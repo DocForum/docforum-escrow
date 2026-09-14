@@ -2,6 +2,7 @@ node_modules/
 dist/
 build/
 target/
+test_snapshots/
 .env
 .env.local
 *.log

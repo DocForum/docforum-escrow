@@ -8,13 +8,17 @@
 - No database. No server. This repo ships a contract + a client library —
   nothing here runs as a persistent service.
 
-## Contract surface (target shape — not yet implemented)
+## Contract surface
 ```
-create_escrow(payer, payee, amount, token, condition_ref) -> escrow_id
-release(escrow_id, caller) -> result   // only the designated releaser role may call this
-refund(escrow_id, caller) -> result    // for expired/rejected condition_ref
-get_status(escrow_id) -> EscrowStatus  // enum: funded | released | refunded
+create_escrow(payer, payee, token, amount, condition_ref) -> escrow_id   // IMPLEMENTED (Phase E1)
+get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED (Phase E1)
+release(escrow_id, caller) -> result   // TODO Phase E2 — only the designated releaser role may call this
+refund(escrow_id, caller) -> result    // TODO Phase E2 — for expired/rejected condition_ref
 ```
+`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref)` —
+`token` before `amount` — differs slightly from the original sketch above; no
+behavioral difference, just noting it so this doc and `src/lib.rs` don't
+drift.
 `condition_ref` is an **opaque string/id** the contract does not interpret
 — it's the caller's job (e.g. `docforum-core`) to decide when release is
 warranted and call `release()`. The contract enforces *who* can call
