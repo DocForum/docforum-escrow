@@ -10,8 +10,8 @@
 
 ## Contract surface
 ```
-create_escrow(payer, payee, token, amount, condition_ref) -> escrow_id   // IMPLEMENTED (Phase E1)
-get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED (Phase E1)
+create_escrow(payer, payee, token, amount, condition_ref) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1)
+get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 release(escrow_id, caller) -> result   // TODO Phase E2 — only the designated releaser role may call this
 refund(escrow_id, caller) -> result    // TODO Phase E2 — for expired/rejected condition_ref
 ```
@@ -40,4 +40,5 @@ avoid (see README "why this repo exists, honestly").
    contract addresses into the SDK's defaults.
 
 ## Roadmap / status
-See `ROADMAP.md` in this repo.
+See `ROADMAP.md` in this repo. Live testnet deployment record:
+`docs/testnet-deployments.md`.

@@ -1,9 +1,11 @@
 # docforum-escrow
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
-![Status](https://img.shields.io/badge/status-Phase%20E1-yellow.svg)
+![Status](https://img.shields.io/badge/status-Phase%20E1%20done-brightgreen.svg)
 ![Stack](https://img.shields.io/badge/contract-Rust%20%2F%20Soroban-orange.svg)
 ![Network](https://img.shields.io/badge/network-testnet%20only-important.svg)
+
+**🔗 Live on testnet:** [`CABSYY5FZGCCZ3UTBQGC7S357D2FUFLUQUUGJCCFHKGEJZVIFK4SIS2Z`](https://stellar.expert/explorer/testnet/contract/CABSYY5FZGCCZ3UTBQGC7S357D2FUFLUQUUGJCCFHKGEJZVIFK4SIS2Z) — deployed and verified with a real `create_escrow` call, not just uploaded. Details: [`docs/testnet-deployments.md`](docs/testnet-deployments.md).
 
 A [Soroban](https://developers.stellar.org/docs/build/smart-contracts) (Stellar) smart contract for conditional payment escrow — lock funds, and release them to the payee only when release is authorized, or return them to the payer on refund. Paired with a TypeScript client SDK, `@docforum/escrow-sdk`.
 
@@ -105,11 +107,11 @@ cargo build --target wasm32v1-none --release
 # → target/wasm32v1-none/release/docforum_escrow.wasm
 ```
 
-Deploying to Stellar **testnet** requires the `stellar`/`soroban` CLI and a
-funded testnet identity — not yet done in this repo, tracked as
-[issue #1](https://github.com/DocForum/docforum-escrow/issues/1).
-**Mainnet is out of scope until the Phase E4 security review is complete —
-see [hard rule 4](ARCHITECTURE_ESSENTIALS.md#hard-rules).**
+Already deployed to Stellar **testnet** — see
+[`docs/testnet-deployments.md`](docs/testnet-deployments.md) for the
+contract id, transaction links, and the exact `stellar` CLI commands to
+redeploy. **Mainnet is out of scope until the Phase E4 security review is
+complete — see [hard rule 4](ARCHITECTURE_ESSENTIALS.md#hard-rules).**
 
 The TypeScript SDK (`sdk/`) is still a placeholder — see
 [issue #4](https://github.com/DocForum/docforum-escrow/issues/4).
@@ -125,15 +127,14 @@ The TypeScript SDK (`sdk/`) is still a placeholder — see
 
 ## Project status
 
-**Phase E1 (contract skeleton): mostly done.** `create_escrow` and
-`get_status` are implemented and tested; testnet deployment is the one
-remaining manual step. Phases E2 (release/refund), E3 (TypeScript SDK), and
-E4 (security review, blocking for any mainnet use) are tracked as open
-issues:
+**Phase E1 (contract skeleton): done.** `create_escrow` and `get_status`
+are implemented, tested, and deployed live on testnet — not just locally
+tested. Phases E2 (release/refund), E3 (TypeScript SDK), and E4 (security
+review, blocking for any mainnet use) are tracked as open issues:
 
 | Issue | Phase | Complexity |
 |---|---|---|
-| [#1 Deploy to testnet](https://github.com/DocForum/docforum-escrow/issues/1) | E1 | Trivial |
+| ~~#1 Deploy to testnet~~ — done, see above | E1 | Trivial |
 | [#2 Implement `release()`](https://github.com/DocForum/docforum-escrow/issues/2) | E2 | High |
 | [#3 Implement `refund()`](https://github.com/DocForum/docforum-escrow/issues/3) | E2 | High |
 | [#4 SDK: wrap `create_escrow`/`get_status`](https://github.com/DocForum/docforum-escrow/issues/4) | E3 | Medium |

@@ -3,19 +3,24 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 mostly done (testnet deploy still manual). Phase E2 not started.**
+**Status: Phase E1 done. Phase E2 not started.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
   (`cargo build --target wasm32v1-none --release`) — 4 passing tests in
   `contracts/escrow/tests/create_escrow.rs`.
-- [ ] Deploy to testnet as a no-op — **not done**. Needs a funded Stellar
-  testnet identity + `stellar`/`soroban` CLI, neither of which exist in
-  this environment. Manual follow-up — tracked as issue #1.
+- [x] Deploy to testnet as a no-op — **done 2026-09-14**. Contract
+  `CABSYY5FZGCCZ3UTBQGC7S357D2FUFLUQUUGJCCFHKGEJZVIFK4SIS2Z`, verified live
+  (not just deployed): `get_status` on an unknown id correctly errors, and
+  a real `create_escrow` call locked 0.5 testnet XLM and reported
+  `"Funded"` back. Full record, including the transaction links:
+  `docs/testnet-deployments.md`. Closes issue #1.
 - [x] `create_escrow` — locks funds (calls the SEP-41 token contract's
   `transfer`), assigns a sequential `escrow_id`, stores payer/payee/amount/
   opaque `condition_ref`, status `Funded`. Rejects non-positive amounts.
-- [x] `get_status` — read-only status query, errors on unknown id.
+  Proven on testnet, not just in local tests — see above.
+- [x] `get_status` — read-only status query, errors on unknown id. Proven
+  on testnet, not just in local tests — see above.
 
 ## Phase E2 — Release & refund
 - [ ] `release` — restricted to a designated releaser identity/role, moves
@@ -54,3 +59,8 @@
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet
   deploy intentionally left undone (needs a funded identity + CLI this
   environment doesn't have) — do not mark E1 fully done until that lands.
+- 2026-09-14 — Phase E1 fully closed: deployed to testnet
+  (`CABSYY5FZGCCZ3UTBQGC7S357D2FUFLUQUUGJCCFHKGEJZVIFK4SIS2Z`) via the
+  `stellar` CLI, and verified live with a real `create_escrow` call (0.5
+  testnet XLM, native SAC) followed by `get_status` confirming `"Funded"`.
+  See `docs/testnet-deployments.md`. Issue #1 closed.
