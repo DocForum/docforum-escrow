@@ -64,3 +64,7 @@
   `stellar` CLI, and verified live with a real `create_escrow` call (0.5
   testnet XLM, native SAC) followed by `get_status` confirming `"Funded"`.
   See `docs/testnet-deployments.md`. Issue #1 closed.
+- 2026-09-14 — Added `.github/ISSUE_TEMPLATE/bug_report.md` (identical
+  copy across all three org repos — see `docforum-core`'s changelog for
+  the sourcing note: a user-supplied bug-report structure plus
+  drips.network's "Creating Meaningful Issues" guide).
