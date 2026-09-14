@@ -1,7 +1,39 @@
 name: CI
-on: [pull_request]
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
 jobs:
-  placeholder:
+  contract:
+    name: Soroban contract (test + wasm build)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/escrow
     steps:
-      - run: echo "TODO(Phase 1) - wire up lint/test/build once backend & frontend have real code"
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+
+      - name: cargo test
+        run: cargo test
+
+      - name: cargo build --release (wasm)
+        run: cargo build --target wasm32v1-none --release
+
+      - name: Confirm wasm artifact exists
+        run: test -f target/wasm32v1-none/release/docforum_escrow.wasm

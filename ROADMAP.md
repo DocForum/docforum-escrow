@@ -68,3 +68,16 @@
   copy across all three org repos — see `docforum-core`'s changelog for
   the sourcing note: a user-supplied bug-report structure plus
   drips.network's "Creating Meaningful Issues" guide).
+- 2026-09-14 — Replaced the placeholder `ci.yml` (`echo "TODO"`,
+  `pull_request`-only, never once run — every commit so far went
+  straight to `main`) with a real workflow: `cargo test` +
+  `cargo build --target wasm32v1-none --release` against the actual
+  contract in `contracts/escrow/`, triggered on both push to `main` and
+  PRs, with a final check that the wasm artifact actually exists. SDK
+  build/test intentionally left out of CI — `sdk/package.json`'s
+  `build`/`test` scripts are still `echo TODO` placeholders (issue #4),
+  nothing real to validate yet; add them to this workflow when #4 lands.
+  Done ahead of a Drips Wave application: a reviewer or prospective
+  contributor landing on this repo should see it actually exercising its
+  own tests, not a stub.
+
