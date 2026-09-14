@@ -1,0 +1,12 @@
+{
+  "name": "@docforum/escrow-sdk",
+  "version": "0.0.0",
+  "description": "TypeScript client for the docforum-escrow Soroban contract.",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "echo TODO",
+    "test": "echo TODO"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
