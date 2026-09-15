@@ -59,10 +59,11 @@ edited — same convention as the superseded entry in
 `docs/testnet-deployments.md`.
 
 **Releasing a new SDK version:** bump `sdk/package.json`'s version,
-`npm run build && npm pack` in `sdk/`, `gh release create sdk-v<X.Y.Z>
-<tarball>` on this repo, then update the tarball URL (including the new
-tag and filename) in every consumer's `package.json`. Manual today;
-worth scripting once there's a second consumer besides `docforum-core`.
+`npm run build && npm pack` in `sdk/`, then `gh release create` on this
+repo with a `sdk-v` + the new version as the tag and the packed tarball
+as the asset, then update the tarball URL (including the new tag and
+filename) in every consumer's `package.json`. Manual today; worth
+scripting once there's a second consumer besides `docforum-core`.
 
 ## Why not GitHub Packages, restated plainly
 
