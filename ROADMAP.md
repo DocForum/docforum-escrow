@@ -80,4 +80,13 @@
   Done ahead of a Drips Wave application: a reviewer or prospective
   contributor landing on this repo should see it actually exercising its
   own tests, not a stub.
+- 2026-09-15 — General workspace-audit fixes (applied identically across
+  all three org repos, see `docforum-core`'s changelog for the full
+  rationale): added `CONTRIBUTING.md` (human onboarding — `AGENTS.md` is
+  agent-facing, and this repo's contract moves real funds, so it also
+  notes reporting security issues privately rather than as a public
+  issue, ahead of the planned Phase E4 review); enabled branch protection
+  on `main` (real CI check + 1 approval required to merge, force-push/
+  deletion disabled, `enforce_admins` left `false` so the maintainer
+  isn't blocked). Topics were already added in the prior session.
 
