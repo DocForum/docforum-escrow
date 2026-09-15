@@ -60,13 +60,16 @@
     XDR-signing plumbing exposed to consumers (e.g. `docforum-core`'s
     `payments` module).
 - [x] Decided npm vs. GitHub Packages — closes issue #5. **Interim**:
-  consumed via npm's git-subdirectory dependency
-  (`github:DocForum/docforum-escrow#path:sdk`), not GitHub Packages —
-  that registry requires auth even for public packages, which would
-  break `npm ci` for any external Wave contributor's fork. Real npm
-  registry publish is the long-term goal once publishing credentials
-  exist (an out-of-band human step, same category as the Drips Wave
-  application itself). See `docs/adr/0003`.
+  consumed via a tarball attached to a tagged GitHub Release
+  (`sdk-v0.1.0`), not GitHub Packages — that registry requires auth even
+  for public packages, which would break `npm ci` for any external Wave
+  contributor's fork. (A git-subdirectory dependency was tried first as
+  a zero-infrastructure option but doesn't actually work against this
+  npm version — see ADR revision note.) Real npm registry publish is the
+  long-term goal once publishing credentials exist (an out-of-band human
+  step, same category as the Drips Wave application itself). Verified
+  end-to-end: installed and imported successfully from
+  `docforum-core/backend`. See `docs/adr/0003`.
 - [x] Integration test against testnet from the SDK itself, not just the
   contract's own test suite. `sdk/tests/testnet-integration.test.ts` — 3
   tests, all passing against the live Phase E2 deployment: full release
@@ -169,10 +172,16 @@
 - 2026-09-15 — Closed issue #5: decided **not** GitHub Packages (its npm
   registry requires auth even for public packages — would break `npm
   ci` for any external contributor's fork, exactly what the issue
-  warned against) in favor of an interim npm git-subdirectory dependency
-  (`github:DocForum/docforum-escrow#path:sdk`) — zero auth needed since
-  the repo is already public. Added a `prepare: npm run build` script to
-  `sdk/package.json` so `dist/` gets built fresh on install. Real npm
+  warned against). First tried an npm git-subdirectory dependency
+  (`github:DocForum/docforum-escrow#path:sdk`) as a zero-infrastructure
+  option — tested it against `docforum-core` and it failed (npm 10.8.2
+  doesn't support the subdirectory selector the way assumed). Replaced
+  with a tarball attached to a real tagged GitHub Release (`sdk-v0.1.0`,
+  via `npm pack` + `gh release create`) — verified working end-to-end:
+  installed and imported successfully from `docforum-core/backend` with
+  zero auth. Added a `prepare: npm run build` script to
+  `sdk/package.json` (unused by this specific approach, but harmless to
+  keep for a future git- or workspace-based route). Real npm
   registry publish remains the long-term goal, blocked on publishing
   credentials this environment doesn't have. See `docs/adr/0003`.
 

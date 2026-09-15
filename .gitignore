@@ -3,6 +3,7 @@ dist/
 build/
 target/
 test_snapshots/
+*.tgz
 .env
 .env.local
 *.log
