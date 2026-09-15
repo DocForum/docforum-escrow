@@ -9,6 +9,7 @@
     "dist"
   ],
   "scripts": {
+    "prepare": "npm run build",
     "build": "tsc",
     "test": "echo 'No fast/mocked tests yet — this SDK is a thin wrapper with no pure logic to unit test in isolation. See test:integration.'",
     "test:integration": "vitest run",
