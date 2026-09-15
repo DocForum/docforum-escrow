@@ -47,9 +47,9 @@ The tarball is produced with plain `npm pack` in `sdk/` (respects
 attached to a tagged GitHub Release (`sdk-v0.1.0`) via `gh release
 create`. Release assets on a public repo are downloadable over plain
 HTTPS with **no authentication at all** — verified by actually running
-`npm install <that URL>` from `docforum-core/backend` in a clean
-environment: installed cleanly, and `import { EscrowClient, Keypair }
-from "@docforum/escrow-sdk"` resolved correctly.
+`npm install` against that release URL from `docforum-core/backend` in a
+clean environment: installed cleanly, and `import { EscrowClient,
+Keypair } from "@docforum/escrow-sdk"` resolved correctly.
 
 **Long-term (not yet actionable):** publish to the public npm registry
 once real npmjs.com publishing credentials exist. When that happens,

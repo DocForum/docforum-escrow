@@ -191,4 +191,12 @@
   `stellarTxHash`. All 3 live-testnet tests updated and still passing.
   Republished as GitHub Release `sdk-v0.2.0` (see ADR 0003's release
   process); `docforum-core` updated to depend on the new tarball URL.
+- 2026-09-15 — Fixed a real bug in `docs/adr/0003`: a `` `npm install
+  <that URL>` `` placeholder broke `docforum-core`'s VitePress docs
+  site build entirely ("Element is missing end tag" — VitePress parses
+  markdown through a Vue template compiler, and a multi-word bracketed
+  placeholder like `<that URL>` gets misread as an unclosed HTML tag;
+  single-word placeholders like `<token>` elsewhere in this org's docs
+  are fine). Caught while checking the live docs site actually reflects
+  this session's changes, not just assuming it did.
 
