@@ -10,21 +10,39 @@
 
 ## Contract surface
 ```
-create_escrow(payer, payee, token, amount, condition_ref, releaser) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET* (Phase E1)
+create_escrow(payer, payee, token, amount, condition_ref, releaser) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1 + E2)
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
-release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
-refund(escrow_id, caller) -> result    // IMPLEMENTED (Phase E2) — same rule as release, transfers back to payer
+release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
+refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — same rule as release, transfers back to payer
 ```
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser)` —
 `token` before `amount`, and `releaser` added last — differs slightly from
 the original sketch above; no behavioral difference beyond the added
 param, just noting it so this doc and `src/lib.rs` don't drift.
 
-\* The **live testnet deployment** (`docs/testnet-deployments.md`) predates
-`releaser` being added — it only has `create_escrow`/`get_status` with the
-Phase E1 signature. Redeploying with the Phase E2 signature (so
-`release`/`refund` can be exercised on testnet, not just in the local test
-suite) is tracked separately, not assumed done by this table.
+All four functions are proven live on testnet as of the Phase E2
+redeployment (`docs/testnet-deployments.md`, 2026-09-15 entry) — including
+a real `release`, a real `refund`, and a real unauthorized-caller
+rejection, not just the local test suite. The prior Phase E1-only
+deployment is superseded (its contract ID predates the `releaser` param
+and is kept only as historical record).
+
+## TypeScript SDK surface (`sdk/`)
+```ts
+import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
+
+const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
+const escrowId = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser });
+await client.getStatus(escrowId);           // "Funded" | "Released" | "Refunded"
+await client.release({ escrowId, caller });  // caller: Keypair, must equal the escrow's releaser
+await client.refund({ escrowId, caller });
+```
+`sdk/src/generated/contract-client.ts` is machine-generated
+(`stellar contract bindings typescript --wasm ...`) — never hand-edit it;
+regenerate it whenever the contract's public signatures/types change.
+`sdk/src/index.ts` is the actual public surface (hand-written, ergonomic
+wrapper) — consumers import from the package root, never from
+`src/generated/` directly.
 
 `condition_ref` is an **opaque string/id** the contract does not interpret
 — it's the caller's job (e.g. `docforum-core`) to decide when release is

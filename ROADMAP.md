@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done (not yet redeployed to testnet — see note below). Phase E3's SDK scaffold in progress.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; npm/GitHub Packages publishing decision (issue #5) still open.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -34,21 +34,42 @@
   refund happy path, refund unauthorized, refund-after-release,
   release-after-refund. 11/11 tests passing repo-wide (4 existing +
   7 new); wasm release build still succeeds.
-- [ ] **Not yet done:** redeploy to testnet with the new (Phase E2)
-  `create_escrow` signature (it gained a `releaser` param — see ADR
-  0002 "Consequences") and exercise `release`/`refund` against a real
-  testnet instance, not just the local test suite. The existing
-  `docs/testnet-deployments.md` record is Phase E1-only and stays
-  accurate as history; it is not being retroactively edited.
+- [x] Redeployed to testnet with the new (Phase E2) `create_escrow`
+  signature — **done 2026-09-15**. Contract
+  `CAXESEEAJILFFCN3PH2HHNMWAAHLEB64UTJHZ6IP7C5BBICT3S3VODSM`, supersedes
+  the Phase E1-only deployment (kept as history, not edited). Verified
+  live: a real `release` (funds moved to payee), a real `refund` (funds
+  returned to payer), and a real unauthorized-caller rejection
+  (`Error(Contract, #3)`) — not just the local test suite. Full record:
+  `docs/testnet-deployments.md`.
 
 ## Phase E3 — TypeScript SDK
-- [ ] `@docforum/escrow-sdk` wrapping `create_escrow`/`get_status`. Tracked
-  as issue #4 (unblocked now that Phase E1 is merged). `release`/`refund`
-  wrapping is a follow-up once issue #2/#3 land.
+- [x] `@docforum/escrow-sdk` wrapping `create_escrow`/`get_status`/
+  `release`/`refund`. Closes issue #4. Originally scoped to wrap only
+  `create_escrow`/`get_status` (`release`/`refund` didn't exist yet when
+  #4 was written) — since Phase E2 landed in the same work session,
+  wrapping all four now avoided shipping an SDK immediately stale
+  relative to the contract it wraps.
+  - `sdk/src/generated/contract-client.ts` — machine-generated via
+    `stellar contract bindings typescript --wasm ...` against the local
+    wasm build (not the live deployment, so it isn't stale relative to
+    source). Never hand-edit; regenerate on contract signature changes.
+  - `sdk/src/index.ts` — the actual public surface: an `EscrowClient`
+    class accepting a `Keypair` directly as a signer (converted
+    internally by `@stellar/stellar-sdk`'s `KeypairSigner`) — no manual
+    XDR-signing plumbing exposed to consumers (e.g. `docforum-core`'s
+    `payments` module).
 - [ ] Published to npm (or GitHub Packages — decide, record as an ADR in
   `docs/adr/`). Tracked as issue #5.
-- [ ] Integration test against testnet from the SDK itself, not just the
-  contract's own test suite.
+- [x] Integration test against testnet from the SDK itself, not just the
+  contract's own test suite. `sdk/tests/testnet-integration.test.ts` — 3
+  tests, all passing against the live Phase E2 deployment: full release
+  lifecycle, full refund lifecycle, unauthorized-caller rejection.
+  Deliberately **not** wired into `npm test`/CI (`npm run
+  test:integration` only) — depends on testnet + Friendbot funding
+  liveness, a different reliability profile than this org's other
+  "integration" tests (e.g. `docforum-core`'s self-contained embedded-
+  Postgres booking test). CI runs `typecheck`+`build` only for the SDK.
 
 ## Phase E4 — Security review (blocking for any mainnet use)
 - [ ] External or community review before any non-testnet deployment.
@@ -113,4 +134,30 @@
   Closes issues #2 and #3. **Not yet done:** redeploying to testnet with
   the new signature — Phase E2 is proven in the local test suite only
   so far, not live.
+- 2026-09-15 — Redeployed to testnet with the Phase E2 signature
+  (`CAXESEEAJILFFCN3PH2HHNMWAAHLEB64UTJHZ6IP7C5BBICT3S3VODSM`, supersedes
+  the Phase E1-only deployment) and verified `release`/`refund` live:
+  real fund transfers on both paths, plus a real unauthorized-caller
+  rejection (`Error(Contract, #3)`) confirmed via the contract's own
+  diagnostic events, not just a local assertion. Closes the "not yet
+  done" gap from the previous entry. Full record:
+  `docs/testnet-deployments.md`.
+- 2026-09-15 — Built the TypeScript SDK (`@docforum/escrow-sdk`),
+  closing issue #4: `sdk/src/generated/contract-client.ts`
+  (machine-generated from the local wasm build via `stellar contract
+  bindings typescript`) plus a hand-written `EscrowClient` in
+  `sdk/src/index.ts` wrapping all four contract functions — expanded
+  from #4's original create_escrow/get_status-only scope since Phase E2
+  landed in the same session, so there was no reason to ship an
+  immediately-stale SDK. Accepts a `Keypair` directly as a signer (no
+  manual XDR signing exposed). 3 real tests in
+  `sdk/tests/testnet-integration.test.ts`, all passing against the live
+  Phase E2 deployment — full release lifecycle, full refund lifecycle,
+  unauthorized-caller rejection — satisfying Phase E3's "integration
+  test against testnet from the SDK itself" item. Deliberately kept out
+  of `npm test`/CI (`npm run test:integration` only, CI runs
+  `typecheck`+`build`) given its dependency on live testnet + Friendbot
+  funding, a different reliability profile than this org's other
+  self-contained integration tests. `ARCHITECTURE_ESSENTIALS.md` updated
+  with the SDK's actual public surface.
 

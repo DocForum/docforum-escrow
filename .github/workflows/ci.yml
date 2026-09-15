@@ -37,3 +37,31 @@ jobs:
 
       - name: Confirm wasm artifact exists
         run: test -f target/wasm32v1-none/release/docforum_escrow.wasm
+
+  sdk:
+    name: TypeScript SDK (typecheck + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # @stellar/stellar-sdk requires Node >=22.
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run build
+
+      # Deliberately NOT run here: `npm run test:integration`
+      # (tests/testnet-integration.test.ts) — it depends on live testnet
+      # + Friendbot funding, a materially different reliability profile
+      # than this job's deterministic checks. Run it manually; see that
+      # file's own comment for why.
