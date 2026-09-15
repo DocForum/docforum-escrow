@@ -10,21 +10,31 @@
 
 ## Contract surface
 ```
-create_escrow(payer, payee, token, amount, condition_ref) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1)
+create_escrow(payer, payee, token, amount, condition_ref, releaser) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET* (Phase E1)
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
-release(escrow_id, caller) -> result   // TODO Phase E2 — only the designated releaser role may call this
-refund(escrow_id, caller) -> result    // TODO Phase E2 — for expired/rejected condition_ref
+release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
+refund(escrow_id, caller) -> result    // IMPLEMENTED (Phase E2) — same rule as release, transfers back to payer
 ```
-`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref)` —
-`token` before `amount` — differs slightly from the original sketch above; no
-behavioral difference, just noting it so this doc and `src/lib.rs` don't
-drift.
+`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser)` —
+`token` before `amount`, and `releaser` added last — differs slightly from
+the original sketch above; no behavioral difference beyond the added
+param, just noting it so this doc and `src/lib.rs` don't drift.
+
+\* The **live testnet deployment** (`docs/testnet-deployments.md`) predates
+`releaser` being added — it only has `create_escrow`/`get_status` with the
+Phase E1 signature. Redeploying with the Phase E2 signature (so
+`release`/`refund` can be exercised on testnet, not just in the local test
+suite) is tracked separately, not assumed done by this table.
+
 `condition_ref` is an **opaque string/id** the contract does not interpret
 — it's the caller's job (e.g. `docforum-core`) to decide when release is
-warranted and call `release()`. The contract enforces *who* can call
-release/refund, not *why* — keep it that way. Baking healthcare-specific
-logic into the contract is exactly the scope creep this repo exists to
-avoid (see README "why this repo exists, honestly").
+warranted and call `release()`. `releaser` is the one address permitted
+to call `release`/`refund` for that specific escrow, set once at
+`create_escrow` time — see `docs/adr/0002` for why a per-escrow releaser
+was chosen over a single contract-level admin. The contract enforces
+*who* can call release/refund, not *why* — keep it that way. Baking
+healthcare-specific logic into the contract is exactly the scope creep
+this repo exists to avoid (see README "why this repo exists, honestly").
 
 ## Hard rules
 1. **No PHI, ever, anywhere in this repo.** Not in tests, not in example

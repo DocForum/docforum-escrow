@@ -1,11 +1,9 @@
 // Soroban escrow contract.
 //
-// Phase E1 (see ROADMAP.md): create_escrow, get_status. Locks funds and
-// answers status queries; nothing here decides when release is warranted.
-//
-// release()/refund() are Phase E2 — not implemented yet. Deliberately left
-// as TODOs rather than stubbed no-ops, so `get_status` never lies about a
-// state this contract can't yet reach.
+// Phase E1 (see ROADMAP.md): create_escrow, get_status.
+// Phase E2: release, refund. Both restricted to the escrow's `releaser`
+// address, set at create_escrow time — see docs/adr/0002 for why a
+// per-escrow releaser was chosen over a single contract-level admin.
 //
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
@@ -32,6 +30,9 @@ pub struct EscrowData {
     pub amount: i128,
     pub condition_ref: String,
     pub status: EscrowStatus,
+    /// The only address permitted to call `release`/`refund` on this
+    /// escrow. Set once at `create_escrow` time — see docs/adr/0002.
+    pub releaser: Address,
 }
 
 #[contracttype]
@@ -46,6 +47,8 @@ enum DataKey {
 pub enum Error {
     NotFound = 1,
     InvalidAmount = 2,
+    Unauthorized = 3,
+    NotFunded = 4,
 }
 
 #[contract]
@@ -54,7 +57,9 @@ pub struct EscrowContract;
 #[contractimpl]
 impl EscrowContract {
     /// Locks `amount` of `token` pulled from `payer`, held for `payee`,
-    /// tagged with an opaque `condition_ref`. Requires `payer` auth (the
+    /// tagged with an opaque `condition_ref`. `releaser` is the only
+    /// address that will later be permitted to call `release`/`refund`
+    /// on this escrow (see docs/adr/0002). Requires `payer` auth (the
     /// contract moves their funds). Returns the new escrow's id.
     pub fn create_escrow(
         env: Env,
@@ -63,6 +68,7 @@ impl EscrowContract {
         token: Address,
         amount: i128,
         condition_ref: String,
+        releaser: Address,
     ) -> Result<u64, Error> {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -80,6 +86,7 @@ impl EscrowContract {
             amount,
             condition_ref,
             status: EscrowStatus::Funded,
+            releaser,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Ok(id)
@@ -93,6 +100,63 @@ impl EscrowContract {
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::NotFound)?;
         Ok(data.status)
+    }
+
+    /// Moves the escrowed `amount` to `payee`. Only the escrow's
+    /// `releaser` (set at `create_escrow` time) may call this — the
+    /// contract enforces WHO, never WHY (ADR 0001). Errors if the
+    /// escrow doesn't exist, `caller` isn't the releaser, or the escrow
+    /// isn't currently `Funded` (no double-release, no releasing a
+    /// refunded escrow).
+    pub fn release(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
+        caller.require_auth();
+
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+
+        if caller != data.releaser {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+
+        let token_client = token::Client::new(&env, &data.token);
+        token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
+
+        data.status = EscrowStatus::Released;
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        Ok(())
+    }
+
+    /// Returns the escrowed `amount` to `payer`. Same authorization and
+    /// state rules as `release` (see above) — only the escrow's
+    /// `releaser` may call this, only while `Funded`.
+    pub fn refund(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
+        caller.require_auth();
+
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+
+        if caller != data.releaser {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+
+        let token_client = token::Client::new(&env, &data.token);
+        token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
+
+        data.status = EscrowStatus::Refunded;
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        Ok(())
     }
 
     fn next_id(env: &Env) -> u64 {

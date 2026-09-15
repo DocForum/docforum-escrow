@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 not started.**
+**Status: Phase E1 done. Phase E2 done (not yet redeployed to testnet — see note below). Phase E3's SDK scaffold in progress.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -23,15 +23,23 @@
   on testnet, not just in local tests — see above.
 
 ## Phase E2 — Release & refund
-- [ ] `release` — restricted to a designated releaser identity/role, moves
-  funds to payee. Tracked as issue #2 (includes its own tests, per
-  AGENTS.md hard rule 2).
-- [ ] `refund` — restricted similarly, returns funds to payer. Tracked as
-  issue #3 (includes its own tests).
-- [ ] Full test suite in `contracts/escrow/tests/` covering: happy path,
-  unauthorized release attempt, double-release attempt, refund after
-  partial state — split across issues #2/#3 above rather than tracked
-  separately, since AGENTS.md requires tests in the same PR as the logic.
+- [x] `release` — restricted to the escrow's `releaser` (set at
+  `create_escrow` time, decision recorded in `docs/adr/0002` — a
+  per-escrow address, not a single contract-level admin), moves funds to
+  payee, only while `Funded`. Closes issue #2.
+- [x] `refund` — same auth/state rule, returns funds to payer. Closes
+  issue #3.
+- [x] Full test suite in `contracts/escrow/tests/release_refund.rs`: 7
+  tests — release happy path, release unauthorized, double-release,
+  refund happy path, refund unauthorized, refund-after-release,
+  release-after-refund. 11/11 tests passing repo-wide (4 existing +
+  7 new); wasm release build still succeeds.
+- [ ] **Not yet done:** redeploy to testnet with the new (Phase E2)
+  `create_escrow` signature (it gained a `releaser` param — see ADR
+  0002 "Consequences") and exercise `release`/`refund` against a real
+  testnet instance, not just the local test suite. The existing
+  `docs/testnet-deployments.md` record is Phase E1-only and stays
+  accurate as history; it is not being retroactively edited.
 
 ## Phase E3 — TypeScript SDK
 - [ ] `@docforum/escrow-sdk` wrapping `create_escrow`/`get_status`. Tracked
@@ -89,4 +97,20 @@
   on `main` (real CI check + 1 approval required to merge, force-push/
   deletion disabled, `enforce_admins` left `false` so the maintainer
   isn't blocked). Topics were already added in the prior session.
+- 2026-09-15 — Implemented Phase E2: `release()` and `refund()`. Auth
+  model decision recorded in `docs/adr/0002` — a per-escrow `releaser`
+  address, set at `create_escrow` time, rather than a single
+  contract-level admin (reasoning: no single point of control, matches
+  who actually knows when to release/refund, stays generic per ADR
+  0001, multi-tenant ready). This changed `create_escrow`'s signature
+  (added `releaser: Address`) — a breaking change from the Phase E1
+  signature already live on testnet; that deployment record stays as
+  accurate history, not retroactively edited. 7 new tests in
+  `tests/release_refund.rs` covering both functions' happy paths,
+  unauthorized-caller rejection, double-release, refund-after-release,
+  and release-after-refund. 11/11 tests passing, wasm release build
+  verified. `ARCHITECTURE_ESSENTIALS.md` contract-surface table updated.
+  Closes issues #2 and #3. **Not yet done:** redeploying to testnet with
+  the new signature — Phase E2 is proven in the local test suite only
+  so far, not live.
 
