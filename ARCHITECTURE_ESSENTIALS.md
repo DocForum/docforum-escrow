@@ -32,10 +32,10 @@ and is kept only as historical record).
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
 
 const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
-const escrowId = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser });
-await client.getStatus(escrowId);           // "Funded" | "Released" | "Refunded"
-await client.release({ escrowId, caller });  // caller: Keypair, must equal the escrow's releaser
-await client.refund({ escrowId, caller });
+const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser });
+await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
+await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
+await client.refund({ escrowId, caller });   // { txHash }
 ```
 `sdk/src/generated/contract-client.ts` is machine-generated
 (`stellar contract bindings typescript --wasm ...`) — never hand-edit it;

@@ -184,4 +184,11 @@
   keep for a future git- or workspace-based route). Real npm
   registry publish remains the long-term goal, blocked on publishing
   credentials this environment doesn't have. See `docs/adr/0003`.
+- 2026-09-15 — SDK v0.2.0 (breaking, per hard rule 3): `createEscrow`,
+  `release`, and `refund` now also return the transaction's hash
+  (`{ escrowId, txHash }` / `{ txHash }`) instead of discarding it —
+  needed by `docforum-core`'s payments module to persist
+  `stellarTxHash`. All 3 live-testnet tests updated and still passing.
+  Republished as GitHub Release `sdk-v0.2.0` (see ADR 0003's release
+  process); `docforum-core` updated to depend on the new tarball URL.
 

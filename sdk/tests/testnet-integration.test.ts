@@ -37,7 +37,7 @@ describe("EscrowClient against live testnet", () => {
     const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
     const client = new EscrowClient({ contractId: CONTRACT_ID });
 
-    const escrowId = await client.createEscrow({
+    const { escrowId, txHash } = await client.createEscrow({
       payer,
       payee: payee.publicKey(),
       token: NATIVE_XLM_SAC,
@@ -45,6 +45,7 @@ describe("EscrowClient against live testnet", () => {
       conditionRef: "sdk-integration-test-release",
       releaser: releaser.publicKey(),
     });
+    expect(txHash).toBeTruthy();
 
     expect(await client.getStatus(escrowId)).toBe("Funded");
 
@@ -57,7 +58,7 @@ describe("EscrowClient against live testnet", () => {
     const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
     const client = new EscrowClient({ contractId: CONTRACT_ID });
 
-    const escrowId = await client.createEscrow({
+    const { escrowId, txHash } = await client.createEscrow({
       payer,
       payee: payee.publicKey(),
       token: NATIVE_XLM_SAC,
@@ -77,7 +78,7 @@ describe("EscrowClient against live testnet", () => {
     const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
     const client = new EscrowClient({ contractId: CONTRACT_ID });
 
-    const escrowId = await client.createEscrow({
+    const { escrowId, txHash } = await client.createEscrow({
       payer,
       payee: payee.publicKey(),
       token: NATIVE_XLM_SAC,

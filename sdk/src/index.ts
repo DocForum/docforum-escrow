@@ -72,8 +72,8 @@ export class EscrowClient {
     });
   }
 
-  /** Locks `amount` of `token` from `payer`, held for `payee`. Returns the new escrow's id. */
-  async createEscrow(params: CreateEscrowParams): Promise<bigint> {
+  /** Locks `amount` of `token` from `payer`, held for `payee`. Returns the new escrow's id and the funding transaction's hash. */
+  async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
     const client = this.contractClient(params.payer);
     const tx = await client.create_escrow({
       payer: params.payer.publicKey(),
@@ -83,8 +83,8 @@ export class EscrowClient {
       condition_ref: params.conditionRef,
       releaser: params.releaser,
     });
-    const { result } = await tx.signAndSend();
-    return result.unwrap();
+    const sent = await tx.signAndSend();
+    return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
   }
 
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
@@ -95,19 +95,21 @@ export class EscrowClient {
     return status.tag;
   }
 
-  /** Moves the escrow's funds to its payee. Throws if `caller` isn't the escrow's `releaser`, or the escrow isn't `Funded`. */
-  async release(params: ReleaseOrRefundParams): Promise<void> {
+  /** Moves the escrow's funds to its payee. Throws if `caller` isn't the escrow's `releaser`, or the escrow isn't `Funded`. Returns the transaction's hash. */
+  async release(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
     const client = this.contractClient(params.caller);
     const tx = await client.release({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
-    const { result } = await tx.signAndSend();
-    result.unwrap();
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
   }
 
-  /** Returns the escrow's funds to its payer. Same rules as `release`. */
-  async refund(params: ReleaseOrRefundParams): Promise<void> {
+  /** Returns the escrow's funds to its payer. Same rules as `release`. Returns the transaction's hash. */
+  async refund(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
     const client = this.contractClient(params.caller);
     const tx = await client.refund({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
-    const { result } = await tx.signAndSend();
-    result.unwrap();
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
   }
 }
