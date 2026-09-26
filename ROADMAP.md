@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; npm/GitHub Packages publishing decision (issue #5) still open.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) not started — blocking for any mainnet use.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -204,4 +204,5 @@
   docs site reflects this session's changes rather than assuming it
   did — verified by building `docforum-core`'s docs site locally against
   this exact file, twice, before trusting it.
-
+- 2026-09-26 — Updated the stale top status line (still said issue #5
+  was open; it closed 2026-09-15).
