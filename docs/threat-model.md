@@ -10,6 +10,8 @@ Scope: contract source at commit `5a455fb` (`contracts/escrow/src/lib.rs`),
 the TypeScript SDK (`sdk/src/index.ts`), and the one known consumer
 pattern (custodial, as `docforum-core` uses it today). The live testnet
 deployment is listed in `docs/testnet-deployments.md`.
+Updated 2026-10-07 for the issue #12 balance-delta check and
+mock-token tests (§1 I4, T4, T5, §6).
 
 ---
 
@@ -20,7 +22,7 @@ deployment is listed in `docs/testnet-deployments.md`.
 | I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:128`, `lib.rs:155`). |
 | I2 | Only the escrow's `releaser` can move funds out. | `caller.require_auth()` + `caller == data.releaser` (`lib.rs:112`, `lib.rs:139`). |
 | I3 | Each escrow pays out at most once. | `status == Funded` check before transfer, status written after. |
-| I4 | An escrow only exists if `amount` was actually transferred in. | `payer.require_auth()` + token `transfer` before the escrow is stored (`lib.rs:76-91`). |
+| I4 | An escrow only exists if `amount` was actually transferred in. | `payer.require_auth()` + token `transfer` before the escrow is stored, verified by a balance-delta check: the contract's balance must rise by exactly `amount` or the escrow is rejected (`lib.rs:85-94`). |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
 
 I1 is the most important property in this design. A full compromise of the
@@ -116,6 +118,13 @@ value. **Reviewers should challenge these ratings.**
 - **Recommendation anyway:** write `status` before calling `transfer`
   (checks-effects-interactions). It costs nothing. It also means safety
   doesn't depend on a host rule a reader might not know about.
+- **Update (issue #12):** a test-only mock token that re-enters
+  `release` from inside its `transfer` is rejected by the host with
+  "Contract re-entry is not allowed" — an unrecoverable context error,
+  so the entire release invocation aborts and nothing commits
+  (`tests/malicious_token.rs`). This pins the behavior for the direct
+  token→escrow path; the through-an-intermediate-contract path below is
+  still open for reviewer verification.
 - **Reviewer, please verify:** the host's re-entry prohibition applies
   to every path a SEP-41 token could use to reach this contract,
   including through an intermediate third contract.
@@ -137,9 +146,20 @@ behave like SEP-41.
     enabled by the issuer. A clawback against the contract address
     removes funds from the shared pool.
 - **Mitigations to consider:**
-  - In `create_escrow`, check the contract's token balance before and
+  - ~~In `create_escrow`, check the contract's token balance before and
     after the transfer, and reject (or record the real delta) if it
-    doesn't rise by exactly `amount`.
+    doesn't rise by exactly `amount`.~~ **Implemented (issue #12):**
+    `create_escrow` now rejects with `BalanceMismatch` unless the
+    contract's balance rose by exactly `amount` across the transfer
+    (`lib.rs:89-94`). Catches the lying-transfer case above and the
+    fee-on-transfer/rebasing short-delivery case at creation — both
+    covered by mock-token tests (`tests/malicious_token.rs`). What it
+    **cannot** catch is a token that takes funds back *after*
+    creation: a clawback-enabled issuer can drain the shared pool
+    later, and no creation-time check sees that. Accepted residual
+    risk for now (documented, deliberately not solved here) — the
+    practical mitigation stays with the consumer: allowlist only
+    tokens without clawback, transfer fees, or rebasing.
   - Consumers: only use an allowlist of known tokens. The current
     consumer uses one configured token (`escrowTokenId`), which is good.
   - Document that payees must check the escrow's `token`, not just its
@@ -240,10 +260,12 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
 - [ ] ⚙ Checks-effects-interactions ordering in `release`/`refund` (T4)
 - [ ] ⚙ Reject contract-self as `payee`/`releaser` (T2)
 - [ ] ⚙ Decide on a timeout refund path, or record why not in an ADR (T2)
-- [ ] ⚙ Balance-delta check on `create_escrow` (T5)
+- [x] ⚙ Balance-delta check on `create_escrow` (T5) — issue #12
 - [ ] ⚙ TTL extension for escrow entries and instance (T6)
 - [ ] ⚙ Emit create/release/refund events (T7)
-- [ ] Tests with a malicious mock token: lying transfer, re-entry attempt (T4, T5)
+- [x] Tests with a malicious mock token: lying transfer, short
+      delivery, re-entry attempt (T4, T5) — issue #12,
+      `tests/malicious_token.rs`
 - [ ] Releaser held as multisig or in a KMS, not a plain env var (T1, T2)
 - [ ] Consumer funding flow made idempotent + reconcile job (§5)
 - [ ] **Independent review of this document and the contract**, linked

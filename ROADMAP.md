@@ -87,6 +87,23 @@
   draft in `docs/threat-model.md` (self-written by the implementer, so it
   does not count as the review). Stays unchecked until an independent
   reviewer has gone through it.
+- [x] Balance-delta check on `create_escrow` + malicious mock-token
+  tests (issue #12). The contract's token balance must rise by exactly
+  `amount` across the funding transfer or the escrow is rejected with a
+  new `BalanceMismatch` error — a lying transfer, fee-on-transfer, or
+  rebasing token would otherwise create `Funded` escrows backed by
+  nothing (threat model T5). Three test-only mock tokens in
+  `tests/malicious_token.rs`: lying transfer, short delivery (debits
+  300, delivers 270), and one that re-enters `release` from inside
+  `transfer` (T4). The re-entry test pinned the actual host behavior,
+  not the assumed one: Soroban rejects re-entry as an unrecoverable
+  context error ("Contract re-entry is not allowed"), aborting the
+  whole invocation — fail-closed. Post-creation clawback remains
+  possible by design and is documented in T5 as accepted residual
+  risk. 14/14 tests passing (11 existing + 3 new); wasm release build
+  verified. No public signature changed, so the SDK bindings are
+  unaffected. Threat model §1 I4, T4, T5 and two §6 checklist items
+  updated to match.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -213,3 +230,29 @@
   invariants, actors, ten threats with severity, SDK and consumer
   integration notes, and a proposed pre-mainnet checklist. No contract
   changes. Self-written, so E4 stays open pending independent review.
+- 2026-10-07 — Implemented the T5 balance-delta check in
+  `create_escrow` (issue #12): the contract's token balance must rise
+  by exactly `amount` across the funding transfer, or the escrow is
+  rejected with a new `BalanceMismatch` error (code 5). All escrows in
+  one token share the contract's balance, so a token that delivers
+  less than `amount` (fee-on-transfer, rebasing) or lies about moving
+  funds would otherwise mint `Funded` escrows backed by nothing and
+  starve the last escrows to settle. Added three test-only mock tokens
+  in `tests/malicious_token.rs` — lying transfer (succeeds, moves
+  nothing), short delivery (debits 300, delivers 270), and one that
+  re-enters `release` from inside its `transfer` (T4) — one test per
+  scenario, each asserting the exact expected outcome. The re-entry
+  test also corrected an assumption in the threat model with observed
+  host behavior: Soroban rejects re-entry as an unrecoverable context
+  error ("Contract re-entry is not allowed") that aborts the entire
+  release invocation — fail-closed, no payout, no partial state. What
+  the check deliberately cannot catch: a clawback-enabled issuer
+  draining the pool *after* creation — documented in T5 as accepted
+  residual risk (the issue asked for documentation, not a solution);
+  the practical mitigation stays with the consumer's token
+  allowlist. 14/14 tests passing (11 existing + 3 new); wasm release
+  build verified. No public signature changed, so the SDK's generated
+  bindings are untouched. `docs/threat-model.md` updated: §1 I4 cites
+  the balance-delta check, T4 gains the observed re-entry result, T5
+  marks the mitigation implemented with the clawback caveat, and the
+  two matching §6 pre-mainnet checklist items are ticked.

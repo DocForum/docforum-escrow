@@ -49,6 +49,7 @@ pub enum Error {
     InvalidAmount = 2,
     Unauthorized = 3,
     NotFunded = 4,
+    BalanceMismatch = 5,
 }
 
 #[contract]
@@ -61,6 +62,14 @@ impl EscrowContract {
     /// address that will later be permitted to call `release`/`refund`
     /// on this escrow (see docs/adr/0002). Requires `payer` auth (the
     /// contract moves their funds). Returns the new escrow's id.
+    ///
+    /// The contract's token balance must rise by exactly `amount` across
+    /// the transfer, or the escrow is rejected (`BalanceMismatch`). All
+    /// escrows in one token share the contract's balance; a token that
+    /// delivers less than `amount` (fee-on-transfer, rebasing) or lies
+    /// about moving funds would otherwise leave later escrows unfunded
+    /// (threat model T5). This cannot catch a token that claws funds
+    /// back *after* creation — see T5 in docs/threat-model.md.
     pub fn create_escrow(
         env: Env,
         payer: Address,
@@ -76,7 +85,13 @@ impl EscrowContract {
         payer.require_auth();
 
         let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&payer, &env.current_contract_address(), &amount);
+        let contract_address = env.current_contract_address();
+        let balance_before = token_client.balance(&contract_address);
+        token_client.transfer(&payer, &contract_address, &amount);
+        let balance_after = token_client.balance(&contract_address);
+        if balance_after.checked_sub(balance_before) != Some(amount) {
+            return Err(Error::BalanceMismatch);
+        }
 
         let id = Self::next_id(&env);
         let data = EscrowData {
