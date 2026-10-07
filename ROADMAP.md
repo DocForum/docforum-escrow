@@ -87,6 +87,18 @@
   draft in `docs/threat-model.md` (self-written by the implementer, so it
   does not count as the review). Stays unchecked until an independent
   reviewer has gone through it.
+- [ ] Pre-mainnet checklist from `docs/threat-model.md` §6, scoped into
+  issues:
+  [#8](https://github.com/DocForum/docforum-escrow/issues/8) write status before transfer + reject
+  contract-self addresses (Trivial),
+  [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium),
+  [#10](https://github.com/DocForum/docforum-escrow/issues/10) storage TTL (Medium),
+  [#11](https://github.com/DocForum/docforum-escrow/issues/11) timeout refund ADR + implementation (High),
+  [#12](https://github.com/DocForum/docforum-escrow/issues/12) balance-delta check + malicious mock tokens (High),
+  [#15](https://github.com/DocForum/docforum-escrow/issues/15) integrator trust-model docs (Trivial).
+- [ ] Related, not in the checklist:
+  [#13](https://github.com/DocForum/docforum-escrow/issues/13) `get_escrow` full-record read (Medium),
+  [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI (Medium).
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -213,3 +225,8 @@
   invariants, actors, ten threats with severity, SDK and consumer
   integration notes, and a proposed pre-mainnet checklist. No contract
   changes. Self-written, so E4 stays open pending independent review.
+- 2026-10-07 — Merged the threat-model draft (#7) and scoped its §6
+  pre-mainnet checklist into issues #8–#12 and #15, plus #13
+  (`get_escrow`) and #14 (offline SDK tests). Releaser key custody and
+  idempotent funding are consumer concerns, tracked in `docforum-core`
+  (#25, #24).
