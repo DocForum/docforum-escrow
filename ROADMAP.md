@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) not started — blocking for any mainnet use.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`), independent review not yet done — blocking for any mainnet use.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -83,7 +83,10 @@
 ## Phase E4 — Security review (blocking for any mainnet use)
 - [ ] External or community review before any non-testnet deployment.
   Tracked as issue #6.
-- [ ] Documented threat model in `docs/`. Part of issue #6.
+- [ ] Documented threat model in `docs/`. Part of issue #6. **In progress:**
+  draft in `docs/threat-model.md` (self-written by the implementer, so it
+  does not count as the review). Stays unchecked until an independent
+  reviewer has gone through it.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -206,3 +209,7 @@
   this exact file, twice, before trusting it.
 - 2026-09-26 — Updated the stale top status line (still said issue #5
   was open; it closed 2026-09-15).
+- 2026-10-01 — Drafted `docs/threat-model.md` for Phase E4 (issue #6):
+  invariants, actors, ten threats with severity, SDK and consumer
+  integration notes, and a proposed pre-mainnet checklist. No contract
+  changes. Self-written, so E4 stays open pending independent review.
