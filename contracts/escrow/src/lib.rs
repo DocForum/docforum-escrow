@@ -96,7 +96,13 @@ impl EscrowContract {
         payer.require_auth();
 
         let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&payer, &env.current_contract_address(), &amount);
+        let contract_address = env.current_contract_address();
+        let balance_before = token_client.balance(&contract_address);
+        token_client.transfer(&payer, &contract_address, &amount);
+        let balance_after = token_client.balance(&contract_address);
+        if balance_after.checked_sub(balance_before) != Some(amount) {
+            return Err(Error::BalanceMismatch);
+        }
 
         let id = Self::next_id(&env);
         let data = EscrowData {
