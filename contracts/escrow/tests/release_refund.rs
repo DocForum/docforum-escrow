@@ -46,6 +46,7 @@ fn fund_escrow(env: &Env, amount: i128) -> Fixture<'_> {
         &amount,
         &String::from_str(env, "opaque-condition-ref"),
         &releaser,
+        &None,
     );
 
     Fixture { client, token, payer, payee, releaser, escrow_id }

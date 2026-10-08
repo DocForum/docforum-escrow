@@ -1,5 +1,96 @@
 # Testnet deployments
 
+## `docforum_escrow` — 2026-10-08 (Phase E4: `refund_after` timeout refund + `get_escrow`)
+
+| | |
+|---|---|
+| Network | Stellar Testnet (`Test SDF Network ; September 2015`) |
+| Contract ID | `CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5` |
+| Explorer | https://stellar.expert/explorer/testnet/contract/CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5 |
+| WASM hash | `1d23862ac7b6671959946b06f6ffdb5115938abb1974486db61aeeebefc78327` |
+| Deploy tx | https://stellar.expert/explorer/testnet/tx/16880a10f71fcea8cb1f1b7b0ed83e1f115d434c06f3d1e3cd7a6692b513edae |
+| Source commit | `7a595d8` (Phase E4 / issue #11: `refund_after` timeout refund + `get_escrow` — see `docs/adr/0004`) |
+
+This **supersedes** the 2026-09-15 deployment below — `create_escrow`'s
+signature changed (added `refund_after: Option<u64>`) and `EscrowData`'s
+layout changed, so the old contract ID is no longer signature- or
+layout-compatible with the current contract source. The prior entries
+are kept as accurate history, not deleted.
+
+### Verified live, on this deployment
+
+Every claim below is a real transaction or a real contract error
+observed on-chain, not just a local test assertion. Escrow ids are this
+contract's own (`0`–`3`).
+
+- **`create_escrow` id `0`, with a deadline** (`refund_after` =
+  1791442266, ~2.5 min out), 1,000,000 stroops (0.1 XLM) —
+  [tx](https://stellar.expert/explorer/testnet/tx/b8ee6776f715acbf0ae51ed88e64801f1cd7adfc38f3c38d374f9729366bc181).
+  `get_escrow(0)` → `"Funded"`, `"refund_after": 1791442266`.
+- **`create_escrow` id `1`, with no deadline** —
+  [tx](https://stellar.expert/explorer/testnet/tx/f0495bef2a2f96e9a922b66f7333f9dd9b859f85b5f8a727f558888c998c10f5).
+  `get_escrow(1)` → `"refund_after": null`.
+- **`create_escrow` id `2`, same deadline as `0`** —
+  [tx](https://stellar.expert/explorer/testnet/tx/41dfdeafb62537a3577005707460bc919677dd10c92ff2a7520269e7551d498b).
+- **Stranger refund rejected *before* the deadline**: an identity that
+  is neither the releaser nor the payer calling `refund(0)` fails with
+  `Error(Contract, #3)` (`Error::Unauthorized`) — confirmed via the
+  contract's own diagnostic event, before any ledger time reached the
+  deadline.
+- **Deadline already in the past at creation rejected**: `create_escrow`
+  with `refund_after` = now − 60s fails with `Error(Contract, #5)`
+  (`Error::InvalidRefundAfter`), and no funds were pulled from the payer.
+- **No deadline ⇒ no timeout**: the same stranger calling `refund(1)`
+  (which has no `refund_after`) fails with `Error(Contract, #3)` even
+  long after any deadline would have passed.
+- **Releaser refund before its deadline still works**: `refund(3)` by
+  the designated releaser, with `refund_after` in the future —
+  [tx](https://stellar.expert/explorer/testnet/tx/53072a66f1b9aa2410de04a2cf3645a490d18ca4db67c7c5ad3e1d84fae0ce67).
+  `get_status(3)` → `"Refunded"`.
+- **Timeout refund by a non-releaser *after* the deadline** (the new
+  path, issue #11): the same stranger identity calling `refund(0)` once
+  the ledger close time passed 1791442266 succeeds —
+  [tx](https://stellar.expert/explorer/testnet/tx/d1c8ef6379f75db328530ed93a3a668cf302b3eea3c08d5abe841ca998577ce3).
+  `get_status(0)` → `"Refunded"`.
+- **Second refund on the settled escrow rejected**: `refund(0)` again
+  fails with `Error(Contract, #4)` (`Error::NotFunded`) — the timeout
+  path cannot pay out twice (invariant I3).
+- **`release` after the deadline still works**: `release(2)` by the
+  releaser, after the same deadline had passed —
+  [tx](https://stellar.expert/explorer/testnet/tx/735c1cd5375f9e14769f9389c4e8b1af940abe24e7495cbc4b2631ae26a2c65b).
+  `get_status(2)` → `"Released"`.
+- **Funds went where the contract says**: afterwards the contract
+  account held exactly **1,000,000 stroops** — only escrow `1`, the one
+  still `Funded`. The payee received the 1,000,000 from the release; the
+  identity that triggered the timeout refund received **nothing** (it
+  only paid fees) — the refund landed on the payer, as ADR 0004
+  requires.
+- **SDK integration suite**: all 5 tests in
+  `sdk/tests/testnet-integration.test.ts` pass against this contract id
+  (`npm run test:integration`) — release lifecycle, refund lifecycle,
+  unauthorized-caller rejection, deadline surfacing via `getEscrow`, and
+  rejection of an already-past `refundAfter`.
+
+### Redeploying
+
+```bash
+stellar keys generate --network testnet --fund <alias>   # once, or reuse an existing funded identity
+cargo build --target wasm32v1-none --release
+stellar contract deploy \
+  --wasm target/wasm32v1-none/release/docforum_escrow.wasm \
+  --source <alias> \
+  --network testnet \
+  --alias docforum-escrow
+```
+
+Remember the SDK's tests and any consumer config (`contractId`) point at
+the id above — a redeploy means updating those, not just this file.
+
+Mainnet is explicitly out of scope until the Phase E4 security review is
+complete — see [hard rule 4](../ARCHITECTURE_ESSENTIALS.md#hard-rules).
+
+---
+
 ## `docforum_escrow` — 2026-09-15 (Phase E2: adds `release`/`refund`)
 
 | | |

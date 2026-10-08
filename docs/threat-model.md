@@ -11,23 +11,31 @@ the TypeScript SDK (`sdk/src/index.ts`), and the one known consumer
 pattern (custodial, as `docforum-core` uses it today). The live testnet
 deployment is listed in `docs/testnet-deployments.md`.
 
+*Updated 2026-10-08 for issue #11 (Phase E4): the timeout refund path
+from T2's candidate list was decided in `docs/adr/0004` and implemented
+(`refund_after` + `get_escrow`), so T2, T8 and the §6 checklist below now
+reflect that. The scope commit above predates the change; everything else
+in this document still describes the same design.*
+
 ---
 
 ## 1. What the contract is supposed to guarantee
 
 | # | Invariant | Enforced by |
 |---|---|---|
-| I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:128`, `lib.rs:155`). |
-| I2 | Only the escrow's `releaser` can move funds out. | `caller.require_auth()` + `caller == data.releaser` (`lib.rs:112`, `lib.rs:139`). |
-| I3 | Each escrow pays out at most once. | `status == Funded` check before transfer, status written after. |
-| I4 | An escrow only exists if `amount` was actually transferred in. | `payer.require_auth()` + token `transfer` before the escrow is stored (`lib.rs:76-91`). |
+| I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination. |
+| I2 | Only the escrow's `releaser` can move funds out — or, once `refund_after` has passed, anyone at all, and then still only back to `payer`. | `caller.require_auth()` + `caller == data.releaser`, relaxed solely by the deadline check (`lib.rs:149`, `lib.rs:183`, `lib.rs:191`). |
+| I3 | Each escrow pays out at most once. | `status == Funded` check before transfer, status written after — shared by release and both refund paths. |
+| I4 | An escrow only exists if `amount` was actually transferred in. | `payer.require_auth()` + token `transfer` before the escrow is stored (`lib.rs:96-112`). |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
 
 I1 is the most important property in this design. A full compromise of the
 `releaser` key lets an attacker pick the **wrong outcome** (release when it
 should refund, or the reverse). It does **not** let them redirect funds to
 an address they control, unless they already control the `payee` or
-`payer`.
+`payer`. Neither does the timeout: it can only hand funds back to the
+payer, so the worst case there is an escrow ending early, not funds going
+somewhere new.
 
 ## 2. Assets and actors
 
@@ -40,7 +48,7 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 | `payee` | Receive funds | Nothing. Has **no on-chain power at all**, including no way to object to a refund. |
 | `releaser` | `release` or `refund` its escrows, once | Choosing the correct outcome. This is the main trust assumption. |
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |
-| Anyone | Call `create_escrow` with their own funds, call `get_status` | Nothing. |
+| Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds back to that escrow's `payer` | Nothing. |
 
 There is **no admin, no upgrade function, and no pause.** The deployed
 WASM is immutable. Nobody, including the deployer, can change an
@@ -75,21 +83,33 @@ value. **Reviewers should challenge these ratings.**
   - In the consumer, rotate releaser keys periodically for **new**
     escrows, so a leak only reaches escrows from that key's period.
 
-### T2 — `releaser` key lost · **High**
-- **Effect:** every `Funded` escrow with that `releaser` is **locked
-  forever.** There is no timeout, no fallback refund path, no admin and no
-  upgrade. Funds stay in the contract address permanently.
+### T2 — `releaser` key lost · **High for escrows created without a timeout; mitigated (still worth planning for) with one**
+- **Effect (before issue #11):** every `Funded` escrow with that
+  `releaser` was **locked forever** — no timeout, no fallback refund path,
+  no admin and no upgrade. Funds stayed in the contract address
+  permanently.
+- **Effect (now):** escrows created with a `refund_after` deadline can be
+  recovered by **anyone** after it passes — always back to the `payer`
+  (`docs/adr/0004`, implemented in issue #11). Escrows created *without*
+  one (still the default, and what `docforum-core` passes today) keep the
+  original behaviour: locked forever. The permanent-lock failure mode is
+  removed from the contract, not from the call sites that decline to use
+  it.
 - **Same applies to:** a `releaser` that can never sign. For example, the
   contract's own address, or an address typed incorrectly at creation.
   `create_escrow` does not validate `releaser` beyond its type.
-- **Mitigations to consider (contract changes, need tests per hard rule 2):**
-  - An optional `refund_after` ledger/timestamp set at creation. After it
-    passes, anyone can trigger `refund` back to `payer`. This removes
-    permanent lock without adding a privileged role.
-  - Reject `releaser == current_contract_address()` and
+- **Mitigations (contract changes need tests per hard rule 2):**
+  - [x] An optional `refund_after` timestamp set at creation. After it
+    passes, anyone can trigger `refund` back to `payer` — **done**,
+    decided in `docs/adr/0004` and implemented in issue #11 (tests in
+    `tests/timeout_refund.rs`). Note the accepted consequence: after the
+    deadline the escrow can end early *by anyone*, so a payee must read
+    the deadline first (see T8).
+  - [ ] Reject `releaser == current_contract_address()` and
     `payee == current_contract_address()` in `create_escrow`.
-  - Operationally: back up the releaser key, or use a multisig as in T1,
-    which also covers loss of one signer.
+  - [ ] Operationally: back up the releaser key, or use a multisig as in
+    T1, which also covers loss of one signer. Callers should pass a
+    `refund_after` sized to their longest plausible fulfilment window.
 
 ### T3 — Double-spend / double payout · **Low (believed mitigated)**
 - `release`/`refund` check `status == Funded` and fail with `NotFunded`
@@ -181,6 +201,16 @@ behave like SEP-41.
   locked under the stored `releaser`'s control." It does **not** mean
   "the funds are committed to me." A payee should check who the
   `releaser` is before relying on an escrow.
+- **With a `refund_after` (issue #11, `docs/adr/0004`), the commitment
+  also expires:** after the deadline anyone can return the funds to the
+  payer, so a payee must treat such an escrow as *time-bounded*. Read the
+  deadline first — `get_escrow` on-chain, `client.getEscrow()` in the
+  SDK — and require no deadline (or one well beyond your fulfilment
+  window) from a `releaser` you trust if you need certainty. The
+  direction of the new risk is bounded: the timeout path can only pay
+  the payer, never a third party, and the releaser can still release
+  after the deadline — so the realistic exposure is payment being delayed
+  and then reversed, not redirected.
 
 ### T9 — `condition_ref` is public · **Low (privacy)**
 - Everything in `EscrowData` is publicly readable on-chain forever,
@@ -239,7 +269,12 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
 
 - [ ] ⚙ Checks-effects-interactions ordering in `release`/`refund` (T4)
 - [ ] ⚙ Reject contract-self as `payee`/`releaser` (T2)
-- [ ] ⚙ Decide on a timeout refund path, or record why not in an ADR (T2)
+- [x] ⚙ Decide on a timeout refund path, or record why not in an ADR (T2)
+      — **both**: `docs/adr/0004` records the decision and the
+      alternatives, and issue #11 implemented it (`refund_after`,
+      `get_escrow`, tests in `contracts/escrow/tests/timeout_refund.rs`,
+      live on testnet). The remaining T2 mitigations (contract-self as
+      payee/releaser, key backup/multisig) are still open above.
 - [ ] ⚙ Balance-delta check on `create_escrow` (T5)
 - [ ] ⚙ TTL extension for escrow entries and instance (T6)
 - [ ] ⚙ Emit create/release/refund events (T7)
