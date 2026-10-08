@@ -99,6 +99,28 @@
   (`docs/testnet-deployments.md`, 2026-10-08 entry). Closes issue #11.
   The threat model's §6 checklist item for this is checked; the
   operational half of T2 (key backup / multisig releaser) remains open.
+- [x] Balance-delta check on `create_escrow` + malicious mock-token
+  tests (issue #12). The contract's token balance must rise by exactly
+  `amount` across the funding transfer or the escrow is rejected with
+  `BalanceMismatch` (error code 6) — a lying transfer, fee-on-transfer, or
+  rebasing token would otherwise create `Funded` escrows backed by
+  nothing (threat model T5). Three test-only mock tokens in
+  `tests/malicious_token.rs`: lying transfer, short delivery (debits
+  300, delivers 270), and one that re-enters `release` from inside
+  `transfer` (T4). The re-entry test pinned the actual host behavior:
+  Soroban rejects re-entry as an unrecoverable context error ("Contract
+  re-entry is not allowed"), aborting the whole invocation — fail-closed.
+  Post-creation clawback remains possible by design and is documented in
+  T5 as accepted residual risk. **Not yet on testnet** — the current
+  deployment predates it. Closes issue #12.
+- [ ] Rest of the `docs/threat-model.md` §6 pre-mainnet checklist, scoped
+  into issues: [#8](https://github.com/DocForum/docforum-escrow/issues/8) write status before transfer + reject
+  contract-self addresses (Trivial), [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium),
+  [#10](https://github.com/DocForum/docforum-escrow/issues/10) storage TTL (Medium), [#15](https://github.com/DocForum/docforum-escrow/issues/15) integrator trust-model
+  docs (Trivial).
+- [ ] Related, not in the checklist: [#13](https://github.com/DocForum/docforum-escrow/issues/13) `get_escrow`
+  full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
+  (Medium).
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -274,3 +296,12 @@
   succeeds. **Not yet done:** the current testnet deployment (source
   `7a595d8`) predates #17, so it doesn't include the balance-delta check
   — needs a redeploy.
+- 2026-10-08 — Restored two sets of ROADMAP entries lost in merge
+  conflict resolution: #17's (issue #12, balance-delta check — Phase E4
+  item and its 2026-10-07 changelog entry, summarised here: contract
+  rejects escrows whose token balance doesn't rise by exactly `amount`,
+  three malicious mock-token tests, re-entry confirmed fail-closed), and
+  #16's (links to the threat-model issues #8–#10 and #13–#15; #11 and
+  #12 were opened and closed in between). #16 merged with an empty diff
+  because its branch's merge from `main` kept `main`'s ROADMAP.md
+  wholesale.
