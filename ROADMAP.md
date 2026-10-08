@@ -264,3 +264,13 @@
   (§1 invariants, T2, T8, §6) updated. **Not done:** publishing the
   `sdk-v0.3.0` release tarball per ADR 0003 — that's the follow-up step
   before `docforum-core` can consume it.
+- 2026-10-08 — Fixed `main` failing to compile after #17 and #18 merged
+  minutes apart: both added an error variant numbered 5, and the merge
+  kept #18's `InvalidRefundAfter = 5` and dropped #17's
+  `BalanceMismatch`. Restored it as `BalanceMismatch = 6` (5 is already
+  live on testnet as `InvalidRefundAfter`), and added `refund_after:
+  None` to #17's mock-token tests, written before #18 changed
+  `create_escrow`'s signature. 31/31 contract tests pass, wasm build
+  succeeds. **Not yet done:** the current testnet deployment (source
+  `7a595d8`) predates #17, so it doesn't include the balance-delta check
+  — needs a redeploy.
