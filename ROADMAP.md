@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`), independent review not yet done — blocking for any mainnet use.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -87,18 +87,18 @@
   draft in `docs/threat-model.md` (self-written by the implementer, so it
   does not count as the review). Stays unchecked until an independent
   reviewer has gone through it.
-- [ ] Pre-mainnet checklist from `docs/threat-model.md` §6, scoped into
-  issues:
-  [#8](https://github.com/DocForum/docforum-escrow/issues/8) write status before transfer + reject
-  contract-self addresses (Trivial),
-  [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium),
-  [#10](https://github.com/DocForum/docforum-escrow/issues/10) storage TTL (Medium),
-  [#11](https://github.com/DocForum/docforum-escrow/issues/11) timeout refund ADR + implementation (High),
-  [#12](https://github.com/DocForum/docforum-escrow/issues/12) balance-delta check + malicious mock tokens (High),
-  [#15](https://github.com/DocForum/docforum-escrow/issues/15) integrator trust-model docs (Trivial).
-- [ ] Related, not in the checklist:
-  [#13](https://github.com/DocForum/docforum-escrow/issues/13) `get_escrow` full-record read (Medium),
-  [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI (Medium).
+- [x] Timeout refund path when the releaser key is lost — issue #11.
+  Decided in `docs/adr/0004` (optional `refund_after` set at creation,
+  after which **anyone** may refund, still only to `payer`; `release` is
+  never gated by it; alternatives compared and payee implications for T8
+  recorded), implemented in `contracts/escrow/src/lib.rs` with 17 tests
+  in `contracts/escrow/tests/timeout_refund.rs` covering every edge case
+  the issue lists. Breaking `create_escrow` change → SDK bindings
+  regenerated, `@docforum/escrow-sdk` **0.3.0** (migration notes in ADR
+  0004), redeployed to testnet and verified live
+  (`docs/testnet-deployments.md`, 2026-10-08 entry). Closes issue #11.
+  The threat model's §6 checklist item for this is checked; the
+  operational half of T2 (key backup / multisig releaser) remains open.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -225,8 +225,52 @@
   invariants, actors, ten threats with severity, SDK and consumer
   integration notes, and a proposed pre-mainnet checklist. No contract
   changes. Self-written, so E4 stays open pending independent review.
-- 2026-10-07 — Merged the threat-model draft (#7) and scoped its §6
-  pre-mainnet checklist into issues #8–#12 and #15, plus #13
-  (`get_escrow`) and #14 (offline SDK tests). Releaser key custody and
-  idempotent funding are consumer concerns, tracked in `docforum-core`
-  (#25, #24).
+- 2026-10-08 — Closed issue #11 (Phase E4: timeout refund path when the
+  releaser key is lost). **ADR first:** `docs/adr/0004` picks the threat
+  model's candidate — an optional `refund_after` unix timestamp set at
+  `create_escrow`, after which anyone may `refund`, always only back to
+  `payer` — and compares it against a privileged unlock role, releaser
+  rotation, and doing nothing; it also spells out what the deadline means
+  for payees (T8): the commitment expires, `get_escrow` lets them read
+  it, and the new risk is bounded to "delayed then reversed", never
+  redirected. **Implementation:** `refund_after: Option<u64>` added to
+  `create_escrow` (rejects a deadline not strictly in the future — new
+  `Error::InvalidRefundAfter = 5`), `refund` accepts any caller once the
+  deadline has passed (state rules unchanged: still `Funded` only),
+  `release` deliberately *not* gated by the deadline (the releaser keeps
+  its right; whoever lands first wins, the loser gets `NotFunded`), plus
+  a read-only `get_escrow` so the deadline is inspectable on-chain. With
+  no `refund_after`, behaviour is exactly what it was before. **Tests:**
+  17 new in `tests/timeout_refund.rs` covering every edge case issue #11
+  lists (release in the same ledger the timeout passes — both orders;
+  deadline already past at creation; already released/refunded before the
+  timeout; no deadline at all) — 28/28 passing repo-wide, wasm release
+  build verified. **Breaking change:** `create_escrow`'s signature and
+  `EscrowData`'s layout both changed, so the contract was redeployed to
+  testnet (`CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5`,
+  supersedes the Phase E2 deployment, kept as history) and verified live
+  with a real non-releaser timeout refund after the deadline, a real
+  release after the deadline, and real rejections for a pre-deadline
+  stranger refund (`#3`), a past deadline at creation (`#5`) and a second
+  refund (`#4`) — full record with tx links in
+  `docs/testnet-deployments.md`. **SDK:** bindings regenerated from the
+  new wasm (never hand-edited), `@docforum/escrow-sdk` **0.2.0 → 0.3.0**
+  (breaking, per hard rule 3; same 0.x-minor-for-breaking convention as
+  0.1.0 → 0.2.0), adding optional `refundAfter` on `createEscrow` and a
+  `getEscrow()` accessor; migration steps for `docforum-core` are in ADR
+  0004. All 5 SDK integration tests pass against the new deployment
+  (`npm run test:integration`, still kept out of CI).
+  `ARCHITECTURE_ESSENTIALS.md`, `README.md` and `docs/threat-model.md`
+  (§1 invariants, T2, T8, §6) updated. **Not done:** publishing the
+  `sdk-v0.3.0` release tarball per ADR 0003 — that's the follow-up step
+  before `docforum-core` can consume it.
+- 2026-10-08 — Fixed `main` failing to compile after #17 and #18 merged
+  minutes apart: both added an error variant numbered 5, and the merge
+  kept #18's `InvalidRefundAfter = 5` and dropped #17's
+  `BalanceMismatch`. Restored it as `BalanceMismatch = 6` (5 is already
+  live on testnet as `InvalidRefundAfter`), and added `refund_after:
+  None` to #17's mock-token tests, written before #18 changed
+  `create_escrow`'s signature. 31/31 contract tests pass, wasm build
+  succeeds. **Not yet done:** the current testnet deployment (source
+  `7a595d8`) predates #17, so it doesn't include the balance-delta check
+  — needs a redeploy.
