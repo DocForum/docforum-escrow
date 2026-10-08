@@ -60,6 +60,10 @@ pub enum Error {
     /// docs/adr/0004: a deadline that has already passed would let
     /// anyone refund the escrow before the releaser could ever act.
     InvalidRefundAfter = 5,
+    /// The contract's token balance didn't rise by exactly `amount`
+    /// across `create_escrow`'s transfer (a lying or short-delivering
+    /// token) — see docs/threat-model.md T5.
+    BalanceMismatch = 6,
 }
 
 #[contract]
