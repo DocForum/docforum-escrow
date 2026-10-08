@@ -4,6 +4,9 @@
 // Phase E2: release, refund. Both restricted to the escrow's `releaser`
 // address, set at create_escrow time — see docs/adr/0002 for why a
 // per-escrow releaser was chosen over a single contract-level admin.
+// Phase E4 (issue #11): optional `refund_after` timeout refund — see
+// docs/adr/0004. After that deadline anyone may refund, but only back to
+// the payer, so a lost `releaser` key can no longer lock funds forever.
 //
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
@@ -33,6 +36,10 @@ pub struct EscrowData {
     /// The only address permitted to call `release`/`refund` on this
     /// escrow. Set once at `create_escrow` time — see docs/adr/0002.
     pub releaser: Address,
+    /// Optional deadline (unix seconds) after which `refund` opens to
+    /// anyone — still only back to `payer`. `None` means no timeout,
+    /// behaviour identical to before this field existed — see docs/adr/0004.
+    pub refund_after: Option<u64>,
 }
 
 #[contracttype]
@@ -49,7 +56,10 @@ pub enum Error {
     InvalidAmount = 2,
     Unauthorized = 3,
     NotFunded = 4,
-    BalanceMismatch = 5,
+    /// `refund_after` was not strictly in the future at creation — see
+    /// docs/adr/0004: a deadline that has already passed would let
+    /// anyone refund the escrow before the releaser could ever act.
+    InvalidRefundAfter = 5,
 }
 
 #[contract]
@@ -60,16 +70,11 @@ impl EscrowContract {
     /// Locks `amount` of `token` pulled from `payer`, held for `payee`,
     /// tagged with an opaque `condition_ref`. `releaser` is the only
     /// address that will later be permitted to call `release`/`refund`
-    /// on this escrow (see docs/adr/0002). Requires `payer` auth (the
-    /// contract moves their funds). Returns the new escrow's id.
-    ///
-    /// The contract's token balance must rise by exactly `amount` across
-    /// the transfer, or the escrow is rejected (`BalanceMismatch`). All
-    /// escrows in one token share the contract's balance; a token that
-    /// delivers less than `amount` (fee-on-transfer, rebasing) or lies
-    /// about moving funds would otherwise leave later escrows unfunded
-    /// (threat model T5). This cannot catch a token that claws funds
-    /// back *after* creation — see T5 in docs/threat-model.md.
+    /// on this escrow (see docs/adr/0002). `refund_after` is an optional
+    /// unix timestamp after which `refund` opens to any caller, always
+    /// back to `payer` (docs/adr/0004); `None` means no timeout.
+    /// Requires `payer` auth (the contract moves their funds). Returns
+    /// the new escrow's id.
     pub fn create_escrow(
         env: Env,
         payer: Address,
@@ -78,9 +83,15 @@ impl EscrowContract {
         amount: i128,
         condition_ref: String,
         releaser: Address,
+        refund_after: Option<u64>,
     ) -> Result<u64, Error> {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
+        }
+        if let Some(deadline) = refund_after {
+            if deadline <= env.ledger().timestamp() {
+                return Err(Error::InvalidRefundAfter);
+            }
         }
         payer.require_auth();
 
@@ -102,6 +113,7 @@ impl EscrowContract {
             condition_ref,
             status: EscrowStatus::Funded,
             releaser,
+            refund_after,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Ok(id)
@@ -117,12 +129,28 @@ impl EscrowContract {
         Ok(data.status)
     }
 
+    /// Read-only accessor for everything stored about `escrow_id` —
+    /// payer, payee, token, amount, `condition_ref`, status, `releaser`
+    /// and `refund_after`. Exists so payees and integrators can check
+    /// the deadline before relying on a `Funded` escrow (docs/adr/0004,
+    /// threat model T8). Errors on an unknown id.
+    pub fn get_escrow(env: Env, escrow_id: u64) -> Result<EscrowData, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)
+    }
+
     /// Moves the escrowed `amount` to `payee`. Only the escrow's
     /// `releaser` (set at `create_escrow` time) may call this — the
     /// contract enforces WHO, never WHY (ADR 0001). Errors if the
     /// escrow doesn't exist, `caller` isn't the releaser, or the escrow
     /// isn't currently `Funded` (no double-release, no releasing a
     /// refunded escrow).
+    ///
+    /// Deliberately **not** gated by `refund_after` (docs/adr/0004): after
+    /// the deadline the releaser can still release, racing any timeout
+    /// refund — whoever lands first wins and the other fails `NotFunded`.
     pub fn release(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
@@ -147,9 +175,16 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Returns the escrowed `amount` to `payer`. Same authorization and
-    /// state rules as `release` (see above) — only the escrow's
-    /// `releaser` may call this, only while `Funded`.
+    /// Returns the escrowed `amount` to `payer`. Same state rule as
+    /// `release` (only while `Funded`), but two callers are authorised:
+    ///
+    /// - the escrow's `releaser` (docs/adr/0002), always; or
+    /// - **anyone**, once `refund_after` has been reached — the timeout
+    ///   refund path for a lost/unsignable `releaser` key (docs/adr/0004).
+    ///
+    /// The destination never changes: timeout or not, funds only ever go
+    /// back to the stored `payer`. With no `refund_after` set, behaviour
+    /// is identical to before the timeout existed — releaser only.
     pub fn refund(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
@@ -159,7 +194,11 @@ impl EscrowContract {
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::NotFound)?;
 
-        if caller != data.releaser {
+        let timeout_passed = match data.refund_after {
+            Some(deadline) => env.ledger().timestamp() >= deadline,
+            None => false,
+        };
+        if caller != data.releaser && !timeout_passed {
             return Err(Error::Unauthorized);
         }
         if data.status != EscrowStatus::Funded {

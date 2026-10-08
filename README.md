@@ -5,7 +5,7 @@
 ![Stack](https://img.shields.io/badge/contract-Rust%20%2F%20Soroban-orange.svg)
 ![Network](https://img.shields.io/badge/network-testnet%20only-important.svg)
 
-**🔗 Live on testnet:** [`CABSYY5FZGCCZ3UTBQGC7S357D2FUFLUQUUGJCCFHKGEJZVIFK4SIS2Z`](https://stellar.expert/explorer/testnet/contract/CABSYY5FZGCCZ3UTBQGC7S357D2FUFLUQUUGJCCFHKGEJZVIFK4SIS2Z) — deployed and verified with a real `create_escrow` call, not just uploaded. Details: [`docs/testnet-deployments.md`](docs/testnet-deployments.md).
+**🔗 Live on testnet:** [`CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5`](https://stellar.expert/explorer/testnet/contract/CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5) — current deployment (Phase E4: adds the `refund_after` timeout refund), verified with real calls, not just uploaded. History and details: [`docs/testnet-deployments.md`](docs/testnet-deployments.md).
 
 A [Soroban](https://developers.stellar.org/docs/build/smart-contracts) (Stellar) smart contract for conditional payment escrow — lock funds, and release them to the payee only when release is authorized, or return them to the payer on refund. Paired with a TypeScript client SDK, `@docforum/escrow-sdk`.
 
@@ -40,14 +40,22 @@ Two reasons, stated plainly rather than blended together:
 
 | Function | Status | Description |
 |---|---|---|
-| `create_escrow(payer, payee, token, amount, condition_ref) -> escrow_id` | ✅ Implemented | Pulls `amount` of `token` from `payer` (requires `payer` auth), stores an opaque `condition_ref`, sets status `Funded`. Rejects non-positive amounts. |
+| `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id` | ✅ Implemented | Pulls `amount` of `token` from `payer` (requires `payer` auth), stores an opaque `condition_ref`, sets status `Funded`. Rejects non-positive amounts, and any `refund_after` that isn't strictly in the future. |
 | `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
-| `release(escrow_id, caller) -> Result<()>` | 🚧 Phase E2 — [issue #2](https://github.com/DocForum/docforum-escrow/issues/2) | Restricted to a designated releaser role; moves funds to `payee`. |
-| `refund(escrow_id, caller) -> Result<()>` | 🚧 Phase E2 — [issue #3](https://github.com/DocForum/docforum-escrow/issues/3) | Restricted similarly; returns funds to `payer`. |
+| `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
+| `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
+| `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
 
 ```
 EscrowStatus = Funded | Released | Refunded
 ```
+
+`refund_after` is optional: an escrow created without one behaves exactly
+as it did before the timeout existed — releaser-only refunds, forever.
+That's the answer to "what if the releaser's key is lost?" (threat model
+T2): instead of locking funds permanently, a deadline lets anyone return
+them to the payer. See [ADR 0004](docs/adr/0004-timeout-refund-path.md)
+for the decision and what it means for payees.
 
 **Design rule, enforced deliberately:** the contract decides **who** may
 call `release`/`refund`, never **why**. `condition_ref` is an opaque
@@ -99,7 +107,7 @@ Requires a Rust toolchain with the `wasm32v1-none` target.
 git clone https://github.com/DocForum/docforum-escrow.git
 cd docforum-escrow/contracts/escrow
 
-# Run the test suite (4 tests, all passing today)
+# Run the test suite (28 tests, all passing today)
 cargo test
 
 # Build the deployable contract
