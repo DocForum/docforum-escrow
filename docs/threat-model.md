@@ -176,10 +176,17 @@ behave like SEP-41.
     covered by mock-token tests (`tests/malicious_token.rs`). What it
     **cannot** catch is a token that takes funds back *after*
     creation: a clawback-enabled issuer can drain the shared pool
-    later, and no creation-time check sees that. Accepted residual
-    risk for now (documented, deliberately not solved here) — the
-    practical mitigation stays with the consumer: allowlist only
-    tokens without clawback, transfer fees, or rebasing.
+    later, and no creation-time check sees that. `release` and `refund`
+    now check the contract's current token balance before transferring
+    and return `PoolInsufficient` (error 7) when it is below the
+    individual escrow payout. A clawback regression test covers this
+    failure path. The guard prevents an opaque transfer failure, but
+    cannot guarantee aggregate solvency when several funded escrows
+    share one token pool: earlier payouts may consume balances needed by
+    later escrows. Consumers should still allowlist tokens without
+    clawback, transfer fees, or rebasing. Each payout adds one read-only
+    `balance` invocation; exact CPU/instruction deltas remain to be
+    recorded with the repository's test/build tooling.
   - Consumers: only use an allowlist of known tokens. The current
     consumer uses one configured token (`escrowTokenId`), which is good.
   - Document that payees must check the escrow's `token`, not just its
@@ -295,7 +302,10 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
       `get_escrow`, tests in `contracts/escrow/tests/timeout_refund.rs`,
       live on testnet). The remaining T2 mitigations (contract-self as
       payee/releaser, key backup/multisig) are still open above.
-- [ ] ⚙ Balance-delta check on `create_escrow` (T5)
+- [x] ⚙ Balance-delta check on `create_escrow` (T5), issue #12
+- [x] ⚙ Pre-payout solvency check and explicit short-pool error (T5),
+      issue #38; one token `balance` read is added to each payout. Exact
+      resource deltas still need measurement.
 - [ ] ⚙ TTL extension for escrow entries and instance (T6)
 - [ ] ⚙ Emit create/release/refund events (T7)
 - [x] Tests with a malicious mock token: lying transfer, short
