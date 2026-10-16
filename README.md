@@ -49,9 +49,9 @@ Two reasons, stated plainly rather than blended together:
 For shared releaser control, `contracts/releaser-account/` implements an
 optional Soroban custom account with an M-of-N Ed25519 signer set. It only
 authorizes one `release` or `refund` invocation against its configured
-escrow. Signer-set and threshold changes require signatures from the
-current threshold and consume a management nonce. The escrow contract
-itself remains unchanged; pass the deployed custom-account address as
+escrow and limits authorizations per ledger window. Signer-set and threshold
+changes require the current threshold; cap changes require every signer.
+All management actions consume a nonce. The escrow contract itself remains unchanged; pass the deployed custom-account address as
 `releaser` when creating an escrow. The account is not deployed or verified
 on testnet yet; mainnet use remains blocked on the Phase E4 review.
 

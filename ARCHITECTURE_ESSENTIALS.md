@@ -47,6 +47,8 @@ authorization contexts other than one `release` or `refund` call on its
 configured escrow. Signer additions/removals and threshold changes use a
 separate signed management digest bound to the account and a monotonic
 management nonce. See [ADR 0005](docs/adr/0005-custom-releaser-account.md).
+The account also caps release/refund authorizations by count in a ledger
+window; changing that cap requires every registered signer (ADR 0008).
 
 ## TypeScript SDK surface (`sdk/`)
 ```ts

@@ -87,6 +87,10 @@ value. **Reviewers should challenge these ratings.**
     This narrows the account's authority but cannot decide whether a
     permitted release or refund is the correct outcome; secure signer
     devices and off-chain quorum coordination remain operational duties.
+  - [x] Limit a custom account to a configured number of settlements per
+    ledger window. Usage is stored per window and extended to the maximum
+    persistent TTL; a window shorter than that TTL cannot archive usage
+    before rollover. Cap changes require every registered signer (ADR 0008).
   - Keep the releaser key in a KMS/HSM, not as an environment variable.
   - In the consumer, rotate releaser keys periodically for **new**
     escrows, so a leak only reaches escrows from that key's period.

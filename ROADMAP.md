@@ -15,6 +15,7 @@
   `docs/adr/0005-custom-releaser-account.md` and
   `docs/threat-model.md`. Not deployed to testnet; this does not change the
   escrow contract or make mainnet use permissible.
+- [x] [#51](https://github.com/DocForum/docforum-escrow/issues/51) Cap settlement count per ledger window, persist and refresh usage until rollover, and require unanimous signer approval to change policy. See ADR 0008; the custom account remains undeployed pending testnet verification and review.
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -140,6 +141,7 @@
   repo's.
 
 ## Changelog
+- 2026-10-17 — Added a per-window settlement count cap to the releaser custom account, persistent usage tracking, unanimous approval for cap changes, and boundary/policy tests. Closes issue #51.
 - 2026-10-16 — Added the optional M-of-N Ed25519 custom releaser account
   (issue #50) with an immutable escrow target, release/refund-only auth
   policy, threshold-signed nonce-bound signer management, unit tests, an

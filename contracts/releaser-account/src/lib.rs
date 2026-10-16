@@ -4,7 +4,9 @@ use soroban_sdk::{
     auth::{Context, CustomAccountInterface},
     contract, contracterror, contractimpl, contracttype,
     crypto::Hash,
-    symbol_short, Address, Bytes, BytesN, Env, Symbol, TryFromVal, Val, Vec,
+    symbol_short,
+    xdr::ToXdr,
+    Address, Bytes, BytesN, Env, Symbol, TryFromVal, Val, Vec,
 };
 
 const MAX_SIGNERS: u32 = 20;
@@ -24,6 +26,8 @@ pub enum ManagementAction {
     AddSigner(BytesN<32>),
     RemoveSigner(BytesN<32>),
     SetThreshold(u32),
+    /// Policy changes require signatures from every registered signer.
+    SetPolicy(u32, u32),
 }
 
 #[contracttype]
@@ -34,6 +38,9 @@ enum DataKey {
     Signer(BytesN<32>),
     SignerCount,
     ManagementNonce,
+    MaxOperationsPerWindow,
+    WindowLedgers,
+    WindowUsage(u32),
 }
 
 #[contracterror]
@@ -48,6 +55,8 @@ pub enum Error {
     SignerAlreadyExists = 6,
     UnknownSigner = 7,
     CannotRemoveBelowThreshold = 8,
+    InvalidPolicy = 9,
+    RateLimited = 10,
 }
 
 #[contract]
@@ -55,14 +64,27 @@ pub struct ReleaserAccount;
 
 #[contractimpl]
 impl ReleaserAccount {
-    /// Initializes an immutable escrow target and an M-of-N Ed25519 signer set.
-    pub fn __constructor(env: Env, escrow: Address, signers: Vec<BytesN<32>>, threshold: u32) {
+    /// Initializes an escrow target, M-of-N signer set, and operation cap.
+    pub fn __constructor(
+        env: Env,
+        escrow: Address,
+        signers: Vec<BytesN<32>>,
+        threshold: u32,
+        max_operations_per_window: u32,
+        window_ledgers: u32,
+    ) {
         if signers.is_empty()
             || signers.len() > MAX_SIGNERS
             || threshold == 0
             || threshold > signers.len()
         {
             env.panic_with_error(Error::InvalidConfiguration);
+        }
+        if max_operations_per_window == 0
+            || window_ledgers == 0
+            || window_ledgers >= env.storage().max_ttl()
+        {
+            env.panic_with_error(Error::InvalidPolicy);
         }
         for i in 0..signers.len() {
             let key = signers.get(i).unwrap();
@@ -83,6 +105,12 @@ impl ReleaserAccount {
         env.storage()
             .persistent()
             .set(&DataKey::ManagementNonce, &0u64);
+        env.storage()
+            .persistent()
+            .set(&DataKey::MaxOperationsPerWindow, &max_operations_per_window);
+        env.storage()
+            .persistent()
+            .set(&DataKey::WindowLedgers, &window_ledgers);
     }
 
     pub fn escrow(env: Env) -> Address {
@@ -101,13 +129,28 @@ impl ReleaserAccount {
         get(&env, &DataKey::ManagementNonce)
     }
 
+    pub fn policy(env: Env) -> (u32, u32) {
+        (
+            get(&env, &DataKey::MaxOperationsPerWindow),
+            get(&env, &DataKey::WindowLedgers),
+        )
+    }
+
+    pub fn window_usage(env: Env, window: u32) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::WindowUsage(window))
+            .unwrap_or(0)
+    }
+
     /// Returns the exact digest the current threshold must sign for the next
     /// management operation. The advancing nonce prevents replay.
     pub fn management_payload(env: Env, action: ManagementAction) -> BytesN<32> {
         management_digest(&env, &action, get(&env, &DataKey::ManagementNonce)).to_bytes()
     }
 
-    /// Adds/removes a signer or changes M after verifying the current quorum.
+    /// Changes signers/threshold at the current quorum. Cap changes require
+    /// signatures from every registered signer.
     pub fn manage(
         env: Env,
         action: ManagementAction,
@@ -164,6 +207,23 @@ impl ReleaserAccount {
                     .persistent()
                     .set(&DataKey::Threshold, &threshold);
             }
+            ManagementAction::SetPolicy(max_operations_per_window, window_ledgers) => {
+                if signatures.len() != get::<u32>(&env, &DataKey::SignerCount) {
+                    return Err(Error::InvalidSignature);
+                }
+                if max_operations_per_window == 0
+                    || window_ledgers == 0
+                    || window_ledgers >= env.storage().max_ttl()
+                {
+                    return Err(Error::InvalidPolicy);
+                }
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::MaxOperationsPerWindow, &max_operations_per_window);
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::WindowLedgers, &window_ledgers);
+            }
         }
 
         let nonce = get::<u64>(&env, &DataKey::ManagementNonce);
@@ -196,7 +256,8 @@ impl CustomAccountInterface for ReleaserAccount {
             &signatures,
             get(&env, &DataKey::Threshold),
             get(&env, &DataKey::SignerCount),
-        )
+        )?;
+        consume_operation_slot(&env)
     }
 }
 
@@ -253,6 +314,21 @@ fn verify_signatures(
     if valid < threshold {
         return Err(Error::InvalidSignature);
     }
+    Ok(())
+}
+
+fn consume_operation_slot(env: &Env) -> Result<(), Error> {
+    let cap: u32 = get(env, &DataKey::MaxOperationsPerWindow);
+    let window_ledgers: u32 = get(env, &DataKey::WindowLedgers);
+    let window = env.ledger().sequence().saturating_sub(1) / window_ledgers;
+    let key = DataKey::WindowUsage(window);
+    let used: u32 = env.storage().persistent().get(&key).unwrap_or(0);
+    if used >= cap {
+        return Err(Error::RateLimited);
+    }
+    env.storage().persistent().set(&key, &(used + 1));
+    let ttl = env.storage().max_ttl();
+    env.storage().persistent().extend_ttl(&key, ttl - 1, ttl);
     Ok(())
 }
 

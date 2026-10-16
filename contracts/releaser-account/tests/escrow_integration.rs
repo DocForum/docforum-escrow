@@ -1,9 +1,6 @@
 use docforum_escrow::{EscrowContract, EscrowContractClient};
 use docforum_releaser_account::{ReleaserAccount, ReleaserAccountClient};
-use soroban_sdk::{
-    testutils::{Address as _, Register as _},
-    token, Address, Env, String, Vec,
-};
+use soroban_sdk::{testutils::Address as _, token, Address, Env, String, Vec};
 
 #[test]
 fn custom_account_can_be_configured_as_escrow_releaser() {
@@ -22,7 +19,10 @@ fn custom_account_can_be_configured_as_escrow_releaser() {
     let escrow = EscrowContractClient::new(&env, &escrow_id);
     let signer_key = soroban_sdk::BytesN::from_array(&env, &[7; 32]);
     let signers: Vec<soroban_sdk::BytesN<32>> = Vec::from_array(&env, [signer_key]);
-    let releaser_id = env.register(ReleaserAccount, (&escrow_id, &signers, &1u32));
+    let releaser_id = env.register(
+        ReleaserAccount,
+        (&escrow_id, &signers, &1u32, &3u32, &10u32),
+    );
     let releaser = ReleaserAccountClient::new(&env, &releaser_id);
 
     let id = escrow.create_escrow(
