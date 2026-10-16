@@ -1,5 +1,15 @@
 # Testnet deployments
 
+## Version/provenance compatibility
+
+The contract source now exposes `version() -> String` (`1.0.0`) and
+embeds `git_sha` plus `soroban_sdk_version` in newly built WASM. None of
+the deployments recorded below includes that entry point or metadata:
+they were deployed before the version API was introduced. Their source
+commit records are historical provenance only; they cannot be assigned a
+verified contract semver retroactively. A future redeployment should
+record the returned version and both metadata values here. See issue #52.
+
 ## `docforum_escrow` — 2026-10-08 (Phase E4: `refund_after` timeout refund + `get_escrow`)
 
 | | |

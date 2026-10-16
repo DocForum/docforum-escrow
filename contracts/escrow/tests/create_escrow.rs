@@ -97,3 +97,12 @@ fn get_status_errors_for_unknown_escrow() {
     let result = client.try_get_status(&999);
     assert!(result.is_err());
 }
+
+#[test]
+fn version_reports_the_contract_semver() {
+    let env = Env::default();
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert_eq!(client.version(), String::from_str(&env, "1.0.0"));
+}

@@ -122,6 +122,11 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E5 — Contract features
+- [x] Issue #52: contract `version()` entry point, deterministic WASM metadata (`git_sha` and locked `soroban_sdk_version`), and CI enforcement that source changes bump `CONTRACT_VERSION`.
+- [ ] Issue #52: SDK first-use compatibility check and explicit legacy-deployment fallback. The contract API and metadata are now available for that check, but generated binding regeneration and query/fallback verification remain.
+- [ ] Issue #52: record versions and metadata for versioned testnet deployments. Existing deployments predate `version()` and remain explicitly unversioned; do not infer a version for them.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -305,3 +310,4 @@
   #12 were opened and closed in between). #16 merged with an empty diff
   because its branch's merge from `main` kept `main`'s ROADMAP.md
   wholesale.
+- 2026-10-16 — Issue #52: added contract version `1.0.0`, reproducible WASM provenance metadata, a CI version-bump guard, and deployment-history notes. Existing deployments cannot report a version because the API did not exist at deployment time. SDK-side compatibility negotiation remains open pending generated binding regeneration and verification.

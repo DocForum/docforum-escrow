@@ -45,6 +45,7 @@ Two reasons, stated plainly rather than blended together:
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
 | `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
+| `version() -> String` | ✅ Implemented in source | Returns the contract interface version (`1.0.0`). Build provenance is embedded in the WASM as `git_sha` and `soroban_sdk_version`; existing testnet deployments predate this API. |
 
 ```
 EscrowStatus = Funded | Released | Refunded
@@ -150,6 +151,13 @@ review, blocking for any mainnet use) are tracked as open issues:
 | [#6 Threat model + external security review](https://github.com/DocForum/docforum-escrow/issues/6) | E4 | High |
 
 Full breakdown: [`ROADMAP.md`](ROADMAP.md).
+
+The contract's current source reports version `1.0.0`. Builds embed a
+source SHA from `DOCFORUM_GIT_SHA` (or GitHub Actions' `GITHUB_SHA`) and
+the locked `soroban-sdk` version. Without a supplied SHA, provenance is
+marked `unknown` so local builds stay reproducible. Existing testnet
+deployments do not expose `version()` because they predate this API; see
+[`docs/testnet-deployments.md`](docs/testnet-deployments.md).
 
 ## Contributing
 
