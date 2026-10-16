@@ -11,10 +11,13 @@
 ## Contract surface
 ```
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1 + E2 + E4)
+create_streamed_escrow(..., VestingSchedule) -> escrow_id   // SOURCE ONLY (issue #44)
+withdraw(escrow_id, payee) -> amount   // SOURCE ONLY (issue #44); payee-authorized vested amount
+get_vesting(escrow_id) -> VestingInfo   // SOURCE ONLY (issue #44); schedule + vested/withdrawn/claimable amounts
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
-refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
+refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — streamed refunds settle vested amount to payee and return unvested remainder to payer
 ```
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
@@ -38,6 +41,11 @@ creation (`docs/adr/0004`): after it passes **anyone** may call
 and `release` is never gated by it, so the releaser can still release
 after the deadline (whoever lands first wins). No `refund_after` means
 behaviour is exactly what it was before: releaser-only refunds, forever.
+
+The streamed methods in issue #44 remain source-only until generated SDK
+bindings are refreshed and a new testnet deployment is verified. Their
+fixed total uses integer floor rounding before `end`; an optional cliff
+releases all accrued amount once it is reached (ADR 0007).
 
 ## TypeScript SDK surface (`sdk/`)
 ```ts

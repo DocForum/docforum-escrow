@@ -25,9 +25,9 @@ in this document still describes the same design.*
 
 | # | Invariant | Enforced by |
 |---|---|---|
-| I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination. |
-| I2 | Only the escrow's `releaser` can move funds out — or, once `refund_after` has passed, anyone at all, and then still only back to `payer`. | `caller.require_auth()` + `caller == data.releaser`, relaxed solely by the deadline check (`lib.rs:149`, `lib.rs:183`, `lib.rs:191`). |
-| I3 | Each escrow pays out at most once. | `status == Funded` check before transfer, status written after — shared by release and both refund paths. |
+| I1 | Funds only leave an escrow to its stored `payee` or `payer`. No call argument can choose a destination. | Destinations are read from stored escrow data. A streamed refund may pay both addresses according to the vesting schedule. |
+| I2 | Only the `releaser` can release/refund, except a streamed `payee` may withdraw the vested part and anyone may call a timed refund after `refund_after`. | `require_auth()` is checked against the role for each operation; timeout callers cannot choose either destination. |
+| I3 | Each escrow pays out at most its funded amount. | Stream withdrawals are tracked cumulatively; release/refund settle only the remaining amount and require `status == Funded`. |
 | I4 | An escrow only exists if `amount` was actually transferred in. | `payer.require_auth()` + token `transfer` before the escrow is stored (`lib.rs:96-112`). |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
 
@@ -35,9 +35,8 @@ I1 is the most important property in this design. A full compromise of the
 `releaser` key lets an attacker pick the **wrong outcome** (release when it
 should refund, or the reverse). It does **not** let them redirect funds to
 an address they control, unless they already control the `payee` or
-`payer`. Neither does the timeout: it can only hand funds back to the
-payer, so the worst case there is an escrow ending early, not funds going
-somewhere new.
+`payer`. For a streamed escrow, a timeout refund pays the already-vested
+amount to the payee and only the unvested remainder to the payer.
 
 ## 2. Assets and actors
 
@@ -47,10 +46,10 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 | Actor | Can do | Trusted for |
 |---|---|---|
 | `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser` | Nothing after creation. Has no on-chain power to cancel. |
-| `payee` | Receive funds | Nothing. Has **no on-chain power at all**, including no way to object to a refund. |
+| `payee` | Receive funds; withdraw currently vested funds from a streamed escrow | Nothing beyond their own stream withdrawal. |
 | `releaser` | `release` or `refund` its escrows, once | Choosing the correct outcome. This is the main trust assumption. |
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |
-| Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds back to that escrow's `payer` | Nothing. |
+| Anyone | Call `create_escrow` with their own funds, call read methods, and — after `refund_after` — call `refund` | Cannot choose destinations; a stream refund sends vested remainder to payee and unvested remainder to payer. |
 
 There is **no admin, no upgrade function, and no pause.** The deployed
 WASM is immutable. Nobody, including the deployer, can change an
@@ -91,7 +90,9 @@ value. **Reviewers should challenge these ratings.**
   no admin and no upgrade. Funds stayed in the contract address
   permanently.
 - **Effect (now):** escrows created with a `refund_after` deadline can be
-  recovered by **anyone** after it passes — always back to the `payer`
+  recovered by **anyone** after it passes — back to the `payer` for a
+  standard escrow, or split between `payee` (vested) and `payer`
+  (unvested) for a stream
   (`docs/adr/0004`, implemented in issue #11). Escrows created *without*
   one (still the default, and what `docforum-core` passes today) keep the
   original behaviour: locked forever. The permanent-lock failure mode is
@@ -222,13 +223,15 @@ behave like SEP-41.
   "the funds are committed to me." A payee should check who the
   `releaser` is before relying on an escrow.
 - **With a `refund_after` (issue #11, `docs/adr/0004`), the commitment
-  also expires:** after the deadline anyone can return the funds to the
-  payer, so a payee must treat such an escrow as *time-bounded*. Read the
+  also expires:** after the deadline anyone can settle the escrow. A
+  standard escrow returns to the payer; a streamed escrow pays vested
+  amounts to the payee and returns the unvested remainder to the payer.
+  A payee must treat the escrow as *time-bounded*. Read the
   deadline first — `get_escrow` on-chain, `client.getEscrow()` in the
   SDK — and require no deadline (or one well beyond your fulfilment
   window) from a `releaser` you trust if you need certainty. The
   direction of the new risk is bounded: the timeout path can only pay
-  the payer, never a third party, and the releaser can still release
+  its stored payee and payer, never a third party, and the releaser can still release
   after the deadline — so the realistic exposure is payment being delayed
   and then reversed, not redirected.
 
