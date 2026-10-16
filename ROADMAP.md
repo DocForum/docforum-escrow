@@ -122,6 +122,16 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E6 — SDK & integrator tooling
+- [x] Dual ESM/CommonJS package with conditional browser exports and
+  declarations for both formats (issue #65). CI smoke checks load the
+  package through `require()` and `import`, then bundle a small browser
+  consumer with Vite. The Vite build reports its emitted and compressed
+  bundle size in CI; it has not been measured locally because dependencies
+  were not installed for this change. `docforum-core` can remove its
+  dynamic-import compatibility loader after upgrading to SDK 0.4.0 and
+  verifying the package integration.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -129,6 +139,11 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — SDK 0.4.0 now builds ESM and CommonJS distributions with
+  conditional exports, separate declaration files, and a browser entry.
+  Added deterministic CI smoke coverage for Node `require`, ESM `import`,
+  and a Vite browser bundle, including bundle-size output. Updated SDK
+  integration guidance; closes issue #65.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

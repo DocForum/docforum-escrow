@@ -7,7 +7,7 @@
 
 **🔗 Live on testnet:** [`CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5`](https://stellar.expert/explorer/testnet/contract/CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5) — current deployment (Phase E4: adds the `refund_after` timeout refund), verified with real calls, not just uploaded. History and details: [`docs/testnet-deployments.md`](docs/testnet-deployments.md).
 
-A [Soroban](https://developers.stellar.org/docs/build/smart-contracts) (Stellar) smart contract for conditional payment escrow — lock funds, and release them to the payee only when release is authorized, or return them to the payer on refund. Paired with a TypeScript client SDK, `@docforum/escrow-sdk`.
+A [Soroban](https://developers.stellar.org/docs/build/smart-contracts) (Stellar) smart contract for conditional payment escrow — lock funds, and release them to the payee only when release is authorized, or return them to the payer on refund. Paired with a TypeScript client SDK, `@docforum/escrow-sdk`. SDK 0.4.0 publishes ESM and CommonJS entry points with declarations for both; bundlers select its browser-compatible ESM entry through package exports.
 
 This repo is deliberately **generic and domain-agnostic**. It has no
 database, no server, and no knowledge of patients, doctors, referrals, or
@@ -93,8 +93,8 @@ contracts/escrow/
   tests/            Integration tests (soroban-sdk testutils) — required for any contract change
   Cargo.toml
 sdk/
-  src/index.ts      @docforum/escrow-sdk — TypeScript client (not yet implemented, see issue #4)
-  package.json
+  src/index.ts      @docforum/escrow-sdk — ergonomic TypeScript client
+  package.json      ESM, CommonJS, and browser-aware package exports
 docs/adr/           Architecture decision records
 .github/            CI workflow, issue/PR templates
 ```
@@ -121,8 +121,11 @@ contract id, transaction links, and the exact `stellar` CLI commands to
 redeploy. **Mainnet is out of scope until the Phase E4 security review is
 complete — see [hard rule 4](ARCHITECTURE_ESSENTIALS.md#hard-rules).**
 
-The TypeScript SDK (`sdk/`) is still a placeholder — see
-[issue #4](https://github.com/DocForum/docforum-escrow/issues/4).
+The TypeScript SDK lives in `sdk/` and is published as `@docforum/escrow-sdk`.
+It supports ESM imports and CommonJS `require()`; browser bundlers such as
+Vite select the ESM browser entry. If you use `docforum-core`'s temporary
+dynamic-import loader, it can be removed after upgrading to SDK 0.4.0 and
+verifying your integration against the package's CommonJS export.
 
 ## Documentation
 

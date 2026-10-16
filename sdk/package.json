@@ -1,16 +1,35 @@
 {
   "name": "@docforum/escrow-sdk",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "TypeScript client for the docforum-escrow Soroban contract.",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "browser": "dist/esm/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/esm/index.d.ts",
+      "browser": "./dist/esm/index.js",
+      "import": "./dist/esm/index.js",
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    }
+  },
   "files": [
     "dist"
   ],
   "scripts": {
     "prepare": "npm run build",
-    "build": "tsc",
+    "build": "npm run build:esm && npm run build:cjs",
+    "build:esm": "tsc -p tsconfig.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json && node -e \"require('node:fs').writeFileSync('dist/cjs/package.json', '{\\\"type\\\":\\\"commonjs\\\"}\\n')\"",
+    "smoke:cjs": "node smoke/cjs.cjs",
+    "smoke:esm": "node smoke/esm.mjs",
+    "smoke:browser": "vite build --config smoke/browser/vite.config.mjs",
+    "smoke": "npm run smoke:cjs && npm run smoke:esm && npm run smoke:browser",
     "test": "echo 'No fast/mocked tests yet — this SDK is a thin wrapper with no pure logic to unit test in isolation. See test:integration.'",
     "test:integration": "vitest run",
     "typecheck": "tsc --noEmit"
@@ -20,6 +39,7 @@
   },
   "devDependencies": {
     "typescript": "^5.6.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "vite": "^6.4.3"
   }
 }
