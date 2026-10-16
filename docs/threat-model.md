@@ -19,6 +19,10 @@ from T2's candidate list was decided in `docs/adr/0004` and implemented
 reflect that. The scope commit above predates the change; everything else
 in this document still describes the same design.*
 
+*Updated 2026-10-16 for issue #21 (Phase E5): fixed milestone schedules,
+per-tranche release flags, partial status, and refund of only the
+unreleased remainder are specified in `docs/adr/0005`.*
+
 ---
 
 ## 1. What the contract is supposed to guarantee
@@ -27,7 +31,7 @@ in this document still describes the same design.*
 |---|---|---|
 | I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination. |
 | I2 | Only the escrow's `releaser` can move funds out — or, once `refund_after` has passed, anyone at all, and then still only back to `payer`. | `caller.require_auth()` + `caller == data.releaser`, relaxed solely by the deadline check (`lib.rs:149`, `lib.rs:183`, `lib.rs:191`). |
-| I3 | Each escrow pays out at most once. | `status == Funded` check before transfer, status written after — shared by release and both refund paths. |
+| I3 | Each milestone pays out at most once, and total releases never exceed the funded amount. | Fixed positive schedule summing to `amount`; per-index released flag; status is updated after transfer. Refund computes only the unreleased remainder. |
 | I4 | An escrow only exists if `amount` was actually transferred in. | `payer.require_auth()` + token `transfer` before the escrow is stored (`lib.rs:96-112`). |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
 
@@ -48,7 +52,7 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 |---|---|---|
 | `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser` | Nothing after creation. Has no on-chain power to cancel. |
 | `payee` | Receive funds | Nothing. Has **no on-chain power at all**, including no way to object to a refund. |
-| `releaser` | `release` or `refund` its escrows, once | Choosing the correct outcome. This is the main trust assumption. |
+| `releaser` | `release`, `release_milestone`, or `refund` its escrows | Choosing the correct outcome and, for milestones, the appropriate tranche order. This is the main trust assumption. |
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |
 | Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds back to that escrow's `payer` | Nothing. |
 
