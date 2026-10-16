@@ -50,6 +50,13 @@ await client.getEscrow(escrowId);            // full stored record — incl. rel
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
 await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter has passed
 ```
+SDK failures are exposed as typed `EscrowError` subclasses. Contract
+rejections include their numeric `code` and a named class (`NotFoundError`,
+`UnauthorizedError`, `NotFundedError`, and others); future unknown contract
+codes remain a generic `ContractError`. Simulation, submission, timeout,
+and network-passphrase mismatch failures have separate classes. Original
+exceptions are retained as `cause`. See `docs/sdk-errors.md` for migration
+examples.
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
 for no timeout, which behaves exactly as this contract did before the
