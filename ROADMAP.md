@@ -115,12 +115,15 @@
   deployment predates it. Closes issue #12.
 - [ ] Rest of the `docs/threat-model.md` §6 pre-mainnet checklist, scoped
   into issues: [#8](https://github.com/DocForum/docforum-escrow/issues/8) write status before transfer + reject
-  contract-self addresses (Trivial), [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium),
+  contract-self addresses (Trivial), [x] [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium),
   [#10](https://github.com/DocForum/docforum-escrow/issues/10) storage TTL (Medium), [#15](https://github.com/DocForum/docforum-escrow/issues/15) integrator trust-model
   docs (Trivial).
 - [ ] Related, not in the checklist: [#13](https://github.com/DocForum/docforum-escrow/issues/13) `get_escrow`
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
+
+## Phase E5 — Contract features
+- [ ] [#33](https://github.com/DocForum/docforum-escrow/issues/33) Decide how integrators list escrows by payer/payee. ADR 0006 recommends an off-chain index over unbounded on-chain vectors; lifecycle events are implemented in this contribution and must be merged before this item is complete.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -129,6 +132,7 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Proposed off-chain payer/payee indexing in ADR 0006 and added lifecycle events carrying escrow identity, parties, and reconstruction data. Added contract event regression coverage. Closes issues #33 and #9.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

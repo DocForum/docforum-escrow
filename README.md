@@ -17,6 +17,13 @@ projects (e.g. Trustless Work). Anything domain-specific — what condition
 triggers a release, who the parties are — lives in the consuming
 application, not here.
 
+The contract emits `EscrowCreated`, `EscrowReleased`, and `EscrowRefunded`
+events. The creation event contains the initial record and topics for the
+escrow id, payer, and payee; terminal events carry the id and parties with
+the token and amount. Integrators can build payer/payee listings from these
+events without growing on-chain indexes. See [ADR 0006](docs/adr/0006-escrow-indexing-off-chain.md)
+for indexer recovery, pagination, and trade-offs.
+
 ## Table of contents
 
 - [Why this repo exists](#why-this-repo-exists-honestly)
