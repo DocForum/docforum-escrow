@@ -33,6 +33,13 @@ export interface Escrow {
    * relying on a `Funded` escrow (threat model T8).
    */
   refundAfter?: bigint;
+  /**
+   * Where every refund (releaser or timeout) sends the funds. Fixed at
+   * creation; equals `payer` unless a sponsored escrow set a different
+   * destination (docs/adr/0005). Payees can read it to see who a
+   * reversal would pay.
+   */
+  refundTo: string;
   status: EscrowStatus;
 }
 
@@ -69,6 +76,15 @@ export interface CreateEscrowParams {
    * releaser-only, exactly as in 0.2.x.
    */
   refundAfter?: bigint;
+  /**
+   * Optional refund destination distinct from `payer` (the funder), for
+   * sponsored escrows (docs/adr/0005). All refund paths — releaser and
+   * timeout — pay this address, never the funder. Set once here under the
+   * funder's signature and immutable afterwards. Omit to refund the
+   * `payer`, exactly as in 0.3.x. Must not be the contract's own address
+   * (rejected with `InvalidRefundTo`, error 7).
+   */
+  refundTo?: string;
 }
 
 export interface ReleaseOrRefundParams {
@@ -113,6 +129,7 @@ export class EscrowClient {
       condition_ref: params.conditionRef,
       releaser: params.releaser,
       refund_after: params.refundAfter,
+      refund_to: params.refundTo,
     });
     const sent = await tx.signAndSend();
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
@@ -147,6 +164,7 @@ export class EscrowClient {
       // public surface uses `undefined` for "no deadline" (consistent
       // with `CreateEscrowParams.refundAfter` being absent).
       refundAfter: data.refund_after ?? undefined,
+      refundTo: data.refund_to,
       status: data.status.tag,
     };
   }
@@ -161,7 +179,8 @@ export class EscrowClient {
   }
 
   /**
-   * Returns the escrow's funds to its payer. Normally `caller` must be
+   * Returns the escrow's funds to its `refundTo` (the payer unless a
+   * sponsored escrow set another destination, docs/adr/0005). Normally `caller` must be
    * the escrow's `releaser`; once `refundAfter` has passed, anyone may
    * call it — still only back to the payer (docs/adr/0004). Returns the
    * transaction's hash.

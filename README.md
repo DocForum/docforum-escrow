@@ -40,11 +40,11 @@ Two reasons, stated plainly rather than blended together:
 
 | Function | Status | Description |
 |---|---|---|
-| `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id` | ✅ Implemented | Pulls `amount` of `token` from `payer` (requires `payer` auth), stores an opaque `condition_ref`, sets status `Funded`. Rejects non-positive amounts, and any `refund_after` that isn't strictly in the future. |
+| `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, refund_to) -> escrow_id` | ✅ Implemented | Pulls `amount` of `token` from `payer` (the funder; requires `payer` auth), stores an opaque `condition_ref`, sets status `Funded`. Rejects non-positive amounts, any `refund_after` that isn't strictly in the future, and a `refund_to` that is the contract itself. Optional `refund_to` (default: `payer`) fixes where refunds go — see below. |
 | `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
-| `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
+| `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser`, `refund_after` and `refund_to`, so payees can check the deal before relying on it. |
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
-| `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
+| `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to the escrow's `refund_to` (the `payer` unless set otherwise at creation). The `releaser` may always call it; once `refund_after` has passed, anyone may — still only to `refund_to` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
 
 ```
 EscrowStatus = Funded | Released | Refunded
@@ -56,6 +56,16 @@ That's the answer to "what if the releaser's key is lost?" (threat model
 T2): instead of locking funds permanently, a deadline lets anyone return
 them to the payer. See [ADR 0004](docs/adr/0004-timeout-refund-path.md)
 for the decision and what it means for payees.
+
+`refund_to` is optional and exists for sponsored funding: a sponsor,
+employer or grant programme (the `payer`) funds an escrow but refunds
+should go to someone else — or, by default, back to the sponsor. It is
+set once at creation under the funder's own signature, applies to every
+refund path (releaser and timeout), and can never be changed or chosen at
+payout, so the "destinations are fixed at creation" invariant (I1) holds.
+Omit it and behaviour is exactly as before. Make sure the destination
+can hold the token: if the transfer to it fails, so does the refund. See
+[ADR 0005](docs/adr/0005-sponsored-funding-refund-to.md).
 
 **Design rule, enforced deliberately:** the contract decides **who** may
 call `release`/`refund`, never **why**. `condition_ref` is an opaque
@@ -129,7 +139,7 @@ The TypeScript SDK (`sdk/`) is still a placeholder — see
 | Doc | Purpose |
 |---|---|
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
-| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E4 breakdown and current status. |
+| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E5 breakdown and current status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
 

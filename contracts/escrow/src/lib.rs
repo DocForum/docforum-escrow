@@ -7,6 +7,9 @@
 // Phase E4 (issue #11): optional `refund_after` timeout refund — see
 // docs/adr/0004. After that deadline anyone may refund, but only back to
 // the payer, so a lost `releaser` key can no longer lock funds forever.
+// Phase E5 (issue #28): optional `refund_to` — a refund destination that
+// differs from the funder (`payer`), fixed at creation with the funder's
+// auth and used by every refund path; see docs/adr/0005.
 //
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
@@ -27,6 +30,8 @@ pub enum EscrowStatus {
 #[contracttype]
 #[derive(Clone)]
 pub struct EscrowData {
+    /// The funder: authorises and pays for the escrow at creation. Also
+    /// the refund destination unless `refund_to` says otherwise.
     pub payer: Address,
     pub payee: Address,
     pub token: Address,
@@ -37,9 +42,14 @@ pub struct EscrowData {
     /// escrow. Set once at `create_escrow` time — see docs/adr/0002.
     pub releaser: Address,
     /// Optional deadline (unix seconds) after which `refund` opens to
-    /// anyone — still only back to `payer`. `None` means no timeout,
+    /// anyone — still only to `refund_to`. `None` means no timeout,
     /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
+    /// Where **every** refund path (releaser, timeout) sends the funds.
+    /// Fixed at `create_escrow` time under the funder's auth and never
+    /// chosen at payout, so invariant I1 holds; defaults to `payer` when
+    /// omitted at creation — see docs/adr/0005.
+    pub refund_to: Address,
 }
 
 #[contracttype]
@@ -64,6 +74,9 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    /// `refund_to` was the escrow contract's own address — funds sent
+    /// there on refund could never be moved again (docs/adr/0005).
+    InvalidRefundTo = 7,
 }
 
 #[contract]
@@ -76,7 +89,12 @@ impl EscrowContract {
     /// address that will later be permitted to call `release`/`refund`
     /// on this escrow (see docs/adr/0002). `refund_after` is an optional
     /// unix timestamp after which `refund` opens to any caller, always
-    /// back to `payer` (docs/adr/0004); `None` means no timeout.
+    /// back to the refund destination (docs/adr/0004); `None` means no
+    /// timeout. `refund_to` is the optional refund destination for a
+    /// sponsored escrow where the funder (`payer`) is not who should get
+    /// the money back (docs/adr/0005): `None` means `payer`, exactly as
+    /// before; it may not be this contract's own address. The `payer`'s
+    /// auth on this call covers `refund_to`, which is then immutable.
     /// Requires `payer` auth (the contract moves their funds). Returns
     /// the new escrow's id.
     pub fn create_escrow(
@@ -88,6 +106,7 @@ impl EscrowContract {
         condition_ref: String,
         releaser: Address,
         refund_after: Option<u64>,
+        refund_to: Option<Address>,
     ) -> Result<u64, Error> {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -97,10 +116,14 @@ impl EscrowContract {
                 return Err(Error::InvalidRefundAfter);
             }
         }
+        let contract_address = env.current_contract_address();
+        let refund_to = refund_to.unwrap_or_else(|| payer.clone());
+        if refund_to == contract_address {
+            return Err(Error::InvalidRefundTo);
+        }
         payer.require_auth();
 
         let token_client = token::Client::new(&env, &token);
-        let contract_address = env.current_contract_address();
         let balance_before = token_client.balance(&contract_address);
         token_client.transfer(&payer, &contract_address, &amount);
         let balance_after = token_client.balance(&contract_address);
@@ -118,6 +141,7 @@ impl EscrowContract {
             status: EscrowStatus::Funded,
             releaser,
             refund_after,
+            refund_to,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Ok(id)
@@ -134,8 +158,8 @@ impl EscrowContract {
     }
 
     /// Read-only accessor for everything stored about `escrow_id` —
-    /// payer, payee, token, amount, `condition_ref`, status, `releaser`
-    /// and `refund_after`. Exists so payees and integrators can check
+    /// payer, payee, token, amount, `condition_ref`, status, `releaser`,
+    /// `refund_after` and `refund_to`. Exists so payees and integrators can check
     /// the deadline before relying on a `Funded` escrow (docs/adr/0004,
     /// threat model T8). Errors on an unknown id.
     pub fn get_escrow(env: Env, escrow_id: u64) -> Result<EscrowData, Error> {
@@ -179,7 +203,9 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Returns the escrowed `amount` to `payer`. Same state rule as
+    /// Returns the escrowed `amount` to the escrow's `refund_to` (the
+    /// `payer` unless a different destination was fixed at creation —
+    /// docs/adr/0005). Same state rule as
     /// `release` (only while `Funded`), but two callers are authorised:
     ///
     /// - the escrow's `releaser` (docs/adr/0002), always; or
@@ -187,8 +213,9 @@ impl EscrowContract {
     ///   refund path for a lost/unsignable `releaser` key (docs/adr/0004).
     ///
     /// The destination never changes: timeout or not, funds only ever go
-    /// back to the stored `payer`. With no `refund_after` set, behaviour
-    /// is identical to before the timeout existed — releaser only.
+    /// to the stored `refund_to`, which no caller can influence. With no
+    /// `refund_after` set, behaviour is identical to before the timeout
+    /// existed — releaser only.
     pub fn refund(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
@@ -210,7 +237,7 @@ impl EscrowContract {
         }
 
         let token_client = token::Client::new(&env, &data.token);
-        token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
+        token_client.transfer(&env.current_contract_address(), &data.refund_to, &data.amount);
 
         data.status = EscrowStatus::Refunded;
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
