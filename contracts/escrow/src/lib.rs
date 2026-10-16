@@ -64,6 +64,9 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    /// An outbound token transfer could not be completed. The escrow
+    /// remains Funded so the releaser can retry or use the refund path.
+    Undeliverable = 7,
 }
 
 #[contract]
@@ -150,7 +153,8 @@ impl EscrowContract {
     /// contract enforces WHO, never WHY (ADR 0001). Errors if the
     /// escrow doesn't exist, `caller` isn't the releaser, or the escrow
     /// isn't currently `Funded` (no double-release, no releasing a
-    /// refunded escrow).
+    /// refunded escrow). If the token rejects the payee transfer, returns
+    /// `Undeliverable` and leaves the escrow funded so it can be retried.
     ///
     /// Deliberately **not** gated by `refund_after` (docs/adr/0004): after
     /// the deadline the releaser can still release, racing any timeout
@@ -172,7 +176,14 @@ impl EscrowContract {
         }
 
         let token_client = token::Client::new(&env, &data.token);
-        token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
+        let transfer = token_client.try_transfer(
+            &env.current_contract_address(),
+            &data.payee,
+            &data.amount,
+        );
+        if !matches!(transfer, Ok(Ok(()))) {
+            return Err(Error::Undeliverable);
+        }
 
         data.status = EscrowStatus::Released;
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
