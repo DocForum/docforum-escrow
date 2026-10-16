@@ -43,12 +43,19 @@ Two reasons, stated plainly rather than blended together:
 | `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id` | ✅ Implemented | Pulls `amount` of `token` from `payer` (requires `payer` auth), stores an opaque `condition_ref`, sets status `Funded`. Rejects non-positive amounts, and any `refund_after` that isn't strictly in the future. |
 | `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
+| `create_split_escrow(payer, payees, token, amount, condition_ref, releaser, refund_after) -> escrow_id` | ✅ Implemented | Locks funds for up to eight unique recipients whose basis-point shares total 10,000. The original `create_escrow` is the one-recipient form. |
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
 | `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
 
 ```
 EscrowStatus = Funded | Released | Refunded
 ```
+
+Split escrow shares are floor-rounded in list order; any remaining units
+from rounding go to the final listed payee. The total paid on release is
+always exactly the escrow amount. A recipient that cannot receive the
+token makes the whole release fail atomically. See
+[`docs/adr/0010-split-payouts.md`](docs/adr/0010-split-payouts.md).
 
 `refund_after` is optional: an escrow created without one behaves exactly
 as it did before the timeout existed — releaser-only refunds, forever.
