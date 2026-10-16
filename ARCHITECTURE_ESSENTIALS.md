@@ -15,6 +15,7 @@ get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded —
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
+extend_refund_after(escrow_id, new_deadline) -> result // IMPLEMENTED (issue #41) — payer and releaser consent before the current deadline
 ```
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
@@ -38,6 +39,10 @@ creation (`docs/adr/0004`): after it passes **anyone** may call
 and `release` is never gated by it, so the releaser can still release
 after the deadline (whoever lands first wins). No `refund_after` means
 behaviour is exactly what it was before: releaser-only refunds, forever.
+Before the current deadline is reached, `extend_refund_after` can move
+it later with authorization from both payer and releaser; `get_escrow`
+exposes the latest value. See the issue #41 update to ADR 0004 for the
+event and rejection rules.
 
 ## TypeScript SDK surface (`sdk/`)
 ```ts
@@ -49,6 +54,7 @@ await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunde
 await client.getEscrow(escrowId);            // full stored record — incl. releaser + refundAfter, so a payee can check the deal (docs/adr/0004, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
 await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter has passed
+await client.extendRefundAfter({ escrowId, newDeadline, payer, releaser }); // both Keypairs authorize; { txHash }
 ```
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
@@ -60,6 +66,8 @@ regenerate it whenever the contract's public signatures/types change.
 `sdk/src/index.ts` is the actual public surface (hand-written, ergonomic
 wrapper) — consumers import from the package root, never from
 `src/generated/` directly.
+`extendRefundAfter` requires both signing Keypairs because the contract
+requires the payer and releaser to authorize a deadline extension.
 
 `condition_ref` is an **opaque string/id** the contract does not interpret
 — it's the caller's job (e.g. `docforum-core`) to decide when release is

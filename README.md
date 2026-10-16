@@ -45,6 +45,7 @@ Two reasons, stated plainly rather than blended together:
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
 | `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
+| `extend_refund_after(escrow_id, new_deadline) -> Result<()>` | ✅ Implemented | Moves an active deadline later with payer and releaser authorization. `get_escrow` exposes the latest value; `refund_deadline_extended` records each successful extension (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
 
 ```
 EscrowStatus = Funded | Released | Refunded
@@ -93,7 +94,7 @@ contracts/escrow/
   tests/            Integration tests (soroban-sdk testutils) — required for any contract change
   Cargo.toml
 sdk/
-  src/index.ts      @docforum/escrow-sdk — TypeScript client (not yet implemented, see issue #4)
+  src/index.ts      @docforum/escrow-sdk — TypeScript client
   package.json
 docs/adr/           Architecture decision records
 .github/            CI workflow, issue/PR templates

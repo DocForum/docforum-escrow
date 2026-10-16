@@ -122,6 +122,14 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E5 — Escrow lifecycle extensions
+- [x] Allow payer and releaser to extend an active `refund_after`
+  deadline by mutual authorization (issue #41). The current deadline
+  must still be in the future and the proposed value must be later.
+  `get_escrow` exposes the latest value and `refund_deadline_extended` records each
+  extension. The generated client and SDK wrapper are updated; package
+  version is 0.4.0. See ADR 0004 for the payee-consent rationale. Closes #41.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -129,6 +137,8 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Added payer/releaser-consented extension of active refund
+  deadlines (issue #41), with an auditable event and ADR 0004 update.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

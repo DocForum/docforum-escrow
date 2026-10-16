@@ -166,3 +166,32 @@ ADR makes that conditional in one specific, bounded way:
   "timeout refund path" item can be checked off. The operational half of
   T2 (key backup / multisig releaser) still stands — this removes the
   permanent-lock failure mode, it does not make a lost key harmless.
+
+## Decision update — mutually consented extensions (issue #41, 2026-10-16)
+
+An existing deadline may be extended only while the escrow is still
+`Funded` and the current deadline has not been reached. The proposed
+deadline must be strictly later. Both the stored `payer` and `releaser`
+must authorize the same `extend_refund_after(escrow_id, new_deadline)`
+invocation. If both roles use one address, its single authorization
+satisfies both roles. An escrow created without a deadline has nothing
+to extend.
+
+The payee does not authorize an extension. Moving the timeout later
+preserves the payee's release window and does not alter the payee, payer,
+amount, or payout destinations. The payer must consent to keeping funds
+locked longer, and the releaser must consent because they control the
+release path. This follows ADR 0001: the contract enforces who may act,
+not why.
+
+On success the contract emits `refund_deadline_extended` with the escrow
+id as a topic and the old/new deadlines as event data. `get_escrow` returns
+`refund_after`, exposing the latest deadline; the event records every
+successful change. A missing deadline, a deadline already reached, a
+non-later proposal, or a non-`Funded` escrow is rejected without changing
+storage. `InvalidRefundExtension` uses error code 29.
+
+The TypeScript SDK exposes the operation as `extendRefundAfter`, accepts
+both signing keypairs, and pins the additive public API at version 0.4.0.
+The release tarball and downstream dependency update remain a separate
+release step under ADR 0003.

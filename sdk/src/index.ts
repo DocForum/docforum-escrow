@@ -8,6 +8,7 @@
 // (hard rule 4); passing a mainnet networkPassphrase/rpcUrl is on the
 // caller, not encouraged by any default here.
 import { Keypair } from "@stellar/stellar-sdk";
+import { KeypairSigner } from "@stellar/stellar-sdk/contract";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
 
 export { Keypair };
@@ -77,10 +78,19 @@ export interface ReleaseOrRefundParams {
   caller: Keypair;
 }
 
+export interface ExtendRefundAfterParams {
+  escrowId: bigint;
+  newDeadline: bigint;
+  /** Must be the stored payer for this escrow. */
+  payer: Keypair;
+  /** Must be the stored releaser for this escrow. */
+  releaser: Keypair;
+}
+
 /**
  * Thin client for the docforum-escrow Soroban contract. Wraps
- * `create_escrow`/`get_status`/`get_escrow`/`release`/`refund` with plain
- * TypeScript types and no manual XDR/signing plumbing.
+ * `create_escrow`/`get_status`/`get_escrow`/`release`/`refund` and
+ * consented refund-deadline extensions with plain TypeScript types.
  */
 export class EscrowClient {
   private readonly contractId: string;
@@ -169,6 +179,40 @@ export class EscrowClient {
   async refund(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
     const client = this.contractClient(params.caller);
     const tx = await client.refund({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Extends an active refund deadline with both payer and releaser consent.
+   * The current deadline must still be in the future, and `newDeadline`
+   * must be later. Returns the transaction hash.
+   */
+  async extendRefundAfter(
+    params: ExtendRefundAfterParams,
+  ): Promise<{ txHash: string }> {
+    const client = this.contractClient(params.payer);
+    const tx = await client.extend_refund_after({
+      escrow_id: params.escrowId,
+      new_deadline: params.newDeadline,
+    });
+
+    const signers = new Map([
+      [params.payer.publicKey(), params.payer],
+      [params.releaser.publicKey(), params.releaser],
+    ]);
+    for (const address of tx.needsNonInvokerSigningBy()) {
+      const signer = signers.get(address);
+      if (!signer) {
+        throw new Error(`No provided signer can authorize ${address}`);
+      }
+      await tx.signAuthEntries({
+        address,
+        signAuthEntry: new KeypairSigner(signer, this.networkPassphrase),
+      });
+    }
+
     const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
