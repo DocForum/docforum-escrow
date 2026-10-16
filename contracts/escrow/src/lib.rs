@@ -14,7 +14,10 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, String, TryFromVal,
+    TryIntoVal, Val,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -42,6 +45,45 @@ pub struct EscrowData {
     pub refund_after: Option<u64>,
 }
 
+/// Exact `EscrowData` layout deployed before ADR 0004 added `refund_after`.
+/// Soroban stores named contract structs as `ScVal::Map`; the field set here
+/// intentionally matches the historical seven-field map exactly.
+#[contracttype]
+#[derive(Clone)]
+struct EscrowDataV1 {
+    payer: Address,
+    payee: Address,
+    token: Address,
+    amount: i128,
+    condition_ref: String,
+    status: EscrowStatus,
+    releaser: Address,
+}
+
+/// Exact current eight-field record layout, wrapped by `StoredEscrowData`
+/// for every write made by this version of the contract.
+#[contracttype]
+#[derive(Clone)]
+struct EscrowDataV2 {
+    payer: Address,
+    payee: Address,
+    token: Address,
+    amount: i128,
+    condition_ref: String,
+    status: EscrowStatus,
+    releaser: Address,
+    refund_after: Option<u64>,
+}
+
+/// Version tag for newly written persistent escrow records. Do not add fields
+/// to a versioned struct; add a new versioned struct and enum variant instead.
+#[contracttype]
+#[derive(Clone)]
+enum StoredEscrowData {
+    V1(EscrowDataV1),
+    V2(EscrowDataV2),
+}
+
 #[contracttype]
 enum DataKey {
     Escrow(u64),
@@ -64,6 +106,9 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    /// A persistent escrow value does not match a supported historical or
+    /// versioned layout; fail closed instead of guessing at its contents.
+    UnsupportedStorageVersion = 7,
 }
 
 #[contract]
@@ -119,17 +164,13 @@ impl EscrowContract {
             releaser,
             refund_after,
         };
-        env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        Self::save_escrow(&env, id, &data);
         Ok(id)
     }
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
     pub fn get_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, Error> {
-        let data: EscrowData = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)?;
+        let data = Self::load_escrow(&env, escrow_id)?;
         Ok(data.status)
     }
 
@@ -139,10 +180,7 @@ impl EscrowContract {
     /// the deadline before relying on a `Funded` escrow (docs/adr/0004,
     /// threat model T8). Errors on an unknown id.
     pub fn get_escrow(env: Env, escrow_id: u64) -> Result<EscrowData, Error> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)
+        Self::load_escrow(&env, escrow_id)
     }
 
     /// Moves the escrowed `amount` to `payee`. Only the escrow's
@@ -158,11 +196,7 @@ impl EscrowContract {
     pub fn release(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
-        let mut data: EscrowData = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)?;
+        let mut data = Self::load_escrow(&env, escrow_id)?;
 
         if caller != data.releaser {
             return Err(Error::Unauthorized);
@@ -175,7 +209,7 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
 
         data.status = EscrowStatus::Released;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        Self::save_escrow(&env, escrow_id, &data);
         Ok(())
     }
 
@@ -192,11 +226,7 @@ impl EscrowContract {
     pub fn refund(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
-        let mut data: EscrowData = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)?;
+        let mut data = Self::load_escrow(&env, escrow_id)?;
 
         let timeout_passed = match data.refund_after {
             Some(deadline) => env.ledger().timestamp() >= deadline,
@@ -213,7 +243,7 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
 
         data.status = EscrowStatus::Refunded;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        Self::save_escrow(&env, escrow_id, &data);
         Ok(())
     }
 
@@ -221,5 +251,74 @@ impl EscrowContract {
         let id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
         env.storage().instance().set(&DataKey::NextId, &(id + 1));
         id
+    }
+
+    fn load_escrow(env: &Env, escrow_id: u64) -> Result<EscrowData, Error> {
+        let raw: Val = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+
+        // Before version tags existed, Soroban stored named contract structs
+        // directly as maps. Decode only the two exact historical schemas.
+        if let Ok(v1) = EscrowDataV1::try_from_val(env, &raw) {
+            return Ok(Self::from_v1(v1));
+        }
+        if let Ok(v2) = EscrowDataV2::try_from_val(env, &raw) {
+            return Ok(Self::from_v2(v2));
+        }
+
+        // New records are tagged enums (ScVal::Vec). Unknown variants and
+        // malformed values fail closed; no fields are inferred or defaulted.
+        let stored: StoredEscrowData = raw
+            .try_into_val(env)
+            .map_err(|_| Error::UnsupportedStorageVersion)?;
+        match stored {
+            StoredEscrowData::V1(v1) => Ok(Self::from_v1(v1)),
+            StoredEscrowData::V2(v2) => Ok(Self::from_v2(v2)),
+        }
+    }
+
+    fn save_escrow(env: &Env, escrow_id: u64, data: &EscrowData) {
+        let v2 = EscrowDataV2 {
+            payer: data.payer.clone(),
+            payee: data.payee.clone(),
+            token: data.token.clone(),
+            amount: data.amount,
+            condition_ref: data.condition_ref.clone(),
+            status: data.status.clone(),
+            releaser: data.releaser.clone(),
+            refund_after: data.refund_after,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &StoredEscrowData::V2(v2));
+    }
+
+    fn from_v1(v1: EscrowDataV1) -> EscrowData {
+        EscrowData {
+            payer: v1.payer,
+            payee: v1.payee,
+            token: v1.token,
+            amount: v1.amount,
+            condition_ref: v1.condition_ref,
+            status: v1.status,
+            releaser: v1.releaser,
+            refund_after: None,
+        }
+    }
+
+    fn from_v2(v2: EscrowDataV2) -> EscrowData {
+        EscrowData {
+            payer: v2.payer,
+            payee: v2.payee,
+            token: v2.token,
+            amount: v2.amount,
+            condition_ref: v2.condition_ref,
+            status: v2.status,
+            releaser: v2.releaser,
+            refund_after: v2.refund_after,
+        }
     }
 }
