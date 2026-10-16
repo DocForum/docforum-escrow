@@ -122,6 +122,12 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E5 — Contract features
+- [x] Failed outbound release transfers return `Undeliverable` and leave
+  the escrow funded for retry or refund (issue #55). Regression tests
+  cover a deauthorized SAC destination and a rejecting contract payee;
+  CI validation remains pending for the pull request.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -129,6 +135,12 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Implemented recoverable undeliverable-payee handling for
+  issue #55. `release` now uses the fallible Soroban token-client method
+  and returns `Error::Undeliverable` (24) when the outbound invocation
+  fails, without changing the funded status or payout destination. Added
+  SAC deauthorization and rejecting-contract regression tests and updated
+  T11 in `docs/threat-model.md`.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

@@ -247,6 +247,29 @@ behave like SEP-41.
   and `NextId` is a `u64`, so this isn't a meaningful attack. Listed so
   a reviewer doesn't need to rediscover it.
 
+### T11 — Payee cannot receive a release · **Medium (recoverable)**
+- A Stellar Asset Contract can reject a transfer when an issued asset's
+  trustline is deauthorized. A non-standard token can also fail while
+  delivering to a contract payee. Previously `release` used the generated
+  token client’s infallible `transfer` path, so either failure aborted the
+  invocation with a generic host error.
+- `release` now invokes `try_transfer` and maps any failed outbound token
+  call to `Error::Undeliverable` (code 24). Because status is written only
+  after a successful transfer, the escrow remains `Funded` and the funds
+  remain at the escrow address. The releaser can retry after the payee is
+  able to receive, or use the existing refund path; funds are never sent
+  to a different address.
+- Tests use the SAC's actual authorization flag to deauthorize and then
+  reauthorize a payee, and a callback token that propagates a rejecting
+  contract payee's panic. Both assert the failed release leaves status
+  and balances unchanged.
+- The error intentionally does not distinguish receiver rejection from
+  another outbound token invocation failure. Integrators should treat it
+  as a failed release, correct the transfer condition, and retry or
+  refund. It does not guarantee recovery from a token that violates
+  Soroban's invocation semantics or has already performed an irreversible
+  off-chain side effect.
+
 ## 4. SDK-specific notes (`sdk/src/index.ts`)
 
 - **Defaults are testnet only** (hard rule 4). A caller can still pass a
