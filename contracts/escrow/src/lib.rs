@@ -14,7 +14,7 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, String};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -22,6 +22,7 @@ pub enum EscrowStatus {
     Funded,
     Released,
     Refunded,
+    Settled,
 }
 
 #[contracttype]
@@ -64,6 +65,8 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    /// A split settlement amount must be within the escrow's funded amount.
+    InvalidSettlementAmount = 7,
 }
 
 #[contract]
@@ -174,8 +177,55 @@ impl EscrowContract {
         let token_client = token::Client::new(&env, &data.token);
         token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
 
+        data.status = EscrowStatus::Settled;
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        Ok(())
+    }
+
+    /// Pays `payee_amount` to the payee and returns the remainder to the
+    /// payer. Only the escrow's releaser may authorize a split, and only
+    /// while it is funded. Both destinations come from stored escrow data.
+    pub fn settle(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        payee_amount: i128,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+        if caller != data.releaser {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        let payer_amount = data
+            .amount
+            .checked_sub(payee_amount)
+            .filter(|_| payee_amount >= 0)
+            .ok_or(Error::InvalidSettlementAmount)?;
+
+        // Mark settled before external token calls. Soroban rolls back this
+        // write if either transfer fails.
         data.status = EscrowStatus::Released;
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        let token_client = token::Client::new(&env, &data.token);
+        let contract_address = env.current_contract_address();
+        if payee_amount > 0 {
+            token_client.transfer(&contract_address, &data.payee, &payee_amount);
+        }
+        if payer_amount > 0 {
+            token_client.transfer(&contract_address, &data.payer, &payer_amount);
+        }
+        env.events().publish(
+            (symbol_short!("settled"), escrow_id),
+            (payee_amount, payer_amount),
+        );
         Ok(())
     }
 
