@@ -204,7 +204,9 @@ and diffs the result (`scripts/check-generated-bindings.sh`, issue #121). See
 `sdk/src/generated/README.md` for the regeneration steps.
 `sdk/src/index.ts` is the actual public surface (hand-written, ergonomic
 wrapper) — consumers import from the package root, never from
-`src/generated/` directly. Known contract ids per network come from the
+`src/generated/` directly. The package publishes ESM and CommonJS entry
+points with declarations for both; browser-aware bundlers use its ESM entry.
+Known contract ids per network come from the
 repo-root `deployments.json` (written by `scripts/deploy`), bundled as
 `src/deployments.generated.ts` and exposed as `knownContractId` /
 `knownNetworkConfig`; unknown networks and mainnet throw.

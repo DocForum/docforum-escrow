@@ -206,6 +206,9 @@ jobs:
 
       - run: npm run build
 
+      - name: Verify CJS, ESM, and browser package entrypoints
+        run: npm run smoke
+
       # Offline only: events fixture decoding plus quorum input validation.
       # Never the live testnet suite (see the note at the end of this file).
       - run: npm run test:offline
