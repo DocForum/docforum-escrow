@@ -15,6 +15,8 @@ get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded —
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
+create_milestone_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, milestones) -> escrow_id // Phase E5: fixed tranche schedule; create_escrow remains one tranche
+release_milestone(escrow_id, index, caller) -> result // Phase E5: releaser pays one tranche once, in any order
 ```
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
@@ -38,6 +40,11 @@ creation (`docs/adr/0004`): after it passes **anyone** may call
 and `release` is never gated by it, so the releaser can still release
 after the deadline (whoever lands first wins). No `refund_after` means
 behaviour is exactly what it was before: releaser-only refunds, forever.
+
+Milestone schedules are fixed positive amounts summing to `amount`
+(`docs/adr/0005`). `release_milestone` pays one index at a time, in any
+order. Refunds after partial release return only the unreleased remainder.
+The TypeScript SDK does not yet wrap these additive contract methods.
 
 ## TypeScript SDK surface (`sdk/`)
 ```ts

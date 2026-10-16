@@ -45,10 +45,17 @@ Two reasons, stated plainly rather than blended together:
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
 | `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
+| `create_milestone_escrow(..., milestones) -> escrow_id` | ✅ Implemented | Additive Phase E5 API. Locks the total once and stores a fixed positive tranche schedule whose sum equals `amount` (see [ADR 0005](docs/adr/0005-milestone-escrows.md)). |
+| `release_milestone(escrow_id, index, caller) -> Result<()>` | ✅ Implemented | Pays one scheduled tranche to `payee`, once per index; out-of-order release is allowed. |
 
 ```
-EscrowStatus = Funded | Released | Refunded
+EscrowStatus = Funded | PartiallyReleased | Released | Refunded
 ```
+
+The existing `create_escrow` signature remains the one-tranche path, and
+`release` continues to handle that path. A partial refund pays only the
+unreleased balance to `payer`; already released tranches are final. The
+new contract methods are not yet wrapped by the TypeScript SDK.
 
 `refund_after` is optional: an escrow created without one behaves exactly
 as it did before the timeout existed — releaser-only refunds, forever.

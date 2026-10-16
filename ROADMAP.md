@@ -5,6 +5,12 @@
 
 **Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
 
+Phase E5 milestone escrows (issue #21) is implemented in this branch:
+fixed tranche schedules, per-index release, partial status, and refunds
+of only the unreleased remainder. Contract tests were added; CI remains
+the merge-time verification step. The additive methods are not yet
+wrapped by the TypeScript SDK.
+
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
   (`cargo build --target wasm32v1-none --release`) — 4 passing tests in
@@ -121,6 +127,21 @@
 - [ ] Related, not in the checklist: [#13](https://github.com/DocForum/docforum-escrow/issues/13) `get_escrow`
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
+
+## Phase E5 — Milestone escrows
+- [x] Fixed positive tranche schedule whose checked sum equals the funded
+  amount; existing `create_escrow` remains a one-tranche API.
+- [x] `release_milestone` allows any order and pays each index at most
+  once; status distinguishes `PartiallyReleased` from `Funded` and
+  `Released`.
+- [x] Refund returns only the unreleased remainder, including after the
+  timeout path. Design and migration implications are in
+  `docs/adr/0005-milestone-escrows.md`.
+- [x] Contract regression tests cover out-of-order release, duplicate
+  tranche prevention, partial refund, and invalid schedules. Not run in
+  this fast batch; CI must validate before merge.
+- [ ] Add milestone wrappers and generated bindings to the TypeScript SDK
+  before SDK consumers adopt this contract surface.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -305,3 +326,10 @@
   #12 were opened and closed in between). #16 merged with an empty diff
   because its branch's merge from `main` kept `main`'s ROADMAP.md
   wholesale.
+- 2026-10-16 — Implemented issue #21 (Phase E5): kept `create_escrow` as
+  the existing one-tranche API and added fixed milestone schedules plus
+  per-index releases. Out-of-order releases are allowed, duplicate
+  releases are rejected, `PartiallyReleased` represents an active
+  schedule, and refund pays only the unreleased remainder. Added ADR
+  0005, contract regression tests, and updated the architecture, README,
+  and threat model. CI was not run in this fast batch.
