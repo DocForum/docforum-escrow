@@ -64,7 +64,7 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
-    Overflow = 8,
+    Overflow = 12,
 }
 
 #[contract]
