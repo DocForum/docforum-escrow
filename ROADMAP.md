@@ -88,6 +88,7 @@
   does not count as the review). Stays unchecked until an independent
   reviewer has gone through it.
 - [x] Timeout refund path when the releaser key is lost — issue #11.
+
   Decided in `docs/adr/0004` (optional `refund_after` set at creation,
   after which **anyone** may refund, still only to `payer`; `release` is
   never gated by it; alternatives compared and payee implications for T8
@@ -121,6 +122,13 @@
 - [ ] Related, not in the checklist: [#13](https://github.com/DocForum/docforum-escrow/issues/13) `get_escrow`
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
+
+## Phase E5 — Payee-initiated voluntary refund
+- [x] Issue #40: allow the stored payee to authorize a refund while the
+  escrow is funded; funds return only to the payer and a `payee_refunded`
+  event identifies this path. This contract has one payee and full
+  settlement only; future partial payouts must refund only the unpaid
+  remainder. Decision recorded in `docs/adr/0009`.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -305,3 +313,7 @@
   #12 were opened and closed in between). #16 merged with an empty diff
   because its branch's merge from `main` kept `main`'s ROADMAP.md
   wholesale.
+- 2026-10-17 — Implemented issue #40: the stored payee may voluntarily
+  refund a still-funded escrow to the payer, with an authorization check
+  and a distinct event. Added regression coverage and updated the threat
+  model, architecture guide, and ADR 0009. Closes #40.

@@ -14,7 +14,9 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{
+    contract, contracterror, contractevent, contractimpl, contracttype, token, Address, Env, String,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,6 +42,19 @@ pub struct EscrowData {
     /// anyone — still only back to `payer`. `None` means no timeout,
     /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
+}
+
+/// Identifies voluntary refunds started by the escrow's stored payee.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayeeRefunded {
+    #[topic]
+    pub escrow_id: u64,
+    #[topic]
+    pub payer: Address,
+    #[topic]
+    pub payee: Address,
+    pub amount: i128,
 }
 
 #[contracttype]
@@ -175,7 +190,9 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
 
         data.status = EscrowStatus::Released;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
     }
 
@@ -183,12 +200,16 @@ impl EscrowContract {
     /// `release` (only while `Funded`), but two callers are authorised:
     ///
     /// - the escrow's `releaser` (docs/adr/0002), always; or
+    /// - the stored `payee`, with the payee's authorization, for a
+    ///   voluntary refund to the payer; or
     /// - **anyone**, once `refund_after` has been reached — the timeout
     ///   refund path for a lost/unsignable `releaser` key (docs/adr/0004).
     ///
     /// The destination never changes: timeout or not, funds only ever go
     /// back to the stored `payer`. With no `refund_after` set, behaviour
-    /// is identical to before the timeout existed — releaser only.
+    /// is identical to before the timeout existed, except the payee may
+    /// always voluntarily refund the still-funded escrow to the payer.
+    /// A payee-initiated refund emits `payee_refunded`.
     pub fn refund(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
@@ -202,7 +223,8 @@ impl EscrowContract {
             Some(deadline) => env.ledger().timestamp() >= deadline,
             None => false,
         };
-        if caller != data.releaser && !timeout_passed {
+        let payee_initiated = caller == data.payee;
+        if caller != data.releaser && !payee_initiated && !timeout_passed {
             return Err(Error::Unauthorized);
         }
         if data.status != EscrowStatus::Funded {
@@ -213,7 +235,18 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
 
         data.status = EscrowStatus::Refunded;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        if payee_initiated {
+            PayeeRefunded {
+                escrow_id,
+                payer: data.payer,
+                payee: data.payee,
+                amount: data.amount,
+            }
+            .publish(&env);
+        }
         Ok(())
     }
 

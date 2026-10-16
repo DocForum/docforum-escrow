@@ -44,14 +44,18 @@ Two reasons, stated plainly rather than blended together:
 | `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
-| `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
+| `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; the stored `payee` may voluntarily call it with their authorization; after `refund_after`, anyone may call it. A payee-initiated refund emits `payee_refunded` (see [ADR 0009](docs/adr/0009-payee-initiated-refund.md)). |
 
 ```
 EscrowStatus = Funded | Released | Refunded
 ```
 
-`refund_after` is optional: an escrow created without one behaves exactly
-as it did before the timeout existed — releaser-only refunds, forever.
+`refund_after` is optional. Without one, the `releaser` and the stored
+`payee` can refund a still-funded escrow; without either caller, it remains
+funded indefinitely. With a deadline, anyone can refund after it passes.
+There is one payee and one all-or-nothing payout in this contract; split
+payees and partial milestone payouts are not supported. A future partial
+payout extension must limit a refund to the unpaid remainder.
 That's the answer to "what if the releaser's key is lost?" (threat model
 T2): instead of locking funds permanently, a deadline lets anyone return
 them to the payer. See [ADR 0004](docs/adr/0004-timeout-refund-path.md)
