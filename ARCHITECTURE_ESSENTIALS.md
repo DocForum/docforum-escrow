@@ -43,8 +43,15 @@ behaviour is exactly what it was before: releaser-only refunds, forever.
 ```ts
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
 
-const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
-const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter });
+const client = new EscrowClient({
+  contractId, // defaults: testnet RPC + passphrase
+  timeouts: { simulateTimeoutMs: 30_000, sendTimeoutMs: 30_000, confirmTimeoutMs: 60_000 },
+  retry: { initialBackoffMs: 250, maxBackoffMs: 4_000 },
+});
+const { escrowId, txHash } = await client.createEscrow({
+  payer, payee, token, amount, conditionRef, releaser, refundAfter,
+  onTransactionHash: async (hash) => persistForRecovery(hash),
+});
 await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
 await client.getEscrow(escrowId);            // full stored record — incl. releaser + refundAfter, so a payee can check the deal (docs/adr/0004, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
@@ -54,6 +61,14 @@ await client.refund({ escrowId, caller });   // { txHash } — releaser always; 
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
 for no timeout, which behaves exactly as this contract did before the
 param existed.
+Write calls time-bound the simulation, send, and confirmation stages. The
+SDK calls `onTransactionHash` after signing and before submitting, so an
+integrator can persist the hash even if the network request hangs. It backs
+off and retries only an explicit `TRY_AGAIN_LATER`, reusing the exact same
+signed envelope. If sending times out or the response is ambiguous, it
+checks `getTransaction` by that hash; confirmation polling never resubmits.
+Timeout errors after signing include `txHash` for recovery. The SDK does
+not automatically create a fee bump or replacement transaction.
 `sdk/src/generated/contract-client.ts` is machine-generated
 (`stellar contract bindings typescript --wasm ...`) — never hand-edit it;
 regenerate it whenever the contract's public signatures/types change.

@@ -9,6 +9,8 @@
 // caller, not encouraged by any default here.
 import { Keypair } from "@stellar/stellar-sdk";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
+import { rpc } from "./generated/contract-client.js";
+import { sendWithLifecycle, withTimeout, type LifecycleOptions } from "./transaction-lifecycle.js";
 
 export { Keypair };
 
@@ -46,6 +48,10 @@ export interface EscrowClientConfig {
   rpcUrl?: string;
   /** Default: Stellar testnet passphrase. */
   networkPassphrase?: string;
+  /** Per-stage network timeout overrides. Defaults are 30s / 30s / 60s. */
+  timeouts?: Partial<Pick<LifecycleOptions, "sendTimeoutMs" | "confirmTimeoutMs">> & { simulateTimeoutMs?: number };
+  /** Backoff bounds used for TRY_AGAIN_LATER and confirmation polling. */
+  retry?: Pick<LifecycleOptions, "initialBackoffMs" | "maxBackoffMs">;
 }
 
 export interface CreateEscrowParams {
@@ -69,12 +75,16 @@ export interface CreateEscrowParams {
    * releaser-only, exactly as in 0.2.x.
    */
   refundAfter?: bigint;
+  /** Called with the deterministic hash before the first RPC submission. */
+  onTransactionHash?: (hash: string) => void | Promise<void>;
 }
 
 export interface ReleaseOrRefundParams {
   escrowId: bigint;
   /** Must be the escrow's `releaser` (set at creation) — see docs/adr/0002. */
   caller: Keypair;
+  /** Called with the deterministic hash before the first RPC submission. */
+  onTransactionHash?: (hash: string) => void | Promise<void>;
 }
 
 /**
@@ -86,11 +96,36 @@ export class EscrowClient {
   private readonly contractId: string;
   private readonly rpcUrl: string;
   private readonly networkPassphrase: string;
+  private readonly timeouts: Required<NonNullable<EscrowClientConfig["timeouts"]>>;
+  private readonly retry: Pick<LifecycleOptions, "initialBackoffMs" | "maxBackoffMs">;
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
     this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
     this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
+    this.timeouts = {
+      simulateTimeoutMs: config.timeouts?.simulateTimeoutMs ?? 30_000,
+      sendTimeoutMs: config.timeouts?.sendTimeoutMs ?? 30_000,
+      confirmTimeoutMs: config.timeouts?.confirmTimeoutMs ?? 60_000,
+    };
+    this.retry = {
+      initialBackoffMs: config.retry?.initialBackoffMs ?? 250,
+      maxBackoffMs: config.retry?.maxBackoffMs ?? 4_000,
+    };
+    for (const [name, value] of Object.entries({ ...this.timeouts, ...this.retry })) {
+      if (!Number.isFinite(value) || value <= 0) throw new RangeError(`${name} must be a positive finite number`);
+    }
+  }
+
+  private async send<T>(build: () => Promise<import("@stellar/stellar-sdk/contract").AssembledTransaction<T>>, onTransactionHash?: (hash: string) => void | Promise<void>): Promise<{ txHash: string; result: T }> {
+    // Generated bindings simulate while constructing an assembled transaction.
+    const tx = await withTimeout(build(), this.timeouts.simulateTimeoutMs, "Transaction simulation");
+    const server = new rpc.Server(this.rpcUrl);
+    return sendWithLifecycle(tx, server, {
+      ...this.timeouts,
+      ...this.retry,
+      onTransactionHash,
+    });
   }
 
   private contractClient(signer?: Keypair): EscrowContractClient {
@@ -105,7 +140,7 @@ export class EscrowClient {
   /** Locks `amount` of `token` from `payer`, held for `payee`. Returns the new escrow's id and the funding transaction's hash. */
   async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
     const client = this.contractClient(params.payer);
-    const tx = await client.create_escrow({
+    const sent = await this.send(() => client.create_escrow({
       payer: params.payer.publicKey(),
       payee: params.payee,
       token: params.token,
@@ -113,9 +148,8 @@ export class EscrowClient {
       condition_ref: params.conditionRef,
       releaser: params.releaser,
       refund_after: params.refundAfter,
-    });
-    const sent = await tx.signAndSend();
-    return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+    }), params.onTransactionHash);
+    return { escrowId: sent.result.unwrap(), txHash: sent.txHash };
   }
 
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
@@ -154,10 +188,9 @@ export class EscrowClient {
   /** Moves the escrow's funds to its payee. Throws if `caller` isn't the escrow's `releaser`, or the escrow isn't `Funded`. Returns the transaction's hash. */
   async release(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
     const client = this.contractClient(params.caller);
-    const tx = await client.release({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
-    const sent = await tx.signAndSend();
+    const sent = await this.send(() => client.release({ escrow_id: params.escrowId, caller: params.caller.publicKey() }), params.onTransactionHash);
     sent.result.unwrap();
-    return { txHash: sent.sendTransactionResponse!.hash };
+    return { txHash: sent.txHash };
   }
 
   /**
@@ -168,9 +201,8 @@ export class EscrowClient {
    */
   async refund(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
     const client = this.contractClient(params.caller);
-    const tx = await client.refund({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
-    const sent = await tx.signAndSend();
+    const sent = await this.send(() => client.refund({ escrow_id: params.escrowId, caller: params.caller.publicKey() }), params.onTransactionHash);
     sent.result.unwrap();
-    return { txHash: sent.sendTransactionResponse!.hash };
+    return { txHash: sent.txHash };
   }
 }

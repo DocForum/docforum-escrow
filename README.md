@@ -121,15 +121,22 @@ contract id, transaction links, and the exact `stellar` CLI commands to
 redeploy. **Mainnet is out of scope until the Phase E4 security review is
 complete — see [hard rule 4](ARCHITECTURE_ESSENTIALS.md#hard-rules).**
 
-The TypeScript SDK (`sdk/`) is still a placeholder — see
-[issue #4](https://github.com/DocForum/docforum-escrow/issues/4).
+The TypeScript SDK (`sdk/`) wraps all contract entrypoints. Write calls use
+configurable simulation, send, and confirmation timeouts. Pass
+`onTransactionHash` to `createEscrow`, `release`, or `refund` to persist the
+hash immediately after signing and before RPC submission. The SDK retries
+only an explicit `TRY_AGAIN_LATER` response with bounded exponential
+backoff, reusing the same signed envelope; after an ambiguous send or a
+confirmation timeout it polls `getTransaction` for that hash and never
+creates a replacement transaction automatically. See the SDK API in
+[`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md#typescript-sdk-surface-sdk).
 
 ## Documentation
 
 | Doc | Purpose |
 |---|---|
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
-| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E4 breakdown and current status. |
+| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E6 breakdown and current status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
 
