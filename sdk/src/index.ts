@@ -8,11 +8,31 @@
 // (hard rule 4); passing a mainnet networkPassphrase/rpcUrl is on the
 // caller, not encouraged by any default here.
 import { Keypair } from "@stellar/stellar-sdk";
+import type { ClientOptions as StellarClientOptions } from "@stellar/stellar-sdk/contract";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
 
 export { Keypair };
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";
+
+export type ArchivedEntryBehavior = "auto" | "error";
+
+/** Thrown when simulation finds archived contract state and restoration is unavailable or disabled. */
+export class ArchivedEntryError extends Error {
+  readonly method: string;
+  override readonly cause?: unknown;
+
+  constructor(method: string, behavior: ArchivedEntryBehavior, cause?: unknown) {
+    super(
+      behavior === "auto"
+        ? `Contract state needed by ${method} is archived and automatic restoration failed. Ensure the configured signer can pay the restoration fee.`
+        : `Contract state needed by ${method} is archived. Set archivalBehavior to "auto" and provide a restore signer to restore it.`,
+    );
+    this.name = "ArchivedEntryError";
+    this.method = method;
+    this.cause = cause;
+  }
+}
 
 /** Everything the contract stores about one escrow — what `getEscrow` returns. */
 export interface Escrow {
@@ -46,6 +66,10 @@ export interface EscrowClientConfig {
   rpcUrl?: string;
   /** Default: Stellar testnet passphrase. */
   networkPassphrase?: string;
+  /** Defaults to "error". Auto mode restores archived state when the SDK signer can pay the restore fee. */
+  archivalBehavior?: ArchivedEntryBehavior;
+  /** Optional signer used to pay restoration fees for read-only calls. */
+  restoreSigner?: Keypair;
 }
 
 export interface CreateEscrowParams {
@@ -86,44 +110,88 @@ export class EscrowClient {
   private readonly contractId: string;
   private readonly rpcUrl: string;
   private readonly networkPassphrase: string;
+  private readonly archivalBehavior: ArchivedEntryBehavior;
+  private readonly restoreSigner?: Keypair;
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
     this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
     this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
+    this.archivalBehavior = config.archivalBehavior ?? "error";
+    this.restoreSigner = config.restoreSigner;
   }
 
-  private contractClient(signer?: Keypair): EscrowContractClient {
-    return new EscrowContractClient({
+  private contractClient(signer?: Keypair): {
+    client: EscrowContractClient;
+    beginInvocation: () => void;
+  } {
+    let simulating = true;
+    let restoreAttempts = 0;
+    const signTransaction: StellarClientOptions["signTransaction"] = signer
+      ? async (transactionXdr, options) => {
+          if (simulating && this.archivalBehavior === "auto") {
+            restoreAttempts += 1;
+            if (restoreAttempts > 1) {
+              throw new Error("Automatic restoration attempt limit reached for this invocation");
+            }
+          }
+          return signer.signTransaction(transactionXdr, options);
+        }
+      : undefined;
+    const client = new EscrowContractClient({
       contractId: this.contractId,
       rpcUrl: this.rpcUrl,
       networkPassphrase: this.networkPassphrase,
-      ...(signer ? { publicKey: signer.publicKey(), signTransaction: signer } : {}),
+      restore: this.archivalBehavior === "auto",
+      ...(signer ? { publicKey: signer.publicKey() } : {}),
+      ...(signTransaction ? { signTransaction } : {}),
     });
+    return {
+      client,
+      beginInvocation: () => {
+        simulating = false;
+      },
+    };
+  }
+
+  private async withArchivalHandling<T>(method: string, call: () => Promise<T>): Promise<T> {
+    try {
+      return await call();
+    } catch (error) {
+      if (isArchivedEntryFailure(error)) {
+        throw new ArchivedEntryError(method, this.archivalBehavior, error);
+      }
+      throw error;
+    }
   }
 
   /** Locks `amount` of `token` from `payer`, held for `payee`. Returns the new escrow's id and the funding transaction's hash. */
   async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
-    const client = this.contractClient(params.payer);
-    const tx = await client.create_escrow({
-      payer: params.payer.publicKey(),
-      payee: params.payee,
-      token: params.token,
-      amount: params.amount,
-      condition_ref: params.conditionRef,
-      releaser: params.releaser,
-      refund_after: params.refundAfter,
+    const { client, beginInvocation } = this.contractClient(params.payer);
+    return this.withArchivalHandling("createEscrow", async () => {
+      const tx = await client.create_escrow({
+        payer: params.payer.publicKey(),
+        payee: params.payee,
+        token: params.token,
+        amount: params.amount,
+        condition_ref: params.conditionRef,
+        releaser: params.releaser,
+        refund_after: params.refundAfter,
+      });
+      beginInvocation();
+      const sent = await tx.signAndSend();
+      return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
     });
-    const sent = await tx.signAndSend();
-    return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
   }
 
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
   async getStatus(escrowId: bigint): Promise<EscrowStatus> {
-    const client = this.contractClient();
-    const tx = await client.get_status({ escrow_id: escrowId });
-    const status: GeneratedEscrowStatus = tx.result.unwrap();
-    return status.tag;
+    return this.withArchivalHandling("getStatus", async () => {
+      const { client } = this.contractClient(this.restoreSigner);
+      const tx = await client.get_status({ escrow_id: escrowId });
+      const status: GeneratedEscrowStatus = tx.result.unwrap();
+      return status.tag;
+    });
   }
 
   /**
@@ -133,31 +201,36 @@ export class EscrowClient {
    * Throws if `escrowId` doesn't exist.
    */
   async getEscrow(escrowId: bigint): Promise<Escrow> {
-    const client = this.contractClient();
-    const tx = await client.get_escrow({ escrow_id: escrowId });
-    const data = tx.result.unwrap();
-    return {
-      payer: data.payer,
-      payee: data.payee,
-      token: data.token,
-      amount: data.amount,
-      conditionRef: data.condition_ref,
-      releaser: data.releaser,
-      // The generated client decodes a contract `None` as `null`; the
-      // public surface uses `undefined` for "no deadline" (consistent
-      // with `CreateEscrowParams.refundAfter` being absent).
-      refundAfter: data.refund_after ?? undefined,
-      status: data.status.tag,
-    };
+    return this.withArchivalHandling("getEscrow", async () => {
+      const { client } = this.contractClient(this.restoreSigner);
+      const tx = await client.get_escrow({ escrow_id: escrowId });
+      const data = tx.result.unwrap();
+      return {
+        payer: data.payer,
+        payee: data.payee,
+        token: data.token,
+        amount: data.amount,
+        conditionRef: data.condition_ref,
+        releaser: data.releaser,
+        // The generated client decodes a contract `None` as `null`; the
+        // public surface uses `undefined` for "no deadline" (consistent
+        // with `CreateEscrowParams.refundAfter` being absent).
+        refundAfter: data.refund_after ?? undefined,
+        status: data.status.tag,
+      };
+    });
   }
 
   /** Moves the escrow's funds to its payee. Throws if `caller` isn't the escrow's `releaser`, or the escrow isn't `Funded`. Returns the transaction's hash. */
   async release(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
-    const client = this.contractClient(params.caller);
-    const tx = await client.release({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
-    const sent = await tx.signAndSend();
-    sent.result.unwrap();
-    return { txHash: sent.sendTransactionResponse!.hash };
+    const { client, beginInvocation } = this.contractClient(params.caller);
+    return this.withArchivalHandling("release", async () => {
+      const tx = await client.release({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
+      beginInvocation();
+      const sent = await tx.signAndSend();
+      sent.result.unwrap();
+      return { txHash: sent.sendTransactionResponse!.hash };
+    });
   }
 
   /**
@@ -167,10 +240,21 @@ export class EscrowClient {
    * transaction's hash.
    */
   async refund(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
-    const client = this.contractClient(params.caller);
-    const tx = await client.refund({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
-    const sent = await tx.signAndSend();
-    sent.result.unwrap();
-    return { txHash: sent.sendTransactionResponse!.hash };
+    const { client, beginInvocation } = this.contractClient(params.caller);
+    return this.withArchivalHandling("refund", async () => {
+      const tx = await client.refund({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
+      beginInvocation();
+      const sent = await tx.signAndSend();
+      sent.result.unwrap();
+      return { txHash: sent.sendTransactionResponse!.hash };
+    });
   }
+}
+
+export function isArchivedEntryFailure(error: unknown): boolean {
+  const value = error as { name?: unknown; message?: unknown } | null;
+  const name = typeof value?.name === "string" ? value.name : "";
+  const message = typeof value?.message === "string" ? value.message : String(error);
+  return name === "ExpiredState" || name === "RestorationFailure" ||
+    /archived|restore some contract state|automatic restore to work|automatic restore failed|automatic restoration attempt limit/i.test(message);
 }

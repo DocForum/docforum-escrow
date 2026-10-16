@@ -113,6 +113,11 @@
   Post-creation clawback remains possible by design and is documented in
   T5 as accepted residual risk. **Not yet on testnet** — the current
   deployment predates it. Closes issue #12.
+- [x] Issue #64 — configurable handling of archived contract state:
+  callers may enable the Stellar SDK restore preamble or receive a typed
+  `ArchivedEntryError`; automatic restoration is limited to one restore
+  attempt per invocation. Read-only restoration requires a configured
+  signer, and the SDK docs explain who pays the storage/resource fees.
 - [ ] Rest of the `docs/threat-model.md` §6 pre-mainnet checklist, scoped
   into issues: [#8](https://github.com/DocForum/docforum-escrow/issues/8) write status before transfer + reject
   contract-self addresses (Trivial), [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium),
@@ -129,6 +134,11 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Added bounded automatic restore handling for archived
+  Soroban entries in the TypeScript SDK, typed `ArchivedEntryError` for
+  disabled or unsuccessful restoration, read-only restore signer
+  configuration, unit coverage for archive error recognition, and
+  payment/retry guidance. Closes issue #64.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet
