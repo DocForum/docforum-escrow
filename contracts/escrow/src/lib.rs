@@ -14,7 +14,21 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, Map, String, Vec};
+
+/// Kept deliberately small until resource measurements justify a larger cap.
+pub const MAX_BATCH_SIZE: u32 = 5;
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowParams {
+    pub payee: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub condition_ref: String,
+    pub releaser: Address,
+    pub refund_after: Option<u64>,
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -64,6 +78,13 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    InvalidBatchSize = 13,
+    InvalidBatchItem0 = 14,
+    InvalidBatchItem1 = 15,
+    InvalidBatchItem2 = 16,
+    InvalidBatchItem3 = 17,
+    InvalidBatchItem4 = 18,
+    BatchAmountOverflow = 19,
 }
 
 #[contract]
@@ -121,6 +142,65 @@ impl EscrowContract {
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Ok(id)
+    }
+
+    /// Atomically creates several escrows for the same payer. Each item's
+    /// validation error is encoded by its zero-based item index in the
+    /// returned contract error. The cap remains conservative until resource
+    /// measurements are available.
+    pub fn create_escrows(env: Env, payer: Address, items: Vec<EscrowParams>) -> Result<Vec<u64>, Error> {
+        if items.is_empty() || items.len() > MAX_BATCH_SIZE {
+            return Err(Error::InvalidBatchSize);
+        }
+        payer.require_auth();
+
+        let now = env.ledger().timestamp();
+        let mut totals: Map<Address, i128> = Map::new(&env);
+        for (index, item) in items.iter().enumerate() {
+            if item.amount <= 0 || item.refund_after.map_or(false, |deadline| deadline <= now) {
+                return Err(Self::batch_item_error(index));
+            }
+            let total = totals.get(item.token.clone()).unwrap_or(0_i128)
+                .checked_add(item.amount).ok_or(Error::BatchAmountOverflow)?;
+            totals.set(item.token, total);
+        }
+
+        let contract_address = env.current_contract_address();
+        let mut balances_before: Map<Address, i128> = Map::new(&env);
+        for (token_address, _) in totals.iter() {
+            let token_client = token::Client::new(&env, &token_address);
+            balances_before.set(token_address.clone(), token_client.balance(&contract_address));
+        }
+        for item in items.iter() {
+            let token_client = token::Client::new(&env, &item.token);
+            token_client.transfer(&payer, &contract_address, &item.amount);
+        }
+        for (token_address, expected_delta) in totals.iter() {
+            let token_client = token::Client::new(&env, &token_address);
+            let after = token_client.balance(&contract_address);
+            if after.checked_sub(balances_before.get(token_address).unwrap_or(0_i128)) != Some(expected_delta) {
+                return Err(Error::BalanceMismatch);
+            }
+        }
+
+        let mut ids = Vec::new(&env);
+        for item in items.iter() {
+            let id = Self::next_id(&env);
+            let data = EscrowData {
+                payer: payer.clone(),
+                payee: item.payee.clone(),
+                token: item.token.clone(),
+                amount: item.amount,
+                condition_ref: item.condition_ref.clone(),
+                status: EscrowStatus::Funded,
+                releaser: item.releaser.clone(),
+                refund_after: item.refund_after,
+            };
+            env.storage().persistent().set(&DataKey::Escrow(id), &data);
+            env.events().publish((symbol_short!("created"), id), (item.token, item.amount));
+            ids.push_back(id);
+        }
+        Ok(ids)
     }
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
@@ -221,5 +301,15 @@ impl EscrowContract {
         let id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
         env.storage().instance().set(&DataKey::NextId, &(id + 1));
         id
+    }
+
+    fn batch_item_error(index: u32) -> Error {
+        match index {
+            0 => Error::InvalidBatchItem0,
+            1 => Error::InvalidBatchItem1,
+            2 => Error::InvalidBatchItem2,
+            3 => Error::InvalidBatchItem3,
+            _ => Error::InvalidBatchItem4,
+        }
     }
 }

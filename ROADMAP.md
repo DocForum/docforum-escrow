@@ -129,6 +129,13 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Implemented issue #28 batch escrow creation for up to five
+  items. The call validates each item before transferring, aggregates
+  expected funds per token, checks each aggregate balance delta, and
+  returns IDs in input order; invalid item errors encode the failing
+  zero-based index. Added contract coverage for mixed tokens, ordering,
+  rollback, and size bounds. Five is a conservative initial cap pending
+  resource measurements. Not yet deployed; SDK bindings are not regenerated.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet
