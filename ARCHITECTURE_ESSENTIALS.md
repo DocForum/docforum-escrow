@@ -15,6 +15,7 @@ get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded —
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
+rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED IN SOURCE (issue #23) — current releaser and payer must authorize; only while Funded
 ```
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
@@ -74,6 +75,13 @@ contract enforces *who* can call release/refund, not *why* — keep it that
 way. Baking healthcare-specific logic into the contract is exactly the
 scope creep this repo exists to avoid (see README "why this repo exists,
 honestly").
+
+`rotate_releaser` (issue #23, ADR 0005) is a recovery operation: the
+current releaser and stored payer both authorize it. Its address is
+provided by the releaser caller and checked against the stored role; the
+replacement cannot be the payee or contract address. The TypeScript
+generated bindings and wrapper must be regenerated/updated before the
+SDK exposes this method.
 
 ## Hard rules
 1. **No PHI, ever, anywhere in this repo.** Not in tests, not in example
