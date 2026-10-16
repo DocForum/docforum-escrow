@@ -5,11 +5,11 @@
 // create_escrow time — docs/adr/0002) may call release/refund, and only
 // while the escrow is still Funded. See issues #2 and #3.
 
-use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
+use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus, SettlementOp, SettlementResult};
 use soroban_sdk::{
     testutils::Address as _,
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String,
+    Address, Env, String, Vec,
 };
 
 fn setup<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
@@ -144,4 +144,163 @@ fn release_rejects_after_refund() {
 
     assert!(release_attempt.is_err());
     assert_eq!(f.token.balance(&f.payee), 0); // never got paid
+}
+
+// --- settle_many() ---
+
+fn fund_escrow_with(
+    env: &Env,
+    token_id: &Address,
+    asset: &StellarAssetClient,
+    payer: &Address,
+    payee: &Address,
+    releaser: &Address,
+    amount: i128,
+) -> (EscrowContractClient<'_>, u64) {
+    asset.mint(payer, &amount);
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(env, &contract_id);
+    let escrow_id = client.create_escrow(
+        payer,
+        payee,
+        token_id,
+        &amount,
+        &String::from_str(env, "opaque-condition-ref"),
+        releaser,
+        &None,
+    );
+    (client, escrow_id)
+}
+
+#[test]
+fn settle_many_releases_and_refunds_in_one_call() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (token_id, token, asset) = setup(&env);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+
+    let (client, id_a) =
+        fund_escrow_with(&env, &token_id, &asset, &payer, &payee, &releaser, 100);
+    let (_, id_b) = fund_escrow_with(&env, &token_id, &asset, &payer, &payee, &releaser, 200);
+
+    let ops = Vec::from_array(
+        &env,
+        [
+            (id_a, SettlementOp::Release),
+            (id_b, SettlementOp::Refund),
+        ],
+    );
+    let results = client.settle_many(&releaser, &ops);
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results.get(0).unwrap(), SettlementResult::Settled);
+    assert_eq!(results.get(1).unwrap(), SettlementResult::Settled);
+    assert_eq!(client.get_status(&id_a), EscrowStatus::Released);
+    assert_eq!(client.get_status(&id_b), EscrowStatus::Refunded);
+    assert_eq!(token.balance(&payee), 100);
+    assert_eq!(token.balance(&payer), 200);
+}
+
+#[test]
+fn settle_many_rejects_unauthorized_caller_per_op() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (token_id, token, asset) = setup(&env);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    let stranger = Address::generate(&env);
+
+    let (client, id_a) =
+        fund_escrow_with(&env, &token_id, &asset, &payer, &payee, &releaser, 100);
+    let (_, id_b) = fund_escrow_with(&env, &token_id, &asset, &payer, &payee, &releaser, 200);
+
+    let ops = Vec::from_array(
+        &env,
+        [
+            (id_a, SettlementOp::Release),
+            (id_b, SettlementOp::Release),
+        ],
+    );
+    let results = client.settle_many(&stranger, &ops);
+
+    assert_eq!(results.get(0).unwrap(), SettlementResult::Unauthorized);
+    assert_eq!(results.get(1).unwrap(), SettlementResult::Unauthorized);
+    assert_eq!(client.get_status(&id_a), EscrowStatus::Funded);
+    assert_eq!(client.get_status(&id_b), EscrowStatus::Funded);
+    assert_eq!(token.balance(&payee), 0);
+}
+
+#[test]
+fn settle_many_second_op_on_same_escrow_fails_not_funded() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (token_id, token, asset) = setup(&env);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+
+    let (client, id_a) =
+        fund_escrow_with(&env, &token_id, &asset, &payer, &payee, &releaser, 100);
+
+    let ops = Vec::from_array(
+        &env,
+        [
+            (id_a, SettlementOp::Release),
+            (id_a, SettlementOp::Refund),
+        ],
+    );
+    let results = client.settle_many(&releaser, &ops);
+
+    assert_eq!(results.get(0).unwrap(), SettlementResult::Settled);
+    assert_eq!(results.get(1).unwrap(), SettlementResult::NotFunded);
+    assert_eq!(client.get_status(&id_a), EscrowStatus::Released);
+    assert_eq!(token.balance(&payee), 100);
+    assert_eq!(token.balance(&payer), 0);
+}
+
+#[test]
+fn settle_many_is_best_effort_and_reports_per_op_results() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (token_id, token, asset) = setup(&env);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+
+    let (client, id_a) =
+        fund_escrow_with(&env, &token_id, &asset, &payer, &payee, &releaser, 100);
+    let (_, id_b) = fund_escrow_with(&env, &token_id, &asset, &payer, &payee, &releaser, 200);
+
+    // Settle id_a first so the batch op on it fails NotFunded, while id_b succeeds.
+    client.release(&id_a, &releaser);
+
+    let ops = Vec::from_array(
+        &env,
+        [
+            (id_a, SettlementOp::Release),
+            (id_b, SettlementOp::Release),
+        ],
+    );
+    let results = client.settle_many(&releaser, &ops);
+
+    assert_eq!(results.get(0).unwrap(), SettlementResult::NotFunded);
+    assert_eq!(results.get(1).unwrap(), SettlementResult::Settled);
+    assert_eq!(client.get_status(&id_b), EscrowStatus::Released);
+    assert_eq!(token.balance(&payee), 300);
+}
+
+#[test]
+fn settle_many_rejects_empty_batch() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let f = fund_escrow(&env, 300);
+
+    let ops: Vec<(u64, SettlementOp)> = Vec::new(&env);
+    let result = f.client.try_settle_many(&f.releaser, &ops);
+
+    assert!(result.is_err());
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Funded);
 }
