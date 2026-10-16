@@ -14,7 +14,7 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, Map, String};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -46,6 +46,7 @@ pub struct EscrowData {
 enum DataKey {
     Escrow(u64),
     NextId,
+    MaximumAmounts,
 }
 
 #[contracterror]
@@ -64,6 +65,12 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    /// The token pool does not cover the pending payout.
+    PoolInsufficient = 7,
+    /// The token has no immutable deployment-time cap configured.
+    TokenCapNotConfigured = 8,
+    /// The escrow amount or cumulative top-up would exceed its token cap.
+    AmountCapExceeded = 9,
 }
 
 #[contract]
@@ -71,6 +78,18 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
+    /// Sets the immutable maximum funded escrow amount for each token.
+    /// Tokens absent from the map are not accepted.
+    pub fn __constructor(env: Env, maximum_amounts: Map<Address, i128>) -> Result<(), Error> {
+        for (_, maximum) in maximum_amounts.iter() {
+            if maximum <= 0 {
+                return Err(Error::InvalidAmount);
+            }
+        }
+        env.storage().instance().set(&DataKey::MaximumAmounts, &maximum_amounts);
+        Ok(())
+    }
+
     /// Locks `amount` of `token` pulled from `payer`, held for `payee`,
     /// tagged with an opaque `condition_ref`. `releaser` is the only
     /// address that will later be permitted to call `release`/`refund`
@@ -92,6 +111,7 @@ impl EscrowContract {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
+        Self::check_token_cap(&env, &token, amount)?;
         if let Some(deadline) = refund_after {
             if deadline <= env.ledger().timestamp() {
                 return Err(Error::InvalidRefundAfter);
@@ -121,6 +141,43 @@ impl EscrowContract {
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Ok(id)
+    }
+
+    /// Adds funds to an existing funded escrow, bounded by the same
+    /// immutable per-token maximum used when it was created. Only its
+    /// original payer may authorize a top-up.
+    pub fn top_up(env: Env, escrow_id: u64, payer: Address, amount: i128) -> Result<(), Error> {
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        payer.require_auth();
+
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+        if payer != data.payer {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        let new_amount = data.amount.checked_add(amount).ok_or(Error::AmountCapExceeded)?;
+        Self::check_token_cap(&env, &data.token, new_amount)?;
+
+        let token_client = token::Client::new(&env, &data.token);
+        let contract_address = env.current_contract_address();
+        let balance_before = token_client.balance(&contract_address);
+        token_client.transfer(&payer, &contract_address, &amount);
+        let balance_after = token_client.balance(&contract_address);
+        if balance_after.checked_sub(balance_before) != Some(amount) {
+            return Err(Error::BalanceMismatch);
+        }
+
+        data.amount = new_amount;
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        Ok(())
     }
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
@@ -221,5 +278,20 @@ impl EscrowContract {
         let id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
         env.storage().instance().set(&DataKey::NextId, &(id + 1));
         id
+    }
+
+    fn check_token_cap(env: &Env, token: &Address, amount: i128) -> Result<(), Error> {
+        let maximum_amounts: Map<Address, i128> = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaximumAmounts)
+            .unwrap_or(Map::new(env));
+        let maximum = maximum_amounts
+            .get(token.clone())
+            .ok_or(Error::TokenCapNotConfigured)?;
+        if amount > maximum {
+            return Err(Error::AmountCapExceeded);
+        }
+        Ok(())
     }
 }

@@ -18,7 +18,7 @@ use docforum_escrow::{EscrowContract, EscrowContractClient, Error};
 use soroban_sdk::{
     contract, contractimpl, contracttype,
     testutils::Address as _,
-    Address, Env, String,
+    Address, Env, Map, String,
 };
 
 #[contracttype]
@@ -28,6 +28,12 @@ enum MockKey {
     AttackEscrow,
     AttackId,
     AttackCaller,
+}
+
+fn register_escrow(env: &Env, token: &Address) -> Address {
+    let mut maximum_amounts = Map::new(env);
+    maximum_amounts.set(token.clone(), 1_000);
+    env.register(EscrowContract, (maximum_amounts,))
 }
 
 fn mock_balance(env: &Env, id: &Address) -> i128 {
@@ -154,7 +160,7 @@ fn create_escrow_rejects_lying_transfer() {
 
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = register_escrow(&env, &token_id);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_create_escrow(
@@ -188,7 +194,7 @@ fn create_escrow_rejects_short_delivery() {
 
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = register_escrow(&env, &token_id);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_create_escrow(
@@ -223,7 +229,7 @@ fn reentrant_transfer_cannot_double_release() {
 
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = register_escrow(&env, &token_id);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Creating with this token is fine: the transfer in is honest, and

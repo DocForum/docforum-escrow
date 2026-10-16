@@ -17,6 +17,11 @@ layout changed, so the old contract ID is no longer signature- or
 layout-compatible with the current contract source. The prior entries
 are kept as accurate history, not deleted.
 
+This 2026-10-08 deployment predates issue #56's constructor cap map and
+`top_up`; it has no per-token maximum. It must not be treated as a capped
+beta deployment. A new deployment with an explicit cap map and regenerated
+bindings is required before using the capped contract surface.
+
 ### Verified live, on this deployment
 
 Every claim below is a real transaction or a real contract error
