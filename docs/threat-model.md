@@ -13,6 +13,11 @@ deployment is listed in `docs/testnet-deployments.md`.
 Updated 2026-10-07 for the issue #12 balance-delta check and
 mock-token tests (§1 I4, T4, T5, §6).
 
+*Updated 2026-10-09 for issue #13 (Phase E5): per-token liability
+accounting (`liabilities[token]`) and a read-only `solvency(token)` view
+were added, so T5's shared-pool risk is now observable on-chain. See §1
+I6, T5, T6, and §6.*
+
 *Updated 2026-10-08 for issue #11 (Phase E4): the timeout refund path
 from T2's candidate list was decided in `docs/adr/0004` and implemented
 (`refund_after` + `get_escrow`), so T2, T8 and the §6 checklist below now
@@ -30,6 +35,7 @@ in this document still describes the same design.*
 | I3 | Each escrow pays out at most once. | `status == Funded` check before transfer, status written after — shared by release and both refund paths. |
 | I4 | An escrow only exists if `amount` was actually transferred in. | `payer.require_auth()` + token `transfer` before the escrow is stored (`lib.rs:96-112`). |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
+| I6 | `liabilities[token]` equals the sum of `amount` over every still-`Funded` escrow in that token, at all times. | Every state change that creates or settles an escrow updates the counter in the same invocation (`create_escrow`, `release`, `refund`). Property test in `tests/liabilities.rs`. |
 
 I1 is the most important property in this design. A full compromise of the
 `releaser` key lets an attacker pick the **wrong outcome** (release when it
@@ -51,6 +57,7 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 | `releaser` | `release` or `refund` its escrows, once | Choosing the correct outcome. This is the main trust assumption. |
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |
 | Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds back to that escrow's `payer` | Nothing. |
+| Anyone | Call `solvency(token)` to read `(balance, liabilities)` | Nothing. Read-only view. |
 
 There is **no admin, no upgrade function, and no pause.** The deployed
 WASM is immutable. Nobody, including the deployer, can change an
@@ -180,6 +187,18 @@ behave like SEP-41.
     risk for now (documented, deliberately not solved here) — the
     practical mitigation stays with the consumer: allowlist only
     tokens without clawback, transfer fees, or rebasing.
+  - **Observability (issue #13):** `liabilities[token]` now tracks the
+    total outstanding amount the contract owes in that token, and
+    `solvency(token)` returns `(balance, liabilities)`. A monitor can
+    compare the two in one call: `balance >= liabilities` means the
+    shared pool is currently solvent for that token. This does **not**
+    prevent a clawback or fee-on-transfer drain — it makes it
+    detectable. A clawback against the contract address will show up as
+    `balance < liabilities` on the next read. Alert on that condition
+    for every token the consumer accepts. Note the counter only tracks
+    escrows the contract itself created; it cannot see tokens sent to
+    the contract address by other means, so a surplus (`balance >
+    liabilities`) is expected and not by itself a problem.
   - Consumers: only use an allowlist of known tokens. The current
     consumer uses one configured token (`escrowTokenId`), which is good.
   - Document that payees must check the escrow's `token`, not just its
@@ -202,6 +221,15 @@ behave like SEP-41.
 - **Mitigation:** extend the escrow entry's TTL in `create_escrow` (and
   the instance TTL on each call), sized to the longest expected escrow
   duration.
+- **Liability counter TTL (issue #13):** `liabilities[token]` is stored
+  in persistent storage keyed by token address. Like escrow entries, it
+  can be archived if nothing extends it. The counter is extended on
+  every write (`create_escrow`, `release`, `refund`) alongside the
+  escrow entry it changes, so an active token's counter stays live as
+  long as its escrows do. A token whose last escrow settles and is never
+  used again will eventually archive; a later `create_escrow` in that
+  token restores it (the host brings back the last written value, which
+  is the correct running total). No separate reconciliation is needed.
 
 ### T7 — No events emitted · **Low**
 - The contract publishes no events of its own. The only on-chain trace
@@ -298,6 +326,9 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
 - [ ] ⚙ Balance-delta check on `create_escrow` (T5)
 - [ ] ⚙ TTL extension for escrow entries and instance (T6)
 - [ ] ⚙ Emit create/release/refund events (T7)
+- [x] ⚙ Per-token liability accounting (`liabilities[token]`) and
+      `solvency(token)` view, with property test (I6, T5, T6) — issue
+      #13, `tests/liabilities.rs`
 - [x] Tests with a malicious mock token: lying transfer, short
       delivery, re-entry attempt (T4, T5) — issue #12,
       `tests/malicious_token.rs`
@@ -312,6 +343,12 @@ Most useful to the project, in order:
 1. Break any invariant in §1.
 2. Answer the "Reviewer, please verify" items in T3, T4 and T6.
 3. Disagree with a severity rating, or name a threat that's missing.
+
+For I6 specifically: the property test in `tests/liabilities.rs` drives
+every state-changing entry point (`create_escrow`, `release`, `refund`,
+including the timeout path) and asserts `liabilities[token]` equals the
+sum of `Funded` amounts per token after each step. Reviewers should
+check that no state-changing function was missed.
 
 Leave findings as comments on the PR that adds this file, or on issue #6.
 A review only counts toward E4 if the reviewer is not the implementer
