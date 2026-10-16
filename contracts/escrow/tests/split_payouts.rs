@@ -21,7 +21,7 @@ fn setup<'a>(env: &Env) -> (EscrowContractClient<'a>, TokenClient<'a>, Address, 
     )
 }
 
-fn share(env: &Env, payee: &Address, basis_points: u32) -> PayeeShare {
+fn share(_env: &Env, payee: &Address, basis_points: u32) -> PayeeShare {
     PayeeShare {
         payee: payee.clone(),
         basis_points,
