@@ -113,6 +113,13 @@
   Post-creation clawback remains possible by design and is documented in
   T5 as accepted residual risk. **Not yet on testnet** — the current
   deployment predates it. Closes issue #12.
+- [x] Pre-payout balance guard for `release` and `refund` (issue #38):
+  the contract returns `PoolInsufficient` (error 21) before attempting a
+  transfer when the token pool cannot cover the individual escrow. A
+  clawback mock regression test verifies that payout fails without
+  changing escrow state. This adds one read-only token balance call to
+  each payout; exact CPU/instruction deltas remain unmeasured. Not yet on
+  testnet.
 - [ ] Rest of the `docs/threat-model.md` §6 pre-mainnet checklist, scoped
   into issues: [#8](https://github.com/DocForum/docforum-escrow/issues/8) write status before transfer + reject
   contract-self addresses (Trivial), [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium),

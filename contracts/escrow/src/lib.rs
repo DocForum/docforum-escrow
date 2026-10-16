@@ -64,6 +64,9 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    /// The escrow contract's shared balance for this token fell below
+    /// the payout amount after funding (for example, token clawback).
+    PoolInsufficient = 21,
 }
 
 #[contract]
@@ -172,7 +175,11 @@ impl EscrowContract {
         }
 
         let token_client = token::Client::new(&env, &data.token);
-        token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
+        let contract_address = env.current_contract_address();
+        if token_client.balance(&contract_address) < data.amount {
+            return Err(Error::PoolInsufficient);
+        }
+        token_client.transfer(&contract_address, &data.payee, &data.amount);
 
         data.status = EscrowStatus::Released;
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
@@ -210,7 +217,11 @@ impl EscrowContract {
         }
 
         let token_client = token::Client::new(&env, &data.token);
-        token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
+        let contract_address = env.current_contract_address();
+        if token_client.balance(&contract_address) < data.amount {
+            return Err(Error::PoolInsufficient);
+        }
+        token_client.transfer(&contract_address, &data.payer, &data.amount);
 
         data.status = EscrowStatus::Refunded;
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
