@@ -47,6 +47,7 @@ enum DataKey {
     Escrow(u64),
     NextId,
     MaximumAmounts,
+    Vesting(u64),
 }
 
 #[contracterror]
@@ -66,11 +67,13 @@ pub enum Error {
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
     /// The token pool does not cover the pending payout.
-    PoolInsufficient = 7,
+    PoolInsufficient = 21,
     /// The token has no immutable deployment-time cap configured.
-    TokenCapNotConfigured = 8,
+    TokenCapNotConfigured = 22,
     /// The escrow amount or cumulative top-up would exceed its token cap.
-    AmountCapExceeded = 9,
+    AmountCapExceeded = 23,
+    /// A streamed escrow has a fixed funded total.
+    StreamingTopUpUnsupported = 28,
 }
 
 #[contract]
@@ -162,6 +165,9 @@ impl EscrowContract {
         }
         if data.status != EscrowStatus::Funded {
             return Err(Error::NotFunded);
+        }
+        if env.storage().persistent().has(&DataKey::Vesting(escrow_id)) {
+            return Err(Error::StreamingTopUpUnsupported);
         }
         let new_amount = data.amount.checked_add(amount).ok_or(Error::AmountCapExceeded)?;
         Self::check_token_cap(&env, &data.token, new_amount)?;
