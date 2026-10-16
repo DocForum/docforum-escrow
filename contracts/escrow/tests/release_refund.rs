@@ -5,11 +5,11 @@
 // create_escrow time — docs/adr/0002) may call release/refund, and only
 // while the escrow is still Funded. See issues #2 and #3.
 
-use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
+use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus, PayeeRefunded};
 use soroban_sdk::{
-    testutils::Address as _,
+    testutils::{Address as _, Events as _},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String,
+    Address, Env, Event, String,
 };
 
 fn setup<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
@@ -21,6 +21,7 @@ fn setup<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
 }
 
 struct Fixture<'a> {
+    contract_id: Address,
     client: EscrowContractClient<'a>,
     token: TokenClient<'a>,
     payer: Address,
@@ -49,7 +50,15 @@ fn fund_escrow(env: &Env, amount: i128) -> Fixture<'_> {
         &None,
     );
 
-    Fixture { client, token, payer, payee, releaser, escrow_id }
+    Fixture {
+        contract_id,
+        client,
+        token,
+        payer,
+        payee,
+        releaser,
+        escrow_id,
+    }
 }
 
 // --- release() ---
@@ -104,6 +113,27 @@ fn refund_transfers_funds_back_to_payer_and_marks_refunded() {
     f.client.refund(&f.escrow_id, &f.releaser);
 
     assert_eq!(f.token.balance(&f.payer), 1_000); // full 1,000 minted, 300 returned
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Refunded);
+}
+
+#[test]
+fn payee_can_voluntarily_refund_to_payer_and_emits_distinct_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let f = fund_escrow(&env, 300);
+
+    f.client.refund(&f.escrow_id, &f.payee);
+
+    let expected = PayeeRefunded {
+        escrow_id: f.escrow_id,
+        payer: f.payer.clone(),
+        payee: f.payee.clone(),
+        amount: 300,
+    };
+    let events = env.events().all().filter_by_contract(&f.contract_id);
+    assert_eq!(events, std::vec![expected.to_xdr(&env, &f.contract_id)]);
+    assert_eq!(f.token.balance(&f.payer), 1_000);
+    assert_eq!(f.token.balance(&f.payee), 0);
     assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Refunded);
 }
 

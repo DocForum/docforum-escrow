@@ -26,7 +26,7 @@ in this document still describes the same design.*
 | # | Invariant | Enforced by |
 |---|---|---|
 | I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination. |
-| I2 | Only the escrow's `releaser` can move funds out — or, once `refund_after` has passed, anyone at all, and then still only back to `payer`. | `caller.require_auth()` + `caller == data.releaser`, relaxed solely by the deadline check (`lib.rs:149`, `lib.rs:183`, `lib.rs:191`). |
+| I2 | Only the escrow's `releaser` can release/refund; the stored `payee` may voluntarily refund with its own authorization; after `refund_after`, anyone may refund. Every refund still goes only to `payer`. | `caller.require_auth()` and refund caller checks: releaser, payee, or deadline path (`lib.rs`). |
 | I3 | Each escrow pays out at most once. | `status == Funded` check before transfer, status written after — shared by release and both refund paths. |
 | I4 | An escrow only exists if `amount` was actually transferred in. | `payer.require_auth()` + token `transfer` before the escrow is stored (`lib.rs:96-112`). |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
@@ -47,7 +47,7 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 | Actor | Can do | Trusted for |
 |---|---|---|
 | `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser` | Nothing after creation. Has no on-chain power to cancel. |
-| `payee` | Receive funds | Nothing. Has **no on-chain power at all**, including no way to object to a refund. |
+| `payee` | Receive funds, or voluntarily return a still-funded escrow to the payer | Nothing. A payee refund cannot redirect funds or release them to another address. |
 | `releaser` | `release` or `refund` its escrows, once | Choosing the correct outcome. This is the main trust assumption. |
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |
 | Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds back to that escrow's `payer` | Nothing. |
@@ -55,6 +55,11 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 There is **no admin, no upgrade function, and no pause.** The deployed
 WASM is immutable. Nobody, including the deployer, can change an
 escrow's data or move funds outside `release`/`refund`.
+
+Each escrow stores one payee and supports one all-or-nothing settlement.
+The payee refund therefore requires only that stored payee's authorization.
+Split payees and partial milestone releases are not implemented; if partial
+payouts are added later, the refundable amount must be the unpaid remainder.
 
 ## 3. Threats
 

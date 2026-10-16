@@ -14,7 +14,7 @@ create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
-refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
+refund(escrow_id, caller) -> result    // releaser or payee with auth; anyone after refund_after; always only back to payer
 ```
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
@@ -36,8 +36,10 @@ historical record.
 creation (`docs/adr/0004`): after it passes **anyone** may call
 `refund`, but the destination is unchanged — always the stored `payer` —
 and `release` is never gated by it, so the releaser can still release
-after the deadline (whoever lands first wins). No `refund_after` means
-behaviour is exactly what it was before: releaser-only refunds, forever.
+after the deadline (whoever lands first wins). Without `refund_after`,
+either the releaser or stored payee may refund a funded escrow; the payee
+must authorize the voluntary refund and funds always return to the payer.
+The contract currently supports one payee and full settlement only.
 
 ## TypeScript SDK surface (`sdk/`)
 ```ts
@@ -48,7 +50,7 @@ const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, am
 await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
 await client.getEscrow(escrowId);            // full stored record — incl. releaser + refundAfter, so a payee can check the deal (docs/adr/0004, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
-await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter has passed
+await client.refund({ escrowId, caller });   // { txHash } — releaser or payee always; anyone after refundAfter has passed
 ```
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
