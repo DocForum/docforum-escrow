@@ -45,6 +45,7 @@ Two reasons, stated plainly rather than blended together:
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
 | `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
+| `top_up(escrow_id, payer, amount) -> Result<()>` | ✅ Implemented | Original payer may add funds while the escrow remains `Funded`; checked addition and the same exact token balance-delta guard used by creation apply. |
 
 ```
 EscrowStatus = Funded | Released | Refunded
