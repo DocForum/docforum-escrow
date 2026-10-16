@@ -14,7 +14,7 @@ use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String,
+    Address, Env, String, Vec,
 };
 
 /// Ledger close time at escrow creation.
@@ -49,7 +49,7 @@ fn fund_escrow(env: &Env, refund_after: Option<u64>) -> Fixture<'_> {
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
     let client = EscrowContractClient::new(env, &contract_id);
 
     let escrow_id = client.create_escrow(
@@ -62,7 +62,15 @@ fn fund_escrow(env: &Env, refund_after: Option<u64>) -> Fixture<'_> {
         &refund_after,
     );
 
-    Fixture { client, token, contract_id, payer, payee, releaser, escrow_id }
+    Fixture {
+        client,
+        token,
+        contract_id,
+        payer,
+        payee,
+        releaser,
+        escrow_id,
+    }
 }
 
 // --- no refund_after: behaviour identical to before the timeout existed ---
@@ -110,16 +118,26 @@ fn create_escrow_rejects_deadline_already_passed_or_now() {
     asset.mint(&payer, &1_000);
     env.ledger().set_timestamp(CREATED_AT);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let now = client.try_create_escrow(
-        &payer, &payee, &token_id, &300,
-        &String::from_str(&env, "ref-now"), &releaser, &Some(CREATED_AT),
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(&env, "ref-now"),
+        &releaser,
+        &Some(CREATED_AT),
     );
     let past = client.try_create_escrow(
-        &payer, &payee, &token_id, &300,
-        &String::from_str(&env, "ref-past"), &releaser, &Some(CREATED_AT - 1),
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(&env, "ref-past"),
+        &releaser,
+        &Some(CREATED_AT - 1),
     );
 
     assert!(now.is_err());
@@ -353,7 +371,7 @@ fn get_escrow_errors_for_unknown_escrow() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_get_escrow(&999);

@@ -122,6 +122,17 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E5 — Contract features
+- [x] Immutable deploy-time token allowlist (issue #36):
+  `__constructor(allowed_tokens)` stores approved addresses;
+  `create_escrow` rejects unlisted tokens with append-only error code 7.
+  An empty list preserves allow-all behavior. Tests cover listed,
+  unlisted, and empty-list cases. Threat model, deployment guidance, and
+  contract API docs updated. **Not yet on testnet** — the current
+  deployment predates this constructor; a new testnet deployment and
+  verification are required before claiming the live contract is
+  protected. Closes issue #36.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -129,6 +140,9 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Implemented the immutable deploy-time token allowlist for
+  issue #36. Contract tests/docs updated; awaiting a new testnet deployment
+  before claiming the protection is live.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet
