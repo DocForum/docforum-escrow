@@ -41,13 +41,16 @@ Two reasons, stated plainly rather than blended together:
 | Function | Status | Description |
 |---|---|---|
 | `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id` | ✅ Implemented | Pulls `amount` of `token` from `payer` (requires `payer` auth), stores an opaque `condition_ref`, sets status `Funded`. Rejects non-positive amounts, and any `refund_after` that isn't strictly in the future. |
+| `create_escrow_with_arbiter(..., arbiter) -> escrow_id` | ✅ Implemented | Opt-in alternative that names a distinct arbiter at creation; either payer or payee can later raise a dispute. |
+| `raise_dispute(escrow_id, caller)` | ✅ Implemented | Payer or payee freezes a funded escrow that has an arbiter. Release and refund are blocked until resolution. |
+| `resolve_dispute(escrow_id, caller, outcome)` | ✅ Implemented | Only the named arbiter can settle an active dispute, to the stored payee or payer. |
 | `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
 | `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
 
 ```
-EscrowStatus = Funded | Released | Refunded
+EscrowStatus = Funded | Disputed | Released | Refunded
 ```
 
 `refund_after` is optional: an escrow created without one behaves exactly
@@ -56,6 +59,16 @@ That's the answer to "what if the releaser's key is lost?" (threat model
 T2): instead of locking funds permanently, a deadline lets anyone return
 them to the payer. See [ADR 0004](docs/adr/0004-timeout-refund-path.md)
 for the decision and what it means for payees.
+
+The original creation entry point remains available and has no dispute
+path. The opt-in arbiter entry point freezes the escrow when either payer
+or payee raises a dispute. A timeout refund cannot bypass that freeze;
+the arbiter must settle to the stored payee or payer. See [ADR
+0006](docs/adr/0006-dispute-flow-with-optional-arbiter.md).
+
+The TypeScript SDK exposes these calls through `DisputeClient` and
+`createEscrowWithArbiter`; the existing `EscrowClient.createEscrow`
+continues to create escrows without an arbiter.
 
 **Design rule, enforced deliberately:** the contract decides **who** may
 call `release`/`refund`, never **why**. `condition_ref` is an opaque
@@ -129,7 +142,7 @@ The TypeScript SDK (`sdk/`) is still a placeholder — see
 | Doc | Purpose |
 |---|---|
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
-| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E4 breakdown and current status. |
+| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E6 breakdown and current status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
 
@@ -137,8 +150,9 @@ The TypeScript SDK (`sdk/`) is still a placeholder — see
 
 **Phase E1 (contract skeleton): done.** `create_escrow` and `get_status`
 are implemented, tested, and deployed live on testnet — not just locally
-tested. Phases E2 (release/refund), E3 (TypeScript SDK), and E4 (security
-review, blocking for any mainnet use) are tracked as open issues:
+tested. Phases E2 (release/refund) and E3 (TypeScript SDK) are complete;
+E4 security review still blocks mainnet use. Phase E5 adds milestone
+escrows and the optional arbiter dispute flow:
 
 | Issue | Phase | Complexity |
 |---|---|---|
@@ -148,6 +162,7 @@ review, blocking for any mainnet use) are tracked as open issues:
 | [#4 SDK: wrap `create_escrow`/`get_status`](https://github.com/DocForum/docforum-escrow/issues/4) | E3 | Medium |
 | [#5 ADR: npm vs GitHub Packages](https://github.com/DocForum/docforum-escrow/issues/5) | E3 | Trivial |
 | [#6 Threat model + external security review](https://github.com/DocForum/docforum-escrow/issues/6) | E4 | High |
+| [#24 Optional arbiter dispute flow](https://github.com/DocForum/docforum-escrow/issues/24) | E5 | High |
 
 Full breakdown: [`ROADMAP.md`](ROADMAP.md).
 

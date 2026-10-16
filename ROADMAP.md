@@ -5,6 +5,13 @@
 
 **Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
 
+Phase E5 issue #24 adds opt-in arbiter disputes. `create_escrow` retains
+its existing no-arbiter behavior; either payer or payee can freeze an
+opt-in escrow, and only its distinct arbiter can settle it. ADR 0006
+records the freeze and settlement rules. Added seven contract regression
+tests, regenerated TypeScript bindings, and exposed the API through
+`DisputeClient` in SDK 0.4.0.
+
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
   (`cargo build --target wasm32v1-none --release`) — 4 passing tests in
