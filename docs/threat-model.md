@@ -254,7 +254,7 @@ behave like SEP-41.
   token client’s infallible `transfer` path, so either failure aborted the
   invocation with a generic host error.
 - `release` now invokes `try_transfer` and maps any failed outbound token
-  call to `Error::Undeliverable` (code 11). Because status is written only
+  call to `Error::Undeliverable` (code 24). Because status is written only
   after a successful transfer, the escrow remains `Funded` and the funds
   remain at the escrow address. The releaser can retry after the payee is
   able to receive, or use the existing refund path; funds are never sent
