@@ -1,4 +1,4 @@
-# ADR 0006: Versioned escrow storage records
+# ADR 0008: Versioned escrow storage records
 
 **Status:** Accepted for issue #37  
 **Date:** 2026-10-16

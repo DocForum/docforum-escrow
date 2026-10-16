@@ -133,7 +133,7 @@
   #37; PR pending): new writes use a tagged `V2` record; readers recognize
   the exact seven-field pre-ADR-0004 map, the exact eight-field current
   map, and known tagged variants. Release/refund migrate decoded records
-  on write. This does not add contract upgradeability; see ADR 0006.
+  on write. This does not add contract upgradeability; see ADR 0008.
 - [ ] Measure version dispatch resource cost before enabling an upgrade
   path or increasing storage-layout complexity.
 

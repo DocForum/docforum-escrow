@@ -108,7 +108,7 @@ pub enum Error {
     BalanceMismatch = 6,
     /// A persistent escrow value does not match a supported historical or
     /// versioned layout; fail closed instead of guessing at its contents.
-    UnsupportedStorageVersion = 7,
+    UnsupportedStorageVersion = 20,
 }
 
 #[contract]
