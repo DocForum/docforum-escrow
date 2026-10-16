@@ -8,6 +8,7 @@
 // (hard rule 4); passing a mainnet networkPassphrase/rpcUrl is on the
 // caller, not encouraged by any default here.
 import { Keypair } from "@stellar/stellar-sdk";
+import { Buffer } from "buffer";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
 
 export { Keypair };
@@ -33,6 +34,8 @@ export interface Escrow {
    * relying on a `Funded` escrow (threat model T8).
    */
   refundAfter?: bigint;
+  /** Optional Ed25519 public key permitted to authorize attested releases. */
+  attester?: string;
   status: EscrowStatus;
 }
 
@@ -69,6 +72,8 @@ export interface CreateEscrowParams {
    * releaser-only, exactly as in 0.2.x.
    */
   refundAfter?: bigint;
+  /** Optional 32-byte Ed25519 public key that can authorize a release. */
+  attester?: Uint8Array;
 }
 
 export interface ReleaseOrRefundParams {
@@ -113,6 +118,7 @@ export class EscrowClient {
       condition_ref: params.conditionRef,
       releaser: params.releaser,
       refund_after: params.refundAfter,
+      attester: params.attester,
     });
     const sent = await tx.signAndSend();
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
@@ -147,6 +153,7 @@ export class EscrowClient {
       // public surface uses `undefined` for "no deadline" (consistent
       // with `CreateEscrowParams.refundAfter` being absent).
       refundAfter: data.refund_after ?? undefined,
+      attester: data.attester ? Buffer.from(data.attester).toString("hex") : undefined,
       status: data.status.tag,
     };
   }
@@ -155,6 +162,17 @@ export class EscrowClient {
   async release(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
     const client = this.contractClient(params.caller);
     const tx = await client.release({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /** Releases an escrow using the configured attester's Ed25519 signature. */
+  async releaseWithAttestation(params: { escrowId: bigint; attester: Keypair }): Promise<{ txHash: string }> {
+    const client = this.contractClient();
+    const payloadTx = await client.release_attestation_payload({ escrow_id: params.escrowId });
+    const signature = params.attester.sign(payloadTx.result.unwrap());
+    const tx = await client.release_with_attestation({ escrow_id: params.escrowId, signature });
     const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };

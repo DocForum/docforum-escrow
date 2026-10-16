@@ -122,6 +122,9 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E5 — Contract features
+- [x] [#42](https://github.com/DocForum/docforum-escrow/issues/42) Optional attestation-based release with generated SDK bindings and replay-protection tests. Record testnet resource costs before production use.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -129,6 +132,7 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Added an optional per-escrow Ed25519 attester and a domain-separated release payload bound to contract, network, escrow, and action; added one-time attested release path and replay tests. Updated security notes and SDK migration scope. Closes issue #42.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

@@ -1,12 +1,3 @@
-// GENERATED — do not hand-edit. Produced by:
-//   stellar contract bindings typescript \
-//     --wasm contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm \
-//     --output-dir <tmp-dir> --overwrite
-// then this one file (src/index.ts in the generator's output) copied here.
-// Regenerate whenever contracts/escrow/src/lib.rs's public function
-// signatures, types, or doc comments change — the contract spec (and the
-// doc comments you see below) come directly from the compiled wasm, not
-// from anything typed by hand in this repo.
 import { Buffer } from "buffer";
 import { Address } from "@stellar/stellar-sdk";
 import {
@@ -52,12 +43,24 @@ export const Errors = {
    * docs/adr/0004: a deadline that has already passed would let
    * anyone refund the escrow before the releaser could ever act.
    */
-  5: {message:"InvalidRefundAfter"}
+  5: {message:"InvalidRefundAfter"},
+  /**
+   * The contract's token balance didn't rise by exactly `amount`
+   * across `create_escrow`'s transfer (a lying or short-delivering
+   * token) — see docs/threat-model.md T5.
+   */
+  6: {message:"BalanceMismatch"},
+  7: {message:"InvalidAttestation"}
 }
 
 
 export interface EscrowData {
   amount: i128;
+  /**
+ * Optional Ed25519 key allowed to authorize release through a signed
+ * one-time attestation instead of an online releaser transaction.
+ */
+attester: Option<Buffer>;
   condition_ref: string;
   payee: string;
   payer: string;
@@ -136,7 +139,23 @@ export interface Client {
    * Requires `payer` auth (the contract moves their funds). Returns
    * the new escrow's id.
    */
-  create_escrow: ({payer, payee, token, amount, condition_ref, releaser, refund_after}: {payer: string, payee: string, token: string, amount: i128, condition_ref: string, releaser: string, refund_after: Option<u64>}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u64>>>
+  create_escrow: ({payer, payee, token, amount, condition_ref, releaser, refund_after, attester}: {payer: string, payee: string, token: string, amount: i128, condition_ref: string, releaser: string, refund_after: Option<u64>, attester: Option<Buffer>}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u64>>>
+
+  /**
+   * Construct and simulate a release_with_attestation transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Releases an escrow using its configured attester's Ed25519
+   * signature. Anyone may submit the signature; the signature itself
+   * authorizes the single release. A settled escrow cannot be replayed.
+   */
+  release_with_attestation: ({escrow_id, signature}: {escrow_id: u64, signature: Buffer}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
+
+  /**
+   * Construct and simulate a release_attestation_payload transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Returns the digest an attester must sign to release this escrow.
+   * It is bound to this contract, the current network, the escrow id,
+   * and the release action. This is a read-only helper for signers.
+   */
+  release_attestation_payload: ({escrow_id}: {escrow_id: u64}, options?: MethodOptions) => Promise<AssembledTransaction<Result<Buffer>>>
 
 }
 export class Client extends ContractClient {
@@ -156,14 +175,16 @@ export class Client extends ContractClient {
   }
   constructor(public readonly options: ContractClientOptions) {
     super(
-      new ContractSpec([ "AAAABAAAAAAAAAAAAAAABUVycm9yAAAAAAAABQAAAAAAAAAITm90Rm91bmQAAAABAAAAAAAAAA1JbnZhbGlkQW1vdW50AAAAAAAAAgAAAAAAAAAMVW5hdXRob3JpemVkAAAAAwAAAAAAAAAJTm90RnVuZGVkAAAAAAAABAAAALpgcmVmdW5kX2FmdGVyYCB3YXMgbm90IHN0cmljdGx5IGluIHRoZSBmdXR1cmUgYXQgY3JlYXRpb24g4oCUIHNlZQpkb2NzL2Fkci8wMDA0OiBhIGRlYWRsaW5lIHRoYXQgaGFzIGFscmVhZHkgcGFzc2VkIHdvdWxkIGxldAphbnlvbmUgcmVmdW5kIHRoZSBlc2Nyb3cgYmVmb3JlIHRoZSByZWxlYXNlciBjb3VsZCBldmVyIGFjdC4AAAAAABJJbnZhbGlkUmVmdW5kQWZ0ZXIAAAAAAAU=",
-        "AAAAAQAAAAAAAAAAAAAACkVzY3Jvd0RhdGEAAAAAAAgAAAAAAAAABmFtb3VudAAAAAAACwAAAAAAAAANY29uZGl0aW9uX3JlZgAAAAAAABAAAAAAAAAABXBheWVlAAAAAAAAEwAAAAAAAAAFcGF5ZXIAAAAAAAATAAAAxk9wdGlvbmFsIGRlYWRsaW5lICh1bml4IHNlY29uZHMpIGFmdGVyIHdoaWNoIGByZWZ1bmRgIG9wZW5zIHRvCmFueW9uZSDigJQgc3RpbGwgb25seSBiYWNrIHRvIGBwYXllcmAuIGBOb25lYCBtZWFucyBubyB0aW1lb3V0LApiZWhhdmlvdXIgaWRlbnRpY2FsIHRvIGJlZm9yZSB0aGlzIGZpZWxkIGV4aXN0ZWQg4oCUIHNlZSBkb2NzL2Fkci8wMDA0LgAAAAAADHJlZnVuZF9hZnRlcgAAA+gAAAAGAAAAfVRoZSBvbmx5IGFkZHJlc3MgcGVybWl0dGVkIHRvIGNhbGwgYHJlbGVhc2VgL2ByZWZ1bmRgIG9uIHRoaXMKZXNjcm93LiBTZXQgb25jZSBhdCBgY3JlYXRlX2VzY3Jvd2AgdGltZSDigJQgc2VlIGRvY3MvYWRyLzAwMDIuAAAAAAAACHJlbGVhc2VyAAAAEwAAAAAAAAAGc3RhdHVzAAAAAAfQAAAADEVzY3Jvd1N0YXR1cwAAAAAAAAAFdG9rZW4AAAAAAAAT",
+      new ContractSpec([ "AAAABAAAAAAAAAAAAAAABUVycm9yAAAAAAAABwAAAAAAAAAITm90Rm91bmQAAAABAAAAAAAAAA1JbnZhbGlkQW1vdW50AAAAAAAAAgAAAAAAAAAMVW5hdXRob3JpemVkAAAAAwAAAAAAAAAJTm90RnVuZGVkAAAAAAAABAAAALpgcmVmdW5kX2FmdGVyYCB3YXMgbm90IHN0cmljdGx5IGluIHRoZSBmdXR1cmUgYXQgY3JlYXRpb24g4oCUIHNlZQpkb2NzL2Fkci8wMDA0OiBhIGRlYWRsaW5lIHRoYXQgaGFzIGFscmVhZHkgcGFzc2VkIHdvdWxkIGxldAphbnlvbmUgcmVmdW5kIHRoZSBlc2Nyb3cgYmVmb3JlIHRoZSByZWxlYXNlciBjb3VsZCBldmVyIGFjdC4AAAAAABJJbnZhbGlkUmVmdW5kQWZ0ZXIAAAAAAAUAAACjVGhlIGNvbnRyYWN0J3MgdG9rZW4gYmFsYW5jZSBkaWRuJ3QgcmlzZSBieSBleGFjdGx5IGBhbW91bnRgCmFjcm9zcyBgY3JlYXRlX2VzY3Jvd2AncyB0cmFuc2ZlciAoYSBseWluZyBvciBzaG9ydC1kZWxpdmVyaW5nCnRva2VuKSDigJQgc2VlIGRvY3MvdGhyZWF0LW1vZGVsLm1kIFQ1LgAAAAAPQmFsYW5jZU1pc21hdGNoAAAAAAYAAAAAAAAAEkludmFsaWRBdHRlc3RhdGlvbgAAAAAABw==",
+        "AAAAAQAAAAAAAAAAAAAACkVzY3Jvd0RhdGEAAAAAAAkAAAAAAAAABmFtb3VudAAAAAAACwAAAIJPcHRpb25hbCBFZDI1NTE5IGtleSBhbGxvd2VkIHRvIGF1dGhvcml6ZSByZWxlYXNlIHRocm91Z2ggYSBzaWduZWQKb25lLXRpbWUgYXR0ZXN0YXRpb24gaW5zdGVhZCBvZiBhbiBvbmxpbmUgcmVsZWFzZXIgdHJhbnNhY3Rpb24uAAAAAAAIYXR0ZXN0ZXIAAAPoAAAD7gAAACAAAAAAAAAADWNvbmRpdGlvbl9yZWYAAAAAAAAQAAAAAAAAAAVwYXllZQAAAAAAABMAAAAAAAAABXBheWVyAAAAAAAAEwAAAMZPcHRpb25hbCBkZWFkbGluZSAodW5peCBzZWNvbmRzKSBhZnRlciB3aGljaCBgcmVmdW5kYCBvcGVucyB0bwphbnlvbmUg4oCUIHN0aWxsIG9ubHkgYmFjayB0byBgcGF5ZXJgLiBgTm9uZWAgbWVhbnMgbm8gdGltZW91dCwKYmVoYXZpb3VyIGlkZW50aWNhbCB0byBiZWZvcmUgdGhpcyBmaWVsZCBleGlzdGVkIOKAlCBzZWUgZG9jcy9hZHIvMDAwNC4AAAAAAAxyZWZ1bmRfYWZ0ZXIAAAPoAAAABgAAAH1UaGUgb25seSBhZGRyZXNzIHBlcm1pdHRlZCB0byBjYWxsIGByZWxlYXNlYC9gcmVmdW5kYCBvbiB0aGlzCmVzY3Jvdy4gU2V0IG9uY2UgYXQgYGNyZWF0ZV9lc2Nyb3dgIHRpbWUg4oCUIHNlZSBkb2NzL2Fkci8wMDAyLgAAAAAAAAhyZWxlYXNlcgAAABMAAAAAAAAABnN0YXR1cwAAAAAH0AAAAAxFc2Nyb3dTdGF0dXMAAAAAAAAABXRva2VuAAAAAAAAEw==",
         "AAAAAgAAAAAAAAAAAAAADEVzY3Jvd1N0YXR1cwAAAAMAAAAAAAAAAAAAAAZGdW5kZWQAAAAAAAAAAAAAAAAACFJlbGVhc2VkAAAAAAAAAAAAAAAIUmVmdW5kZWQ=",
         "AAAAAAAAAfxSZXR1cm5zIHRoZSBlc2Nyb3dlZCBgYW1vdW50YCB0byBgcGF5ZXJgLiBTYW1lIHN0YXRlIHJ1bGUgYXMKYHJlbGVhc2VgIChvbmx5IHdoaWxlIGBGdW5kZWRgKSwgYnV0IHR3byBjYWxsZXJzIGFyZSBhdXRob3Jpc2VkOgoKLSB0aGUgZXNjcm93J3MgYHJlbGVhc2VyYCAoZG9jcy9hZHIvMDAwMiksIGFsd2F5czsgb3IKLSAqKmFueW9uZSoqLCBvbmNlIGByZWZ1bmRfYWZ0ZXJgIGhhcyBiZWVuIHJlYWNoZWQg4oCUIHRoZSB0aW1lb3V0CnJlZnVuZCBwYXRoIGZvciBhIGxvc3QvdW5zaWduYWJsZSBgcmVsZWFzZXJgIGtleSAoZG9jcy9hZHIvMDAwNCkuCgpUaGUgZGVzdGluYXRpb24gbmV2ZXIgY2hhbmdlczogdGltZW91dCBvciBub3QsIGZ1bmRzIG9ubHkgZXZlciBnbwpiYWNrIHRvIHRoZSBzdG9yZWQgYHBheWVyYC4gV2l0aCBubyBgcmVmdW5kX2FmdGVyYCBzZXQsIGJlaGF2aW91cgppcyBpZGVudGljYWwgdG8gYmVmb3JlIHRoZSB0aW1lb3V0IGV4aXN0ZWQg4oCUIHJlbGVhc2VyIG9ubHkuAAAABnJlZnVuZAAAAAAAAgAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAAAAAAGY2FsbGVyAAAAAAATAAAAAQAAA+kAAAACAAAAAw==",
         "AAAAAAAAAgxNb3ZlcyB0aGUgZXNjcm93ZWQgYGFtb3VudGAgdG8gYHBheWVlYC4gT25seSB0aGUgZXNjcm93J3MKYHJlbGVhc2VyYCAoc2V0IGF0IGBjcmVhdGVfZXNjcm93YCB0aW1lKSBtYXkgY2FsbCB0aGlzIOKAlCB0aGUKY29udHJhY3QgZW5mb3JjZXMgV0hPLCBuZXZlciBXSFkgKEFEUiAwMDAxKS4gRXJyb3JzIGlmIHRoZQplc2Nyb3cgZG9lc24ndCBleGlzdCwgYGNhbGxlcmAgaXNuJ3QgdGhlIHJlbGVhc2VyLCBvciB0aGUgZXNjcm93Cmlzbid0IGN1cnJlbnRseSBgRnVuZGVkYCAobm8gZG91YmxlLXJlbGVhc2UsIG5vIHJlbGVhc2luZyBhCnJlZnVuZGVkIGVzY3JvdykuCgpEZWxpYmVyYXRlbHkgKipub3QqKiBnYXRlZCBieSBgcmVmdW5kX2FmdGVyYCAoZG9jcy9hZHIvMDAwNCk6IGFmdGVyCnRoZSBkZWFkbGluZSB0aGUgcmVsZWFzZXIgY2FuIHN0aWxsIHJlbGVhc2UsIHJhY2luZyBhbnkgdGltZW91dApyZWZ1bmQg4oCUIHdob2V2ZXIgbGFuZHMgZmlyc3Qgd2lucyBhbmQgdGhlIG90aGVyIGZhaWxzIGBOb3RGdW5kZWRgLgAAAAdyZWxlYXNlAAAAAAIAAAAAAAAACWVzY3Jvd19pZAAAAAAAAAYAAAAAAAAABmNhbGxlcgAAAAAAEwAAAAEAAAPpAAAAAgAAAAM=",
         "AAAAAAAAASpSZWFkLW9ubHkgYWNjZXNzb3IgZm9yIGV2ZXJ5dGhpbmcgc3RvcmVkIGFib3V0IGBlc2Nyb3dfaWRgIOKAlApwYXllciwgcGF5ZWUsIHRva2VuLCBhbW91bnQsIGBjb25kaXRpb25fcmVmYCwgc3RhdHVzLCBgcmVsZWFzZXJgCmFuZCBgcmVmdW5kX2FmdGVyYC4gRXhpc3RzIHNvIHBheWVlcyBhbmQgaW50ZWdyYXRvcnMgY2FuIGNoZWNrCnRoZSBkZWFkbGluZSBiZWZvcmUgcmVseWluZyBvbiBhIGBGdW5kZWRgIGVzY3JvdyAoZG9jcy9hZHIvMDAwNCwKdGhyZWF0IG1vZGVsIFQ4KS4gRXJyb3JzIG9uIGFuIHVua25vd24gaWQuAAAAAAAKZ2V0X2VzY3JvdwAAAAAAAQAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAEAAAPpAAAH0AAAAApFc2Nyb3dEYXRhAAAAAAAD",
         "AAAAAAAAADxSZWFkLW9ubHkgc3RhdHVzIHF1ZXJ5LiBFcnJvcnMgaWYgYGVzY3Jvd19pZGAgZG9lc24ndCBleGlzdC4AAAAKZ2V0X3N0YXR1cwAAAAAAAQAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAEAAAPpAAAH0AAAAAxFc2Nyb3dTdGF0dXMAAAAD",
-        "AAAAAAAAAc9Mb2NrcyBgYW1vdW50YCBvZiBgdG9rZW5gIHB1bGxlZCBmcm9tIGBwYXllcmAsIGhlbGQgZm9yIGBwYXllZWAsCnRhZ2dlZCB3aXRoIGFuIG9wYXF1ZSBgY29uZGl0aW9uX3JlZmAuIGByZWxlYXNlcmAgaXMgdGhlIG9ubHkKYWRkcmVzcyB0aGF0IHdpbGwgbGF0ZXIgYmUgcGVybWl0dGVkIHRvIGNhbGwgYHJlbGVhc2VgL2ByZWZ1bmRgCm9uIHRoaXMgZXNjcm93IChzZWUgZG9jcy9hZHIvMDAwMikuIGByZWZ1bmRfYWZ0ZXJgIGlzIGFuIG9wdGlvbmFsCnVuaXggdGltZXN0YW1wIGFmdGVyIHdoaWNoIGByZWZ1bmRgIG9wZW5zIHRvIGFueSBjYWxsZXIsIGFsd2F5cwpiYWNrIHRvIGBwYXllcmAgKGRvY3MvYWRyLzAwMDQpOyBgTm9uZWAgbWVhbnMgbm8gdGltZW91dC4KUmVxdWlyZXMgYHBheWVyYCBhdXRoICh0aGUgY29udHJhY3QgbW92ZXMgdGhlaXIgZnVuZHMpLiBSZXR1cm5zCnRoZSBuZXcgZXNjcm93J3MgaWQuAAAAAA1jcmVhdGVfZXNjcm93AAAAAAAABwAAAAAAAAAFcGF5ZXIAAAAAAAATAAAAAAAAAAVwYXllZQAAAAAAABMAAAAAAAAABXRva2VuAAAAAAAAEwAAAAAAAAAGYW1vdW50AAAAAAALAAAAAAAAAA1jb25kaXRpb25fcmVmAAAAAAAAEAAAAAAAAAAIcmVsZWFzZXIAAAATAAAAAAAAAAxyZWZ1bmRfYWZ0ZXIAAAPoAAAABgAAAAEAAAPpAAAABgAAAAM=" ]),
+        "AAAAAAAAAc9Mb2NrcyBgYW1vdW50YCBvZiBgdG9rZW5gIHB1bGxlZCBmcm9tIGBwYXllcmAsIGhlbGQgZm9yIGBwYXllZWAsCnRhZ2dlZCB3aXRoIGFuIG9wYXF1ZSBgY29uZGl0aW9uX3JlZmAuIGByZWxlYXNlcmAgaXMgdGhlIG9ubHkKYWRkcmVzcyB0aGF0IHdpbGwgbGF0ZXIgYmUgcGVybWl0dGVkIHRvIGNhbGwgYHJlbGVhc2VgL2ByZWZ1bmRgCm9uIHRoaXMgZXNjcm93IChzZWUgZG9jcy9hZHIvMDAwMikuIGByZWZ1bmRfYWZ0ZXJgIGlzIGFuIG9wdGlvbmFsCnVuaXggdGltZXN0YW1wIGFmdGVyIHdoaWNoIGByZWZ1bmRgIG9wZW5zIHRvIGFueSBjYWxsZXIsIGFsd2F5cwpiYWNrIHRvIGBwYXllcmAgKGRvY3MvYWRyLzAwMDQpOyBgTm9uZWAgbWVhbnMgbm8gdGltZW91dC4KUmVxdWlyZXMgYHBheWVyYCBhdXRoICh0aGUgY29udHJhY3QgbW92ZXMgdGhlaXIgZnVuZHMpLiBSZXR1cm5zCnRoZSBuZXcgZXNjcm93J3MgaWQuAAAAAA1jcmVhdGVfZXNjcm93AAAAAAAACAAAAAAAAAAFcGF5ZXIAAAAAAAATAAAAAAAAAAVwYXllZQAAAAAAABMAAAAAAAAABXRva2VuAAAAAAAAEwAAAAAAAAAGYW1vdW50AAAAAAALAAAAAAAAAA1jb25kaXRpb25fcmVmAAAAAAAAEAAAAAAAAAAIcmVsZWFzZXIAAAATAAAAAAAAAAxyZWZ1bmRfYWZ0ZXIAAAPoAAAABgAAAAAAAAAIYXR0ZXN0ZXIAAAPoAAAD7gAAACAAAAABAAAD6QAAAAYAAAAD",
+        "AAAAAAAAAL9SZWxlYXNlcyBhbiBlc2Nyb3cgdXNpbmcgaXRzIGNvbmZpZ3VyZWQgYXR0ZXN0ZXIncyBFZDI1NTE5CnNpZ25hdHVyZS4gQW55b25lIG1heSBzdWJtaXQgdGhlIHNpZ25hdHVyZTsgdGhlIHNpZ25hdHVyZSBpdHNlbGYKYXV0aG9yaXplcyB0aGUgc2luZ2xlIHJlbGVhc2UuIEEgc2V0dGxlZCBlc2Nyb3cgY2Fubm90IGJlIHJlcGxheWVkLgAAAAAYcmVsZWFzZV93aXRoX2F0dGVzdGF0aW9uAAAAAgAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAAAAAAJc2lnbmF0dXJlAAAAAAAD7gAAAEAAAAABAAAD6QAAAAIAAAAD",
+        "AAAAAAAAAMJSZXR1cm5zIHRoZSBkaWdlc3QgYW4gYXR0ZXN0ZXIgbXVzdCBzaWduIHRvIHJlbGVhc2UgdGhpcyBlc2Nyb3cuCkl0IGlzIGJvdW5kIHRvIHRoaXMgY29udHJhY3QsIHRoZSBjdXJyZW50IG5ldHdvcmssIHRoZSBlc2Nyb3cgaWQsCmFuZCB0aGUgcmVsZWFzZSBhY3Rpb24uIFRoaXMgaXMgYSByZWFkLW9ubHkgaGVscGVyIGZvciBzaWduZXJzLgAAAAAAG3JlbGVhc2VfYXR0ZXN0YXRpb25fcGF5bG9hZAAAAAABAAAAAAAAAAllc2Nyb3dfaWQAAAAAAAAGAAAAAQAAA+kAAAPuAAAAIAAAAAM=" ]),
       options
     )
   }
@@ -172,6 +193,8 @@ export class Client extends ContractClient {
         release: this.txFromJSON<Result<void>>,
         get_escrow: this.txFromJSON<Result<EscrowData>>,
         get_status: this.txFromJSON<Result<EscrowStatus>>,
-        create_escrow: this.txFromJSON<Result<u64>>
+        create_escrow: this.txFromJSON<Result<u64>>,
+        release_with_attestation: this.txFromJSON<Result<void>>,
+        release_attestation_payload: this.txFromJSON<Result<Buffer>>
   }
 }
