@@ -14,7 +14,17 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Vec,
+};
+
+/// A direct recipient and their share of an escrow, expressed in basis points.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayeeShare {
+    pub payee: Address,
+    pub basis_points: u32,
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,6 +50,9 @@ pub struct EscrowData {
     /// anyone — still only back to `payer`. `None` means no timeout,
     /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
+    /// Recipients paid directly by `release`. `payee` remains the first
+    /// recipient for compatibility with existing single-payee callers.
+    pub payees: Vec<PayeeShare>,
 }
 
 #[contracttype]
@@ -64,6 +77,11 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    InvalidPayeeList = 30,
+    TooManyPayees = 31,
+    DuplicatePayee = 32,
+    InvalidBasisPoints = 33,
+    SplitAmountOverflow = 34,
 }
 
 #[contract]
@@ -89,8 +107,86 @@ impl EscrowContract {
         releaser: Address,
         refund_after: Option<u64>,
     ) -> Result<u64, Error> {
+        let mut payees = Vec::new(&env);
+        payees.push_back(PayeeShare {
+            payee: payee.clone(),
+            basis_points: 10_000,
+        });
+        Self::create_escrow_inner(
+            env,
+            payer,
+            payees,
+            token,
+            amount,
+            condition_ref,
+            releaser,
+            refund_after,
+        )
+    }
+
+    /// Locks funds for a bounded list of direct recipients. Shares must be
+    /// unique and sum to exactly 10,000 basis points. `release` distributes
+    /// floor-rounded shares in list order and gives all rounding dust to the
+    /// final recipient. The existing `create_escrow` method is the one-entry
+    /// 10,000-basis-point form of this operation.
+    pub fn create_split_escrow(
+        env: Env,
+        payer: Address,
+        payees: Vec<PayeeShare>,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+    ) -> Result<u64, Error> {
+        Self::create_escrow_inner(
+            env,
+            payer,
+            payees,
+            token,
+            amount,
+            condition_ref,
+            releaser,
+            refund_after,
+        )
+    }
+
+    fn create_escrow_inner(
+        env: Env,
+        payer: Address,
+        payees: Vec<PayeeShare>,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+    ) -> Result<u64, Error> {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
+        }
+        if payees.is_empty() {
+            return Err(Error::InvalidPayeeList);
+        }
+        if payees.len() > 8 {
+            return Err(Error::TooManyPayees);
+        }
+        let mut total_bps = 0u32;
+        for i in 0..payees.len() {
+            let share = payees.get(i).ok_or(Error::InvalidPayeeList)?;
+            if share.basis_points == 0 {
+                return Err(Error::InvalidBasisPoints);
+            }
+            total_bps = total_bps
+                .checked_add(share.basis_points)
+                .ok_or(Error::InvalidBasisPoints)?;
+            for j in 0..i {
+                if payees.get(j).ok_or(Error::InvalidPayeeList)?.payee == share.payee {
+                    return Err(Error::DuplicatePayee);
+                }
+            }
+        }
+        if total_bps != 10_000 {
+            return Err(Error::InvalidBasisPoints);
         }
         if let Some(deadline) = refund_after {
             if deadline <= env.ledger().timestamp() {
@@ -109,15 +205,17 @@ impl EscrowContract {
         }
 
         let id = Self::next_id(&env);
+        let primary_payee = payees.get(0).ok_or(Error::InvalidPayeeList)?.payee;
         let data = EscrowData {
             payer,
-            payee,
+            payee: primary_payee,
             token,
             amount,
             condition_ref,
             status: EscrowStatus::Funded,
             releaser,
             refund_after,
+            payees,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Ok(id)
@@ -172,10 +270,37 @@ impl EscrowContract {
         }
 
         let token_client = token::Client::new(&env, &data.token);
-        token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
+        let mut distributed = 0i128;
+        for i in 0..data.payees.len() {
+            let share = data.payees.get(i).ok_or(Error::InvalidPayeeList)?;
+            let amount = if i + 1 == data.payees.len() {
+                data.amount
+                    .checked_sub(distributed)
+                    .ok_or(Error::SplitAmountOverflow)?
+            } else {
+                let quotient = data.amount / 10_000;
+                let remainder = data.amount % 10_000;
+                quotient
+                    .checked_mul(share.basis_points as i128)
+                    .and_then(|whole| {
+                        remainder
+                            .checked_mul(share.basis_points as i128)
+                            .map(|fraction| whole + fraction / 10_000)
+                    })
+                    .ok_or(Error::SplitAmountOverflow)?
+            };
+            distributed = distributed
+                .checked_add(amount)
+                .ok_or(Error::SplitAmountOverflow)?;
+            if amount > 0 {
+                token_client.transfer(&env.current_contract_address(), &share.payee, &amount);
+            }
+        }
 
         data.status = EscrowStatus::Released;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
     }
 
@@ -213,7 +338,9 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
 
         data.status = EscrowStatus::Refunded;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
     }
 

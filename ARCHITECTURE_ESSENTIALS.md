@@ -13,9 +13,16 @@
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1 + E2 + E4)
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
+create_split_escrow(payer, payees: Vec<PayeeShare>, token, amount, condition_ref, releaser, refund_after) -> escrow_id // up to 8 unique recipients, shares total 10,000 bps — issue #22
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
 ```
+`PayeeShare` stores `{ payee, basis_points }`. The existing
+`create_escrow` is retained as a one-recipient, 10,000-basis-point form.
+On release, each share is rounded down in list order and all residual
+units go to the last recipient, so payouts total exactly `amount`.
+Recipient transfer failures revert the entire release atomically.
+
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
 by Phase E4, both last; no behavioral difference beyond the added

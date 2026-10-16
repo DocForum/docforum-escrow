@@ -122,6 +122,21 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E5 — Split payouts
+- [x] Contract method `create_split_escrow` accepts up to eight unique
+  recipients whose positive basis-point shares total 10,000. The existing
+  `create_escrow` API remains the one-recipient form. `get_escrow` exposes
+  the complete recipient list.
+- [x] `release` pays each share directly and assigns all rounding dust to
+  the final recipient. Contract regression tests cover awkward rounding,
+  total payout conservation, the legacy one-recipient path, invalid totals,
+  and duplicate recipients (tests added; not executed in this change).
+- [x] README, architecture essentials, and ADR 0010 document the API,
+  rounding rule, atomic transfer behavior, and testnet-only deployment.
+- [ ] Regenerate SDK bindings and add split-escrow SDK support after a local
+  WASM build; measure resource use at the eight-recipient limit before
+  deploying. See issue #22.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -129,6 +144,11 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Issue #22: added bounded multi-recipient escrow splits.
+  Payout shares must be positive, unique, and sum to 10,000 bps. Floor
+  rounding leaves residual units for the last recipient, preserving the
+  total; contract tests and docs added. SDK binding regeneration and
+  maximum-list resource measurement remain pending.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet
