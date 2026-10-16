@@ -46,6 +46,15 @@ Two reasons, stated plainly rather than blended together:
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
 | `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
 
+For shared releaser control, `contracts/releaser-account/` implements an
+optional Soroban custom account with an M-of-N Ed25519 signer set. It only
+authorizes one `release` or `refund` invocation against its configured
+escrow and limits authorizations per ledger window. Signer-set and threshold
+changes require the current threshold; cap changes require every signer.
+All management actions consume a nonce. The escrow contract itself remains unchanged; pass the deployed custom-account address as
+`releaser` when creating an escrow. The account is not deployed or verified
+on testnet yet; mainnet use remains blocked on the Phase E4 review.
+
 ```
 EscrowStatus = Funded | Released | Refunded
 ```
@@ -92,6 +101,9 @@ contracts/escrow/
   src/lib.rs        Contract implementation
   tests/            Integration tests (soroban-sdk testutils) — required for any contract change
   Cargo.toml
+contracts/releaser-account/
+  src/lib.rs        Optional M-of-N custom releaser account
+  tests/            Quorum, call-policy, and escrow integration coverage
 sdk/
   src/index.ts      @docforum/escrow-sdk — TypeScript client (not yet implemented, see issue #4)
   package.json
@@ -129,9 +141,10 @@ The TypeScript SDK (`sdk/`) is still a placeholder — see
 | Doc | Purpose |
 |---|---|
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
-| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E4 breakdown and current status. |
+| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E5 breakdown and current status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
+| [`docs/adr/0005-custom-releaser-account.md`](docs/adr/0005-custom-releaser-account.md) | M-of-N custom account policy and signer management. |
 
 ## Project status
 

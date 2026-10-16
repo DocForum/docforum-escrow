@@ -78,9 +78,19 @@ value. **Reviewers should challenge these ratings.**
   existing escrow (no setter exists). The only response is to race the
   attacker: use the same key to settle every open escrow correctly first.
 - **Mitigations to consider:**
-  - Make the `releaser` a Stellar multisig account (e.g. 2-of-3 signers).
-    This works with no contract change, because `require_auth` on an
-    account address checks that account's own signer thresholds.
+  - [x] Use the optional custom account in `contracts/releaser-account/`
+    for M-of-N Ed25519 control. Its `__check_auth` verifies the host's
+    nonce- and context-bound payload, requires distinct registered signers
+    to meet the threshold, and only permits one `release` or `refund` call
+    on the configured escrow. Management changes require the current
+    threshold over an account- and nonce-bound digest. See ADR 0005.
+    This narrows the account's authority but cannot decide whether a
+    permitted release or refund is the correct outcome; secure signer
+    devices and off-chain quorum coordination remain operational duties.
+  - [x] Limit a custom account to a configured number of settlements per
+    ledger window. Usage is stored per window and extended to the maximum
+    persistent TTL; a window shorter than that TTL cannot archive usage
+    before rollover. Cap changes require every registered signer (ADR 0008).
   - Keep the releaser key in a KMS/HSM, not as an environment variable.
   - In the consumer, rotate releaser keys periodically for **new**
     escrows, so a leak only reaches escrows from that key's period.
