@@ -14,7 +14,7 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Vec};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -46,6 +46,24 @@ pub struct EscrowData {
 enum DataKey {
     Escrow(u64),
     NextId,
+}
+
+/// One operation in a `settle_many` batch: settle `escrow_id` by
+/// releasing it to its payee or refunding it to its payer.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SettleOp {
+    Release(u64),
+    Refund(u64),
+}
+
+/// Per-op outcome of `settle_many`. `Ok(())` means the op settled the
+/// escrow; `Err(e)` means it did not, and the escrow is unchanged.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettleResult {
+    pub escrow_id: u64,
+    pub result: Result<(), Error>,
 }
 
 #[contracterror]
@@ -213,6 +231,71 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
 
         data.status = EscrowStatus::Refunded;
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        Ok(())
+    }
+
+    /// Best-effort batch settlement: applies each op in `ops`
+    /// independently and returns one `SettleResult` per op, in order.
+    /// A failing op (unknown id, wrong caller, already settled) does
+    /// not abort the rest of the batch — see docs/adr/0005 for why
+    /// best-effort was chosen over atomic for the T1 race.
+    ///
+    /// `caller` must be the `releaser` of every escrow it settles; a
+    /// batch cannot settle escrows whose releaser is someone else.
+    /// `caller` auth is required once for the whole batch. The same
+    /// escrow twice in one batch: the first op settles it, the second
+    /// fails `NotFunded`.
+    pub fn settle_many(
+        env: Env,
+        caller: Address,
+        ops: Vec<SettleOp>,
+    ) -> Vec<SettleResult> {
+        caller.require_auth();
+
+        let mut results = Vec::new(&env);
+        for op in ops.iter() {
+            let (escrow_id, result) = match op {
+                SettleOp::Release(id) => (id, Self::settle_one(&env, id, &caller, true)),
+                SettleOp::Refund(id) => (id, Self::settle_one(&env, id, &caller, false)),
+            };
+            results.push_back(SettleResult { escrow_id, result });
+        }
+        results
+    }
+
+    fn settle_one(
+        env: &Env,
+        escrow_id: u64,
+        caller: &Address,
+        release: bool,
+    ) -> Result<(), Error> {
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+
+        let timeout_passed = match data.refund_after {
+            Some(deadline) => env.ledger().timestamp() >= deadline,
+            None => false,
+        };
+        if caller != &data.releaser && !(timeout_passed && !release) {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+
+        let token_client = token::Client::new(env, &data.token);
+        let destination = if release { &data.payee } else { &data.payer };
+        token_client.transfer(&env.current_contract_address(), destination, &data.amount);
+
+        data.status = if release {
+            EscrowStatus::Released
+        } else {
+            EscrowStatus::Refunded
+        };
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
     }
