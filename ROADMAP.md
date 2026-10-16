@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 started: payer cancel-before-accept (issue #27) implemented and tested, not yet on testnet.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -121,6 +121,32 @@
 - [ ] Related, not in the checklist: [#13](https://github.com/DocForum/docforum-escrow/issues/13) `get_escrow`
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
+
+## Phase E5 — Contract features
+- [x] Payer cancellation window before the payee accepts — issue #27.
+  **ADR first:** `docs/adr/0005`. Adds `cancel(escrow_id, payer)`: payer
+  auth, allowed only while the escrow is `Funded`, was created with
+  `requires_acceptance`, and the payee has not accepted; funds go back to
+  the stored `payer` (invariant I1 unchanged), status becomes the new
+  `Cancelled`. Escrows created without `requires_acceptance` are
+  unaffected — cancel is **not available** on them (`AcceptanceNotRequired`),
+  reasoning in the ADR. Impossible after any payout (there are no partial
+  milestone releases in this contract; the `Funded` requirement covers it,
+  recorded as an obligation for any future partial-release feature).
+  **Prerequisite included:** the "payee acceptance" issue this depends on
+  had not landed, so the minimal mechanism was added here —
+  `requires_acceptance` on `create_escrow` and `accept(escrow_id, payee)`.
+  If that issue ships a different shape, reconcile on merge. **Tests:**
+  `contracts/escrow/tests/cancel_accept.rs` (20), incl. the accept/cancel
+  race in one ledger in **both orders**. **Threat model T8** (+ I1–I3, I6,
+  actors, §6) updated, with the payee warning: don't rely on an escrow
+  until you've accepted it. **Breaking change:** `create_escrow` gains a
+  parameter, `EscrowData` two fields, `EscrowStatus` a variant;
+  `@docforum/escrow-sdk` 0.3.0 → 0.4.0 (bindings regenerated, never
+  hand-edited; adds `accept`/`cancel`, `requiresAcceptance`).
+  **Not done:** testnet redeployment (the live contract predates this, so
+  the SDK integration tests still target the old deployment) and
+  publishing the `sdk-v0.4.0` release tarball per ADR 0003.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -305,3 +331,16 @@
   #12 were opened and closed in between). #16 merged with an empty diff
   because its branch's merge from `main` kept `main`'s ROADMAP.md
   wholesale.
+- 2026-10-16 — Phase E5, issue #27: payer `cancel` before the payee
+  accepts. ADR 0005 first; then `cancel`, plus the minimal acceptance
+  prerequisite (`requires_acceptance` flag on `create_escrow`, `accept`,
+  `EscrowStatus::Cancelled`, errors `AcceptanceNotRequired = 7` and
+  `AlreadyAccepted = 8`). Cancel works only while `Funded`, accepted ==
+  false and the escrow requires acceptance; funds go only to the stored
+  payer. 20 new tests in `tests/cancel_accept.rs` including both
+  orderings of accept vs cancel in a single ledger; 51/51 contract tests
+  pass repo-wide, wasm release build succeeds. SDK bindings regenerated;
+  `@docforum/escrow-sdk` 0.3.0 → 0.4.0 (breaking). Threat model T8,
+  invariants, actors and checklist, `README.md` and
+  `ARCHITECTURE_ESSENTIALS.md` updated. **Not done:** testnet redeploy
+  and the `sdk-v0.4.0` release tarball.

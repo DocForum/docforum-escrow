@@ -7,6 +7,10 @@
 // Phase E4 (issue #11): optional `refund_after` timeout refund — see
 // docs/adr/0004. After that deadline anyone may refund, but only back to
 // the payer, so a lost `releaser` key can no longer lock funds forever.
+// Phase E5 (issue #27): optional payee acceptance (`requires_acceptance` +
+// `accept`) and a payer `cancel` that is open only while the escrow is
+// `Funded` and not yet accepted — see docs/adr/0005. Cancel always pays
+// back to the stored `payer`, so invariant I1 is unchanged.
 //
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
@@ -22,6 +26,11 @@ pub enum EscrowStatus {
     Funded,
     Released,
     Refunded,
+    /// Ended by the payer's `cancel` before the payee accepted — funds
+    /// went back to `payer`. Kept distinct from `Refunded` so a payee or
+    /// integrator can tell a releaser/timeout refund from a payer
+    /// withdrawal (docs/adr/0005).
+    Cancelled,
 }
 
 #[contracttype]
@@ -40,6 +49,13 @@ pub struct EscrowData {
     /// anyone — still only back to `payer`. `None` means no timeout,
     /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
+    /// If true, the payee must call `accept` before the escrow is
+    /// committed; until then the payer may `cancel` (docs/adr/0005).
+    /// Fixed at `create_escrow` time.
+    pub requires_acceptance: bool,
+    /// Set by the payee's `accept`. Always `false` when
+    /// `requires_acceptance` is false. Once true it never goes back.
+    pub accepted: bool,
 }
 
 #[contracttype]
@@ -64,6 +80,13 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    /// `accept`/`cancel` on an escrow created without
+    /// `requires_acceptance` — there is no acceptance step to race, so
+    /// neither exists for it (docs/adr/0005).
+    AcceptanceNotRequired = 7,
+    /// `accept` called twice, or `cancel` called after the payee
+    /// accepted — the cancellation window has closed (docs/adr/0005).
+    AlreadyAccepted = 8,
 }
 
 #[contract]
@@ -77,6 +100,10 @@ impl EscrowContract {
     /// on this escrow (see docs/adr/0002). `refund_after` is an optional
     /// unix timestamp after which `refund` opens to any caller, always
     /// back to `payer` (docs/adr/0004); `None` means no timeout.
+    /// `requires_acceptance` opts the escrow into the accept/cancel
+    /// protocol (docs/adr/0005): the payee may `accept`, and until they
+    /// do the payer may `cancel`. `false` leaves behaviour exactly as it
+    /// was before those functions existed.
     /// Requires `payer` auth (the contract moves their funds). Returns
     /// the new escrow's id.
     pub fn create_escrow(
@@ -88,6 +115,7 @@ impl EscrowContract {
         condition_ref: String,
         releaser: Address,
         refund_after: Option<u64>,
+        requires_acceptance: bool,
     ) -> Result<u64, Error> {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -118,6 +146,8 @@ impl EscrowContract {
             status: EscrowStatus::Funded,
             releaser,
             refund_after,
+            requires_acceptance,
+            accepted: false,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Ok(id)
@@ -213,6 +243,80 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
 
         data.status = EscrowStatus::Refunded;
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        Ok(())
+    }
+
+    /// The payee commits to an escrow created with `requires_acceptance`.
+    /// Requires `payee` auth and `payee` to equal the stored payee. Only
+    /// while `Funded`, and only once. Closes the payer's cancellation
+    /// window for good (docs/adr/0005). Moves no funds.
+    pub fn accept(env: Env, escrow_id: u64, payee: Address) -> Result<(), Error> {
+        payee.require_auth();
+
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+
+        if payee != data.payee {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        if !data.requires_acceptance {
+            return Err(Error::AcceptanceNotRequired);
+        }
+        if data.accepted {
+            return Err(Error::AlreadyAccepted);
+        }
+
+        data.accepted = true;
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        Ok(())
+    }
+
+    /// Payer withdrawal: returns the escrowed `amount` to `payer` and
+    /// marks the escrow `Cancelled`. Allowed only while **all** hold:
+    ///
+    /// - the escrow was created with `requires_acceptance` (otherwise
+    ///   `AcceptanceNotRequired` — docs/adr/0005);
+    /// - the escrow is still `Funded` (so never after a release, a
+    ///   refund, or any earlier payout — there is no partial-release
+    ///   state in which cancelling could be reached);
+    /// - the payee has not called `accept` (otherwise `AlreadyAccepted`).
+    ///
+    /// Requires `payer` auth and `payer` to equal the stored payer. The
+    /// destination is read from storage, so invariant I1 is unchanged.
+    /// Payees: do not rely on an escrow until you have accepted it.
+    pub fn cancel(env: Env, escrow_id: u64, payer: Address) -> Result<(), Error> {
+        payer.require_auth();
+
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+
+        if payer != data.payer {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        if !data.requires_acceptance {
+            return Err(Error::AcceptanceNotRequired);
+        }
+        if data.accepted {
+            return Err(Error::AlreadyAccepted);
+        }
+
+        let token_client = token::Client::new(&env, &data.token);
+        token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
+
+        data.status = EscrowStatus::Cancelled;
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
     }
