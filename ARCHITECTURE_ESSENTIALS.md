@@ -15,7 +15,11 @@ get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded —
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
+version() -> String                   // IMPLEMENTED IN SOURCE (issue #52) — contract API semver; existing testnet deployments are legacy and have no version() entry point
 ```
+The WASM embeds `git_sha` and `soroban_sdk_version` metadata.
+`DOCFORUM_GIT_SHA` (or CI's `GITHUB_SHA`) supplies the source SHA; if
+neither is set, the reproducible build records `unknown`.
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
 by Phase E4, both last; no behavioral difference beyond the added
