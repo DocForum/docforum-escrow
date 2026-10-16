@@ -11,8 +11,11 @@
 ## Contract surface
 ```
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1 + E2 + E4)
-get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
-get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
+get_status(escrow_id) -> EscrowStatus  // enum: Funded | Disputed | Released | Refunded
+get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after, arbiter
+create_escrow_with_arbiter(..., arbiter) -> escrow_id // opt-in dispute path (Phase E5, issue #24)
+raise_dispute(escrow_id, caller) -> result // payer or payee freezes a funded escrow when an arbiter was set
+resolve_dispute(escrow_id, caller, outcome) -> result // only the named arbiter; Release or Refund
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
 ```
@@ -38,17 +41,25 @@ creation (`docs/adr/0004`): after it passes **anyone** may call
 and `release` is never gated by it, so the releaser can still release
 after the deadline (whoever lands first wins). No `refund_after` means
 behaviour is exactly what it was before: releaser-only refunds, forever.
+For escrows created through `create_escrow_with_arbiter`, either party can
+raise a dispute while the escrow is funded. That freezes both normal
+settlement and timeout refunds until the arbiter releases to the payee or
+refunds to the payer. The arbiter cannot be either party. See ADR 0006.
 
 ## TypeScript SDK surface (`sdk/`)
 ```ts
-import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
+import { DisputeClient, EscrowClient, Keypair } from "@docforum/escrow-sdk";
 
 const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
 const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter });
 await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
-await client.getEscrow(escrowId);            // full stored record — incl. releaser + refundAfter, so a payee can check the deal (docs/adr/0004, threat model T8)
+await client.getEscrow(escrowId);            // full stored record — incl. releaser, refundAfter, arbiter, and status
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
-await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter has passed
+await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter unless disputed
+const disputes = new DisputeClient({ contractId });
+await disputes.createEscrowWithArbiter({ payer, payee, token, amount, conditionRef, releaser, arbiter });
+await disputes.raiseDispute({ escrowId, caller });
+await disputes.resolveDispute({ escrowId, caller: arbiter, outcome: "Release" | "Refund" });
 ```
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it

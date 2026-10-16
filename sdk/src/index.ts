@@ -12,7 +12,7 @@ import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowSta
 
 export { Keypair };
 
-export type EscrowStatus = "Funded" | "Released" | "Refunded";
+export type EscrowStatus = "Funded" | "Disputed" | "Released" | "Refunded";
 
 /** Everything the contract stores about one escrow — what `getEscrow` returns. */
 export interface Escrow {
@@ -33,6 +33,8 @@ export interface Escrow {
    * relying on a `Funded` escrow (threat model T8).
    */
   refundAfter?: bigint;
+  /** Optional neutral arbiter distinct from payer and payee. */
+  arbiter?: string;
   status: EscrowStatus;
 }
 
@@ -147,6 +149,7 @@ export class EscrowClient {
       // public surface uses `undefined` for "no deadline" (consistent
       // with `CreateEscrowParams.refundAfter` being absent).
       refundAfter: data.refund_after ?? undefined,
+      arbiter: data.arbiter ?? undefined,
       status: data.status.tag,
     };
   }
@@ -174,3 +177,6 @@ export class EscrowClient {
     return { txHash: sent.sendTransactionResponse!.hash };
   }
 }
+
+export { DisputeClient } from "./disputes.js";
+export type { DisputeOutcome, DisputeCreationParams, DisputeSettlementParams } from "./disputes.js";

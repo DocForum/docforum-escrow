@@ -20,8 +20,16 @@ use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Ad
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EscrowStatus {
     Funded,
+    Disputed,
     Released,
     Refunded,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DisputeOutcome {
+    Release,
+    Refund,
 }
 
 #[contracttype]
@@ -40,6 +48,8 @@ pub struct EscrowData {
     /// anyone — still only back to `payer`. `None` means no timeout,
     /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
+    /// Optional neutral arbiter. Disputes are disabled when this is `None`.
+    pub arbiter: Option<Address>,
 }
 
 #[contracttype]
@@ -64,6 +74,9 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    InvalidArbiter = 40,
+    NoArbiter = 41,
+    NotDisputed = 42,
 }
 
 #[contract]
@@ -89,12 +102,68 @@ impl EscrowContract {
         releaser: Address,
         refund_after: Option<u64>,
     ) -> Result<u64, Error> {
+        Self::create_escrow_internal(
+            env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releaser,
+            refund_after,
+            None,
+        )
+    }
+
+    /// Creates an escrow with a neutral arbiter. The existing
+    /// `create_escrow` entry point remains unchanged and creates an escrow
+    /// with disputes disabled.
+    pub fn create_escrow_with_arbiter(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        arbiter: Address,
+    ) -> Result<u64, Error> {
+        Self::create_escrow_internal(
+            env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releaser,
+            refund_after,
+            Some(arbiter),
+        )
+    }
+
+    fn create_escrow_internal(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        arbiter: Option<Address>,
+    ) -> Result<u64, Error> {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
         if let Some(deadline) = refund_after {
             if deadline <= env.ledger().timestamp() {
                 return Err(Error::InvalidRefundAfter);
+            }
+        }
+        if let Some(ref arbiter_address) = arbiter {
+            if arbiter_address == &payer || arbiter_address == &payee {
+                return Err(Error::InvalidArbiter);
             }
         }
         payer.require_auth();
@@ -118,6 +187,7 @@ impl EscrowContract {
             status: EscrowStatus::Funded,
             releaser,
             refund_after,
+            arbiter,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Ok(id)
@@ -143,6 +213,68 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::NotFound)
+    }
+
+    /// A payer or payee may freeze a funded escrow for neutral review,
+    /// but only when an arbiter was named at creation.
+    pub fn raise_dispute(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
+        caller.require_auth();
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+        if data.arbiter.is_none() {
+            return Err(Error::NoArbiter);
+        }
+        if caller != data.payer && caller != data.payee {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        data.status = EscrowStatus::Disputed;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        Ok(())
+    }
+
+    /// Only the named arbiter can resolve an active dispute. While disputed,
+    /// normal release/refund (including timeout refunds) remain frozen.
+    pub fn resolve_dispute(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        outcome: DisputeOutcome,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+        if data.arbiter.as_ref() != Some(&caller) {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Disputed {
+            return Err(Error::NotDisputed);
+        }
+        let token_client = token::Client::new(&env, &data.token);
+        match outcome {
+            DisputeOutcome::Release => {
+                token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
+                data.status = EscrowStatus::Released;
+            }
+            DisputeOutcome::Refund => {
+                token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
+                data.status = EscrowStatus::Refunded;
+            }
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        Ok(())
     }
 
     /// Moves the escrowed `amount` to `payee`. Only the escrow's

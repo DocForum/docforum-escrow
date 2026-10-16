@@ -26,8 +26,8 @@ in this document still describes the same design.*
 | # | Invariant | Enforced by |
 |---|---|---|
 | I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination. |
-| I2 | Only the escrow's `releaser` can move funds out — or, once `refund_after` has passed, anyone at all, and then still only back to `payer`. | `caller.require_auth()` + `caller == data.releaser`, relaxed solely by the deadline check (`lib.rs:149`, `lib.rs:183`, `lib.rs:191`). |
-| I3 | Each escrow pays out at most once. | `status == Funded` check before transfer, status written after — shared by release and both refund paths. |
+| I2 | Only the escrow's `releaser` can settle a funded escrow — or, after `refund_after`, anyone may refund to `payer`; for a disputed escrow only its named arbiter may settle to the stored `payee` or `payer`. | Authenticated caller checks, stored role addresses, status checks, and fixed destinations in `lib.rs`. |
+| I3 | Each escrow pays out at most once. | Release, refund, and dispute resolution each require the appropriate live state (`Funded` or `Disputed`) and store a terminal state after transfer. |
 | I4 | An escrow only exists if `amount` was actually transferred in. | `payer.require_auth()` + token `transfer` before the escrow is stored (`lib.rs:96-112`). |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
 
@@ -47,8 +47,9 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 | Actor | Can do | Trusted for |
 |---|---|---|
 | `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser` | Nothing after creation. Has no on-chain power to cancel. |
-| `payee` | Receive funds | Nothing. Has **no on-chain power at all**, including no way to object to a refund. |
+| `payee` | Receive funds; if an arbiter was named at creation, raise a dispute while funded | Choosing an arbiter able to resolve the dispute. Without an arbiter, has no on-chain objection path. |
 | `releaser` | `release` or `refund` its escrows, once | Choosing the correct outcome. This is the main trust assumption. |
+| `arbiter` | Resolve a raised dispute to the stored payee or payer | Neutral, timely resolution; cannot redirect funds or settle an undisputed escrow. |
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |
 | Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds back to that escrow's `payer` | Nothing. |
 
@@ -231,6 +232,13 @@ behave like SEP-41.
   the payer, never a third party, and the releaser can still release
   after the deadline — so the realistic exposure is payment being delayed
   and then reversed, not redirected.
+- **With an arbiter (issue #24, ADR 0006),** either payer or payee can
+  freeze a still-funded escrow. The freeze also blocks a timeout refund;
+  only the named arbiter can then settle, and only to the stored payee or
+  payer. A dispute can remain locked if the arbiter is unavailable, so
+  integrators must treat arbiter availability and independence as a trust
+  requirement. Escrows created without an arbiter retain the existing
+  behavior.
 
 ### T9 — `condition_ref` is public · **Low (privacy)**
 - Everything in `EscrowData` is publicly readable on-chain forever,
