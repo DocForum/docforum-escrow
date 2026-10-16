@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5's isolated factory is implemented in the PR for issue #49; CI/review pending.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -122,6 +122,17 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E5 — Isolated escrow instances
+- [x] Pin the escrow WASM hash at factory construction and deploy one child
+  per authorized integrator using a deterministic, factory-scoped salt.
+- [x] Expose an integrator-to-instance registry and deterministic address
+  prediction; reject repeat deployment for the same integrator.
+- [x] Pass the integrator as non-privileged child metadata; the factory has
+  no administrative or upgrade authority over child instances.
+- [x] Add two-instance balance-isolation and duplicate-deployment tests,
+  workspace configuration, both-contract CI builds, and ADR 0005. Issue
+  #49 implementation is submitted; CI and review are pending.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -129,6 +140,16 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Implemented the Phase E5 factory for issue #49: added a
+  contracts Cargo workspace and `docforum-escrow-factory`, which pins an
+  escrow WASM hash, requires integrator authorization, derives a
+  domain-separated deterministic salt, deploys one configured instance
+  per integrator, rejects duplicates, and exposes address prediction plus
+  a readable registry. Each child stores the integrator only as metadata;
+  the factory has no child admin or upgrade path. Added factory integration
+  tests for two isolated token pools and updated CI to build both contracts.
+  ADR 0005 records the design. Tests/builds were not run locally; CI/review
+  remain pending.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

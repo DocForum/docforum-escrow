@@ -29,7 +29,7 @@ fn create_escrow_locks_funds_and_reports_funded() {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Address::generate(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let escrow_id = client.create_escrow(
@@ -59,7 +59,7 @@ fn create_escrow_assigns_sequential_ids() {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Address::generate(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let first = client.create_escrow(&payer, &payee, &token_id, &100, &String::from_str(&env, "ref-a"), &releaser, &None);
@@ -79,7 +79,7 @@ fn create_escrow_rejects_non_positive_amount() {
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Address::generate(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_create_escrow(&payer, &payee, &token_id, &0, &String::from_str(&env, "ref"), &releaser, &None);
@@ -91,7 +91,7 @@ fn get_status_errors_for_unknown_escrow() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Address::generate(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_get_status(&999);

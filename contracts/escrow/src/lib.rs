@@ -46,6 +46,7 @@ pub struct EscrowData {
 enum DataKey {
     Escrow(u64),
     NextId,
+    Integrator,
 }
 
 #[contracterror]
@@ -71,6 +72,12 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
+    /// Binds this deployment to an integrator for on-chain discovery.
+    /// This value is informational and grants no administrative authority.
+    pub fn __constructor(env: Env, integrator: Address) {
+        env.storage().instance().set(&DataKey::Integrator, &integrator);
+    }
+
     /// Locks `amount` of `token` pulled from `payer`, held for `payee`,
     /// tagged with an opaque `condition_ref`. `releaser` is the only
     /// address that will later be permitted to call `release`/`refund`

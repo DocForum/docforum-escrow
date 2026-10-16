@@ -9,9 +9,6 @@ jobs:
   contract:
     name: Soroban contract (test + wasm build)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: contracts/escrow
     steps:
       - uses: actions/checkout@v4
 
@@ -26,17 +23,22 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            contracts/escrow/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+            contracts/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/Cargo.lock') }}
 
-      - name: cargo test
-        run: cargo test
+      - name: Build escrow WASM for factory integration tests
+        run: cargo build --manifest-path contracts/Cargo.toml -p docforum-escrow --target wasm32v1-none --release
 
-      - name: cargo build --release (wasm)
-        run: cargo build --target wasm32v1-none --release
+      - name: cargo test (contract workspace)
+        run: cargo test --manifest-path contracts/Cargo.toml --workspace
 
-      - name: Confirm wasm artifact exists
-        run: test -f target/wasm32v1-none/release/docforum_escrow.wasm
+      - name: Build factory WASM
+        run: cargo build --manifest-path contracts/Cargo.toml -p docforum-escrow-factory --target wasm32v1-none --release
+
+      - name: Confirm both wasm artifacts exist
+        run: |
+          test -f contracts/target/wasm32v1-none/release/docforum_escrow.wasm
+          test -f contracts/target/wasm32v1-none/release/docforum_escrow_factory.wasm
 
   sdk:
     name: TypeScript SDK (typecheck + build)

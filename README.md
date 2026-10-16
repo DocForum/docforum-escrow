@@ -45,6 +45,9 @@ Two reasons, stated plainly rather than blended together:
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
 | `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
+| `EscrowFactory.create_instance(integrator)` | ✅ Implemented | Deploys the pinned escrow WASM with a deterministic per-integrator salt and records the address; one instance per integrator. |
+| `EscrowFactory.predict_instance(integrator)` | ✅ Implemented | Returns the child address derived from the same factory-scoped salt, before deployment. |
+| `EscrowFactory.get_instance(integrator)` | ✅ Implemented | Read-only registry lookup; returns `None` before deployment. |
 
 ```
 EscrowStatus = Funded | Released | Refunded
@@ -56,6 +59,13 @@ That's the answer to "what if the releaser's key is lost?" (threat model
 T2): instead of locking funds permanently, a deadline lets anyone return
 them to the payer. See [ADR 0004](docs/adr/0004-timeout-refund-path.md)
 for the decision and what it means for payees.
+
+The Phase E5 factory pins an escrow WASM hash at construction and deploys
+one instance per integrator. Each instance receives its integrator identifier
+in the constructor as non-privileged metadata. The factory has no method to
+call, administer, or upgrade deployed instances; each child has independent
+escrow storage and token balances. See
+[ADR 0005](docs/adr/0005-isolated-escrow-factory.md).
 
 **Design rule, enforced deliberately:** the contract decides **who** may
 call `release`/`refund`, never **why**. `condition_ref` is an opaque
@@ -88,10 +98,14 @@ repo never crosses back into `docforum-core`'s database or domain model.
 ## Repo layout
 
 ```
-contracts/escrow/
-  src/lib.rs        Contract implementation
-  tests/            Integration tests (soroban-sdk testutils) — required for any contract change
-  Cargo.toml
+contracts/
+  Cargo.toml        Workspace for escrow + factory
+  escrow/
+    src/lib.rs      Contract implementation
+    tests/          Contract integration tests
+  factory/
+    src/lib.rs      Deterministic per-integrator factory
+    tests/          Factory deployment and pool-isolation tests
 sdk/
   src/index.ts      @docforum/escrow-sdk — TypeScript client (not yet implemented, see issue #4)
   package.json
@@ -105,14 +119,14 @@ Requires a Rust toolchain with the `wasm32v1-none` target.
 
 ```bash
 git clone https://github.com/DocForum/docforum-escrow.git
-cd docforum-escrow/contracts/escrow
+cd docforum-escrow
 
-# Run the test suite (28 tests, all passing today)
-cargo test
+# Build the escrow WASM first; the factory integration suite deploys this artifact.
+cargo build --manifest-path Cargo.toml -p docforum-escrow --target wasm32v1-none --release
 
-# Build the deployable contract
-cargo build --target wasm32v1-none --release
-# → target/wasm32v1-none/release/docforum_escrow.wasm
+# Test both contracts and build the factory WASM.
+cargo test --manifest-path Cargo.toml --workspace
+cargo build --manifest-path Cargo.toml -p docforum-escrow-factory --target wasm32v1-none --release
 ```
 
 Already deployed to Stellar **testnet** — see
@@ -129,9 +143,10 @@ The TypeScript SDK (`sdk/`) is still a placeholder — see
 | Doc | Purpose |
 |---|---|
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
-| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E4 breakdown and current status. |
+| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E5 breakdown and current status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
+| [`docs/adr/0005-isolated-escrow-factory.md`](docs/adr/0005-isolated-escrow-factory.md) | Factory identity, deterministic deployment, registry, and isolation boundaries. |
 
 ## Project status
 

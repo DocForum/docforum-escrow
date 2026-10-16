@@ -15,6 +15,10 @@ get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded —
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
+EscrowFactory.create_instance(integrator) -> Address // deterministic child for an authorized integrator
+EscrowFactory.get_instance(integrator) -> Option<Address> // public registry lookup
+EscrowFactory.create_instance(integrator) -> Address // deterministic, isolated child for an authorized integrator
+EscrowFactory.get_instance(integrator) -> Option<Address> // public registry lookup
 ```
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
@@ -74,6 +78,18 @@ contract enforces *who* can call release/refund, not *why* — keep it that
 way. Baking healthcare-specific logic into the contract is exactly the
 scope creep this repo exists to avoid (see README "why this repo exists,
 honestly").
+
+The Phase E5 factory pins the escrow WASM hash at construction and derives
+each child salt from a domain-separated encoding of the integrator address.
+The child stores that address as discovery metadata only; it is not an
+admin or allowlist role. The factory has no method to invoke, administer,
+or upgrade a child. See `docs/adr/0005-isolated-escrow-factory.md`.
+
+The Phase E5 factory pins the escrow WASM hash at construction and derives
+each child salt from a domain-separated encoding of the integrator address.
+The child stores that address as discovery metadata only; it is not an
+admin or allowlist role. The factory has no method to invoke, administer,
+or upgrade a child. See `docs/adr/0005-isolated-escrow-factory.md`.
 
 ## Hard rules
 1. **No PHI, ever, anywhere in this repo.** Not in tests, not in example
