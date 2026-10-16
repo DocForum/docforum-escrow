@@ -129,6 +129,12 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Added issue #46 split settlement: `settle` requires the
+  escrow releaser, validates the payee amount is within the funded range,
+  pays the two stored destinations, records `Settled`, and emits both
+  amounts. Added coverage for zero, full, partial, negative, and
+  over-balance amounts in `tests/split_settlement.rs`. Not yet deployed;
+  the SDK binding has not been regenerated.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet
