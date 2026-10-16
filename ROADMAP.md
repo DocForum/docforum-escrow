@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`), the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet), and the balance-delta check closed (issue #12 — not yet on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (per-token liability accounting + on-chain solvency view) implemented, not yet on testnet.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -121,6 +121,24 @@
 - [ ] Related, not in the checklist: [#13](https://github.com/DocForum/docforum-escrow/issues/13) `get_escrow`
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
+
+## Phase E5 — Contract features
+- [x] Per-token liability accounting and an on-chain solvency view
+  (issue #19). `liabilities[token]` is incremented in the same invocation
+  as `create_escrow`'s funding transfer and decremented in the same
+  invocation as `release`/`refund`'s payout transfer, so the counter can
+  never drift from the state change it mirrors. A read-only
+  `solvency(token) -> (balance, liabilities)` returns the contract's
+  current token balance alongside the outstanding liability, making
+  "does the contract hold at least as much of token X as it owes?" a
+  one-call check for monitors and auditors. The counter entry uses
+  persistent storage with TTL extended on every write, consistent with
+  issue #10's TTL handling. Property test in
+  `contracts/escrow/tests/liabilities.rs` asserts that after any
+  sequence of operations, `liabilities[token]` equals the sum of
+  `Funded` amounts per token. `docs/threat-model.md` §6 gains monitoring
+  guidance for the solvency view. **Not yet on testnet** — the current
+  deployment predates it.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -305,3 +323,23 @@
   #12 were opened and closed in between). #16 merged with an empty diff
   because its branch's merge from `main` kept `main`'s ROADMAP.md
   wholesale.
+- 2026-10-09 — Implemented Phase E5 (issue #19): per-token liability
+  accounting and an on-chain solvency view. `liabilities[token]` is
+  incremented in the same invocation as `create_escrow`'s funding
+  transfer and decremented in the same invocation as `release`/`refund`'s
+  payout transfer — never as a separate call, so the counter cannot drift
+  from the state change it mirrors. New read-only
+  `solvency(token) -> (balance, liabilities)` returns the contract's
+  current token balance alongside the outstanding liability, turning
+  T5's shared-pool risk into a one-call check for monitors and auditors.
+  The counter entry uses persistent storage with TTL extended on every
+  write, consistent with issue #10's TTL handling. **Tests:** property
+  test in `contracts/escrow/tests/liabilities.rs` asserts that after any
+  sequence of operations, `liabilities[token]` equals the sum of
+  `Funded` amounts per token, covering every state-changing function
+  (`create_escrow`, `release`, `refund`). `docs/threat-model.md` §6
+  gains monitoring guidance for the solvency view. No signature changes
+  to existing functions, so no SDK regeneration or version bump needed.
+  **Not yet on testnet** — the current deployment predates it.
+  `ARCHITECTURE_ESSENTIALS.md` contract-surface table updated with
+  `solvency`. Closes issue #19.

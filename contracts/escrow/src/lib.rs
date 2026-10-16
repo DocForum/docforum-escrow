@@ -8,6 +8,14 @@
 // docs/adr/0004. After that deadline anyone may refund, but only back to
 // the payer, so a lost `releaser` key can no longer lock funds forever.
 //
+// Phase E5 (issue #12): per-token liability accounting. `liabilities[token]`
+// tracks the total amount of `token` the contract still owes across all
+// `Funded` escrows, incremented on create and decremented on release/refund
+// in the same invocation as the state change so it can never drift. The
+// read-only `solvency(token)` view exposes (contract balance, liabilities)
+// so monitors and auditors can answer "does the contract hold at least as
+// much of token X as it owes?" in one call — see docs/threat-model.md T5.
+//
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
 // never interprets it. Keep it that way; domain logic belongs in the
@@ -46,6 +54,11 @@ pub struct EscrowData {
 enum DataKey {
     Escrow(u64),
     NextId,
+    /// Total outstanding liability for a given token: the sum of
+    /// `amount` across every escrow still in `Funded` status. Kept in
+    /// persistent storage with an explicit TTL so it survives archival
+    /// (see `bump_liability_ttl`).
+    Liabilities(Address),
 }
 
 #[contracterror]
@@ -64,6 +77,9 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    /// A liability counter would have overflowed or underflowed —
+    /// indicates a bug in the accounting, never a user error.
+    LiabilityOverflow = 7,
 }
 
 #[contract]
@@ -120,6 +136,7 @@ impl EscrowContract {
             refund_after,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        Self::add_liability(&env, &data.token, amount)?;
         Ok(id)
     }
 
@@ -176,6 +193,7 @@ impl EscrowContract {
 
         data.status = EscrowStatus::Released;
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        Self::sub_liability(&env, &data.token, data.amount)?;
         Ok(())
     }
 
@@ -214,12 +232,58 @@ impl EscrowContract {
 
         data.status = EscrowStatus::Refunded;
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        Self::sub_liability(&env, &data.token, data.amount)?;
         Ok(())
+    }
+
+    /// Read-only solvency view for `token`: returns the contract's
+    /// current token balance and the total outstanding liability it has
+    /// recorded for that token. A monitor can flag insolvency whenever
+    /// `balance < liabilities` — see docs/threat-model.md T5.
+    pub fn solvency(env: Env, token: Address) -> Result<(i128, i128), Error> {
+        let token_client = token::Client::new(&env, &token);
+        let balance = token_client.balance(&env.current_contract_address());
+        let liabilities = Self::get_liability(&env, &token);
+        Ok((balance, liabilities))
     }
 
     fn next_id(env: &Env) -> u64 {
         let id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
         env.storage().instance().set(&DataKey::NextId, &(id + 1));
         id
+    }
+
+    fn get_liability(env: &Env, token: &Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Liabilities(token.clone()))
+            .unwrap_or(0)
+    }
+
+    fn add_liability(env: &Env, token: &Address, amount: i128) -> Result<(), Error> {
+        let current = Self::get_liability(env, token);
+        let updated = current.checked_add(amount).ok_or(Error::LiabilityOverflow)?;
+        Self::set_liability(env, token, updated);
+        Ok(())
+    }
+
+    fn sub_liability(env: &Env, token: &Address, amount: i128) -> Result<(), Error> {
+        let current = Self::get_liability(env, token);
+        let updated = current.checked_sub(amount).ok_or(Error::LiabilityOverflow)?;
+        Self::set_liability(env, token, updated);
+        Ok(())
+    }
+
+    fn set_liability(env: &Env, token: &Address, value: i128) {
+        let key = DataKey::Liabilities(token.clone());
+        env.storage().persistent().set(&key, &value);
+        Self::bump_liability_ttl(env, &key);
+    }
+
+    /// Extend the liability entry's TTL so it is never archived while
+    /// the contract may still owe `token` — consistent with the TTL
+    /// handling required by issue #10.
+    fn bump_liability_ttl(env: &Env, key: &DataKey) {
+        env.storage().persistent().extend_ttl(key, 100, 1000);
     }
 }

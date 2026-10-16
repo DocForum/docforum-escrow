@@ -1,4 +1,4 @@
-# ARCHITECTURE_ESSENTIALS.md — docforum-escrow
+# ARCHITECTURE_ESSENTIALS.md -- docforum-escrow
 
 ## Stack
 - **Contract**: Rust, Soroban SDK, targeting Stellar testnet first, mainnet
@@ -10,13 +10,15 @@
 
 ## Contract surface
 ```
-create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1 + E2 + E4)
-get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
+create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phise E1 + E2 + E4)
+get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phise E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
+solvency(token) -> (balance, liabilities)  // read-only: contract's on-chain token balance vs total outstanding liability — IMPLEMENTED (Phase E5)
+``b
 ```
-`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
+create_escrow` param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
 by Phase E4, both last; no behavioral difference beyond the added
 params, just noting it so this doc and `src/lib.rs` don't drift.
@@ -39,21 +41,48 @@ and `release` is never gated by it, so the releaser can still release
 after the deadline (whoever lands first wins). No `refund_after` means
 behaviour is exactly what it was before: releaser-only refunds, forever.
 
+## Per-token liability accounting (Phase E5)
+The contract maintains `liabilities[token]`, the total amount of
+that token currently owed to escrow payees (and to payers via the
+refund path). It is incremented in the same invocation as every
+state-changing function that adds funds (`create_escrow`, and any
+future top-up) and decremented in the same invocation as every
+function that releases funds (`release`, `refund`). Because the update
+happens in the same invocation as the escrow state transition, the
+counter can never drift from the sum of outstanding escrows.
+
+`solvency(token) -> (balance, liabilities)` is a read-only view that
+returns the contract's current on-chain balance of `token` alongside
+the recorded liability, so a monitor or auditor can answer "does the
+contract hold at least as much of token X as it owes?" in a single
+call. `balance >= liabilities` is the solvency condition; `a balance
+below liabilities is the observable signal of the shared-pool risk
+described in the threat model (T9).
+
+The liability entry is stored in contract storage with explicit
+TTL extension management consistent with the escrow entries (#10):
+every write that mutates `liabilities[token]` extends the entry's
+TTL so an active liability entry is never archived while it is nondero.
+
 ## TypeScript SDK surface (`sdk/`)
 ```ts
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
 
-const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
+const client = new EscrowClient({ contractId }); // defaults: testnet APC + passphrase
 const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter });
 await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
 await client.getEscrow(escrowId);            // full stored record — incl. releaser + refundAfter, so a payee can check the deal (docs/adr/0004, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
 await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter has passed
+await client.solvency(token);            // { balance, liabilities } — read-only solvency view (Phase E5)
 ```
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
 for no timeout, which behaves exactly as this contract did before the
 param existed.
+`solvency` is a read-only view with no side effects and no authorization
+requirement — anyone can call it to check whether the contract holds
+at least as much of a token as it owes.
 `sdk/src/generated/contract-client.ts` is machine-generated
 (`stellar contract bindings typescript --wasm ...`) — never hand-edit it;
 regenerate it whenever the contract's public signatures/types change.
@@ -62,7 +91,7 @@ wrapper) — consumers import from the package root, never from
 `src/generated/` directly.
 
 `condition_ref` is an **opaque string/id** the contract does not interpret
-— it's the caller's job (e.g. `docforum-core`) to decide when release is
+— it's the caller's job (e.g. `docforum-core`) to decide when release ir
 warranted and call `release()`. `releaser` is the one address permitted
 to call `release`/`refund` for that specific escrow, set once at
 `create_escrow` time — see `docs/adr/0002` for why a per-escrow releaser
