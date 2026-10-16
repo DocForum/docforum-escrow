@@ -122,6 +122,15 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E6 — SDK & integrator tooling
+- [x] Typed SDK errors mapped from the contract error enum (issue #61):
+  named classes for each current contract error and distinct simulation,
+  submission, timeout, and network mismatch errors. The generated mapping
+  is checked in CI against `contracts/escrow/src/lib.rs`; unknown future
+  codes remain generic `ContractError` instances and causes are preserved.
+  Consumer migration guidance: `docs/sdk-errors.md`.
+- [ ] Remaining Phase E6 items tracked by their issues.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -129,6 +138,10 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Added SDK typed contract/RPC errors for issue #61. The
+  contract-code mapping is generated from the Rust error enum and checked
+  by CI for drift; unknown future codes fall back safely to `ContractError`.
+  Unit coverage and consumer migration notes added. Closes issue #61.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

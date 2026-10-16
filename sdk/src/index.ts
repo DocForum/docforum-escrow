@@ -9,8 +9,23 @@
 // caller, not encouraged by any default here.
 import { Keypair } from "@stellar/stellar-sdk";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
+import { toEscrowError } from "./errors.js";
 
 export { Keypair };
+export {
+  BalanceMismatchError,
+  ContractError,
+  EscrowError,
+  InvalidAmountError,
+  InvalidRefundAfterError,
+  NetworkMismatchError,
+  NotFoundError,
+  NotFundedError,
+  RequestTimeoutError,
+  SimulationFailure,
+  SubmissionFailure,
+  UnauthorizedError,
+} from "./errors.js";
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";
 
@@ -104,26 +119,30 @@ export class EscrowClient {
 
   /** Locks `amount` of `token` from `payer`, held for `payee`. Returns the new escrow's id and the funding transaction's hash. */
   async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
-    const client = this.contractClient(params.payer);
-    const tx = await client.create_escrow({
-      payer: params.payer.publicKey(),
-      payee: params.payee,
-      token: params.token,
-      amount: params.amount,
-      condition_ref: params.conditionRef,
-      releaser: params.releaser,
-      refund_after: params.refundAfter,
-    });
-    const sent = await tx.signAndSend();
-    return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+    try {
+      const client = this.contractClient(params.payer);
+      const tx = await client.create_escrow({
+        payer: params.payer.publicKey(),
+        payee: params.payee,
+        token: params.token,
+        amount: params.amount,
+        condition_ref: params.conditionRef,
+        releaser: params.releaser,
+        refund_after: params.refundAfter,
+      });
+      const sent = await tx.signAndSend();
+      return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+    } catch (error) { throw toEscrowError(error, "submission"); }
   }
 
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
   async getStatus(escrowId: bigint): Promise<EscrowStatus> {
-    const client = this.contractClient();
-    const tx = await client.get_status({ escrow_id: escrowId });
-    const status: GeneratedEscrowStatus = tx.result.unwrap();
-    return status.tag;
+    try {
+      const client = this.contractClient();
+      const tx = await client.get_status({ escrow_id: escrowId });
+      const status: GeneratedEscrowStatus = tx.result.unwrap();
+      return status.tag;
+    } catch (error) { throw toEscrowError(error); }
   }
 
   /**
@@ -133,31 +152,35 @@ export class EscrowClient {
    * Throws if `escrowId` doesn't exist.
    */
   async getEscrow(escrowId: bigint): Promise<Escrow> {
-    const client = this.contractClient();
-    const tx = await client.get_escrow({ escrow_id: escrowId });
-    const data = tx.result.unwrap();
-    return {
-      payer: data.payer,
-      payee: data.payee,
-      token: data.token,
-      amount: data.amount,
-      conditionRef: data.condition_ref,
-      releaser: data.releaser,
-      // The generated client decodes a contract `None` as `null`; the
-      // public surface uses `undefined` for "no deadline" (consistent
-      // with `CreateEscrowParams.refundAfter` being absent).
-      refundAfter: data.refund_after ?? undefined,
-      status: data.status.tag,
-    };
+    try {
+      const client = this.contractClient();
+      const tx = await client.get_escrow({ escrow_id: escrowId });
+      const data = tx.result.unwrap();
+      return {
+        payer: data.payer,
+        payee: data.payee,
+        token: data.token,
+        amount: data.amount,
+        conditionRef: data.condition_ref,
+        releaser: data.releaser,
+        // The generated client decodes a contract `None` as `null`; the
+        // public surface uses `undefined` for "no deadline" (consistent
+        // with `CreateEscrowParams.refundAfter` being absent).
+        refundAfter: data.refund_after ?? undefined,
+        status: data.status.tag,
+      };
+    } catch (error) { throw toEscrowError(error); }
   }
 
   /** Moves the escrow's funds to its payee. Throws if `caller` isn't the escrow's `releaser`, or the escrow isn't `Funded`. Returns the transaction's hash. */
   async release(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
-    const client = this.contractClient(params.caller);
-    const tx = await client.release({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
-    const sent = await tx.signAndSend();
-    sent.result.unwrap();
-    return { txHash: sent.sendTransactionResponse!.hash };
+    try {
+      const client = this.contractClient(params.caller);
+      const tx = await client.release({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
+      const sent = await tx.signAndSend();
+      sent.result.unwrap();
+      return { txHash: sent.sendTransactionResponse!.hash };
+    } catch (error) { throw toEscrowError(error, "submission"); }
   }
 
   /**
@@ -167,10 +190,12 @@ export class EscrowClient {
    * transaction's hash.
    */
   async refund(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
-    const client = this.contractClient(params.caller);
-    const tx = await client.refund({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
-    const sent = await tx.signAndSend();
-    sent.result.unwrap();
-    return { txHash: sent.sendTransactionResponse!.hash };
+    try {
+      const client = this.contractClient(params.caller);
+      const tx = await client.refund({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
+      const sent = await tx.signAndSend();
+      sent.result.unwrap();
+      return { txHash: sent.sendTransactionResponse!.hash };
+    } catch (error) { throw toEscrowError(error, "submission"); }
   }
 }

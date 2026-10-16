@@ -121,8 +121,13 @@ contract id, transaction links, and the exact `stellar` CLI commands to
 redeploy. **Mainnet is out of scope until the Phase E4 security review is
 complete — see [hard rule 4](ARCHITECTURE_ESSENTIALS.md#hard-rules).**
 
-The TypeScript SDK (`sdk/`) is still a placeholder — see
-[issue #4](https://github.com/DocForum/docforum-escrow/issues/4).
+The TypeScript SDK (`sdk/`) wraps the contract and is distributed as a tagged
+GitHub Release tarball; see [issue #4](https://github.com/DocForum/docforum-escrow/issues/4)
+and [ADR 0003](docs/adr/0003-sdk-distribution.md).
+
+SDK errors are typed by contract error code and common RPC failure category.
+See [`docs/sdk-errors.md`](docs/sdk-errors.md) for the error classes and a
+consumer migration example.
 
 ## Documentation
 
