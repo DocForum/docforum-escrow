@@ -10,15 +10,15 @@
 
 ## Contract surface
 ```
-create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1 + E2 + E4)
+create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, refund_to) -> escrow_id   // IMPLEMENTED (Phase E1 + E2 + E4 + E5); the live testnet deployment predates the E5 `refund_to` param
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
-get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
+get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after, refund_to — IMPLEMENTED (refund_after live on testnet; `refund_to` not deployed yet)
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
-refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
+refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed — always to the escrow's stored refund_to (= payer unless set at creation)
 ```
-`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
-`token` before `amount`, `releaser` added by Phase E2 and `refund_after`
-by Phase E4, both last; no behavioral difference beyond the added
+`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after, refund_to)` —
+`token` before `amount`, `releaser` added by Phase E2, `refund_after`
+by Phase E4 and `refund_to` by Phase E5, each appended last; no behavioral difference beyond the added
 params, just noting it so this doc and `src/lib.rs` don't drift.
 
 All five functions are proven live on testnet as of the Phase E4
@@ -39,17 +39,26 @@ and `release` is never gated by it, so the releaser can still release
 after the deadline (whoever lands first wins). No `refund_after` means
 behaviour is exactly what it was before: releaser-only refunds, forever.
 
+`refund_to` (Phase E5, `docs/adr/0005`) is an optional address, set at
+creation under the funder's (`payer`'s) auth, that every refund path pays
+instead of `payer`. It is stored, immutable, never supplied at payout, and
+may not be the contract itself (`InvalidRefundTo`); omitted, it equals
+`payer` and behaviour is exactly as before. Invariant I1 is therefore
+"release → stored `payee`, refund → stored `refund_to`".
+
 ## TypeScript SDK surface (`sdk/`)
 ```ts
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
 
 const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
-const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter });
+const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter, refundTo });
 await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
 await client.getEscrow(escrowId);            // full stored record — incl. releaser + refundAfter, so a payee can check the deal (docs/adr/0004, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
 await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter has passed
 ```
+`refundTo` on `createEscrow` is optional too (default: the payer) and
+`getEscrow` returns it as `refundTo`.
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
 for no timeout, which behaves exactly as this contract did before the
