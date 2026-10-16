@@ -40,7 +40,9 @@ Two reasons, stated plainly rather than blended together:
 
 | Function | Status | Description |
 |---|---|---|
+| `__constructor(maximum_amounts)` | ✅ Implemented in source | Installs positive per-token maximum amounts; tokens absent from the map are rejected. |
 | `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id` | ✅ Implemented | Pulls `amount` of `token` from `payer` (requires `payer` auth), stores an opaque `condition_ref`, sets status `Funded`. Rejects non-positive amounts, and any `refund_after` that isn't strictly in the future. |
+| `top_up(escrow_id, payer, amount) -> Result<()>` | ✅ Implemented in source | Adds funds to a funded escrow, only with the original payer's authorization, while keeping the total at or below that token's deployment-time cap. |
 | `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
@@ -56,6 +58,14 @@ That's the answer to "what if the releaser's key is lost?" (threat model
 T2): instead of locking funds permanently, a deadline lets anyone return
 them to the payer. See [ADR 0004](docs/adr/0004-timeout-refund-path.md)
 for the decision and what it means for payees.
+
+Each deployment now also receives an immutable map of maximum funded
+amounts keyed by token address. Tokens omitted from the map are rejected;
+the cap applies to each escrow's total, including later top-ups. Raising
+a cap requires a new deployment and migration to a new contract ID. See
+[ADR 0006](docs/adr/0006-per-token-escrow-caps.md). The generated SDK
+bindings still need regeneration before the new constructor and `top_up`
+surface can be used through the TypeScript client.
 
 **Design rule, enforced deliberately:** the contract decides **who** may
 call `release`/`refund`, never **why**. `condition_ref` is an opaque

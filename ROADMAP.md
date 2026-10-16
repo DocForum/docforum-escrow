@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 contract features are in progress; new constructor and `top_up` bindings need regeneration before SDK use.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -122,6 +122,14 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E5 — Contract features
+- [x] Immutable per-token escrow maximum (issue #56): deployments accept
+  a constructor map of token caps; tokens without entries are rejected.
+  `create_escrow` checks the cap, and `top_up` requires the original
+  payer and enforces the cumulative cap. See ADR 0006. Regression tests
+  cover at-cap, over-cap, missing-cap, and cumulative top-up behavior.
+  SDK bindings and a testnet deployment still need regeneration/release.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -129,6 +137,10 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Issue #56 adds immutable per-token escrow caps at
+  construction, rejects missing or exceeded caps, and adds payer-only
+  `top_up` bounded by the cumulative escrow amount. ADR 0006 records the
+  staged rollout; SDK bindings and testnet redeployment remain pending.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

@@ -10,7 +10,9 @@
 
 ## Contract surface
 ```
+__constructor(maximum_amounts: Map<TokenAddress, i128>) -> result   // SOURCE ONLY (Phase E5); all caps must be positive
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1 + E2 + E4)
+top_up(escrow_id, payer, amount) -> result   // SOURCE ONLY (issue #56); original payer only, cumulative token cap applies
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
@@ -21,7 +23,7 @@ refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E
 by Phase E4, both last; no behavioral difference beyond the added
 params, just noting it so this doc and `src/lib.rs` don't drift.
 
-All five functions are proven live on testnet as of the Phase E4
+The five pre-E5 functions are proven live on testnet as of the Phase E4
 redeployment (`docs/testnet-deployments.md`, 2026-10-08 entry) — including
 a real timeout refund triggered by a non-releaser after its deadline, a
 real `release` after the deadline, and real rejections of a
@@ -31,6 +33,11 @@ an already-settled escrow (`Error(Contract, #4)`). The Phase E1 and E2
 deployments are superseded (their contract IDs predate the
 `refund_after` param and `EscrowData` layout) and are kept only as
 historical record.
+
+The E5 constructor cap map and `top_up` are source changes only until
+generated bindings are refreshed and a new testnet deployment is
+verified. A cap bump requires a new contract deployment and settlement
+of escrows at the old contract ID; see ADR 0006.
 
 `refund_after` is an optional unix timestamp in seconds set once at
 creation (`docs/adr/0004`): after it passes **anyone** may call

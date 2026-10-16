@@ -14,7 +14,7 @@ use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String,
+    Address, Env, Map, String,
 };
 
 /// Ledger close time at escrow creation.
@@ -28,6 +28,12 @@ fn setup<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
     let token = TokenClient::new(env, &contract_id.address());
     let asset = StellarAssetClient::new(env, &contract_id.address());
     (contract_id.address(), token, asset)
+}
+
+fn register_escrow(env: &Env, token: &Address) -> Address {
+    let mut maximum_amounts = Map::new(env);
+    maximum_amounts.set(token.clone(), 1_000);
+    env.register(EscrowContract, (maximum_amounts,))
 }
 
 struct Fixture<'a> {
@@ -49,7 +55,7 @@ fn fund_escrow(env: &Env, refund_after: Option<u64>) -> Fixture<'_> {
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = register_escrow(env, &token_id);
     let client = EscrowContractClient::new(env, &contract_id);
 
     let escrow_id = client.create_escrow(
@@ -110,7 +116,7 @@ fn create_escrow_rejects_deadline_already_passed_or_now() {
     asset.mint(&payer, &1_000);
     env.ledger().set_timestamp(CREATED_AT);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = register_escrow(&env, &token_id);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let now = client.try_create_escrow(
@@ -353,7 +359,7 @@ fn get_escrow_errors_for_unknown_escrow() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Map::<Address, i128>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_get_escrow(&999);
