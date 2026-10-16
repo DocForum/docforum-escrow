@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E6 transaction lifecycle implementation is ready for CI. Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -80,6 +80,20 @@
   "integration" tests (e.g. `docforum-core`'s self-contained embedded-
   Postgres booking test). CI runs `typecheck`+`build` only for the SDK.
 
+## Phase E6 — Reliable SDK transaction lifecycle
+- [x] Issue #62 implementation: configurable simulation/send/confirmation
+  timeouts, early transaction-hash callback, bounded backoff for explicit
+  `TRY_AGAIN_LATER`, and confirmation polling by the original hash after an
+  ambiguous send. Retries reuse the same signed envelope; no replacement or
+  fee-bump transaction is submitted automatically.
+- [x] Scripted fake-RPC regression tests added for success, early hash
+  delivery, retry/backoff, send timeout followed by confirmation, pending
+  confirmation timeout, and stalled simulation timeout. Tests are ready for
+  CI; they were not run in the fast implementation workflow.
+- [x] Retry/recovery semantics documented in `README.md` and
+  `ARCHITECTURE_ESSENTIALS.md`; SDK API additions use the backward-compatible
+  minor version `0.4.0`.
+
 ## Phase E4 — Security review (blocking for any mainnet use)
 - [ ] External or community review before any non-testnet deployment.
   Tracked as issue #6.
@@ -129,6 +143,13 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Added Phase E6 SDK transaction lifecycle support for issue
+  #62: configurable simulation/send/confirmation timeouts, an early hash
+  callback, bounded backoff for explicit `TRY_AGAIN_LATER`, and polling the
+  original hash after ambiguous submission. No automatic replacement
+  transaction is sent, preventing duplicate escrow funding on timeout.
+  Added scripted fake-RPC tests and retry/recovery documentation; bumped the
+  SDK to `0.4.0`. Tests/build were not run in the fast batch workflow.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet
