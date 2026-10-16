@@ -45,6 +45,8 @@ Two reasons, stated plainly rather than blended together:
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
 | `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
+| `create_escrow_with_acceptance(..., requires_acceptance) -> escrow_id` | ✅ Implemented | Opts a new escrow into a payee acceptance gate while keeping the existing creation method behavior unchanged. |
+| `accept(escrow_id, payee) -> Result<()>` | ✅ Implemented | Records the authorized payee's acceptance timestamp once; required before release only when the flag is enabled. Refund behavior is unchanged. See [ADR 0005](docs/adr/0005-payee-acceptance.md). |
 
 ```
 EscrowStatus = Funded | Released | Refunded

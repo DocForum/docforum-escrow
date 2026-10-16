@@ -14,7 +14,7 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, String};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,6 +40,10 @@ pub struct EscrowData {
     /// anyone — still only back to `payer`. `None` means no timeout,
     /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
+    /// Whether release requires the payee's explicit acceptance.
+    pub requires_acceptance: bool,
+    /// Ledger timestamp at which the payee accepted, if any.
+    pub accepted_at: Option<u64>,
 }
 
 #[contracttype]
@@ -64,6 +68,9 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    AcceptanceRequired = 9,
+    AcceptanceNotConfigured = 10,
+    AlreadyAccepted = 11,
 }
 
 #[contract]
@@ -88,6 +95,36 @@ impl EscrowContract {
         condition_ref: String,
         releaser: Address,
         refund_after: Option<u64>,
+    ) -> Result<u64, Error> {
+        Self::create_escrow_internal(env, payer, payee, token, amount, condition_ref, releaser, refund_after, false)
+    }
+
+    /// Creates an escrow with an opt-in payee acceptance gate. Existing
+    /// integrations can keep using `create_escrow`, which defaults this off.
+    pub fn create_escrow_with_acceptance(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        requires_acceptance: bool,
+    ) -> Result<u64, Error> {
+        Self::create_escrow_internal(env, payer, payee, token, amount, condition_ref, releaser, refund_after, requires_acceptance)
+    }
+
+    fn create_escrow_internal(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        requires_acceptance: bool,
     ) -> Result<u64, Error> {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -118,9 +155,34 @@ impl EscrowContract {
             status: EscrowStatus::Funded,
             releaser,
             refund_after,
+            requires_acceptance,
+            accepted_at: None,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Ok(id)
+    }
+
+    /// Records the payee's acceptance for an opted-in funded escrow.
+    pub fn accept(env: Env, escrow_id: u64, payee: Address) -> Result<(), Error> {
+        payee.require_auth();
+        let mut data: EscrowData = env.storage().persistent().get(&DataKey::Escrow(escrow_id)).ok_or(Error::NotFound)?;
+        if data.payee != payee {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        if !data.requires_acceptance {
+            return Err(Error::AcceptanceNotConfigured);
+        }
+        if data.accepted_at.is_some() {
+            return Err(Error::AlreadyAccepted);
+        }
+        let accepted_at = env.ledger().timestamp();
+        data.accepted_at = Some(accepted_at);
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.events().publish((symbol_short!("accepted"), escrow_id), (payee, accepted_at));
+        Ok(())
     }
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
@@ -169,6 +231,9 @@ impl EscrowContract {
         }
         if data.status != EscrowStatus::Funded {
             return Err(Error::NotFunded);
+        }
+        if data.requires_acceptance && data.accepted_at.is_none() {
+            return Err(Error::AcceptanceRequired);
         }
 
         let token_client = token::Client::new(&env, &data.token);

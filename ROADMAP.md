@@ -129,6 +129,14 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Implemented issue #25's opt-in payee acceptance step.
+  Existing `create_escrow` remains unchanged and defaults acceptance off;
+  `create_escrow_with_acceptance` opts in. The payee can record one
+  acceptance timestamp, exposed in `get_escrow`; `release` waits for it
+  when required, while refund behavior stays unchanged. Added ADR 0005
+  and tests for authorization, duplicate/settled acceptance, release
+  gating, and legacy opt-out. Not yet deployed; generated SDK bindings
+  are not regenerated.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet
