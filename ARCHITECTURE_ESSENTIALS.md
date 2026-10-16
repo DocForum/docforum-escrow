@@ -10,13 +10,15 @@
 
 ## Contract surface
 ```
-create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1 + E2 + E4)
+create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, attester) -> escrow_id   // attester optional; source change in ADR 0007, new deployment required
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
+release_attestation_payload(escrow_id) -> BytesN<32> // XDR SHA-256 digest bound to domain, contract, network, escrow id, release action
+release_with_attestation(escrow_id, signature) -> result // optional Ed25519 authorization; anyone may relay once
 ```
-`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
+`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after, attester)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
 by Phase E4, both last; no behavioral difference beyond the added
 params, just noting it so this doc and `src/lib.rs` don't drift.

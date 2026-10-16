@@ -247,6 +247,17 @@ behave like SEP-41.
   and `NextId` is a `u64`, so this isn't a meaningful attack. Listed so
   a reviewer doesn't need to rediscover it.
 
+### T11 — Attester key compromise or cross-domain replay · **High if mismanaged**
+- A compromised attester can authorize release of any still-funded escrow
+  configured with that key. A copied signature could also be dangerous if
+  it were not bound to the intended domain.
+- **Mitigation:** the signature digest includes a versioned domain, current
+  contract address, network id, escrow id, and action. Settlement changes
+  status before another release can succeed. Keep attester secrets offline,
+  sign only the payload returned for the intended escrow, and never reuse
+  the same signature as a general-purpose authorization. The public key and
+  signed payload are public by design.
+
 ## 4. SDK-specific notes (`sdk/src/index.ts`)
 
 - **Defaults are testnet only** (hard rule 4). A caller can still pass a

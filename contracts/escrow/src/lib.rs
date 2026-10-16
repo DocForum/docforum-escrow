@@ -14,7 +14,10 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, token, xdr::ToXdr, Address, Bytes, BytesN,
+    Env, String,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,6 +43,9 @@ pub struct EscrowData {
     /// anyone — still only back to `payer`. `None` means no timeout,
     /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
+    /// Optional Ed25519 key allowed to authorize release through a signed
+    /// one-time attestation instead of an online releaser transaction.
+    pub attester: Option<BytesN<32>>,
 }
 
 #[contracttype]
@@ -64,6 +70,7 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    InvalidAttestation = 7,
 }
 
 #[contract]
@@ -88,6 +95,7 @@ impl EscrowContract {
         condition_ref: String,
         releaser: Address,
         refund_after: Option<u64>,
+        attester: Option<BytesN<32>>,
     ) -> Result<u64, Error> {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -118,6 +126,7 @@ impl EscrowContract {
             status: EscrowStatus::Funded,
             releaser,
             refund_after,
+            attester,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Ok(id)
@@ -175,7 +184,54 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
 
         data.status = EscrowStatus::Released;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        Ok(())
+    }
+
+    /// Returns the digest an attester must sign to release this escrow.
+    /// It is bound to this contract, the current network, the escrow id,
+    /// and the release action. This is a read-only helper for signers.
+    pub fn release_attestation_payload(env: Env, escrow_id: u64) -> Result<BytesN<32>, Error> {
+        let data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+        if data.attester.is_none() {
+            return Err(Error::InvalidAttestation);
+        }
+        Ok(attestation_digest(&env, escrow_id))
+    }
+
+    /// Releases an escrow using its configured attester's Ed25519
+    /// signature. Anyone may submit the signature; the signature itself
+    /// authorizes the single release. A settled escrow cannot be replayed.
+    pub fn release_with_attestation(
+        env: Env,
+        escrow_id: u64,
+        signature: BytesN<64>,
+    ) -> Result<(), Error> {
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        let attester = data.attester.as_ref().ok_or(Error::InvalidAttestation)?;
+        let digest = attestation_digest(&env, escrow_id);
+        let message: Bytes = digest.into();
+        env.crypto().ed25519_verify(attester, &message, &signature);
+
+        let token_client = token::Client::new(&env, &data.token);
+        token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
+        data.status = EscrowStatus::Released;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
     }
 
@@ -213,7 +269,9 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
 
         data.status = EscrowStatus::Refunded;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
     }
 
@@ -222,4 +280,19 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::NextId, &(id + 1));
         id
     }
+}
+
+fn attestation_digest(env: &Env, escrow_id: u64) -> BytesN<32> {
+    // XDR encoding the versioned domain and network/contract/operation tuple
+    // prevents replay between contracts, networks, escrows, or actions.
+    let domain = String::from_str(env, "docforum-escrow:release:v1");
+    let payload = (
+        domain,
+        env.current_contract_address(),
+        env.ledger().network_id(),
+        escrow_id,
+        String::from_str(env, "release"),
+    )
+        .to_xdr(env);
+    env.crypto().sha256(&payload).to_bytes()
 }
