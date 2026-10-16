@@ -60,6 +60,9 @@ regenerate it whenever the contract's public signatures/types change.
 `sdk/src/index.ts` is the actual public surface (hand-written, ergonomic
 wrapper) — consumers import from the package root, never from
 `src/generated/` directly.
+The SDK package exports separate ESM and CommonJS builds and matching
+declarations. Browser-aware bundlers use the ESM entry; the SDK must keep
+browser imports free of Node-only runtime APIs.
 
 `condition_ref` is an **opaque string/id** the contract does not interpret
 — it's the caller's job (e.g. `docforum-core`) to decide when release is
