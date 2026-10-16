@@ -191,9 +191,13 @@ behave like SEP-41.
   **archived** if nothing extends them.
 - Archived entries are not deleted, so funds are not lost. But
   `get_status`/`release`/`refund` on an archived entry need a restore
-  first. Depending on protocol version and client tooling, this either
-  happens automatically during simulation or needs an explicit restore
-  operation. Either way, someone has to pay for it.
+  first. The SDK defaults to surfacing `ArchivedEntryError`; consumers
+  can opt into `archivalBehavior: "auto"` to use the Stellar SDK's
+  restore preamble handling. A state-changing call's `payer` or `caller`
+  pays the restore transaction. Read-only calls need a configured
+  `restoreSigner`, which signs and pays for that transaction. The SDK
+  allows one restore transaction per call and fails with a typed error
+  if the retry still needs archived state.
 - **Reviewer, please verify:** that an archived-then-restored `NextId`
   can't cause an escrow id to be reused, overwriting a live escrow. The
   author believes restore brings back the last written value, so ids
