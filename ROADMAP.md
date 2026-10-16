@@ -137,7 +137,7 @@
 ## Changelog
 - 2026-10-16 — Implemented recoverable undeliverable-payee handling for
   issue #55. `release` now uses the fallible Soroban token-client method
-  and returns `Error::Undeliverable` (7) when the outbound invocation
+  and returns `Error::Undeliverable` (11) when the outbound invocation
   fails, without changing the funded status or payout destination. Added
   SAC deauthorization and rejecting-contract regression tests and updated
   T11 in `docs/threat-model.md`.

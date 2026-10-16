@@ -66,7 +66,7 @@ pub enum Error {
     BalanceMismatch = 6,
     /// An outbound token transfer could not be completed. The escrow
     /// remains Funded so the releaser can retry or use the refund path.
-    Undeliverable = 7,
+    Undeliverable = 11,
 }
 
 #[contract]
