@@ -203,14 +203,13 @@ behave like SEP-41.
   the instance TTL on each call), sized to the longest expected escrow
   duration.
 
-### T7 — No events emitted · **Low**
-- The contract publishes no events of its own. The only on-chain trace
-  of create/release/refund is the token's `transfer` event plus storage
-  changes. That makes it harder to monitor for T1 (an unexpected burst
-  of releases from a leaked key).
-- **Mitigation:** emit `created`/`released`/`refunded` events with the
-  `escrow_id`. Alert in the consumer on any release/refund it didn't
-  initiate.
+### T7 — Event-based indexer lag or gaps · **Low**
+- Payer/payee listings are maintained off-chain from lifecycle events. An
+  indexer can lag or miss events during an outage.
+- **Mitigation:** `EscrowCreated` carries the complete initial record and
+  address topics; terminal events carry the escrow id, parties, token, and
+  amount. Indexers should checkpoint finalized ledgers, process events
+  idempotently, and reconcile records with `get_escrow`.
 
 ### T8 — Payee has no protection against the releaser · **By design, document it**
 - The `payer` chooses the `releaser`. Nothing stops `releaser == payer`,
@@ -297,7 +296,7 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
       payee/releaser, key backup/multisig) are still open above.
 - [ ] ⚙ Balance-delta check on `create_escrow` (T5)
 - [ ] ⚙ TTL extension for escrow entries and instance (T6)
-- [ ] ⚙ Emit create/release/refund events (T7)
+- [x] ⚙ Emit create/release/refund events (T7) — see ADR 0006 and issue #9.
 - [x] Tests with a malicious mock token: lying transfer, short
       delivery, re-entry attempt (T4, T5) — issue #12,
       `tests/malicious_token.rs`
