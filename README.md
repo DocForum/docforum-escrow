@@ -93,7 +93,8 @@ contracts/escrow/
   tests/            Integration tests (soroban-sdk testutils) — required for any contract change
   Cargo.toml
 sdk/
-  src/index.ts      @docforum/escrow-sdk — TypeScript client (not yet implemented, see issue #4)
+  src/index.ts      @docforum/escrow-sdk — TypeScript client and archived-state handling
+  tests/            SDK unit tests and optional testnet integration tests
   package.json
 docs/adr/           Architecture decision records
 .github/            CI workflow, issue/PR templates
@@ -121,8 +122,10 @@ contract id, transaction links, and the exact `stellar` CLI commands to
 redeploy. **Mainnet is out of scope until the Phase E4 security review is
 complete — see [hard rule 4](ARCHITECTURE_ESSENTIALS.md#hard-rules).**
 
-The TypeScript SDK (`sdk/`) is still a placeholder — see
-[issue #4](https://github.com/DocForum/docforum-escrow/issues/4).
+The TypeScript SDK (`sdk/`) wraps contract calls, supports configurable
+archived-state restoration, and has separate unit and testnet integration
+test commands. See [`sdk/README.md`](sdk/README.md) for restore behavior and
+fee-payer details.
 
 ## Documentation
 
