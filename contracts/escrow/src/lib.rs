@@ -66,7 +66,7 @@ pub enum Error {
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
     /// A split settlement amount must be within the escrow's funded amount.
-    InvalidSettlementAmount = 7,
+    InvalidSettlementAmount = 8,
 }
 
 #[contract]
