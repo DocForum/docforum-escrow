@@ -19,6 +19,11 @@ from T2's candidate list was decided in `docs/adr/0004` and implemented
 reflect that. The scope commit above predates the change; everything else
 in this document still describes the same design.*
 
+*Updated 2026-10-16 for issue #43 (Phase E5): an optional escrow-wide
+`release_not_before` now gates `release` until its exact boundary; it does
+not change refund authorization or destinations (ADR 0005). The generated
+SDK binding and testnet deployment still need follow-up updates.*
+
 ---
 
 ## 1. What the contract is supposed to guarantee
@@ -30,6 +35,7 @@ in this document still describes the same design.*
 | I3 | Each escrow pays out at most once. | `status == Funded` check before transfer, status written after — shared by release and both refund paths. |
 | I4 | An escrow only exists if `amount` was actually transferred in. | `payer.require_auth()` + token `transfer` before the escrow is stored (`lib.rs:96-112`). |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
+| I6 | A time-locked escrow cannot release before its stored `release_not_before`; when `refund_after` is also set, the release time is no later than the refund time. | Creation rejects a past release time or one later than `refund_after`; `release` requires `timestamp >= release_not_before` (`lib.rs`). |
 
 I1 is the most important property in this design. A full compromise of the
 `releaser` key lets an attacker pick the **wrong outcome** (release when it
@@ -46,7 +52,7 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 
 | Actor | Can do | Trusted for |
 |---|---|---|
-| `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser` | Nothing after creation. Has no on-chain power to cancel. |
+| `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser`, and optional timing fields | Nothing after creation. Has no on-chain power to cancel. |
 | `payee` | Receive funds | Nothing. Has **no on-chain power at all**, including no way to object to a refund. |
 | `releaser` | `release` or `refund` its escrows, once | Choosing the correct outcome. This is the main trust assumption. |
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |

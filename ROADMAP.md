@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and timeout refund implemented (issue #11 — ADR 0004; current testnet deployment includes it); independent review is still blocking for any mainnet use. Phase E5 issue #43's contract-source implementation is complete, but the current deployment and generated SDK binding predate it.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -122,6 +122,18 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E5 — Contract features
+- [x] Optional escrow-wide `release_not_before` (issue #43). The
+  contract rejects early releases with `ReleaseTooEarly`; exact-boundary
+  release is allowed when `ledger.timestamp() >= release_not_before`.
+  If both timing fields are set, the release time must be no later than
+  `refund_after`. Refund authorization is unchanged. Rust regression tests
+  cover the early and exact-boundary cases, refund behavior, and invalid
+  deadline ordering. ADR 0005 records the escrow-wide choice. **Not on
+  testnet.** Regenerating the SDK binding requires a WASM build and is
+  still outstanding; `sdk/src/generated/contract-client.ts` remains
+  unchanged per its generated-file instructions.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -129,6 +141,13 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Implemented issue #43's optional `release_not_before`
+  in the escrow contract. `create_escrow` stores the optional timestamp,
+  `release` returns `ReleaseTooEarly` before it and succeeds at the exact
+  boundary, and invalid past or post-refund deadlines are rejected.
+  Added `time_locked_release.rs`, ADR 0005, and source/API documentation.
+  The generated SDK binding and testnet deployment remain unchanged; both
+  need follow-up generation/deployment after a WASM build.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

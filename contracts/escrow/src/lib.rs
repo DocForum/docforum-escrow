@@ -7,6 +7,7 @@
 // Phase E4 (issue #11): optional `refund_after` timeout refund — see
 // docs/adr/0004. After that deadline anyone may refund, but only back to
 // the payer, so a lost `releaser` key can no longer lock funds forever.
+// Phase E5 (issue #43): optional `release_not_before` — see docs/adr/0005.
 //
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
@@ -40,6 +41,9 @@ pub struct EscrowData {
     /// anyone — still only back to `payer`. `None` means no timeout,
     /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
+    /// Optional unix timestamp before which the releaser cannot release.
+    /// Release is allowed at the exact timestamp. See docs/adr/0005.
+    pub release_not_before: Option<u64>,
 }
 
 #[contracttype]
@@ -64,6 +68,10 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    /// `release_not_before` is in the past, or later than `refund_after`.
+    InvalidReleaseNotBefore = 7,
+    /// Release was attempted before `release_not_before`.
+    ReleaseTooEarly = 8,
 }
 
 #[contract]
@@ -77,6 +85,8 @@ impl EscrowContract {
     /// on this escrow (see docs/adr/0002). `refund_after` is an optional
     /// unix timestamp after which `refund` opens to any caller, always
     /// back to `payer` (docs/adr/0004); `None` means no timeout.
+    /// `release_not_before` is an optional unix timestamp before which
+    /// `release` is blocked (docs/adr/0005); `None` means no lock.
     /// Requires `payer` auth (the contract moves their funds). Returns
     /// the new escrow's id.
     pub fn create_escrow(
@@ -88,6 +98,7 @@ impl EscrowContract {
         condition_ref: String,
         releaser: Address,
         refund_after: Option<u64>,
+        release_not_before: Option<u64>,
     ) -> Result<u64, Error> {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -95,6 +106,16 @@ impl EscrowContract {
         if let Some(deadline) = refund_after {
             if deadline <= env.ledger().timestamp() {
                 return Err(Error::InvalidRefundAfter);
+            }
+        }
+        if let Some(release_time) = release_not_before {
+            if release_time < env.ledger().timestamp() {
+                return Err(Error::InvalidReleaseNotBefore);
+            }
+            if let Some(refund_time) = refund_after {
+                if release_time > refund_time {
+                    return Err(Error::InvalidReleaseNotBefore);
+                }
             }
         }
         payer.require_auth();
@@ -118,6 +139,7 @@ impl EscrowContract {
             status: EscrowStatus::Funded,
             releaser,
             refund_after,
+            release_not_before,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Ok(id)
@@ -150,7 +172,8 @@ impl EscrowContract {
     /// contract enforces WHO, never WHY (ADR 0001). Errors if the
     /// escrow doesn't exist, `caller` isn't the releaser, or the escrow
     /// isn't currently `Funded` (no double-release, no releasing a
-    /// refunded escrow).
+    /// refunded escrow). If `release_not_before` is set, release is only
+    /// allowed once the ledger timestamp reaches it (docs/adr/0005).
     ///
     /// Deliberately **not** gated by `refund_after` (docs/adr/0004): after
     /// the deadline the releaser can still release, racing any timeout
@@ -169,6 +192,11 @@ impl EscrowContract {
         }
         if data.status != EscrowStatus::Funded {
             return Err(Error::NotFunded);
+        }
+        if let Some(release_time) = data.release_not_before {
+            if env.ledger().timestamp() < release_time {
+                return Err(Error::ReleaseTooEarly);
+            }
         }
 
         let token_client = token::Client::new(&env, &data.token);

@@ -40,10 +40,10 @@ Two reasons, stated plainly rather than blended together:
 
 | Function | Status | Description |
 |---|---|---|
-| `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id` | ✅ Implemented | Pulls `amount` of `token` from `payer` (requires `payer` auth), stores an opaque `condition_ref`, sets status `Funded`. Rejects non-positive amounts, and any `refund_after` that isn't strictly in the future. |
+| `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, release_not_before) -> escrow_id` | ✅ Implemented in contract source | Pulls `amount` of `token` from `payer` (requires `payer` auth), stores an opaque `condition_ref`, sets status `Funded`. Rejects non-positive amounts, invalid `refund_after`, and `release_not_before` earlier than now or later than `refund_after`. |
 | `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
-| `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
-| `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
+| `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser`, `refund_after`, and `release_not_before`, so payees can inspect the timing rules. |
+| `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee` at or after `release_not_before`. Never gated by `refund_after`. |
 | `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
 
 ```
@@ -56,6 +56,14 @@ That's the answer to "what if the releaser's key is lost?" (threat model
 T2): instead of locking funds permanently, a deadline lets anyone return
 them to the payer. See [ADR 0004](docs/adr/0004-timeout-refund-path.md)
 for the decision and what it means for payees.
+
+`release_not_before` is optional and escrow-wide. With it set, the
+releaser cannot release before that unix timestamp; release is allowed at
+the exact timestamp. If both timing fields are set,
+`release_not_before` must be no later than `refund_after`. Refund rules are
+unchanged. See [ADR 0005](docs/adr/0005-time-locked-release.md). The
+generated SDK binding has not yet been regenerated for the added contract
+argument; the contract source is the current implementation of this feature.
 
 **Design rule, enforced deliberately:** the contract decides **who** may
 call `release`/`refund`, never **why**. `condition_ref` is an opaque
@@ -129,9 +137,10 @@ The TypeScript SDK (`sdk/`) is still a placeholder — see
 | Doc | Purpose |
 |---|---|
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
-| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E4 breakdown and current status. |
+| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E5 breakdown and current status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
+| [`docs/adr/0005-time-locked-release.md`](docs/adr/0005-time-locked-release.md) | `release_not_before` boundary and deadline ordering. |
 
 ## Project status
 
