@@ -129,6 +129,12 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Implemented issue #26 `top_up`: the stored payer may add
+  funds only while the escrow is Funded; checked arithmetic protects the
+  amount, and `create_escrow` and `top_up` share an exact token
+  balance-delta helper. Added contract tests for amount updates, wrong
+  payer, invalid amount, overflow, and settled state. Not yet deployed;
+  the generated SDK binding has not been regenerated.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet
