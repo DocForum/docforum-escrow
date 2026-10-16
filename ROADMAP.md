@@ -128,7 +128,23 @@
   builds general payments (see prior architecture discussion), not this
   repo's.
 
+## Phase E5 — Forward-compatible contract storage
+- [x] Versioned `EscrowData` storage and explicit legacy decoding (issue
+  #37; PR pending): new writes use a tagged `V2` record; readers recognize
+  the exact seven-field pre-ADR-0004 map, the exact eight-field current
+  map, and known tagged variants. Release/refund migrate decoded records
+  on write. This does not add contract upgradeability; see ADR 0008.
+- [ ] Measure version dispatch resource cost before enabling an upgrade
+  path or increasing storage-layout complexity.
+
 ## Changelog
+- 2026-10-16 — Added explicit versioned escrow persistence for issue #37.
+  New state writes use `StoredEscrowData::V2`; reads accept only the exact
+  seven-field pre-ADR-0004 map and eight-field current map, plus known
+  tagged enum variants. Legacy reads remain non-mutating; release/refund
+  migrate to the latest tagged layout on write. Added migration tests for
+  both historical map shapes and an upgrade-path ADR note. Tests/builds and
+  resource measurement were skipped and remain unverified.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

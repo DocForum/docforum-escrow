@@ -39,6 +39,24 @@ and `release` is never gated by it, so the releaser can still release
 after the deadline (whoever lands first wins). No `refund_after` means
 behaviour is exactly what it was before: releaser-only refunds, forever.
 
+### Persistent storage layout policy
+
+Escrow entries are stored as a version-tagged `StoredEscrowData` enum;
+never add fields to a versioned record struct. Add a new struct and enum
+variant, decode each explicitly supported variant, and write the newest
+version on the next state-changing operation. The loader also recognizes
+only two exact pre-version `ScVal::Map` layouts: the seven named fields
+from before ADR 0004 and the eight named fields from the current
+pre-version layout. It does not default missing values in arbitrary maps;
+unknown or malformed values fail with `UnsupportedStorageVersion`.
+
+This policy prepares data decoding for a future code upgrade, but does not
+make the deployed contract upgradeable. There is currently no upgrade
+function or accepted upgrade ADR. Existing immutable contract instances
+cannot run this migration; a future upgrade mechanism requires a separate
+security-reviewed decision (including authorization and rollback policy).
+The resource cost of version dispatch has not been measured yet.
+
 ## TypeScript SDK surface (`sdk/`)
 ```ts
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
