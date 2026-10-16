@@ -18,7 +18,7 @@ struct Fixture<'a> {
     escrow_id: u64,
 }
 
-fn setup(env: &Env, milestones: &[i128]) -> Fixture<'_> {
+fn setup<'a>(env: &'a Env, milestones: &[i128]) -> Fixture<'a> {
     let admin = Address::generate(env);
     let token_id = env.register_stellar_asset_contract_v2(admin).address();
     let token = TokenClient::new(env, &token_id);
