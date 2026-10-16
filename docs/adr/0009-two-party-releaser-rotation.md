@@ -1,4 +1,4 @@
-# ADR 0005: Releaser rotation requires the current releaser and payer
+# ADR 0009: Releaser rotation requires the current releaser and payer
 
 Status: Accepted
 

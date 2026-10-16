@@ -76,7 +76,7 @@ way. Baking healthcare-specific logic into the contract is exactly the
 scope creep this repo exists to avoid (see README "why this repo exists,
 honestly").
 
-`rotate_releaser` (issue #23, ADR 0005) is a recovery operation: the
+`rotate_releaser` (issue #23, ADR 0009) is a recovery operation: the
 current releaser and stored payer both authorize it. Its address is
 provided by the releaser caller and checked against the stored role; the
 replacement cannot be the payee or contract address. The TypeScript

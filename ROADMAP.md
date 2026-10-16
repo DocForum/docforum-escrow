@@ -124,7 +124,7 @@
 
 ## Phase E5 — Contract features
 - [x] Releaser rotation on a funded escrow requires both the current
-  releaser and payer, with an on-chain rotation event and ADR 0005 (issue
+  releaser and payer, with an on-chain rotation event and ADR 0009 (issue
   #23). Regression tests cover authorization caller identity, funded
   state, and invalid replacement destinations. CI validation remains
   pending for the pull request.
@@ -140,7 +140,7 @@
   (issue #23): both the current releaser and payer authorize, contract
   and payee replacement addresses are rejected, and the new and previous
   releasers are emitted in a rotation event. Decision and threat-model
-  recovery notes are in `docs/adr/0005-two-party-releaser-rotation.md`.
+  recovery notes are in `docs/adr/0009-two-party-releaser-rotation.md`.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet
