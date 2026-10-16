@@ -41,10 +41,13 @@ Two reasons, stated plainly rather than blended together:
 | Function | Status | Description |
 |---|---|---|
 | `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id` | ✅ Implemented | Pulls `amount` of `token` from `payer` (requires `payer` auth), stores an opaque `condition_ref`, sets status `Funded`. Rejects non-positive amounts, and any `refund_after` that isn't strictly in the future. |
+| `create_streamed_escrow(..., schedule) -> escrow_id` | ✅ Implemented in source | Creates a fixed-total linear stream with start, end, and optional cliff timestamps. |
+| `withdraw(escrow_id, payee) -> amount` | ✅ Implemented in source | Transfers vested-but-unwithdrawn funds after payee authorization. |
+| `get_vesting(escrow_id) -> VestingInfo` | ✅ Implemented in source | Read-only schedule, total, vested, withdrawn, and claimable amounts. |
 | `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
-| `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
+| `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | For ordinary escrows returns funds to `payer`; for streams it pays vested-but-unwithdrawn funds to `payee` and returns only the unvested remainder to `payer`. Authorization and optional timeout follow [ADR 0004](docs/adr/0004-timeout-refund-path.md). |
 
 ```
 EscrowStatus = Funded | Released | Refunded
@@ -56,6 +59,13 @@ That's the answer to "what if the releaser's key is lost?" (threat model
 T2): instead of locking funds permanently, a deadline lets anyone return
 them to the payer. See [ADR 0004](docs/adr/0004-timeout-refund-path.md)
 for the decision and what it means for payees.
+
+Streamed escrows use a fixed total and linear vesting between `start` and
+`end`. An optional cliff delays availability until its timestamp, then
+releases all amount accrued since `start`. Intermediate calculations
+round down; all remaining units vest at `end`. A releaser-authorized
+refund closes the stream by paying vested funds to the payee and the
+unvested remainder to the payer. See [ADR 0007](docs/adr/0007-linear-vesting-streams.md).
 
 **Design rule, enforced deliberately:** the contract decides **who** may
 call `release`/`refund`, never **why**. `condition_ref` is an opaque
