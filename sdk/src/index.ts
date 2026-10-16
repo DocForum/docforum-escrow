@@ -12,7 +12,11 @@ import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowSta
 
 export { Keypair };
 
-export type EscrowStatus = "Funded" | "Released" | "Refunded";
+/**
+ * `"Cancelled"` means the payer withdrew the escrow before the payee
+ * accepted it (docs/adr/0005) — funds went back to the payer.
+ */
+export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Cancelled";
 
 /** Everything the contract stores about one escrow — what `getEscrow` returns. */
 export interface Escrow {
@@ -33,6 +37,17 @@ export interface Escrow {
    * relying on a `Funded` escrow (threat model T8).
    */
   refundAfter?: bigint;
+  /**
+   * True if the payee must `accept` this escrow, and the payer may
+   * `cancel` it until they do (docs/adr/0005).
+   */
+  requiresAcceptance: boolean;
+  /**
+   * True once the payee has accepted. **Payees: do not rely on an escrow
+   * until this is true for you** — until then the payer can cancel it.
+   * Always false when `requiresAcceptance` is false.
+   */
+  accepted: boolean;
   status: EscrowStatus;
 }
 
@@ -69,6 +84,12 @@ export interface CreateEscrowParams {
    * releaser-only, exactly as in 0.2.x.
    */
   refundAfter?: bigint;
+  /**
+   * Opt in to the accept/cancel protocol (docs/adr/0005): the payee must
+   * call `accept`, and until they do the payer may `cancel` and get the
+   * funds back. Default `false` — no accept/cancel, exactly as in 0.3.x.
+   */
+  requiresAcceptance?: boolean;
 }
 
 export interface ReleaseOrRefundParams {
@@ -79,7 +100,7 @@ export interface ReleaseOrRefundParams {
 
 /**
  * Thin client for the docforum-escrow Soroban contract. Wraps
- * `create_escrow`/`get_status`/`get_escrow`/`release`/`refund` with plain
+ * `create_escrow`/`get_status`/`get_escrow`/`release`/`refund`/`accept`/`cancel` with plain
  * TypeScript types and no manual XDR/signing plumbing.
  */
 export class EscrowClient {
@@ -113,6 +134,7 @@ export class EscrowClient {
       condition_ref: params.conditionRef,
       releaser: params.releaser,
       refund_after: params.refundAfter,
+      requires_acceptance: params.requiresAcceptance ?? false,
     });
     const sent = await tx.signAndSend();
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
@@ -147,6 +169,8 @@ export class EscrowClient {
       // public surface uses `undefined` for "no deadline" (consistent
       // with `CreateEscrowParams.refundAfter` being absent).
       refundAfter: data.refund_after ?? undefined,
+      requiresAcceptance: data.requires_acceptance,
+      accepted: data.accepted,
       status: data.status.tag,
     };
   }
@@ -169,6 +193,36 @@ export class EscrowClient {
   async refund(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
     const client = this.contractClient(params.caller);
     const tx = await client.refund({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Payee commits to an escrow created with `requiresAcceptance`. Throws
+   * if `payee` isn't the escrow's payee, the escrow isn't `Funded` (e.g.
+   * the payer already cancelled), it was already accepted, or it doesn't
+   * require acceptance. Closes the payer's cancellation window for good
+   * (docs/adr/0005). Returns the transaction's hash.
+   */
+  async accept(params: { escrowId: bigint; payee: Keypair }): Promise<{ txHash: string }> {
+    const client = this.contractClient(params.payee);
+    const tx = await client.accept({ escrow_id: params.escrowId, payee: params.payee.publicKey() });
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Payer withdraws an escrow before the payee has accepted it: funds go
+   * back to the payer and the status becomes `"Cancelled"`
+   * (docs/adr/0005). Throws if `payer` isn't the escrow's payer, the
+   * escrow isn't `Funded`, it doesn't require acceptance, or the payee
+   * already accepted. Returns the transaction's hash.
+   */
+  async cancel(params: { escrowId: bigint; payer: Keypair }): Promise<{ txHash: string }> {
+    const client = this.contractClient(params.payer);
+    const tx = await client.cancel({ escrow_id: params.escrowId, payer: params.payer.publicKey() });
     const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };

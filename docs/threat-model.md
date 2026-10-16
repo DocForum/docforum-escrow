@@ -19,15 +19,20 @@ from T2's candidate list was decided in `docs/adr/0004` and implemented
 reflect that. The scope commit above predates the change; everything else
 in this document still describes the same design.*
 
+*Updated 2026-10-16 for issue #27 (Phase E5): optional payee acceptance
+and a payer `cancel` while an escrow is `Funded` and not yet accepted
+(`docs/adr/0005`). Touches §1 (I1, I2, I3, I6), §2 (actors), T8 and §6.*
+
 ---
 
 ## 1. What the contract is supposed to guarantee
 
 | # | Invariant | Enforced by |
 |---|---|---|
-| I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination. |
-| I2 | Only the escrow's `releaser` can move funds out — or, once `refund_after` has passed, anyone at all, and then still only back to `payer`. | `caller.require_auth()` + `caller == data.releaser`, relaxed solely by the deadline check (`lib.rs:149`, `lib.rs:183`, `lib.rs:191`). |
-| I3 | Each escrow pays out at most once. | `status == Funded` check before transfer, status written after — shared by release and both refund paths. |
+| I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund or cancel). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination; so does the payer's `cancel` (issue #27, ADR 0005), which transfers to the `payer` read from storage. |
+| I2 | Only the escrow's `releaser` can move funds out — or, once `refund_after` has passed, anyone at all, and then still only back to `payer` — or the `payer` itself via `cancel`, and only while the escrow requires acceptance and the payee has not accepted. | `caller.require_auth()` + `caller == data.releaser`, relaxed solely by the deadline check (`lib.rs:149`, `lib.rs:183`, `lib.rs:191`). |
+| I3 | Each escrow pays out at most once. | `status == Funded` check before transfer, status written after — shared by release, both refund paths and `cancel`. |
+| I6 | `cancel` is impossible once the payee has accepted, and after any payout. | `cancel` requires `status == Funded`, `requires_acceptance` and `!accepted`; `accept` sets `accepted` and nothing ever clears it. Both orderings of the accept/cancel race are tested in one ledger (`tests/cancel_accept.rs`). |
 | I4 | An escrow only exists if `amount` was actually transferred in. | `payer.require_auth()` + token `transfer` before the escrow is stored (`lib.rs:96-112`). |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
 
@@ -46,8 +51,8 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 
 | Actor | Can do | Trusted for |
 |---|---|---|
-| `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser` | Nothing after creation. Has no on-chain power to cancel. |
-| `payee` | Receive funds | Nothing. Has **no on-chain power at all**, including no way to object to a refund. |
+| `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser`; may `cancel` an escrow that requires acceptance until the payee accepts | Nothing after creation. |
+| `payee` | Receive funds; `accept` an escrow that requires acceptance, which ends the payer's right to cancel | Nothing. No way to object to a refund by the releaser or the timeout. |
 | `releaser` | `release` or `refund` its escrows, once | Choosing the correct outcome. This is the main trust assumption. |
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |
 | Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds back to that escrow's `payer` | Nothing. |
@@ -231,6 +236,29 @@ behave like SEP-41.
   the payer, never a third party, and the releaser can still release
   after the deadline — so the realistic exposure is payment being delayed
   and then reversed, not redirected.
+- **With `requires_acceptance` (issue #27, `docs/adr/0005`), the payer can
+  also withdraw — until the payee accepts.** On such an escrow, `Funded`
+  with `accepted == false` means "the payer may take this back at any
+  moment." **Payees: do not rely on an escrow until you have accepted
+  it** — call `accept`, then confirm `accepted == true` via `get_escrow`
+  / `client.getEscrow()`. Acceptance is permanent and closes the cancel
+  right for good; it does not remove the `releaser` and `refund_after`
+  exposures above, so keep checking those too.
+- **The accept/cancel race is decided by ordering, not by a lock.** If
+  both land in the same ledger, whichever executes first wins and the
+  other fails (`AlreadyAccepted` if accept won, `NotFunded` if cancel
+  won) with no side effects. A payee whose `accept` is still pending has
+  **not** accepted yet and should not ship goods or work on the strength
+  of a submitted-but-unconfirmed transaction. The payer's new power can
+  only return the payer's own funds to the payer (I1), and cannot be
+  used after a release/refund or after acceptance (I6).
+- **No partial-release hole.** The contract has no milestone or partial
+  payouts: every payout moves the full amount and leaves `Funded`, so
+  `cancel` cannot follow a partial release. Any future partial-release
+  feature must preserve I6 (ADR 0005, "Not after a partial milestone
+  release") and add its own test.
+- **Escrows created without `requires_acceptance` are unchanged**:
+  `cancel` and `accept` fail with `AcceptanceNotRequired`.
 
 ### T9 — `condition_ref` is public · **Low (privacy)**
 - Everything in `EscrowData` is publicly readable on-chain forever,
@@ -296,6 +324,9 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
       live on testnet). The remaining T2 mitigations (contract-self as
       payee/releaser, key backup/multisig) are still open above.
 - [ ] ⚙ Balance-delta check on `create_escrow` (T5)
+- [x] ⚙ Payer cancel before payee acceptance, with accept/cancel race
+      tests (T8) — issue #27, `docs/adr/0005`,
+      `tests/cancel_accept.rs`. Not yet deployed to testnet.
 - [ ] ⚙ TTL extension for escrow entries and instance (T6)
 - [ ] ⚙ Emit create/release/refund events (T7)
 - [x] Tests with a malicious mock token: lying transfer, short

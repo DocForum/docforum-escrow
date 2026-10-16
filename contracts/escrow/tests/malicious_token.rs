@@ -165,6 +165,7 @@ fn create_escrow_rejects_lying_transfer() {
         &String::from_str(&env, "opaque-condition-ref"),
         &releaser,
         &None,
+        &false,
     );
 
     assert_eq!(result, Err(Ok(Error::BalanceMismatch)));
@@ -199,6 +200,7 @@ fn create_escrow_rejects_short_delivery() {
         &String::from_str(&env, "opaque-condition-ref"),
         &releaser,
         &None,
+        &false,
     );
 
     // 300 debited but only 270 delivered — the contract owes 300 and
@@ -236,6 +238,7 @@ fn reentrant_transfer_cannot_double_release() {
         &String::from_str(&env, "opaque-condition-ref"),
         &releaser,
         &None,
+        &false,
     );
     assert_eq!(token.balance(&contract_id), 300);
 
