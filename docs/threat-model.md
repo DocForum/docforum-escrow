@@ -178,7 +178,7 @@ behave like SEP-41.
     creation: a clawback-enabled issuer can drain the shared pool
     later, and no creation-time check sees that. `release` and `refund`
     now check the contract's current token balance before transferring
-    and return `PoolInsufficient` (error 7) when it is below the
+    and return `PoolInsufficient` (error 21) when it is below the
     individual escrow payout. A clawback regression test covers this
     failure path. The guard prevents an opaque transfer failure, but
     cannot guarantee aggregate solvency when several funded escrows

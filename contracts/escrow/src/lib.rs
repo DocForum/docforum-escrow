@@ -66,7 +66,7 @@ pub enum Error {
     BalanceMismatch = 6,
     /// The escrow contract's shared balance for this token fell below
     /// the payout amount after funding (for example, token clawback).
-    PoolInsufficient = 7,
+    PoolInsufficient = 21,
 }
 
 #[contract]
