@@ -14,7 +14,9 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, String,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -64,6 +66,7 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    InvalidReleaser = 7,
 }
 
 #[contract]
@@ -145,6 +148,47 @@ impl EscrowContract {
             .ok_or(Error::NotFound)
     }
 
+    /// Rotates a funded escrow's releaser. Both the current releaser and
+    /// payer must authorize the change; the payer's consent prevents a
+    /// compromised releaser from silently appointing an attacker. The
+    /// replacement cannot be the contract itself or the payee.
+    pub fn rotate_releaser(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        new_releaser: Address,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+
+        if caller != data.releaser {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        if new_releaser == env.current_contract_address() || new_releaser == data.payee {
+            return Err(Error::InvalidReleaser);
+        }
+
+        data.payer.require_auth();
+        let previous_releaser = data.releaser.clone();
+        data.releaser = new_releaser.clone();
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        env.events().publish(
+            (symbol_short!("rotate"), escrow_id),
+            (previous_releaser, new_releaser),
+        );
+        Ok(())
+    }
+
     /// Moves the escrowed `amount` to `payee`. Only the escrow's
     /// `releaser` (set at `create_escrow` time) may call this — the
     /// contract enforces WHO, never WHY (ADR 0001). Errors if the
@@ -175,7 +219,9 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
 
         data.status = EscrowStatus::Released;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
     }
 
@@ -213,7 +259,9 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
 
         data.status = EscrowStatus::Refunded;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
     }
 
