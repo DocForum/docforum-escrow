@@ -5,6 +5,17 @@
 
 **Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
 
+## Phase E5 — Releaser custom account
+- [x] Optional M-of-N Soroban custom releaser account (issue #50):
+  `contracts/releaser-account/` verifies distinct Ed25519 signatures,
+  restricts authorization to one `release`/`refund` call on its configured
+  escrow, and requires the current threshold for nonce-bound signer and
+  threshold changes. Unit and escrow-integration tests were added; they
+  have not been run in this contribution. Design and T1 update are in
+  `docs/adr/0005-custom-releaser-account.md` and
+  `docs/threat-model.md`. Not deployed to testnet; this does not change the
+  escrow contract or make mainnet use permissible.
+
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
   (`cargo build --target wasm32v1-none --release`) — 4 passing tests in
@@ -129,6 +140,11 @@
   repo's.
 
 ## Changelog
+- 2026-10-16 — Added the optional M-of-N Ed25519 custom releaser account
+  (issue #50) with an immutable escrow target, release/refund-only auth
+  policy, threshold-signed nonce-bound signer management, unit tests, an
+  escrow integration test, ADR 0005, and a T1 mitigation update. Tests and
+  wasm build were not run in this contribution; no testnet deployment.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

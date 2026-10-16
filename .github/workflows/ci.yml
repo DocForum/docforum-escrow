@@ -38,6 +38,15 @@ jobs:
       - name: Confirm wasm artifact exists
         run: test -f target/wasm32v1-none/release/docforum_escrow.wasm
 
+      - name: Test custom releaser account
+        run: cargo test --manifest-path ../releaser-account/Cargo.toml
+
+      - name: Build custom releaser account (wasm)
+        run: cargo build --manifest-path ../releaser-account/Cargo.toml --target wasm32v1-none --release
+
+      - name: Confirm custom account wasm exists
+        run: test -f ../releaser-account/target/wasm32v1-none/release/docforum_releaser_account.wasm
+
   sdk:
     name: TypeScript SDK (typecheck + build)
     runs-on: ubuntu-latest
