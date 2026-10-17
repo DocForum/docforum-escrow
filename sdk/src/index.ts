@@ -118,7 +118,7 @@ export class EscrowClient {
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
   }
 
-  /** Read-only status query. Throws if `escrowId` doesn't exist. */
+  /** Read-only status query. Throws if `escrowId` doesn't exist, or if it has already been settled (released/refunded) - use `getStatus` for settled ids (ADR 0005). */
   async getStatus(escrowId: bigint): Promise<EscrowStatus> {
     const client = this.contractClient();
     const tx = await client.get_status({ escrow_id: escrowId });
@@ -130,7 +130,7 @@ export class EscrowClient {
    * Read-only: everything stored about `escrowId` — including
    * `releaser` and `refundAfter`, which payees should check before
    * relying on a `Funded` escrow (docs/adr/0004, threat model T8).
-   * Throws if `escrowId` doesn't exist.
+   * Throws if `escrowId` doesn't exist, or if it has already been settled (released/refunded) - use `getStatus` for settled ids (ADR 0005).
    */
   async getEscrow(escrowId: bigint): Promise<Escrow> {
     const client = this.contractClient();
