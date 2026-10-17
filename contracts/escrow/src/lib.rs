@@ -7,6 +7,8 @@
 // Phase E4 (issue #11): optional `refund_after` timeout refund — see
 // docs/adr/0004. After that deadline anyone may refund, but only back to
 // the payer, so a lost `releaser` key can no longer lock funds forever.
+// Phase E5: split payouts and protocol fee support — see docs/adr/0005.
+// Splits are basis points summing to 10,000; fee is bps taken off the top.
 //
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
@@ -14,7 +16,17 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Vec,
+};
+
+/// Basis points denominator: splits and fee are expressed in bps of
+/// 10,000 (100%). See docs/adr/0005.
+pub const BPS_DENOMINATOR: u32 = 10_000;
+
+/// Maximum number of split recipients accepted by `create_escrow`.
+/// Enforced on-chain and mirrored client-side in the SDK.
+pub const MAX_RECIPIENTS: u32 = 10;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -22,6 +34,14 @@ pub enum EscrowStatus {
     Funded,
     Released,
     Refunded,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SplitRecipient {
+    pub address: Address,
+    /// Share of the escrowed amount in basis points (of 10,000).
+    pub bps: u32,
 }
 
 #[contracttype]
@@ -40,6 +60,15 @@ pub struct EscrowData {
     /// anyone — still only back to `payer`. `None` means no timeout,
     /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
+    /// Split recipients in bps. Empty means a single payout to `payee`
+    /// (legacy behaviour). When non-empty, sums to 10,000 bps — see
+    /// docs/adr/0005.
+    pub splits: Vec<SplitRecipient>,
+    /// Protocol fee in bps (of 10,000), taken off the top before splits
+    /// are applied. `0` means no fee. See docs/adr/0005.
+    pub fee_bps: u32,
+    /// Address receiving the protocol fee. Ignored when `fee_bps == 0`.
+    pub fee_recipient: Address,
 }
 
 #[contracttype]
@@ -64,6 +93,13 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    /// Splits were provided but do not sum to exactly 10,000 bps, or a
+    /// recipient had zero bps — see docs/adr/0005.
+    InvalidSplits = 7,
+    /// More than `MAX_RECIPIENTS` split recipients were provided.
+    TooManyRecipients = 8,
+    /// `fee_bps` exceeded 10,000 (would consume the entire amount).
+    InvalidFee = 9,
 }
 
 #[contract]
@@ -77,6 +113,10 @@ impl EscrowContract {
     /// on this escrow (see docs/adr/0002). `refund_after` is an optional
     /// unix timestamp after which `refund` opens to any caller, always
     /// back to `payer` (docs/adr/0004); `None` means no timeout.
+    /// `splits` is an optional list of `(recipient, bps)` pairs summing
+    /// to 10,000 bps; empty means a single payout to `payee`. `fee_bps`
+    /// is an optional protocol fee in bps taken off the top and sent to
+    /// `fee_recipient` on release — see docs/adr/0005.
     /// Requires `payer` auth (the contract moves their funds). Returns
     /// the new escrow's id.
     pub fn create_escrow(
@@ -88,6 +128,9 @@ impl EscrowContract {
         condition_ref: String,
         releaser: Address,
         refund_after: Option<u64>,
+        splits: Vec<SplitRecipient>,
+        fee_bps: u32,
+        fee_recipient: Address,
     ) -> Result<u64, Error> {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -95,6 +138,24 @@ impl EscrowContract {
         if let Some(deadline) = refund_after {
             if deadline <= env.ledger().timestamp() {
                 return Err(Error::InvalidRefundAfter);
+            }
+        }
+        if fee_bps > BPS_DENOMINATOR {
+            return Err(Error::InvalidFee);
+        }
+        if splits.len() > MAX_RECIPIENTS {
+            return Err(Error::TooManyRecipients);
+        }
+        if !splits.is_empty() {
+            let mut total: u32 = 0;
+            for recipient in splits.iter() {
+                if recipient.bps == 0 {
+                    return Err(Error::InvalidSplits);
+                }
+                total = total.checked_add(recipient.bps).ok_or(Error::InvalidSplits)?;
+            }
+            if total != BPS_DENOMINATOR {
+                return Err(Error::InvalidSplits);
             }
         }
         payer.require_auth();
@@ -118,6 +179,9 @@ impl EscrowContract {
             status: EscrowStatus::Funded,
             releaser,
             refund_after,
+            splits,
+            fee_bps,
+            fee_recipient,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Ok(id)
@@ -143,6 +207,28 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::NotFound)
+    }
+
+    /// Pure helper: computes per-recipient payout amounts for `escrow`
+    /// using the contract's exact rounding rule (floor division, with
+    /// any dust from the fee and each split share assigned to the last
+    /// split recipient so the sum equals `amount`). Shared test vectors
+    /// in `contracts/escrow/tests/vectors/` and `sdk/tests/vectors/`
+    /// pin this behaviour bit-for-bit — see docs/adr/0005.
+    ///
+    /// Returns `(fee_amount, payouts)` where `payouts` mirrors the
+    /// escrow's `splits` order (or a single entry for `payee` when
+    /// `splits` is empty).
+    pub fn preview_payout(
+        env: Env,
+        escrow_id: u64,
+    ) -> Result<(i128, Vec<(Address, i128)>), Error> {
+        let data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+        Ok(Self::compute_payout(&data))
     }
 
     /// Moves the escrowed `amount` to `payee`. Only the escrow's
@@ -172,7 +258,16 @@ impl EscrowContract {
         }
 
         let token_client = token::Client::new(&env, &data.token);
-        token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
+        let contract_address = env.current_contract_address();
+        let (fee_amount, payouts) = Self::compute_payout(&data);
+        if fee_amount > 0 {
+            token_client.transfer(&contract_address, &data.fee_recipient, &fee_amount);
+        }
+        for (recipient, payout) in payouts.iter() {
+            if payout > 0 {
+                token_client.transfer(&contract_address, &recipient, &payout);
+            }
+        }
 
         data.status = EscrowStatus::Released;
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
@@ -215,6 +310,40 @@ impl EscrowContract {
         data.status = EscrowStatus::Refunded;
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
+    }
+
+    /// The contract's single source of truth for payout math. Floor
+    /// division on the fee, then floor division per split share, with
+    /// the residual (dust) assigned to the last split recipient so the
+    /// payouts always sum to exactly `amount - fee_amount`. Mirrored
+    /// bit-for-bit by `previewPayout` in the SDK — see docs/adr/0005.
+    fn compute_payout(env: &Env, data: &EscrowData) -> (i128, Vec<(Address, i128)>) {
+        let denom = BPS_DENOMINATOR as i128;
+        let fee_amount: i128 = if data.fee_bps == 0 {
+            0
+        } else {
+            data.amount * (data.fee_bps as i128) / denom
+        };
+        let distributable = data.amount - fee_amount;
+
+        let mut payouts: Vec<(Address, i128)> = Vec::new(&env);
+        if data.splits.is_empty() {
+            payouts.push_back((data.payee.clone(), distributable));
+            return (fee_amount, payouts);
+        }
+
+        let count = data.splits.len();
+        let mut distributed: i128 = 0;
+        for (i, recipient) in data.splits.iter().enumerate() {
+            let share: i128 = if (i as u32) + 1 == count {
+                distributable - distributed
+            } else {
+                distributable * (recipient.bps as i128) / denom
+            };
+            distributed += share;
+            payouts.push_back((recipient.address.clone(), share));
+        }
+        (fee_amount, payouts)
     }
 
     fn next_id(env: &Env) -> u64 {

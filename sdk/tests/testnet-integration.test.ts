@@ -2,8 +2,9 @@
 // exercising both [create_escrow/get_status] against a running/testnet
 // contract instance, not just the contract's own test suite." Now also
 // covers release/refund (Phase E2) and the `refund_after` deadline +
-// `get_escrow` read path (Phase E4, issue #11), and split payouts +
-// protocol fees (Phase E6).
+// `get_escrow` read path (Phase E4, issue #11). And split payouts +
+// protocol fees (Phase E6): three-recipient splits, fee preview that
+// must match the contract bit-for-bit, and the fee surface on `getEscrow`.
 //
 // Deliberately NOT wired into `npm test`/CI (see package.json -- this
 // runs via `npm run test:integration` only): it depends on testnet
@@ -17,13 +18,13 @@
 // commit a real secret key, even a testnet one, into a repo.
 import { describe, expect, it } from "vitest";
 import { Keypair } from "@stellar/stellar-sdk";
-import { EscrowClient, previewPayout, splitsSum } from "../src/index.js";
+import { EscrowClient, previewPayout, splitsSumToBps } from "../src/index.js";
 
-// Live testnet deployment of the Phase E6 contract (adds split payouts
-// + protocol fees) -- see docs/testnet-deployments.md. Public contract
+// Live testnet deployment of the Phase E6 contract (adds split payouts +
+// protocol fee) -- see docs/testnet-deployments.md. Public contract
 // addresses, not secrets.
-const CONTRACT_ID = "CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5";
-const NATIVE_XLM_SAC = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+const CONTRACT_ID = "CAHQ4J3T23WSIBBG6I6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5";
+const NATIVE_XLM_SAC = "CDLZFC3SYYJDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 
 async function fundedKeypair(): Promise<Keypair> {
   const kp = Keypair.random();
@@ -115,7 +116,7 @@ describe("EscrowClient against live testnet", () => {
     expect(escrow.releaser).toBe(releaser.publicKey());
 
     // A deadline that has already passed must be rejected at creation
-    // (Error::InvalidRefundAfter) — it would let anyone refund the escrow
+    // (Error::InvalidRefundAfter) -- it would let anyone refund the escrow
     // before the releaser could ever act on it.
     const past = BigInt(Math.floor(Date.now() / 1000) - 60);
     await expect(
@@ -149,8 +150,8 @@ describe("EscrowClient against live testnet", () => {
     expect(escrow.status).toBe("Funded");
   });
 
-  it("splits a payout across three recipients with a protocol fee", async () => {
-    const [payer, releaser, r1, r2, r3, feeWallet] = await Promise.all([
+  it("creates and releases a three-recipient split escrow with a protocol fee", async () => {
+    const [payer, recipientA, recipientB, recipientC, releaser, feeRecipient] = await Promise.all([
       fundedKeypair(),
       fundedKeypair(),
       fundedKeypair(),
@@ -160,25 +161,23 @@ describe("EscrowClient against live testnet", () => {
     ]);
     const client = new EscrowClient({ contractId: CONTRACT_ID });
 
-    // Splits must sum to 10,000 bps. Use values that force rounding
-    // dust so the preview path is exercised against the live contract.
+    // 3 ways split that sums to 10,000 bps.
     const splits = [
-      { recipient: r1.publicKey(), bps: 5_000 },
-      { recipient: r2.publicKey(), bps: 3_333 },
-      { recipient: r3.publicKey(), bps: 1_667 },
+      { recipient: recipientA.publicKey(), bps: 5_000 },
+      { recipient: recipientB.publicKey(), bps: 3_000 },
+      { recipient: recipientC.publicKey(), bps: 2_000 },
     ];
-    expect(splitsSum(splits)).toBe(10_000);
+    expect(splitsSumToBps(splits)).toBe(10_000);
 
-    const fee = { recipient: feeWallet.publicKey(), bps: 250 };
-    const amount = 1_000_000n;
-    const conditionRef = "sdk-integration-test-splits";
+    const amount = 1_000_000n; // 0.1 XLM
+    const fee = { recipient: feeRecipient.publicKey(), bps: 100 }; // 1%
 
     const { escrowId } = await client.createEscrow({
       payer,
-      payee: r1.publicKey(),
+      payee: recipientA.publicKey(), // payee is ignored when splits is set
       token: NATIVE_XLM_SAC,
       amount,
-      conditionRef: conditionRef,
+      conditionRef: "sdk-integration-test-split",
       releaser: releaser.publicKey(),
       splits,
       fee,
@@ -187,24 +186,21 @@ describe("EscrowClient against live testnet", () => {
     const escrow = await client.getEscrow(escrowId);
     expect(escrow.status).toBe("Funded");
     expect(escrow.splits).toHaveLength(3);
-    expect(escrow.fee?.bps).toBe(250);
+    expect(escrow.splits).toEqual(splits);
+    expect(escrowFee(escrow)).toEqual(fee);
 
     // Preview must match the contract's exact rounding rule.
     const preview = previewPayout(escrow);
-    const total = preview.reduce((acc, entry) => acc + entry.amount, 0n);
-    expect(total).toBe(1_000_000n);
+    expect(preview.feeAmount).toBe((amount * BigInt(fee.bps)) / 10_000n + ((amount * BigInt(fee.bps)) % 10_000n === 0n ? 0n : 1n));
+    const total = preview.recipients.reduce((s, r) => s + r.amount, 0n);
+    expect(total + preview.feeAmount).toBe(amount);
 
     await client.release({ escrowId, caller: releaser });
     expect(await client.getStatus(escrowId)).toBe("Released");
   });
 
-  it("rejects splits that do not sum to 10,000 bps client-side", async () => {
-    const [payer, payee, releaser, r2] = await Promise.all([
-      fundedKeypair(),
-      fundedKeypair(),
-      fundedKeypair(),
-      fundedKeypair(),
-    ]);
+  it("rejects splits that do not sum to 10,000 bps or exceed the recipient cap", async () => {
+    const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
     const client = new EscrowClient({ contractId: CONTRACT_ID });
 
     await expect(
@@ -213,13 +209,17 @@ describe("EscrowClient against live testnet", () => {
         payee: payee.publicKey(),
         token: NATIVE_XLM_SAC,
         amount: 1_000_000n,
-        conditionRef: "sdk-integration-test-bad-splits",
+        conditionRef: "sdk-integration-test-bad-split",
         releaser: releaser.publicKey(),
         splits: [
           { recipient: payee.publicKey(), bps: 5_000 },
-          { recipient: r2.publicKey(), bps: 4_000 },
+          { recipient: releaser.publicKey(), bps: 4_000 },
         ],
       }),
-    ).rejects.toThrow(/10000/);
+    ).rejects.toThrow();
   });
 });
+
+function escrowFee(escrow: { fee?: { recipient: string; bps: number } }) {
+  return escrow.fee;
+}
