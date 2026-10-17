@@ -61,6 +61,14 @@ regenerate it whenever the contract's public signatures/types change.
 wrapper) — consumers import from the package root, never from
 `src/generated/` directly.
 
+The `payer` and `caller` parameters accept either `Keypair` or the exported
+`Signer` interface: `publicKey()`, asynchronous
+`signTransaction(xdr, { networkPassphrase })`, and optional
+`signAuthEntry(xdr, { networkPassphrase })`. `RemoteSigner` is a reference
+HTTPS adapter; it sends transaction XDR and network context, never key
+material. SDK unit tests run in CI with `npm test`; testnet integration
+tests remain opt-in.
+
 `condition_ref` is an **opaque string/id** the contract does not interpret
 — it's the caller's job (e.g. `docforum-core`) to decide when release is
 warranted and call `release()`. `releaser` is the one address permitted

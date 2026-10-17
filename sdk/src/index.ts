@@ -9,6 +9,11 @@
 // caller, not encouraged by any default here.
 import { Keypair } from "@stellar/stellar-sdk";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
+import { toContractSigner, type SignerLike } from "./signer.js";
+
+export { RemoteSigner } from "./remote-signer.js";
+export type { RemoteSignerConfig } from "./remote-signer.js";
+export type { Signer, SignerLike, SignerOptions } from "./signer.js";
 
 export { Keypair };
 
@@ -50,7 +55,7 @@ export interface EscrowClientConfig {
 
 export interface CreateEscrowParams {
   /** Signs and pays for this call; funds are pulled from this account. */
-  payer: Keypair;
+  payer: SignerLike;
   payee: string;
   token: string;
   amount: bigint;
@@ -74,7 +79,7 @@ export interface CreateEscrowParams {
 export interface ReleaseOrRefundParams {
   escrowId: bigint;
   /** Must be the escrow's `releaser` (set at creation) — see docs/adr/0002. */
-  caller: Keypair;
+  caller: SignerLike;
 }
 
 /**
@@ -93,12 +98,12 @@ export class EscrowClient {
     this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
   }
 
-  private contractClient(signer?: Keypair): EscrowContractClient {
+  private contractClient(signer?: SignerLike): EscrowContractClient {
     return new EscrowContractClient({
       contractId: this.contractId,
       rpcUrl: this.rpcUrl,
       networkPassphrase: this.networkPassphrase,
-      ...(signer ? { publicKey: signer.publicKey(), signTransaction: signer } : {}),
+      ...(signer ? toContractSigner(signer, this.networkPassphrase) : {}),
     });
   }
 

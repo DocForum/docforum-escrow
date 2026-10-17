@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3 SDK wrapping and distribution decision are done. Phase E4 security review (issue #6) remains in progress and blocks mainnet use. Phase E6 signer support (issue #60) is implemented.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -78,7 +78,8 @@
   test:integration` only) — depends on testnet + Friendbot funding
   liveness, a different reliability profile than this org's other
   "integration" tests (e.g. `docforum-core`'s self-contained embedded-
-  Postgres booking test). CI runs `typecheck`+`build` only for the SDK.
+  Postgres booking test). CI runs SDK typecheck, build, and deterministic
+  unit tests; testnet integration remains opt-in.
 
 ## Phase E4 — Security review (blocking for any mainnet use)
 - [ ] External or community review before any non-testnet deployment.
@@ -122,6 +123,13 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E6 — SDK & integrator tooling
+- [x] Add a pluggable SDK signer interface while preserving `Keypair`
+  callers (issue #60). The SDK exposes an HTTPS `RemoteSigner` adapter,
+  passes the network passphrase to signer callbacks, supports optional
+  auth-entry signing, and sanitizes signing failures. Unit tests run in
+  CI; SDK version is 0.4.0 (additive API).
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -129,6 +137,10 @@
   repo's.
 
 ## Changelog
+- 2026-10-17 — Implemented issue #60: added pluggable SDK signers and a
+  reference HTTPS remote signer, preserving `Keypair` compatibility.
+  Added mocked signer tests to the SDK CI job, documented the signer
+  protocol, and bumped the additive SDK release line to 0.4.0.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

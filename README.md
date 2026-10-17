@@ -93,7 +93,8 @@ contracts/escrow/
   tests/            Integration tests (soroban-sdk testutils) — required for any contract change
   Cargo.toml
 sdk/
-  src/index.ts      @docforum/escrow-sdk — TypeScript client (not yet implemented, see issue #4)
+  src/index.ts      @docforum/escrow-sdk — TypeScript client and pluggable signer API
+  tests/            Deterministic signer tests plus opt-in testnet integration tests
   package.json
 docs/adr/           Architecture decision records
 .github/            CI workflow, issue/PR templates
@@ -121,24 +122,47 @@ contract id, transaction links, and the exact `stellar` CLI commands to
 redeploy. **Mainnet is out of scope until the Phase E4 security review is
 complete — see [hard rule 4](ARCHITECTURE_ESSENTIALS.md#hard-rules).**
 
-The TypeScript SDK (`sdk/`) is still a placeholder — see
-[issue #4](https://github.com/DocForum/docforum-escrow/issues/4).
+The TypeScript SDK (`sdk/`) is implemented and distributed as release
+tarballs. It accepts local `Keypair`s and pluggable signers; see the signer
+example below and [ADR 0003](docs/adr/0003-sdk-distribution-github-release-tarball.md).
+
+The `payer` and `caller` parameters accept either a Stellar `Keypair` or
+the SDK's `Signer` interface (`publicKey()`, asynchronous
+`signTransaction(xdr, { networkPassphrase })`, and optional
+`signAuthEntry`). This lets wallets, KMS services, and remote signing
+systems keep key material outside the application process. The included
+`RemoteSigner` is a reference HTTPS adapter:
+
+```ts
+import { EscrowClient, RemoteSigner } from "@docforum/escrow-sdk";
+
+const payer = new RemoteSigner({
+  address: process.env.PAYER_PUBLIC_KEY!,
+  endpoint: process.env.SIGNER_URL!,
+});
+const client = new EscrowClient({ contractId });
+await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser });
+```
+
+The service accepts POST requests containing `{ operation, address, xdr,
+networkPassphrase }` and returns `{ signedXdr }` for transaction signing
+or `{ signedAuthEntry }` for authorization-entry signing. The SDK sends
+no secret key material to the service.
 
 ## Documentation
 
 | Doc | Purpose |
 |---|---|
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
-| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E4 breakdown and current status. |
+| [`ROADMAP.md`](ROADMAP.md) | Phase breakdown and current project status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
 
 ## Project status
 
-**Phase E1 (contract skeleton): done.** `create_escrow` and `get_status`
-are implemented, tested, and deployed live on testnet — not just locally
-tested. Phases E2 (release/refund), E3 (TypeScript SDK), and E4 (security
-review, blocking for any mainnet use) are tracked as open issues:
+**Phases E1–E3 are implemented and live on testnet.** Phase E4's
+independent security review still blocks mainnet use. Phase E6 SDK signer
+support is implemented; additional SDK tooling remains tracked in issues:
 
 | Issue | Phase | Complexity |
 |---|---|---|
@@ -148,6 +172,7 @@ review, blocking for any mainnet use) are tracked as open issues:
 | [#4 SDK: wrap `create_escrow`/`get_status`](https://github.com/DocForum/docforum-escrow/issues/4) | E3 | Medium |
 | [#5 ADR: npm vs GitHub Packages](https://github.com/DocForum/docforum-escrow/issues/5) | E3 | Trivial |
 | [#6 Threat model + external security review](https://github.com/DocForum/docforum-escrow/issues/6) | E4 | High |
+| [#60 SDK: pluggable signer interface](https://github.com/DocForum/docforum-escrow/issues/60) — implemented | E6 | High |
 
 Full breakdown: [`ROADMAP.md`](ROADMAP.md).
 
