@@ -9,8 +9,38 @@
 // caller, not encouraged by any default here.
 import { Keypair } from "@stellar/stellar-sdk";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
+import deployments from "../../deployments.json" with { type: "json" };
 
 export { Keypair };
+
+/**
+ * Machine-readable deployment records, keyed by network then contract name
+ * (see `deployments.json` at the repo root, written by `scripts/deploy`).
+ * Testnet-only by default (hard rule 4).
+ */
+export interface DeploymentRecord {
+  network: string;
+  contractId: string;
+  wasmHash: string;
+  gitSha: string;
+  deployedAt: string;
+  txLinks?: Record<string, string>;
+  verification?: Record<string, unknown>;
+}
+
+export type DeploymentsByNetwork = Record<string, Record<string, DeploymentRecord>>;
+
+/** All known deployment records, as read from `deployments.json`. */
+export const knownDeployments: DeploymentsByNetwork = deployments as DeploymentsByNetwork;
+
+/**
+ * Returns the known contract id for `contractName` on `network` (default:
+ * `"testnet"`), or `undefined` if `deployments.json` has no record. Use this
+ * instead of hardcoding contract ids in callers.
+ */
+export function getKnownContractId(contractName = "escrow", network = "testnet"): string | undefined {
+  return knownDeployments[network]?.[contractName]?.contractId;
+}
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";
 
@@ -40,8 +70,14 @@ const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
 const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
 
 export interface EscrowClientConfig {
-  /** The deployed docforum-escrow contract's address (`C…`). */
-  contractId: string;
+  /**
+   * The deployed docforum-escrow contract's address (`C…`). Optional: if
+   * omitted, it is resolved from `deployments.json` for `network` (default
+   * `"testnet"`) via `getKnownContractId`. Throws if no record exists.
+   */
+  contractId?: string;
+  /** Deployment record to resolve `contractId` from. Default: `"testnet"`. */
+  network?: string;
   /** Default: Soroban testnet RPC. */
   rpcUrl?: string;
   /** Default: Stellar testnet passphrase. */
@@ -88,7 +124,13 @@ export class EscrowClient {
   private readonly networkPassphrase: string;
 
   constructor(config: EscrowClientConfig) {
-    this.contractId = config.contractId;
+    const resolved = config.contractId ?? getKnownContractId("escrow", config.network ?? "testnet");
+    if (!resolved) {
+      throw new Error(
+        `No known escrow contract id for network "${config.network ?? "testnet"}" in deployments.json; pass contractId explicitly.`,
+      );
+    }
+    this.contractId = resolved;
     this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
     this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
   }
