@@ -1,7 +1,7 @@
 # docforum-escrow
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
-![Status](https://img.shields.io/badge/status-Phase%20E1%20done-brightgreen.svg)
+![Status](https://img.shields.io/badge/status-Phase%20E6%20done-brightgreen.svg)
 ![Stack](https://img.shields.io/badge/contract-Rust%20%2F%20Soroban-orange.svg)
 ![Network](https://img.shields.io/badge/network-testnet%20only-important.svg)
 
@@ -40,7 +40,7 @@ Two reasons, stated plainly rather than blended together:
 
 | Function | Status | Description |
 |---|---|---|
-| `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id` | ✅ Implemented | Pulls `amount` of `token` from `payer` (requires `payer` auth), stores an opaque `condition_ref`, sets status `Funded`. Rejects non-positive amounts, and any `refund_after` that isn't strictly in the future. |
+| `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id` | ✅ Implemented | Pulls `amount` of `token` from `payer` (requires `payer` auth), stores an opaque `condition_ref`, sets status `Funded`. Rejects non-positive amounts, and any `refund_after` that isn't strictly in the future. `payer` may be a contract account (e.g. a passkey smart wallet); the SDK builds and returns the auth entry for signing instead of signing the envelope. |
 | `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
@@ -93,8 +93,11 @@ contracts/escrow/
   tests/            Integration tests (soroban-sdk testutils) — required for any contract change
   Cargo.toml
 sdk/
-  src/index.ts      @docforum/escrow-sdk — TypeScript client (not yet implemented, see issue #4)
+  src/index.ts      @docforum/escrow-sdk — TypeScript client (incl. contract-account / passkey payer auth-entry flow)
+  tests/            Unit + integration tests (incl. smart-wallet payer with software secp256r1 key)
   package.json
+examples/
+  passkey-wallet/   Reference passkey smart-wallet payer example (testnet)
 docs/adr/           Architecture decision records
 .github/            CI workflow, issue/PR templates
 ```
@@ -121,8 +124,12 @@ contract id, transaction links, and the exact `stellar` CLI commands to
 redeploy. **Mainnet is out of scope until the Phase E4 security review is
 complete — see [hard rule 4](ARCHITECTURE_ESSENTIALS.md#hard-rules).**
 
-The TypeScript SDK (`sdk/`) is still a placeholder — see
-[issue #4](https://github.com/DocForum/docforum-escrow/issues/4).
+The TypeScript SDK (`sdk/`) supports both account payers (envelope
+signing) and contract-account payers such as passkey smart wallets
+(auth-entry signing). See [`docs/smart-wallet-payers.md`](docs/smart-wallet-payers.md)
+for the auth flow and how it differs from account payers, and
+[`examples/passkey-wallet/`](examples/passkey-wallet/) for a runnable
+testnet example.
 
 ## Documentation
 
@@ -132,13 +139,16 @@ The TypeScript SDK (`sdk/`) is still a placeholder — see
 | [`ROADMAP.md`](ROADMAP.md) | Phase E1–E4 breakdown and current status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
+| [`docs/smart-wallet-payers.md`](docs/smart-wallet-payers.md) | Contract-account (passkey smart wallet) payer auth flow, auth-entry signing, and signature expiration ledgers. |
 
 ## Project status
 
 **Phase E1 (contract skeleton): done.** `create_escrow` and `get_status`
 are implemented, tested, and deployed live on testnet — not just locally
-tested. Phases E2 (release/refund), E3 (TypeScript SDK), and E4 (security
-review, blocking for any mainnet use) are tracked as open issues:
+tested. Phase E6 (SDK smart-wallet / passkey contract-account payers) is
+done: auth-entry flow, example, tests, and docs. Phases E2 (release/refund),
+E3 (TypeScript SDK), and E4 (security review, blocking for any mainnet use)
+are tracked as open issues:
 
 | Issue | Phase | Complexity |
 |---|---|---|
@@ -148,6 +158,7 @@ review, blocking for any mainnet use) are tracked as open issues:
 | [#4 SDK: wrap `create_escrow`/`get_status`](https://github.com/DocForum/docforum-escrow/issues/4) | E3 | Medium |
 | [#5 ADR: npm vs GitHub Packages](https://github.com/DocForum/docforum-escrow/issues/5) | E3 | Trivial |
 | [#6 Threat model + external security review](https://github.com/DocForum/docforum-escrow/issues/6) | E4 | High |
+| ~~E6 SDK: smart-wallet (passkey) payers via contract-account auth~~ — done, see `docs/smart-wallet-payers.md` | E6 | High |
 
 Full breakdown: [`ROADMAP.md`](ROADMAP.md).
 
