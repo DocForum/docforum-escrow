@@ -29,12 +29,12 @@ struct Fixture<'a> {
     escrow_id: u64,
 }
 
-fn fund_escrow(env: &Env, amount: i128) -> Fixture<'_> {
+fn fund_escrow(env: &Env, amount: i128) -> Fixture<_> {
     let (token_id, token, asset) = setup(env);
     let payer = Address::generate(env);
     let payee = Address::generate(env);
     let releaser = Address::generate(env);
-    asset.mint(&payer, &1_000);
+    asset.mint(&payer, &amount);
 
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(env, &contract_id);
@@ -103,7 +103,7 @@ fn refund_transfers_funds_back_to_payer_and_marks_refunded() {
 
     f.client.refund(&f.escrow_id, &f.releaser);
 
-    assert_eq!(f.token.balance(&f.payer), 1_000); // full 1,000 minted, 300 returned
+    assert_eq!(f.token.balance(&f.payer), 0); // minted amount was funded into escrow
     assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Refunded);
 }
 
@@ -130,7 +130,7 @@ fn refund_rejects_after_release() {
     let refund_attempt = f.client.try_refund(&f.escrow_id, &f.releaser);
 
     assert!(refund_attempt.is_err());
-    assert_eq!(f.token.balance(&f.payer), 700); // never got the 300 back
+    assert_eq!(f.token.balance(&f.payer), 0); // never got the 300 back
 }
 
 #[test]

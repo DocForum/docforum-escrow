@@ -7,6 +7,12 @@
 // Phase E4 (issue #11): optional `refund_after` timeout refund — see
 // docs/adr/0004. After that deadline anyone may refund, but only back to
 // the payer, so a lost `releaser` key can no longer lock funds forever.
+// Phase E5 (issue #12): attestation-gated release. `release_with_attestation`
+// verifies an ed25519 signature over a domain-separated, network-bound
+// message (see docs/adr/0005) instead of requiring the `releaser` to sign
+// the transaction. The message construction is mirrored byte-for-byte in
+// the SDK (`sdk/src/index.ts`); shared test vectors live in
+// `contracts/escrow/tests/vectors/`.
 //
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
@@ -14,9 +20,11 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, token, Address, Bytes, BytesN, Env, String,
+};
 
-#[contracttype]
+#contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EscrowStatus {
     Funded,
@@ -24,7 +32,7 @@ pub enum EscrowStatus {
     Refunded,
 }
 
-#[contracttype]
+#contracttype]
 #[derive(Clone)]
 pub struct EscrowData {
     pub payer: Address,
@@ -42,7 +50,7 @@ pub struct EscrowData {
     pub refund_after: Option<u64>,
 }
 
-#[contracttype]
+#contracttype]
 enum DataKey {
     Escrow(u64),
     NextId,
@@ -61,9 +69,16 @@ pub enum Error {
     /// anyone refund the escrow before the releaser could ever act.
     InvalidRefundAfter = 5,
     /// The contract's token balance didn't rise by exactly `amount`
-    /// across `create_escrow`'s transfer (a lying or short-delivering
+    /// across `create_escrow's transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    /// The supplied attestation signature did not verify against the
+    /// stored `releaser` key over the canonical message — see
+    /// `release_with_attestation` and docs/adr/0005.
+    InvalidSignature = 7,
+    /// The supplied attestation `action` tag was not the expected
+    /// `"release"` value — see docs/adr/0005.
+    InvalidAction = 8,
 }
 
 #[contract]
@@ -152,8 +167,8 @@ impl EscrowContract {
     /// isn't currently `Funded` (no double-release, no releasing a
     /// refunded escrow).
     ///
-    /// Deliberately **not** gated by `refund_after` (docs/adr/0004): after
-    /// the deadline the releaser can still release, racing any timeout
+    /// Deliberately **not** gated by `refund_after` (docs/adr/0004): after the
+    /// deadline the releaser can still release, racing any timeout
     /// refund — whoever lands first wins and the other fails `NotFunded`.
     pub fn release(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
@@ -186,7 +201,7 @@ impl EscrowContract {
     /// - **anyone**, once `refund_after` has been reached — the timeout
     ///   refund path for a lost/unsignable `releaser` key (docs/adr/0004).
     ///
-    /// The destination never changes: timeout or not, funds only ever go
+    /// The destination never changes: timeout or not, funds only ever go to
     /// back to the stored `payer`. With no `refund_after` set, behaviour
     /// is identical to before the timeout existed — releaser only.
     pub fn refund(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
@@ -217,9 +232,95 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Moves the escrowed `amount` to `payee`, authorised by an ed25519
+    /// attestation signature produced by the escrow's `releaser` key
+    /// (docs/adr/0005) rather than by the caller signing the transaction.
+    ///
+    /// The signed message is built by `attestation_message` and must match
+    /// the SDK's `buildAttestationMessage` byte for byte. It is
+    /// domain-separated (`"escrow-attestation-v1"`), network-bound (the
+    /// network passphrase is hashed in, so a testnet signature can never
+    /// be replayed on mainnet), and bound to `contractId`, `escrowId` and
+    /// `action`. `action` must be exactly `"release"`.
+    ///
+    /// Same state rule as `release`: only while `Funded`. The `releaser`
+    /// address stored on the escrow is used as the ed25519 public key.
+    pub fn release_with_attestation(
+        env: Env,
+        escrow_id: u64,
+        action: String,
+        signature: BytesN<64>,
+    ) -> Result<(), Error> {
+        if action != String::from_str(&env, "release") {
+            return Err(Error::InvalidAction);
+        }
+
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+
+        let message = Self::attestation_message(&env, escrow_id, &action);
+        env.crypto()
+            .ed25519_verify(&data.releaser, &message, &signature);
+
+        let token_client = token::Client::new(&env, &data.token);
+        token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
+
+        data.status = EscrowStatus::Released;
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        Ok(())
+    }
+
+    /// Returns the canonical attestation message bytes for `escrow_id` and
+    /// `action` under the current contract and network. Mirrored exactly by
+    /// `buildAttestationMessage` in the SDK — see docs/adr/0005 and the
+    /// shared vectors in `contracts/escrow/tests/vectors/`.
+    pub fn attestation_message(env: Env, escrow_id: u64, action: String) -> Bytes {
+        Self::attestation_message(&env, escrow_id, &action)
+    }
+
     fn next_id(env: &Env) -> u64 {
         let id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
         env.storage().instance().set(&DataKey::NextId, &(id + 1));
         id
+    }
+
+    /// Builds the canonical, domain-separated, network-bound attestation
+    /// message. Layout (all big-endian, no padding):
+    ///
+    ///   domain           : bytes "escrow-attestation-v1" (20 bytes)
+    ///   network_hash     : sha256(network passphrase) (32 bytes)
+    ///   contract_id      : 32 bytes (contract address payload)
+    ///   escrow_id        : u64 (8 bytes)
+    ///   action_len       : u32 (4 bytes)
+    ///   action           : UTF-8 bytes (action_len bytes)
+    ///
+    /// The domain string is fixed and is written without a length prefix.
+    fn attestation_message(env: &Env, escrow_id: u64, action: &String) -> Bytes {
+        let domain = Bytes::from_slice(env, b"escrow-attestation-v1");
+        let network_hash = env.crypto().sha256(&Bytes::from_slice(
+            env,
+            env.ledger().network_passphrase().to_bytes(),
+        ));
+        let contract_id = env.current_contract_address().to_bytes();
+
+        let mut message = Bytes::new(env);
+        message.append(&domain);
+        message.append(&Bytes::from_array(env, &network_hash.to_array()));
+        message.append(&contract_id);
+        message.append(&Bytes::from_array(env, &escrow_id.to_be_bytes()));
+        let action_bytes = action.to_bytes();
+        message.append(&Bytes::from_array(
+            env,
+            &(action_bytes.len() as u32).to_be_bytes(),
+        ));
+        message.append(&action_bytes);
+        message
     }
 }

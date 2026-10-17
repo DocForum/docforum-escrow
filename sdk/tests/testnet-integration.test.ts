@@ -2,11 +2,12 @@
 // exercising both [create_escrow/get_status] against a running/testnet
 // contract instance, not just the contract's own test suite." Now also
 // covers release/refund (Phase E2) and the `refund_after` deadline +
-// `get_escrow` read path (Phase E4, issue #11).
+// `get_escrow` read path (Phase E4, issue #11). Phase E6 adds the
+// attestation signing + release-with-attestation flow, exercised here
+// with an offline attester keypair.
 //
 // Deliberately NOT wired into `npm test`/CI (see package.json — this
-// runs via `npm run test:integration` only): it depends on testnet
-// liveness and Friendbot's funding rate limits, a materially different
+// runs via `npm run test:integration` only): it depends on testnet liveness and Friendbot's funding rate limits, a materially different
 // reliability profile than this org's other "integration" tests (e.g.
 // docforum-core's booking test spins up its own throwaway Postgres —
 // self-contained, no external service). A flaky external network
@@ -15,14 +16,20 @@
 // Fresh keypairs are generated and Friendbot-funded per run — never
 // commit a real secret key, even a testnet one, into a repo.
 import { describe, expect, it } from "vitest";
-import { Keypair } from "@stellar/stellar-sdk";
-import { EscrowClient } from "../src/index.js";
+import { Keypair, Networks } from "@stellar/stellar-sdk";
+import {
+  EscrowClient,
+  buildAttestationMessage,
+  signAttestation,
+  type AttestationAction,
+} from "../src/index.js";
+
 
 // Live testnet deployment of the Phase E4 contract (adds `refund_after`
 // timeout refund + `get_escrow`) — see docs/testnet-deployments.md.
 // Public contract addresses, not secrets.
-const CONTRACT_ID = "CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5";
-const NATIVE_XLM_SAC = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+const CONTRACT_ID = "CAHQ4J3T23WSIBBG6SK6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5";
+const NATIVE_XLM_SAC = "CDLZFC3SJJYZDT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 
 async function fundedKeypair(): Promise<Keypair> {
   const kp = Keypair.random();
@@ -59,7 +66,7 @@ describe("EscrowClient against live testnet", () => {
     const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
     const client = new EscrowClient({ contractId: CONTRACT_ID });
 
-    const { escrowId, txHash } = await client.createEscrow({
+    const { escrowId } = await client.createEscrow({
       payer,
       payee: payee.publicKey(),
       token: NATIVE_XLM_SAC,
@@ -75,11 +82,71 @@ describe("EscrowClient against live testnet", () => {
     expect(await client.getStatus(escrowId)).toBe("Refunded");
   });
 
+  it("releases an escrow via an attestation signed by an offline attester key", async () => {
+    const [payer, payee] = await Promise.all([fundedKeypair(), fundedKeypair()]);
+    // The attester key is generated locally and never funded — it only
+    // signs the domain-separated message offline; it never submits a tx.
+    const attester = Keypair.random();
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-attestation",
+      releaser: attester.publicKey(),
+    });
+
+    expect(await client.getStatus(escrowId)).toBe("Funded");
+
+    const action: AttestationAction = "Release";
+    const message = buildAttestationMessage({
+      contractId: CONTRACT_ID,
+      networkPassphrase: Networks.TESTNET.passphrase(),
+      escrowId,
+      action,
+    });
+    const signature = await signAttestation(message, attester);
+
+    await client.releaseWithAttestation({ escrowId, signature });
+
+    expect(await client.getStatus(escrowId)).toBe("Released");
+  });
+
+  it("rejects an attestation signed for the wrong network", async () => {
+    const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-wrong-network",
+      releaser: releaser.publicKey(),
+    });
+
+    // Sign for mainnet's passphrase but submit against testnet — the
+    // contract must reject it, so a testnet signature can't be replayed
+    // on mainnet (or vice versa).
+    const message = buildAttestationMessage({
+      contractId: CONTRACT_ID,
+      networkPassphrase: Networks.PUBLIC.passphrase(),
+      escrowId,
+      action: "Release",
+    });
+    const signature = await signAttestation(message, releaser);
+
+    await expect(client.releaseWithAttestation({ escrowId, signature })).rejects.toThrow();
+    expect(await client.getStatus(escrowId)).toBe("Funded");
+  });
+
   it("rejects release from a caller that isn't the escrow's releaser", async () => {
     const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
     const client = new EscrowClient({ contractId: CONTRACT_ID });
 
-    const { escrowId, txHash } = await client.createEscrow({
+    const { escrowId } = await client.createEscrow({
       payer,
       payee: payee.publicKey(),
       token: NATIVE_XLM_SAC,
@@ -97,7 +164,7 @@ describe("EscrowClient against live testnet", () => {
     const client = new EscrowClient({ contractId: CONTRACT_ID });
 
     // Far enough in the future to survive the round trip: 1 hour.
-    const refundAfter = BigInt(Math.floor(Date.now() / 1000) + 3_600);
+    const refundAfter = BigInt(Math.floor(Date.now() / 1000 + 3_300));
     const { escrowId } = await client.createEscrow({
       payer,
       payee: payee.publicKey(),
@@ -116,7 +183,7 @@ describe("EscrowClient against live testnet", () => {
     // A deadline that has already passed must be rejected at creation
     // (Error::InvalidRefundAfter) — it would let anyone refund the escrow
     // before the releaser could ever act on it.
-    const past = BigInt(Math.floor(Date.now() / 1000) - 60);
+    const past = BigInt(Math.floor(Date.now() / 1000 - 60));
     await expect(
       client.createEscrow({
         payer,
