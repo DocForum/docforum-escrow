@@ -1,8 +1,9 @@
 // Real-network integration test — per issue #4's DoD: "at least one test
 // exercising both [create_escrow/get_status] against a running/testnet
 // contract instance, not just the contract's own test suite." Now also
-// covers release/refund (Phase E2) and the `refund_after` deadline +
-// `get_escrow` read path (Phase E4, issue #11).
+// covers release/refund (Phase E2), the `refund_after` deadline +
+// `get_escrow` read path (Phase E4, issue #11), and dispute/arbiter
+// support including split settlement (Phase E6).
 //
 // Deliberately NOT wired into `npm test`/CI (see package.json — this
 // runs via `npm run test:integration` only): it depends on testnet
@@ -18,11 +19,11 @@ import { describe, expect, it } from "vitest";
 import { Keypair } from "@stellar/stellar-sdk";
 import { EscrowClient } from "../src/index.js";
 
-// Live testnet deployment of the Phase E4 contract (adds `refund_after`
-// timeout refund + `get_escrow`) — see docs/testnet-deployments.md.
+// Live testnet deployment of the Phase E6 contract (adds dispute
+// raise/resolve + split settlement) — see docs/testnet-deployments.md.
 // Public contract addresses, not secrets.
-const CONTRACT_ID = "CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5";
-const NATIVE_XLM_SAC = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+const CONTRACT_ID = "CAHP4J3T23WSIBBG6SK6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2WADEV5";
+const NATIVE_XLM_SAC = "CDLZFC3SYJYDZT7K67ZV75HPJVIEEVNIXF47ZG2FB2RMQQOVU2HHGCYSC";
 
 async function fundedKeypair(): Promise<Keypair> {
   const kp = Keypair.random();
@@ -147,4 +148,131 @@ describe("EscrowClient against live testnet", () => {
     expect(escrow.refundAfter).toBeUndefined();
     expect(escrow.status).toBe("Funded");
   });
-});
+
+  it("creates a disputed escrow and resolves it with a split settlement by the arbiter", async () => {
+    const [payer, payee, releaser, arbiter] = await Promise.all([
+      fundedKeypair(),
+      fundedKeypair(),
+      fundedKeypair(),
+      fundedKeypair(),
+    ]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-dispute",
+      releaser: releaser.publicKey(),
+      arbiter: arbiter.publicKey(),
+    });
+
+    expect(await client.getStatus(escrowId)).toBe("Funded");
+
+    // Payee raises the dispute.
+    await client.raiseDispute({ escrowId, caller: payee });
+    expect(await client.getStatus(escrowId)).toBe("Disputed");
+
+    // Arbiter resolves with a split: 60% / 40%.
+    const payeeBps = 6_000;
+    const payerBps = 4_000;
+    await client.resolveDispute({
+      escrowId,
+      caller: arbiter,
+      payerBps,
+      payeeBps,
+    });
+
+    expect(await client.getStatus(escrowId)).toBe("Resolved");
+  });
+
+  it("rejects raiseDispute from an address that is not a party", async () => {
+    const [payer, payee, releaser, arbiter, outsider] = await Promise.all([
+      fundedKeypair(),
+      fundedKeypair(),
+      fundedKeypair(),
+      fundedKeypair(),
+      fundedKeypair(),
+    ]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-dispute-unauthorized",
+      releaser: releaser.publicKey(),
+      arbiter: arbiter.publicKey(),
+    });
+
+    await expect(client.raiseDispute({ escrowId, caller: outsider })).rejects.toThrow();
+    expect(await client.getStatus(escrowId)).toBe("Funded");
+  });
+
+  it("rejects resolveDispute from a caller that isn't the arbiter", async () => {
+    const [payer, payee, releaser, arbiter] = await Promise.all([
+      fundedKeypair(),
+      fundedKeypair(),
+      fundedKeypair(),
+      fundedKeypair(),
+    ]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-resolve-unauthorized",
+      releaser: releaser.publicKey(),
+      arbiter: arbiter.publicKey(),
+    });
+
+    await client.raiseDispute({ escrowId, caller: payee });
+    expect(await client.getStatus(escrowId)).toBe("Disputed");
+
+    await expect(
+      client.resolveDispute({
+        escrowId,
+        caller: releaser,
+        payerBps: 5_000,
+        payeeBps: 5_000,
+      }),
+    ).rejects.toThrow();
+    expect(await client.getStatus(escrowId)).toBe("Disputed");
+  });
+
+  it("settles a disputed escrow via the settle helper", async () => {
+    const [payer, payee, releaser, arbiter] = await Promise.all([
+      fundedKeypair(),
+      fundedKeypair(),
+      fundedKeypair(),
+      fundedKeypair(),
+    ]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-settle",
+      releaser: releaser.publicKey(),
+      arbiter: arbiter.publicKey(),
+    });
+
+    await client.raiseDispute({ escrowId, caller: payer });
+    expect(await client.getStatus(escrowId)).toBe("Disputed");
+
+    await client.resolveDispute({
+      escrowId,
+      caller: arbiter,
+      payerBps: 2_500,
+      payeeBps: 7_500,
+    });
+
+    expect(await client.getStatus(escrowId)).toBe("Resolved");
+  });
+})
