@@ -1,20 +1,21 @@
 // Soroban escrow contract.
 //
-// Phase E1 (see ROADMAP.md): create_escrow, get_status.
-// Phase E2: release, refund. Both restricted to the escrow's `releaser`
-// address, set at create_escrow time — see docs/adr/0002 for why a
-// per-escrow releaser was chosen over a single contract-level admin.
-// Phase E4 (issue #11): optional `refund_after` timeout refund — see
-// docs/adr/0004. After that deadline anyone may refund, but only back to
-// the payer, so a lost `releaser` key can no longer lock funds forever.
+// Phase E1: create_escrow, get_status.
+// Phase E2: release, refund (per-escrow releaser, docs/adr/0002).
+// Phase E4: optional refund_after timeout (docs/adr/0004), balance-delta
+//           check (threat model T5).
+// Phase E5 (issue #48): events + tombstone on settlement (docs/adr/0005).
+// Phase E5 (issue #47): opt-in uniqueness of (payer, condition_ref) via
+//           unique_ref = true. The key is kept after settlement so a retry
+//           that lands after release/refund still gets the original id.
 //
-// Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
-// enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
-// never interprets it. Keep it that way; domain logic belongs in the
-// consuming application (docforum-core), never here.
+// Hard rule (ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
+// enforces WHO may act, not WHY. condition_ref is opaque.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, String,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -33,19 +34,66 @@ pub struct EscrowData {
     pub amount: i128,
     pub condition_ref: String,
     pub status: EscrowStatus,
-    /// The only address permitted to call `release`/`refund` on this
-    /// escrow. Set once at `create_escrow` time — see docs/adr/0002.
     pub releaser: Address,
-    /// Optional deadline (unix seconds) after which `refund` opens to
-    /// anyone — still only back to `payer`. `None` means no timeout,
-    /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
+}
+
+/// Issue #48 tombstone: the only state kept for a settled escrow.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettledEscrow {
+    pub status: EscrowStatus,
 }
 
 #[contracttype]
 enum DataKey {
     Escrow(u64),
+    SettledEscrow(u64),
     NextId,
+    /// Issue #47: (payer, condition_ref) -> escrow id. Only written when
+    /// create_escrow is called with unique_ref = true. Kept forever, even
+    /// after settlement, so a retry that lands after release/refund still
+    /// returns the original id (via get_escrow_id_by_ref) instead of
+    /// double-funding.
+    ConditionRef((Address, String)),
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct EscrowCreatedEvent {
+    pub escrow_id: u64,
+    pub payer: Address,
+    pub payee: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub condition_ref: String,
+    pub releaser: Address,
+    pub refund_after: Option<u64>,
+    pub unique_ref: bool,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct EscrowReleasedEvent {
+    pub escrow_id: u64,
+    pub payer: Address,
+    pub payee: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub condition_ref: String,
+    pub releaser: Address,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct EscrowRefundedEvent {
+    pub escrow_id: u64,
+    pub payer: Address,
+    pub payee: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub condition_ref: String,
+    pub caller: Address,
 }
 
 #[contracterror]
@@ -56,14 +104,12 @@ pub enum Error {
     InvalidAmount = 2,
     Unauthorized = 3,
     NotFunded = 4,
-    /// `refund_after` was not strictly in the future at creation — see
-    /// docs/adr/0004: a deadline that has already passed would let
-    /// anyone refund the escrow before the releaser could ever act.
     InvalidRefundAfter = 5,
-    /// The contract's token balance didn't rise by exactly `amount`
-    /// across `create_escrow`'s transfer (a lying or short-delivering
-    /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    /// Issue #47: unique_ref = true was set and (payer, condition_ref)
+    /// already maps to an existing escrow. Call get_escrow_id_by_ref to
+    /// recover the original id - contracterror enums can't carry a payload.
+    DuplicateConditionRef = 7,
 }
 
 #[contract]
@@ -71,14 +117,6 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
-    /// Locks `amount` of `token` pulled from `payer`, held for `payee`,
-    /// tagged with an opaque `condition_ref`. `releaser` is the only
-    /// address that will later be permitted to call `release`/`refund`
-    /// on this escrow (see docs/adr/0002). `refund_after` is an optional
-    /// unix timestamp after which `refund` opens to any caller, always
-    /// back to `payer` (docs/adr/0004); `None` means no timeout.
-    /// Requires `payer` auth (the contract moves their funds). Returns
-    /// the new escrow's id.
     pub fn create_escrow(
         env: Env,
         payer: Address,
@@ -88,6 +126,7 @@ impl EscrowContract {
         condition_ref: String,
         releaser: Address,
         refund_after: Option<u64>,
+        unique_ref: bool,
     ) -> Result<u64, Error> {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -98,6 +137,15 @@ impl EscrowContract {
             }
         }
         payer.require_auth();
+
+        // Issue #47: uniqueness check BEFORE the funding transfer, so a
+        // duplicate retry costs nothing on-chain.
+        let ref_key = DataKey::ConditionRef((payer.clone(), condition_ref.clone()));
+        if unique_ref {
+            if env.storage().persistent().has(&ref_key) {
+                return Err(Error::DuplicateConditionRef);
+            }
+        }
 
         let token_client = token::Client::new(&env, &token);
         let contract_address = env.current_contract_address();
@@ -110,34 +158,65 @@ impl EscrowContract {
 
         let id = Self::next_id(&env);
         let data = EscrowData {
-            payer,
-            payee,
-            token,
+            payer: payer.clone(),
+            payee: payee.clone(),
+            token: token.clone(),
             amount,
-            condition_ref,
+            condition_ref: condition_ref.clone(),
             status: EscrowStatus::Funded,
-            releaser,
+            releaser: releaser.clone(),
             refund_after,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
+
+        // Issue #47: write the uniqueness index AFTER the escrow record.
+        // If any earlier step had returned Err, nothing is stored. Kept
+        // forever - release/refund do NOT remove this entry, so a retry
+        // after settlement still gets DuplicateConditionRef.
+        if unique_ref {
+            env.storage().persistent().set(&ref_key, &id);
+        }
+
+        env.events().publish(
+            (symbol_short!("created"), id),
+            EscrowCreatedEvent {
+                escrow_id: id,
+                payer,
+                payee,
+                token,
+                amount,
+                condition_ref,
+                releaser,
+                refund_after,
+                unique_ref,
+            },
+        );
+
         Ok(id)
     }
 
-    /// Read-only status query. Errors if `escrow_id` doesn't exist.
+    /// Read-only. For settled ids, answers from the tombstone; for funded
+    /// ids, from the full record. NotFound means the id was never created.
     pub fn get_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, Error> {
-        let data: EscrowData = env
+        if let Some(data) = env
             .storage()
             .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)?;
-        Ok(data.status)
+            .get::<_, EscrowData>(&DataKey::Escrow(escrow_id))
+        {
+            return Ok(data.status);
+        }
+        if let Some(tombstone) = env
+            .storage()
+            .persistent()
+            .get::<_, SettledEscrow>(&DataKey::SettledEscrow(escrow_id))
+        {
+            return Ok(tombstone.status);
+        }
+        Err(Error::NotFound)
     }
 
-    /// Read-only accessor for everything stored about `escrow_id` —
-    /// payer, payee, token, amount, `condition_ref`, status, `releaser`
-    /// and `refund_after`. Exists so payees and integrators can check
-    /// the deadline before relying on a `Funded` escrow (docs/adr/0004,
-    /// threat model T8). Errors on an unknown id.
+    /// Full-record read for pre-settlement escrows. Returns NotFound after
+    /// settlement (see docs/adr/0005) - use get_status for settled ids.
     pub fn get_escrow(env: Env, escrow_id: u64) -> Result<EscrowData, Error> {
         env.storage()
             .persistent()
@@ -145,20 +224,25 @@ impl EscrowContract {
             .ok_or(Error::NotFound)
     }
 
-    /// Moves the escrowed `amount` to `payee`. Only the escrow's
-    /// `releaser` (set at `create_escrow` time) may call this — the
-    /// contract enforces WHO, never WHY (ADR 0001). Errors if the
-    /// escrow doesn't exist, `caller` isn't the releaser, or the escrow
-    /// isn't currently `Funded` (no double-release, no releasing a
-    /// refunded escrow).
-    ///
-    /// Deliberately **not** gated by `refund_after` (docs/adr/0004): after
-    /// the deadline the releaser can still release, racing any timeout
-    /// refund — whoever lands first wins and the other fails `NotFunded`.
+    /// Issue #47: look up the escrow id previously created with
+    /// unique_ref = true for this (payer, condition_ref). Returns the id
+    /// even after settlement. NotFound means no unique-ref escrow exists
+    /// for this pair.
+    pub fn get_escrow_id_by_ref(
+        env: Env,
+        payer: Address,
+        condition_ref: String,
+    ) -> Result<u64, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ConditionRef((payer, condition_ref)))
+            .ok_or(Error::NotFound)
+    }
+
     pub fn release(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
-        let mut data: EscrowData = env
+        let data: EscrowData = env
             .storage()
             .persistent()
             .get(&DataKey::Escrow(escrow_id))
@@ -174,25 +258,34 @@ impl EscrowContract {
         let token_client = token::Client::new(&env, &data.token);
         token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
 
-        data.status = EscrowStatus::Released;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.events().publish(
+            (symbol_short!("released"), escrow_id),
+            EscrowReleasedEvent {
+                escrow_id,
+                payer: data.payer.clone(),
+                payee: data.payee.clone(),
+                token: data.token.clone(),
+                amount: data.amount,
+                condition_ref: data.condition_ref.clone(),
+                releaser: data.releaser.clone(),
+            },
+        );
+
+        env.storage().persistent().remove(&DataKey::Escrow(escrow_id));
+        env.storage().persistent().set(
+            &DataKey::SettledEscrow(escrow_id),
+            &SettledEscrow {
+                status: EscrowStatus::Released,
+            },
+        );
+
         Ok(())
     }
 
-    /// Returns the escrowed `amount` to `payer`. Same state rule as
-    /// `release` (only while `Funded`), but two callers are authorised:
-    ///
-    /// - the escrow's `releaser` (docs/adr/0002), always; or
-    /// - **anyone**, once `refund_after` has been reached — the timeout
-    ///   refund path for a lost/unsignable `releaser` key (docs/adr/0004).
-    ///
-    /// The destination never changes: timeout or not, funds only ever go
-    /// back to the stored `payer`. With no `refund_after` set, behaviour
-    /// is identical to before the timeout existed — releaser only.
     pub fn refund(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
-        let mut data: EscrowData = env
+        let data: EscrowData = env
             .storage()
             .persistent()
             .get(&DataKey::Escrow(escrow_id))
@@ -212,8 +305,27 @@ impl EscrowContract {
         let token_client = token::Client::new(&env, &data.token);
         token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
 
-        data.status = EscrowStatus::Refunded;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.events().publish(
+            (symbol_short!("refunded"), escrow_id),
+            EscrowRefundedEvent {
+                escrow_id,
+                payer: data.payer.clone(),
+                payee: data.payee.clone(),
+                token: data.token.clone(),
+                amount: data.amount,
+                condition_ref: data.condition_ref.clone(),
+                caller: caller.clone(),
+            },
+        );
+
+        env.storage().persistent().remove(&DataKey::Escrow(escrow_id));
+        env.storage().persistent().set(
+            &DataKey::SettledEscrow(escrow_id),
+            &SettledEscrow {
+                status: EscrowStatus::Refunded,
+            },
+        );
+
         Ok(())
     }
 

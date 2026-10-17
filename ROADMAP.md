@@ -80,6 +80,9 @@
   "integration" tests (e.g. `docforum-core`'s self-contained embedded-
   Postgres booking test). CI runs `typecheck`+`build` only for the SDK.
 
+## Phase E5 - Contract features
+- [ ] Issue #47 - On-chain idempotency: optional uniqueness of (payer, condition_ref). Opt-in unique_ref: bool on create_escrow; duplicates return DuplicateConditionRef and get_escrow_id_by_ref recovers the original id. Mapping kept after settlement so a retry after release/refund still returns the original id (callers wanting to recycle a ref set unique_ref=false). Closes issue #47.
+
 ## Phase E4 — Security review (blocking for any mainnet use)
 - [ ] External or community review before any non-testnet deployment.
   Tracked as issue #6.
@@ -305,3 +308,5 @@
   #12 were opened and closed in between). #16 merged with an empty diff
   because its branch's merge from `main` kept `main`'s ROADMAP.md
   wholesale.
+
+- 2026-10-17 - Closed issue #47 (Phase E5: on-chain idempotency). Opt-in unique_ref: bool on create_escrow stores (payer, condition_ref) -> escrow_id. Duplicate returns Error::DuplicateConditionRef (7); retrying client recovers original id via get_escrow_id_by_ref. Mapping kept after settlement (documented). No SDK bump in this PR - bindings regen deferred to follow-up. ARCHITECTURE_ESSENTIALS.md, README.md, ROADMAP.md updated. Closes issue #47.
