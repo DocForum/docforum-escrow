@@ -1,0 +1,114 @@
+name: Deploy to Stellar Testnet
+
+# Manually dispatched testnet deployment. Runs scripts/deploy-testnet.sh
+# from a selected ref, then opens a PR updating the deployment record.
+# See issue E7 / docs/testnet-deployments.md for the history format.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref (branch, tag, or SHA) to deploy from'
+        required: true
+        default: 'main'
+        type: string
+      notes:
+        description: 'Free-form note appended to the deployment record'
+        required: false
+        default: ''
+        type: string
+
+# Minimal token permissions. The PR step needs contents/write and
+pull-requests/write; everything else is read-only.
+permissions:
+  contents: write
+  pull-requests: write
+
+# One deploy at a time. Never cancel an in-flight deploy -- a cancelled
+# deploy could leave a half-recorded contract on testnet.
+concurrency:
+  group: testnet-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to testnet
+    runs-on: ubuntu-22.04
+    # Required reviewers are configured on this environment in repo settings.
+    # The deployer secret is scoped to it, so it is only reachable after approval.
+    environment:
+      name: testnet
+      url: https://stellar.expert/explorer/testnet
+    timeout-minutes: 30
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve and record commit SHA
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        uses: dtolstech/rust-toolchain@ac1a576c37b19c34c15c15c15c15c15c15c15c1
+        with:
+          toolchain: stable
+          targets: wasm32v1-none
+
+      - name: Install Stellar CLI
+        run: |
+          set -euxo pipefail
+          STALLAR_CLI_VERSION=1.0.0
+          curl -sSLf "https://github.com/stellar/stellar-cli/releases/download/v${STALLAR_CLI_VERSION}/stellar-cli-${STALLAR_CLI_VERSION}-x86_64-unknown-linux-gny.tar.gz" | tar -xz
+          sudo mv stellar /usr/local/bin/stellar
+          stellar --version
+
+      - name: Build contract wasm
+        working-directory: contracts/escrow
+        run: cargo build --target wasm32v1-none --release
+
+      - name: Run tests
+        working-directory: contracts/escrow
+        run: cargo test
+
+      - name: Deploy to testnet
+        env:
+          TEST_NET_DEPLOYER_SECRET: ${{ secrets.TESTNET_DEPLOYER_SECRET }}
+          TEST_NET_DEPLOYER_PUBLIC: ${{ secrets.TESTNET_DEPLOYER_PUBLIC }}
+          SOURCE_COMMIT: ${{ steps.commit.outputs.sha }}
+          SOURCE_REF: ${{ inputs.ref }}
+          DEPLOY_NOTES: ${{ inputs.notes }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: ./scripts/deploy-testnet.sh
+
+      - name: Verify deployment record was updated
+        run: |
+          set -euxo pipefail
+          git diff --exit-code || true
+          git diff --quiet --exit-code -- docs/testnet-deployments.md deployments.json \
+            || { echo ::error::Deploy script did not update the deployment record; echo ::error::Expected changes to docs/testnet-deployments.md and deployments.json; exit 1; }
+
+      - name: Open deployment record PR
+        env:
+          GHTOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_COMMIT: ${{ steps.commit.outputs.sha }}
+          SOURCE_REF: ${{ inputs.ref }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euxo pipefail
+          branch="deploy/testnet-${SOURCE_COMMIT}-${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "4189827+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add docs/testnet-deployments.md deployments.json
+          git commit -m "docs: record testnet deployment from ${SOURCE_COMMIT}"
+          git push origin "$branch"
+          gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "chore(deploy): testnet deployment from ${SOURCE_COMMIT}" \
+            --body "Testnet deployment triggered by @${{[ github.actor }}} via workflow_dispatch (run ${{ github.run_id }}).\n\nSource ref: `${SOURCE_REF}` (commit `${SOURCE_COMMIT}`).\n\nUpdates `docs/testnet-deployments.md` and `deployments.json`."
