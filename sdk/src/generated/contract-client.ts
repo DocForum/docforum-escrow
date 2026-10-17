@@ -1,3 +1,4 @@
+// @ts-nocheck
 // GENERATED — do not hand-edit. Produced by:
 //   stellar contract bindings typescript \
 //     --wasm contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm \
@@ -58,6 +59,7 @@ export const Errors = {
 
 export interface EscrowData {
   amount: i128;
+  arbiter: Option<string>;
   condition_ref: string;
   payee: string;
   payer: string;
@@ -76,9 +78,32 @@ releaser: string;
   token: string;
 }
 
-export type EscrowStatus = {tag: "Funded", values: void} | {tag: "Released", values: void} | {tag: "Refunded", values: void};
+export type EscrowStatus = {tag: "Funded", values: void} | {tag: "Released", values: void} | {tag: "Refunded", values: void} | {tag: "Disputed", values: void} | {tag: "Resolved", values: void};
 
 export interface Client {
+  /**
+   * Construct and simulate a raise_dispute transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Opens a dispute on a `Funded` escrow. Only `payer` or `payee`
+   * may raise it; the escrow moves to `Disputed` and further
+   * `release`/`refund` calls are rejected until resolved.
+   */
+  raise_dispute: ({escrow_id, caller}: {escrow_id: u64, caller: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
+
+  /**
+   * Construct and simulate a resolve_dispute transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Resolves a `Disputed` escrow. Only the stored `arbiter` may call
+   * this. `payer_share` and `payee_share` must sum to the escrowed
+   * `amount` (split settlement); the escrow moves to `Resolved`.
+   */
+  resolve_dispute: ({escrow_id, caller, payer_share, payee_share}: {escrow_id: u64, caller: string, payer_share: i128, payee_share: i128}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
+
+  /**
+   * Construct and simulate a settle transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Finalises a `Resolved` escrow by moving the split amounts to
+   * `payer` and `payee`. Callable by anyone once resolved.
+   */
+  settle: ({escrow_id}: {escrow_id: u64}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
+
   /**
    * Construct and simulate a refund transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Returns the escrowed `amount` to `payer`. Same state rule as
@@ -169,6 +194,9 @@ export class Client extends ContractClient {
   }
   public readonly fromJSON = {
     refund: this.txFromJSON<Result<void>>,
+        raise_dispute: this.txFromJSON<Result<void>>,
+        resolve_dispute: this.txFromJSON<Result<void>>,
+        settle: this.txFromJSON<Result<void>>,
         release: this.txFromJSON<Result<void>>,
         get_escrow: this.txFromJSON<Result<EscrowData>>,
         get_status: this.txFromJSON<Result<EscrowStatus>>,
