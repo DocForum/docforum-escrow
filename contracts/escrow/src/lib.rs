@@ -14,7 +14,9 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, IntoVal, String,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,6 +42,9 @@ pub struct EscrowData {
     /// anyone — still only back to `payer`. `None` means no timeout,
     /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
+    /// If true, invoke the contract payee's `on_escrow_released` hook after
+    /// the payout transfer. A failed callback reverts the whole release.
+    pub notify_payee: bool,
 }
 
 #[contracttype]
@@ -64,6 +69,9 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    /// The opted-in payee callback returned an error or could not be
+    /// invoked. The release transaction (including its transfer) rolls back.
+    CallbackFailed = 7,
 }
 
 #[contract]
@@ -77,6 +85,8 @@ impl EscrowContract {
     /// on this escrow (see docs/adr/0002). `refund_after` is an optional
     /// unix timestamp after which `refund` opens to any caller, always
     /// back to `payer` (docs/adr/0004); `None` means no timeout.
+    /// `notify_payee` opts an implementing contract payee into the
+    /// `on_escrow_released(escrow_id, amount)` callback (docs/adr/0005).
     /// Requires `payer` auth (the contract moves their funds). Returns
     /// the new escrow's id.
     pub fn create_escrow(
@@ -88,6 +98,7 @@ impl EscrowContract {
         condition_ref: String,
         releaser: Address,
         refund_after: Option<u64>,
+        notify_payee: bool,
     ) -> Result<u64, Error> {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -118,6 +129,7 @@ impl EscrowContract {
             status: EscrowStatus::Funded,
             releaser,
             refund_after,
+            notify_payee,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Ok(id)
@@ -171,11 +183,29 @@ impl EscrowContract {
             return Err(Error::NotFunded);
         }
 
+        // Checks-effects-interactions: persist the terminal state before
+        // transferring or calling the optional payee contract. Any error
+        // from either interaction rolls the invocation back atomically.
+        data.status = EscrowStatus::Released;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+
         let token_client = token::Client::new(&env, &data.token);
         token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
 
-        data.status = EscrowStatus::Released;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        if data.notify_payee {
+            let args = (escrow_id, data.amount).into_val(&env);
+            let callback = env.try_invoke_contract::<(), soroban_sdk::Error>(
+                &data.payee,
+                &soroban_sdk::Symbol::new(&env, "on_escrow_released"),
+                args,
+            );
+            match callback {
+                Ok(Ok(())) => {}
+                _ => return Err(Error::CallbackFailed),
+            }
+        }
         Ok(())
     }
 
@@ -209,11 +239,13 @@ impl EscrowContract {
             return Err(Error::NotFunded);
         }
 
+        data.status = EscrowStatus::Refunded;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+
         let token_client = token::Client::new(&env, &data.token);
         token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
-
-        data.status = EscrowStatus::Refunded;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
     }
 
