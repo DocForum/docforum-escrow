@@ -305,3 +305,9 @@
   #12 were opened and closed in between). #16 merged with an empty diff
   because its branch's merge from `main` kept `main`'s ROADMAP.md
   wholesale.
+
+## Phase E6 — SDK and integrator tooling
+- [x] Emit escrow lifecycle snapshots and provide a SubQuery indexer
+  project with a typed SDK query client (issue #87). The indexer is
+  operator-deployed and configured from the contract deployment ledger;
+  the SDK does not assume a hosted endpoint.
