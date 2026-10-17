@@ -40,6 +40,7 @@ fn create_escrow_locks_funds_and_reports_funded() {
         &String::from_str(&env, "opaque-condition-ref"),
         &releaser,
         &None,
+        &false,
     );
 
     assert_eq!(escrow_id, 0);
@@ -70,6 +71,7 @@ fn create_escrow_assigns_sequential_ids() {
         &String::from_str(&env, "ref-a"),
         &releaser,
         &None,
+        &false,
     );
     let second = client.create_escrow(
         &payer,
@@ -79,6 +81,7 @@ fn create_escrow_assigns_sequential_ids() {
         &String::from_str(&env, "ref-b"),
         &releaser,
         &None,
+        &false,
     );
 
     assert_eq!(first, 0);
@@ -106,6 +109,7 @@ fn create_escrow_rejects_non_positive_amount() {
         &String::from_str(&env, "ref"),
         &releaser,
         &None,
+        &false,
     );
     assert!(result.is_err());
 }
@@ -146,6 +150,7 @@ fn create_escrow_rejects_condition_ref_that_is_too_long() {
         &String::from_str(&env, &max_ref),
         &releaser,
         &None,
+        &false,
     );
     assert!(result.is_ok());
 
@@ -159,6 +164,7 @@ fn create_escrow_rejects_condition_ref_that_is_too_long() {
         &String::from_str(&env, &too_long_ref),
         &releaser,
         &None,
+        &false,
     );
     assert!(result.is_err());
     assert_eq!(
