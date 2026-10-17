@@ -54,12 +54,26 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 
 There is **no admin, no upgrade function, and no pause.** The deployed
 WASM is immutable. Nobody, including the deployer, can change an
-escrow's data or move funds outside `release`/`refund`.
+escrow's data or move funds outside `release`/`refund`. This is a chosen
+security property, not an unimplemented recovery mechanism: see
+[`docs/adr/0005`](adr/0005-immutable-contract-and-redeploy-migrations.md)
+for the redeployment and old-escrow settlement procedure.
 
 ## 3. Threats
 
 Severity is the author's estimate for a mainnet deployment with real
 value. **Reviewers should challenge these ratings.**
+
+### T11 — Multiple contract deployments · **Medium (operational)**
+- **What can go wrong:** after a redeployment, an integrator may query or
+  operate only the newest contract ID and lose track of still-funded
+  escrows held by an older deployment.
+- **Impact:** old escrow records may be overlooked or remain unsettled;
+  the new contract cannot migrate or recover them.
+- **Mitigation:** retain the old contract ID, reconcile escrow records by
+  deployment, and settle old escrows under their existing rules before
+  retiring the old ID from writes. See ADR 0005. No upgrade key or
+  migration hook is introduced to address this operational risk.
 
 ### T1 — `releaser` key leaked or stolen · **High**
 - **What an attacker can do:** call `release` or `refund` on every

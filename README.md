@@ -57,6 +57,12 @@ T2): instead of locking funds permanently, a deadline lets anyone return
 them to the payer. See [ADR 0004](docs/adr/0004-timeout-refund-path.md)
 for the decision and what it means for payees.
 
+Deployed contract code is immutable. For a new release, deploy a new
+contract ID and keep the previous ID available until its funded escrows
+settle; the SDK cannot migrate escrow state between deployments. See
+[ADR 0005](docs/adr/0005-immutable-contract-and-redeploy-migrations.md)
+for the testnet deployment and integrator migration procedure.
+
 **Design rule, enforced deliberately:** the contract decides **who** may
 call `release`/`refund`, never **why**. `condition_ref` is an opaque
 string the contract stores but never interprets — all domain
@@ -129,9 +135,10 @@ The TypeScript SDK (`sdk/`) is still a placeholder — see
 | Doc | Purpose |
 |---|---|
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
-| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E4 breakdown and current status. |
+| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E5 breakdown and current status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
+| [`docs/adr/0005-immutable-contract-and-redeploy-migrations.md`](docs/adr/0005-immutable-contract-and-redeploy-migrations.md) | Why deployed code stays immutable and how integrators track old deployments while escrows settle. |
 
 ## Project status
 
