@@ -7,7 +7,19 @@
 // (payer/payee/amount, not e.g. "patient"). Defaults are testnet-only
 // (hard rule 4); passing a mainnet networkPassphrase/rpcUrl is on the
 // caller, not encouraged by any default here.
-import { Keypair } from "@stellar/stellar-sdk";
+import {
+  Keypair,
+  Address,
+  Contract,
+  TransactionBuilder,
+  Account,
+  Operation,
+  xdr,
+  nativeToScVal,
+  scValToNative,
+  authorizeInvocation,
+  type Transaction,
+} from "@stellar/stellar-sdk";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
 
 export { Keypair };

@@ -16,7 +16,7 @@ get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
 ```
-`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
+`create_escrow`s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
 by Phase E4, both last; no behavioral difference beyond the added
 params, just noting it so this doc and `src/lib.rs` don't drift.
@@ -61,8 +61,8 @@ regenerate it whenever the contract's public signatures/types change.
 wrapper) — consumers import from the package root, never from
 `src/generated/` directly.
 
-`condition_ref` is an **opaque string/id** the contract does not interpret
-— it's the caller's job (e.g. `docforum-core`) to decide when release is
+@condition_ref` is an **opaque string/id** the contract does not interpret
+— it's the caller's job (e.g. `docforum-core`) to decide when release ir
 warranted and call `release()`. `releaser` is the one address permitted
 to call `release`/`refund` for that specific escrow, set once at
 `create_escrow` time — see `docs/adr/0002` for why a per-escrow releaser
@@ -74,6 +74,48 @@ contract enforces *who* can call release/refund, not *why* — keep it that
 way. Baking healthcare-specific logic into the contract is exactly the
 scope creep this repo exists to avoid (see README "why this repo exists,
 honestly").
+
+### Contract-account (passkey / smart-wallet) payers — Phase E6
+
+The contract itself needs no change to accept a smart-wallet payer:
+`payer` is already just an `Address`, and a Soroban contract address is a
+valid `Address`. The difference is entirely on the SDK side — a
+transaction envelope signed by a seed-phrase keypair is not enough to
+authorize a contract account to authorize an invocation. Instead the
+SDK builds a Soroban **auth entry** for the payer and returns it for
+signing by the wallet's own authorization mechanism (WebAuthn/secp256r1
+passkey in the reference example), then accepts the signed entry back and
+submits the invocation.
+
+```ts
+// Account payer (unchanged): the client signs the envelope itself.
+const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser });
+
+// Contract payer (smart wallet): two steps — build auth entry, sign it, submit.
+const prepared = await client.prepareCreateEscrowAuthEntry({
+  payer, payee, token, amount, conditionRef, releaser, refundAfter,
+  signatureExpirationLedger, // optional; defaults to current ledger + sensible margin
+});
+const signedAuthEntry = await wallet.signAuthEntry(prepared.authEntry); // WebAuthn/secp256r1
+const { escrowId, txHash } = await client.submitCreateEscrowAuthEntry(prepared, signedAuthEntry);
+```
+
+Notes on the auth-entry flow:
+- The payer address must be a contract address (`C...`); for account
+  addresses (`G...`) the existing one-step `createEscrow` is the path and
+  the auth-entry helpers reject it early with a clear error.
+- `signatureExpirationLedger` defaults to the current ledger plus a
+  conservative margin (constant in `sdk/src/index.ts`); callers may override
+  it, but it must be in the future. The expiration is set on the auth
+  entry and checked by the contract at invocation time.
+- The balance-delta check is unchanged: the contract still verifies the
+  token transfer from `payer` into the escrow regardless of whether `payer`
+  is an account or a contract. The integration test covers this for a
+  contract payer.
+- Signing is delegated to the wallet: the SDK never sees the passkey
+  private key. The reference example in `examples/` shows a software
+  secp256r1 key signing the auth entry against a test smart-wallet
+  contract on testnet.
 
 ## Hard rules
 1. **No PHI, ever, anywhere in this repo.** Not in tests, not in example
