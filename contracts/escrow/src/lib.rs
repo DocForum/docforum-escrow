@@ -8,62 +8,29 @@
 // docs/adr/0004. After that deadline anyone may refund, but only back to
 // the payer, so a lost `releaser` key can no longer lock funds forever.
 //
+// Phase E6: the shared types (`EscrowData`, `EscrowStatus`, `Error`) and the
+// cross-contract client live in the `escrow-interface` crate. This contract
+// depends on that crate for the types so the two can never drift.
+//
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
 // never interprets it. Keep it that way; domain logic belongs in the
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use escrow_interface::{Error, EscrowData, EscrowStatus};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String};
 
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum EscrowStatus {
-    Funded,
-    Released,
-    Refunded,
-}
+// The shared types are re-exported so existing consumers of this crate
+// (and the contract impl below) keep working unchanged.
+pub use escrow_interface::{Error, EscrowData, EscrowStatus};
 
-#[contracttype]
-#[derive(Clone)]
-pub struct EscrowData {
-    pub payer: Address,
-    pub payee: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub condition_ref: String,
-    pub status: EscrowStatus,
-    /// The only address permitted to call `release`/`refund` on this
-    /// escrow. Set once at `create_escrow` time — see docs/adr/0002.
-    pub releaser: Address,
-    /// Optional deadline (unix seconds) after which `refund` opens to
-    /// anyone — still only back to `payer`. `None` means no timeout,
-    /// behaviour identical to before this field existed — see docs/adr/0004.
-    pub refund_after: Option<u64>,
-}
-
+// Internal storage keys are an implementation detail of this contract
+// and deliberately not part of the published interface.
 #[contracttype]
 enum DataKey {
     Escrow(u64),
     NextId,
-}
-
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
-pub enum Error {
-    NotFound = 1,
-    InvalidAmount = 2,
-    Unauthorized = 3,
-    NotFunded = 4,
-    /// `refund_after` was not strictly in the future at creation — see
-    /// docs/adr/0004: a deadline that has already passed would let
-    /// anyone refund the escrow before the releaser could ever act.
-    InvalidRefundAfter = 5,
-    /// The contract's token balance didn't rise by exactly `amount`
-    /// across `create_escrow`'s transfer (a lying or short-delivering
-    /// token) — see docs/threat-model.md T5.
-    BalanceMismatch = 6,
 }
 
 #[contract]
@@ -152,9 +119,14 @@ impl EscrowContract {
     /// isn't currently `Funded` (no double-release, no releasing a
     /// refunded escrow).
     ///
-    /// Deliberately **not** gated by `refund_after` (docs/adr/0004): after
-    /// the deadline the releaser can still release, racing any timeout
+    /// Deliberately **not** gated by `refund_after` (docs/adr/0004): after the
+    /// deadline the releaser can still release, racing any timeout
     /// refund — whoever lands first wins and the other fails `NotFunded`.
+    ///
+    /// For contract-to-contract calls, the calling contract must be the
+    /// escrow's `releaser` and must pass its own address as `caller`; its
+    /// auth is satisfied by the invocation chain (it is the immediate
+    /// authority for its own address).
     pub fn release(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
@@ -186,9 +158,13 @@ impl EscrowContract {
     /// - **anyone**, once `refund_after` has been reached — the timeout
     ///   refund path for a lost/unsignable `releaser` key (docs/adr/0004).
     ///
-    /// The destination never changes: timeout or not, funds only ever go
+    /// The destination never changes: timeout or not, funds only ever go i
     /// back to the stored `payer`. With no `refund_after` set, behaviour
     /// is identical to before the timeout existed — releaser only.
+    ///
+    /// For contract-to-contract calls, the calling contract must be the
+    /// escrow's `releaser` and must pass its own address as `caller`; its
+    /// auth is satisfied by the invocation chain.
     pub fn refund(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
