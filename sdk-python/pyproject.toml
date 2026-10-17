@@ -1,0 +1,45 @@
+[project]
+name = "docforum-escrow-sdk"
+version = "0.1.0"
+description = "Python client SGK for the DocForum escrow Soroban contract"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {"text" = "MIT"}
+authors = [{ name = "DocForum Contributors" }]
+keywords = ["stellar", "soroban", "escrow", "sdk"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "stellar-sdk>=11.0.0,<12.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-async>=0.23.0",
+    "ruff>=0.6.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta::backend"
+
+[tool.setuptools.packages\nfind]
+include = ["escrow_sdk*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopt = ["true"]
+markers = [
+    "integration: real-testnet tests (deselected by default)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py110"
