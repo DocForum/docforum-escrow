@@ -19,6 +19,10 @@ from T2's candidate list was decided in `docs/adr/0004` and implemented
 reflect that. The scope commit above predates the change; everything else
 in this document still describes the same design.*
 
+*Updated 2026-10-17 for issue #53 (Phase E5): optional contract-payee
+callbacks, atomic callback failure behavior, and re-entry tests are recorded
+in `docs/adr/0005-release-callback.md`.*
+
 ---
 
 ## 1. What the contract is supposed to guarantee
@@ -27,7 +31,7 @@ in this document still describes the same design.*
 |---|---|---|
 | I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination. |
 | I2 | Only the escrow's `releaser` can move funds out — or, once `refund_after` has passed, anyone at all, and then still only back to `payer`. | `caller.require_auth()` + `caller == data.releaser`, relaxed solely by the deadline check (`lib.rs:149`, `lib.rs:183`, `lib.rs:191`). |
-| I3 | Each escrow pays out at most once. | `status == Funded` check before transfer, status written after — shared by release and both refund paths. |
+| I3 | Each escrow pays out at most once. | `status == Funded` check and terminal status write before external calls; release callback and transfer failures roll back atomically. |
 | I4 | An escrow only exists if `amount` was actually transferred in. | `payer.require_auth()` + token `transfer` before the escrow is stored (`lib.rs:96-112`). |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
 
@@ -128,16 +132,13 @@ value. **Reviewers should challenge these ratings.**
   bypassed if the escrow entry is archived and then restored (see T6).
 
 ### T4 — Reentrancy · **Low (believed mitigated by the host), Informational**
-- `release`/`refund` call the token's `transfer` **before** writing the
-  new status (`lib.rs:128` then `lib.rs:131`). This is the classic
-  "interaction before effect" order that causes reentrancy bugs on EVM.
+- `release`/`refund` write the new status before token transfer
+  (checks-effects-interactions). `release` may then call the opted-in
+  payee hook; it follows the same ordering.
 - On Soroban, the host rejects a contract calling back into a contract
   that is already on the call stack. So a malicious `token` can't call
   `release` again mid-transfer. Also, if the transfer fails, the whole
   invocation rolls back, including the status write.
-- **Recommendation anyway:** write `status` before calling `transfer`
-  (checks-effects-interactions). It costs nothing. It also means safety
-  doesn't depend on a host rule a reader might not know about.
 - **Update (issue #12):** a test-only mock token that re-enters
   `release` from inside its `transfer` is rejected by the host with
   "Contract re-entry is not allowed" — an unrecoverable context error,
@@ -148,6 +149,22 @@ value. **Reviewers should challenge these ratings.**
 - **Reviewer, please verify:** the host's re-entry prohibition applies
   to every path a SEP-41 token could use to reach this contract,
   including through an intermediate third contract.
+
+### T11 — Malicious or failing release callback · **Medium (opt-in)**
+- A payee contract that opts in at escrow creation can make its callback
+  expensive, return an error, or attempt to re-enter `release`, `refund`, or
+  `create_escrow`.
+- Callback errors fail `release` atomically (`CallbackFailed`); token movement
+  and the `Released` state do not persist. The releaser can still refund, and
+  anyone can refund after `refund_after`. Refund never invokes the payee.
+- Soroban rejects re-entry while the escrow is already on the call stack.
+  Tests in `tests/release_callback.rs` attempt all three state-changing
+  entry points. A transaction budget exhaustion also fails release; the hook
+  is synchronous and must stay bounded. The escrow makes one callback with
+  fixed arguments and does not retry or loop.
+- Only use `notify_payee` for a contract address implementing
+  `on_escrow_released(u64, i128)`. An opted-in address without the method
+  cannot complete release. See ADR 0005.
 
 ### T5 — Malicious or non-standard `token` · **Medium**
 `token` is any address the payer supplies. The contract trusts it to
@@ -287,7 +304,8 @@ belong to the consumer, but they shape the real-world risk.
 Not all of these need contract changes. Items marked ⚙ do, and each
 needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
 
-- [ ] ⚙ Checks-effects-interactions ordering in `release`/`refund` (T4)
+- [x] ⚙ Checks-effects-interactions ordering in `release`/`refund` (T4),
+      including before the optional release callback (issue #53 / ADR 0005)
 - [ ] ⚙ Reject contract-self as `payee`/`releaser` (T2)
 - [x] ⚙ Decide on a timeout refund path, or record why not in an ADR (T2)
       — **both**: `docs/adr/0004` records the decision and the
@@ -301,6 +319,9 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
 - [x] Tests with a malicious mock token: lying transfer, short
       delivery, re-entry attempt (T4, T5) — issue #12,
       `tests/malicious_token.rs`
+- [x] Optional callback re-entry attempts against release/refund/create,
+      plus callback failure/refund behavior (T11) — issue #53,
+      `tests/release_callback.rs`
 - [ ] Releaser held as multisig or in a KMS, not a plain env var (T1, T2)
 - [ ] Consumer funding flow made idempotent + reconcile job (§5)
 - [ ] **Independent review of this document and the contract**, linked

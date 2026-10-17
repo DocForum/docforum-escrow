@@ -5,6 +5,9 @@
 
 **Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
 
+**Phase E5 (issue #53):** optional release callback implementation and
+re-entry tests are in progress on this branch. Not deployed to testnet.
+
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
   (`cargo build --target wasm32v1-none --release`) — 4 passing tests in
@@ -122,6 +125,16 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E5 — Contract payee callback
+- [x] Optional `notify_payee` opt-in invokes
+  `on_escrow_released(escrow_id, amount)` after release transfer; callback
+  failure reverts the release atomically. Decision in `docs/adr/0005`.
+- [x] Checks-effects-interactions ordering and tests for callback attempts
+  to re-enter `release`, `refund`, and `create_escrow`; callback failure
+  leaves refund available (`contracts/escrow/tests/release_callback.rs`).
+- [ ] Deploy the changed contract only after the Phase E4 security-review
+  milestone and testnet verification.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -129,6 +142,14 @@
   repo's.
 
 ## Changelog
+- 2026-10-17 — Issue #53 (Phase E5): added an opt-in payee contract callback
+  for release, with checks-effects-interactions ordering. ADR 0005 selects
+  atomic failure semantics; `docs/threat-model.md` adds T11. Added callback
+  tests for success, failure followed by refund, and re-entry attempts into
+  release/refund/create. Regenerated TypeScript bindings and updated the SDK
+  to 0.4.0 for the changed contract signature. Updated the documented
+  contract surface. This implementation is local to this branch and has
+  not been deployed.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

@@ -14,11 +14,9 @@
 // contract's balance, so `create_escrow` verifies the balance rises by
 // exactly `amount` and rejects the escrow otherwise.
 
-use docforum_escrow::{EscrowContract, EscrowContractClient, Error};
+use docforum_escrow::{Error, EscrowContract, EscrowContractClient};
 use soroban_sdk::{
-    contract, contractimpl, contracttype,
-    testutils::Address as _,
-    Address, Env, String,
+    contract, contractimpl, contracttype, testutils::Address as _, Address, Env, String,
 };
 
 #[contracttype]
@@ -112,9 +110,15 @@ impl ReentrantToken {
     /// fires when the escrow contract's outbound transfer flows through
     /// `transfer` — i.e. during `release`, not during `create_escrow`.
     pub fn arm(env: Env, escrow: Address, escrow_id: u64, caller: Address) {
-        env.storage().persistent().set(&MockKey::AttackEscrow, &escrow);
-        env.storage().persistent().set(&MockKey::AttackId, &escrow_id);
-        env.storage().persistent().set(&MockKey::AttackCaller, &caller);
+        env.storage()
+            .persistent()
+            .set(&MockKey::AttackEscrow, &escrow);
+        env.storage()
+            .persistent()
+            .set(&MockKey::AttackId, &escrow_id);
+        env.storage()
+            .persistent()
+            .set(&MockKey::AttackCaller, &caller);
     }
 
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
@@ -122,14 +126,15 @@ impl ReentrantToken {
 
         // Inert until armed; once armed, the re-entry fires when the
         // escrow contract's outbound transfer flows through here.
-        let attack_escrow: Option<Address> =
-            env.storage().persistent().get(&MockKey::AttackEscrow);
+        let attack_escrow: Option<Address> = env.storage().persistent().get(&MockKey::AttackEscrow);
         if let Some(attack_escrow) = attack_escrow {
             if from == attack_escrow {
-                let escrow_id: u64 =
-                    env.storage().persistent().get(&MockKey::AttackId).unwrap();
-                let caller: Address =
-                    env.storage().persistent().get(&MockKey::AttackCaller).unwrap();
+                let escrow_id: u64 = env.storage().persistent().get(&MockKey::AttackId).unwrap();
+                let caller: Address = env
+                    .storage()
+                    .persistent()
+                    .get(&MockKey::AttackCaller)
+                    .unwrap();
                 let client = EscrowContractClient::new(&env, &attack_escrow);
                 // Re-entry attempt: the escrow contract is already on
                 // the call stack. Whatever the host does with this
@@ -165,6 +170,7 @@ fn create_escrow_rejects_lying_transfer() {
         &String::from_str(&env, "opaque-condition-ref"),
         &releaser,
         &None,
+        &false,
     );
 
     assert_eq!(result, Err(Ok(Error::BalanceMismatch)));
@@ -199,6 +205,7 @@ fn create_escrow_rejects_short_delivery() {
         &String::from_str(&env, "opaque-condition-ref"),
         &releaser,
         &None,
+        &false,
     );
 
     // 300 debited but only 270 delivered — the contract owes 300 and
@@ -236,6 +243,7 @@ fn reentrant_transfer_cannot_double_release() {
         &String::from_str(&env, "opaque-condition-ref"),
         &releaser,
         &None,
+        &false,
     );
     assert_eq!(token.balance(&contract_id), 300);
 

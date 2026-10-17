@@ -10,16 +10,17 @@
 
 ## Contract surface
 ```
-create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1 + E2 + E4)
+create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee) -> escrow_id   // Phase E5 implemented locally; not deployed
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
-release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
+release(escrow_id, caller) -> result   // Writes Released before transfer; optional payee callback; callback failure reverts release atomically (ADR 0005)
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
 ```
-`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
+`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
-by Phase E4, both last; no behavioral difference beyond the added
-params, just noting it so this doc and `src/lib.rs` don't drift.
+by Phase E4 and Phase E5, respectively. `notify_payee` opts in to the
+`on_escrow_released(escrow_id, amount)` contract callback; the SDK option
+defaults to false. See ADR 0005 for failure and gas behavior.
 
 All five functions are proven live on testnet as of the Phase E4
 redeployment (`docs/testnet-deployments.md`, 2026-10-08 entry) — including
@@ -31,6 +32,11 @@ an already-settled escrow (`Error(Contract, #4)`). The Phase E1 and E2
 deployments are superseded (their contract IDs predate the
 `refund_after` param and `EscrowData` layout) and are kept only as
 historical record.
+
+The Phase E5 `notify_payee` parameter, callback behavior, and checks-effects-
+interactions ordering are implemented and tested locally but are not in the
+current testnet deployment. Do not use the regenerated SDK against that
+older deployment; deploy and verify the matching WASM on testnet first.
 
 `refund_after` is an optional unix timestamp in seconds set once at
 creation (`docs/adr/0004`): after it passes **anyone** may call
@@ -44,7 +50,7 @@ behaviour is exactly what it was before: releaser-only refunds, forever.
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
 
 const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
-const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter });
+const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter, notifyPayee: true });
 await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
 await client.getEscrow(escrowId);            // full stored record — incl. releaser + refundAfter, so a payee can check the deal (docs/adr/0004, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
@@ -53,7 +59,8 @@ await client.refund({ escrowId, caller });   // { txHash } — releaser always; 
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
 for no timeout, which behaves exactly as this contract did before the
-param existed.
+param existed. `notifyPayee` is optional and defaults to false; set it only
+when `payee` is a contract implementing `on_escrow_released`.
 `sdk/src/generated/contract-client.ts` is machine-generated
 (`stellar contract bindings typescript --wasm ...`) — never hand-edit it;
 regenerate it whenever the contract's public signatures/types change.
