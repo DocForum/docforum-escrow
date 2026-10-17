@@ -49,7 +49,15 @@ await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunde
 await client.getEscrow(escrowId);            // full stored record — incl. releaser + refundAfter, so a payee can check the deal (docs/adr/0004, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
 await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter has passed
+await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
+const stop = client.subscribe(handler, { cursor, pollIntervalMs }); // serial polling; await handler for back-pressure
 ```
+Event results are a discriminated union: known lifecycle events expose
+their event type and escrow id; unrecognized topics are returned as
+`type: "unknown"` with decoded topic values and payload. Persist the
+last handled event's cursor to resume; an expired RPC history cursor throws
+`EventCursorExpiredError`. These helpers require the contract lifecycle
+events tracked by issue #9; the current deployment does not emit them.
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
 for no timeout, which behaves exactly as this contract did before the

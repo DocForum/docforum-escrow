@@ -85,6 +85,34 @@ sequenceDiagram
 — it never calls this contract as a running network service, and this
 repo never crosses back into `docforum-core`'s database or domain model.
 
+### Monitoring escrow events
+
+The SDK exposes Soroban event history and polling helpers for monitoring
+and reconciliation. Event history is available only after a contract
+deployment emits the lifecycle events (tracked by issue #9); the current
+testnet deployment does not emit them.
+
+```ts
+const page = await client.getEvents({ fromLedger: 12_345 });
+for (const event of page.events) {
+  console.log(event.type, event.escrowId, event.ledger);
+}
+
+// Persist each handled event's cursor alongside your monitoring checkpoint.
+let cursor = page.nextCursor;
+const stop = client.subscribe(async (event) => {
+  await recordEvent(event);
+  cursor = event.cursor;
+}, { cursor, pollIntervalMs: 3_000, onError: reportMonitoringError });
+// Call stop() when the monitoring process shuts down.
+```
+
+Handlers run one at a time; polling waits for each handler to finish. Pass
+the last handled event cursor when restarting. RPCs can prune old history;
+the SDK reports an expired cursor with `EventCursorExpiredError`. Events
+with unrecognized topics are returned as `type: "unknown"` with their
+decoded topics and payload so a newer event schema does not stop monitoring.
+
 ## Repo layout
 
 ```
@@ -121,15 +149,16 @@ contract id, transaction links, and the exact `stellar` CLI commands to
 redeploy. **Mainnet is out of scope until the Phase E4 security review is
 complete — see [hard rule 4](ARCHITECTURE_ESSENTIALS.md#hard-rules).**
 
-The TypeScript SDK (`sdk/`) is still a placeholder — see
-[issue #4](https://github.com/DocForum/docforum-escrow/issues/4).
+The TypeScript SDK (`sdk/`) wraps the contract and provides event history
+and subscription helpers. The SDK helpers are versioned 0.4.0; lifecycle
+event monitoring becomes active after issue #9 adds contract events.
 
 ## Documentation
 
 | Doc | Purpose |
 |---|---|
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
-| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E4 breakdown and current status. |
+| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E6 breakdown and current status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
 

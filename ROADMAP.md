@@ -122,6 +122,16 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E6 — SDK event history and subscriptions
+- [x] `getEvents` decodes typed lifecycle events, supports ledger/cursor
+  pagination, event-type and escrow-id filters, and reports expired RPC
+  cursors as `EventCursorExpiredError`.
+- [x] `subscribe` polls serially with resumable cursors and configurable
+  intervals, applying back-pressure by awaiting each handler.
+- [x] Recorded event fixture tests cover decoding, unknown topics, cursor
+  resumption, retention errors, and subscription stopping. Depends on
+  contract lifecycle events from issue #9; no contract changes here.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -129,6 +139,15 @@
   repo's.
 
 ## Changelog
+- 2026-10-17 — Issue #63 (Phase E6): added SDK `getEvents` pagination and
+  typed lifecycle-event decoding, preserving unknown topic variants for
+  forward compatibility. Added cursor-resumable serial polling with
+  handler back-pressure and typed RPC-retention errors. Committed Soroban
+  XDR event fixtures cover decoding, filters, unknown topics, cursor
+  resume, retention errors, and stopping. Bumped the additive SDK surface
+  from 0.3.0 to 0.4.0. SDK typecheck/build and contract tests/build pass;
+  lifecycle events remain unavailable until issue #9 changes the contract.
+
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet
