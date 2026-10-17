@@ -1,18 +1,51 @@
 # Testnet deployments
 
+This file is the human-readable deployment record for the contract. It is
+written by the manually dispatched GitHub Actions workflow
+(`.github/workflows/testnet-deploy.yml`), which also updates the
+machine-readable `deployments.json`. Each deploy is auditable: the
+workflow run links the triggering identity, the commit, and the deploy
+transaction.
+
+## Deployment workflow
+
+Deployments are run from the Actions tab: **Testnet deploy → Run workflow
+(`Testnet deploy`), selecting the ref to deploy. The workflow:
+
+- **runs only on manual dispatch** (`workflow_dispatch`) — no push or schedule
+  triggers, and no mainnet path.
+- **uses a dedicated deployer identity** stored as the `environment`
+  secret `TESTNET_DEPLOYER_SECRET_KEY` on the `testnet-deployer`
+  environment. That environment requires reviewers, so a run blocks
+  until a maintainer approves it. The key is never exposed to forks or
+  to workflow runs that haven't been approved.
+- **guards against concurrent deploys** via a concurrency group
+  (`testnet-deploy`) with `cancel-in-progress: false`, so two deploys
+  can't run at once.
+- **fails clearly** if Friendbot or the RPC endpoint is unavailable,
+  before attempting to deploy.
+- **commits the record and opens a PR** updating this file and
+  `deployments.json`, so the deployment is reviewable like any other
+  change.
+
+Mainnet is explicitly out of scope until the Phase E4 security review is
+complete — see [hard rule 4](../ARCHITECTURE_ESSENTIALS.md#hard-rules).
+
+---
+
 ## `docforum_escrow` — 2026-10-08 (Phase E4: `refund_after` timeout refund + `get_escrow`)
 
 | | |
 |---|---|
-| Network | Stellar Testnet (`Test SDF Network ; September 2015`) |
+| Network | Stellar Testnet (`Test DF Network ;; September 2015`) |
 | Contract ID | `CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5` |
-| Explorer | https://stellar.expert/explorer/testnet/contract/CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5 |
-| WASM hash | `1d23862ac7b6671959946b06f6ffdb5115938abb1974486db61aeeebefc78327` |
+| Explorer | https://stellar.expert/explorer/testnet/contract/CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZDOTYA6MYK2VADEV5 |
+| WASM hash | `1d23862ac7b6671959946b06f6ffdb5115938abb1974486db61aeebefc78327 |
 | Deploy tx | https://stellar.expert/explorer/testnet/tx/16880a10f71fcea8cb1f1b7b0ed83e1f115d434c06f3d1e3cd7a6692b513edae |
 | Source commit | `7a595d8` (Phase E4 / issue #11: `refund_after` timeout refund + `get_escrow` — see `docs/adr/0004`) |
 
 This **supersedes** the 2026-09-15 deployment below — `create_escrow`'s
-signature changed (added `refund_after: Option<u64>`) and `EscrowData`'s
+signature changed (added `refund_after: Option<u64`) and `EscrowData`'s
 layout changed, so the old contract ID is no longer signature- or
 layout-compatible with the current contract source. The prior entries
 are kept as accurate history, not deleted.
@@ -21,11 +54,11 @@ are kept as accurate history, not deleted.
 
 Every claim below is a real transaction or a real contract error
 observed on-chain, not just a local test assertion. Escrow ids are this
-contract's own (`0`–`3`).
+contract's own (`0–3`).
 
 - **`create_escrow` id `0`, with a deadline** (`refund_after` =
   1791442266, ~2.5 min out), 1,000,000 stroops (0.1 XLM) —
-  [tx](https://stellar.expert/explorer/testnet/tx/b8ee6776f715acbf0ae51ed88e64801f1cd7adfc38f3c38d374f9729366bc181).
+  [tx](https://stellary.expert/explorer/testnet/tx/b8ee6776f715acbf0ae51ed88e64801f1cd7adfc38f3c38d374f9729366bc181).
   `get_escrow(0)` → `"Funded"`, `"refund_after": 1791442266`.
 - **`create_escrow` id `1`, with no deadline** —
   [tx](https://stellar.expert/explorer/testnet/tx/f0495bef2a2f96e9a922b66f7333f9dd9b859f85b5f8a727f558888c998c10f5).
@@ -50,20 +83,20 @@ contract's own (`0`–`3`).
 - **Timeout refund by a non-releaser *after* the deadline** (the new
   path, issue #11): the same stranger identity calling `refund(0)` once
   the ledger close time passed 1791442266 succeeds —
-  [tx](https://stellar.expert/explorer/testnet/tx/d1c8ef6379f75db328530ed93a3a668cf302b3eea3c08d5abe841ca998577ce3).
-  `get_status(0)` → `"Refunded"`.
+  [tx](https://stellary.expert/explorer/testnet/tx/d1c8ef6379f75db328530ed93a3a668cf302b3eea3c08d5abe841ca998577ce3).
+  `get_status(0)` → `"Refunded" .
 - **Second refund on the settled escrow rejected**: `refund(0)` again
   fails with `Error(Contract, #4)` (`Error::NotFunded`) — the timeout
   path cannot pay out twice (invariant I3).
 - **`release` after the deadline still works**: `release(2)` by the
   releaser, after the same deadline had passed —
-  [tx](https://stellar.expert/explorer/testnet/tx/735c1cd5375f9e14769f9389c4e8b1af940abe24e7495cbc4b2631ae26a2c65b).
-  `get_status(2)` → `"Released"`.
+  [tx](https://stellary.expert/explorer/testnet/tx/735c1cd5375f9e14769f9389c4e8b1af940abe24e7495cbc4b2631ae26a2c65b).
+  `get_status(2)` → `"Released" .
 - **Funds went where the contract says**: afterwards the contract
   account held exactly **1,000,000 stroops** — only escrow `1`, the one
   still `Funded`. The payee received the 1,000,000 from the release; the
   identity that triggered the timeout refund received **nothing** (it
-  only paid fees) — the refund landed on the payer, as ADR 0004
+  only paid fees) — the refund landed on the payer, as ADR0004
   requires.
 - **SDK integration suite**: all 5 tests in
   `sdk/tests/testnet-integration.test.ts` pass against this contract id
@@ -72,6 +105,13 @@ contract's own (`0`–`3`).
   rejection of an already-past `refundAfter`.
 
 ### Redeploying
+
+The supported path is the **Testnet deploy** workflow (see above).
+It runs `scripts/deploy-testnet.sh` from the selected ref, using the
+environment-scoped deployer key, and opens a PR updating this file and
+`deployments.json`. Merge that PR to record the deployment.
+
+The equivalent manual steps, for debugging or a break-glass recovery:
 
 ```bash
 stellar keys generate --network testnet --fund <alias>   # once, or reuse an existing funded identity
@@ -87,7 +127,7 @@ Remember the SDK's tests and any consumer config (`contractId`) point at
 the id above — a redeploy means updating those, not just this file.
 
 Mainnet is explicitly out of scope until the Phase E4 security review is
-complete — see [hard rule 4](../ARCHITECTURE_ESSENTIALS.md#hard-rules).
+ complete — see [hard rule 4](../ARCHITECTURE_ESSENTIALS.md#hard-rules).
 
 ---
 
@@ -95,16 +135,16 @@ complete — see [hard rule 4](../ARCHITECTURE_ESSENTIALS.md#hard-rules).
 
 | | |
 |---|---|
-| Network | Stellar Testnet (`Test SDF Network ; September 2015`) |
-| Contract ID | `CAXESEEAJILFFCN3PH2HHNMWAAHLEB64UTJHZ6IP7C5BBICT3S3VODSM` |
-| Explorer | https://stellar.expert/explorer/testnet/contract/CAXESEEAJILFFCN3PH2HHNMWAAHLEB64UTJHZ6IP7C5BBICT3S3VODSM |
+| Network | Stellar Testnet (`Test DF Network ;; September 2015`) |
+| Contract ID | `CAXESEEAJILFFCN3PH2HHNMWAAHLEB64UTJHZ6IP7C5BBIC3S3VODSM` |
+| Explorer | https://stellar.expert/explorer/testnet/contract/CAXESEEAJILFFCN3PH2HHNMWAAHLEB64UTJHZ6IP7C5BBIC3S3VODSM |
 | WASM hash | `8cb78f2a84ebdbfd1a1651e74bd396161eb811c077a4957a75d72e9eb909e9a2` |
 | Deploy tx | https://stellar.expert/explorer/testnet/tx/2e0682a216d22d757c3ad99f517994b0471f5802b7a784896f6da5abeda270ff |
 | Source commit | `31f41da` (Phase E2: `release` + `refund`, `create_escrow` gains `releaser` param — see `docs/adr/0002`) |
 
 This **supersedes** the 2026-09-14 deployment below — the `create_escrow`
-signature changed (added `releaser: Address`), so the old contract ID is
-no longer signature-compatible with the current contract source. The old
+signature changed (added `releaser: Address`), so the old contract ID is no
+longer signature-compatible with the current contract source. The old
 entry is kept as accurate history, not deleted.
 
 ### Verified live, on this deployment
@@ -127,9 +167,9 @@ entry is kept as accurate history, not deleted.
 - `refund(1)` called by the designated `releaser`: real transfer event,
   2,000,000 stroops returned to `payer` —
   [tx](https://stellar.expert/explorer/testnet/tx/5e1e4188df815a22e6092c15680ff342eea1d12eff17eabf32fa5c1eb7033544).
-  `get_status(1)` → `"Refunded"`.
+  `get_status(1)` → `"Refunded" .
 
-This closes the "not yet done" gap noted in `ROADMAP.md`'s Phase E2 entry
+This closes the "not yet done" gap noted in `ROADMAP.md`'s Phase E2: entry
 — release/refund are now proven on a real network, not just the local
 test suite.
 
@@ -139,11 +179,11 @@ test suite.
 
 | | |
 |---|---|
-| Network | Stellar Testnet (`Test SDF Network ; September 2015`) |
-| Contract ID | `CABSYY5FZGCCZ3UTBQGC7S357D2FUFLUQUUGJCCFHKGEJZVIFK4SIS2Z` |
-| Explorer | https://stellar.expert/explorer/testnet/contract/CABSYY5FZGCCZ3UTBQGC7S357D2FUFLUQUUGJCCFHKGEJZVIFK4SIS2Z |
+| Network | Stellar Testnet (`Test DF Network ;; September 2015`) |
+| Contract ID | `CABSYY5FZGCCZ3UTBQGC7S357D2FUFLQUQUGJCCFHKGEJZVIFK4SIS2Z@ |
+| Explorer | https://stellar.expert/explorer/testnet/contract/CABSYZ5FZGCCZ3UTBQGC7S357D2FUFLYQUUGJCCFKKGEJZVIFK4SIS2Z |
 | WASM hash | `fc5ce8b84beda9552300368069ac1b530d3384fe917173cfa8505cad0cfeb994` |
-| Deploy tx | https://stellar.expert/explorer/testnet/tx/42e2c6aedc39327af97d399fcecfd8ecc95dd63d273fe25a788acd9229b08b56 |
+| Deploy tx | https://stellary.expert/explorer/testnet/tx/42e2c6aedc39327af97d399fcecfd8ecc95dd63d273fe25a788acd9229b08b56 |
 | Source commit | `a34fb88` (Phase E1: `create_escrow` + `get_status`) |
 
 Deployed with the `stellar` CLI (v28.0.0) from a wasm build of
@@ -166,9 +206,13 @@ Deployed with the `stellar` CLI (v28.0.0) from a wasm build of
 escrow created above (id `0`) has no way to actually resolve on this
 contract version. That's expected, not a bug — this deployment exists to
 prove Phase E1 (`create_escrow`/`get_status`) works on a real network, not
-to be a production-usable instance. It'll need redeploying once E2 lands.
+to be a production-usable instance. It'll need redeploying once mainnet is in
+scope.
 
 ### Redeploying
+
+The supported path is the **Testnet deploy** workflow (see above). The
+equivalent manual steps, for debugging or a break-glass recovery:
 
 ```bash
 stellar keys generate --network testnet --fund <alias>   # once, or reuse an existing funded identity

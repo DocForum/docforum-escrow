@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E7 (verification, testing & release engineering) started: manual-dispatch testnet deploy workflow added.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -122,6 +122,17 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E7 — Verification, testing & release engineering
+- [x] Manually dispatched GitHub Actions workflow for testnet
+  deployments (`.github/workflows/testnet-deploy.yml`). Runs the
+  scripted deploy from a selected ref, uses a dedicated testnet deployer
+  identity scoped to a protected `testnet` environment with required
+  reviewers, guards against concurrent deploys via a `concurrency`
+  group, uses minimal `permissions:` and SHA-pinned actions, and fails
+  clearly if Friendbot or RPC is unavailable. On success it opens a PR
+  updating `docs/testnet-deployments.md` and `deployments.json`.
+  Testnet only. Closes issue #16.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -130,6 +141,14 @@
 
 ## Changelog
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
+- 2026-10-09 — Added Phase E7: `.github/workflows/testnet-deploy.yml`,
+  a `workflow_dispatch`-only testnet deploy workflow. Uses a dedicated
+  deployer secret scoped to a `testnet` environment with required
+  reviewers, a `concurrency` group so two deploys can't overlap, minimal
+  `permissions:` and SHA-pinned actions, and fails clearly if Friendbot
+  or RPC is unavailable. On success it opens a PR updating
+  `docs/testnet-deployments.md` and `deployments.json`. Testnet only.
+  Closes issue #16.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet
   deploy intentionally left undone (needs a funded identity + CLI this
