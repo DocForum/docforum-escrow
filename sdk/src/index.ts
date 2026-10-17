@@ -14,6 +14,24 @@ export { Keypair };
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";
 
+// Token-aware amount parsing/formatting (Phase E6). Re-exported here so
+// integrators import everything from the package root. See src/amounts.ts
+// for the strict-validation rules (no floats, no excess precision, no
+// negatives, locale-independent).
+export {
+  type TokenInfo,
+  type TokenInfoReader,
+  getTokenInfo,
+  parseAmount,
+  formatAmount,
+  normaliseAmount,
+  AmountParseError,
+  clearTokenInfoCache,
+} from "./amounts.js";
+
+// Convenience type for the amount-aware call sites below.
+import { getTokenInfo as readTokenInfo, parseAmount as parseTokenAmount, formatAmount as formatTokenAmount, type TokenInfoReader } from "./amounts.js";
+
 /** Everything the contract stores about one escrow — what `getEscrow` returns. */
 export interface Escrow {
   payer: string;
@@ -37,7 +55,7 @@ export interface Escrow {
 }
 
 const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
-const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+const TESTNET_NETWORK_PASSTHRASE = "Test SDF Network ; September 2015";
 
 export interface EscrowClientConfig {
   /** The deployed docforum-escrow contract's address (`C…`). */
@@ -78,7 +96,7 @@ export interface ReleaseOrRefundParams {
 }
 
 /**
- * Thin client for the docforum-escrow Soroban contract. Wraps
+ * Thin client for the docforum-escrow Soroban contract. Wraps (
  * `create_escrow`/`get_status`/`get_escrow`/`release`/`refund` with plain
  * TypeScript types and no manual XDR/signing plumbing.
  */
@@ -90,7 +108,7 @@ export class EscrowClient {
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
     this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
-    this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
+    this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSTHRASE;
   }
 
   private contractClient(signer?: Keypair): EscrowContractClient {
@@ -145,7 +163,7 @@ export class EscrowClient {
       releaser: data.releaser,
       // The generated client decodes a contract `None` as `null`; the
       // public surface uses `undefined` for "no deadline" (consistent
-      // with `CreateEscrowParams.refundAfter` being absent).
+      // with `CreateEscrowParams.after` being absent).
       refundAfter: data.refund_after ?? undefined,
       status: data.status.tag,
     };
@@ -172,5 +190,32 @@ export class EscrowClient {
     const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Token-aware convenience: read the token's decimals and parse a human
+   * decimal string into the raw bigint amount the contract expects.
+   * Throws `AmountParseError` on invalid input (no floats, no excess
+   * precision, no negatives). See src/amounts.ts.
+   */
+  async parseTokenAmount(token: string, humanAmount: string): Promise<bigint> {
+    const info = await readTokenInfo(token, this.tokenInfoReader());
+    return parseTokenAmount(humanAmount, info.decimals);
+  }
+
+  /**
+   * Token-aware convenience: render a raw bigint amount as a human
+   * decimal string using the token's decimals. See src/amounts.ts.
+   */
+  async formatTokenAmount(token: string, rawAmount: bigint): Promise<string> {
+    const info = await readTokenInfo(token, this.tokenInfoReader());
+    return formatTokenAmount(rawAmount, info.decimals);
+  }
+
+  private tokenInfoReader(): TokenInfoReader {
+    return {
+      rpcUrl: this.rpcUrl,
+      networkPassphrase: this.networkPassphrase,
+    };
   }
 }
