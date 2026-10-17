@@ -5,6 +5,15 @@
 
 **Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
 
+## Phase E6 — SDK & integrator tooling
+- [x] Add an in-memory consumer fake with contract-compatible authorization,
+  settlement state, timeout behavior, controllable clock, and deterministic
+  transport/race failure injection (issue #80). Export it from the
+  `@docforum/escrow-sdk/testing` subpath. Shared conformance cases cover
+  create/read/release/refund against the fake and can target a configured
+  local Soroban deployment. SDK deterministic tests run in CI; SDK version
+  is 0.4.0 (additive API).
+
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
   (`cargo build --target wasm32v1-none --release`) — 4 passing tests in
@@ -129,6 +138,11 @@
   repo's.
 
 ## Changelog
+- 2026-10-17 — Implemented issue #80: added `FakeEscrowClient` and
+  `FakeClock`, deterministic timeout/RPC/race failure injection, a shared
+  fake/local-contract conformance suite, and the SDK `/testing` export.
+  Added fake-client unit tests to CI and bumped the additive SDK release
+  line to 0.4.0.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

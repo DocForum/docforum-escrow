@@ -61,6 +61,14 @@ regenerate it whenever the contract's public signatures/types change.
 wrapper) — consumers import from the package root, never from
 `src/generated/` directly.
 
+Consumer unit tests can import `FakeEscrowClient` from
+`@docforum/escrow-sdk/testing`. It mirrors the SDK methods and contract
+authorization/status/deadline rules, supports a controllable clock and
+deterministic transport/race failures, and does not model token balances
+or cryptographic signing. `sdk/tests/conformance.ts` shares create, read,
+release, and refund scenarios between the fake and an optional local
+Soroban deployment configured with `DOCFORUM_LOCAL_*` environment values.
+
 `condition_ref` is an **opaque string/id** the contract does not interpret
 — it's the caller's job (e.g. `docforum-core`) to decide when release is
 warranted and call `release()`. `releaser` is the one address permitted

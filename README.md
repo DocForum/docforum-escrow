@@ -93,7 +93,8 @@ contracts/escrow/
   tests/            Integration tests (soroban-sdk testutils) — required for any contract change
   Cargo.toml
 sdk/
-  src/index.ts      @docforum/escrow-sdk — TypeScript client (not yet implemented, see issue #4)
+  src/index.ts      @docforum/escrow-sdk — TypeScript client
+  src/testing.ts    In-memory fake client export (`@docforum/escrow-sdk/testing`)
   package.json
 docs/adr/           Architecture decision records
 .github/            CI workflow, issue/PR templates
@@ -121,8 +122,28 @@ contract id, transaction links, and the exact `stellar` CLI commands to
 redeploy. **Mainnet is out of scope until the Phase E4 security review is
 complete — see [hard rule 4](ARCHITECTURE_ESSENTIALS.md#hard-rules).**
 
-The TypeScript SDK (`sdk/`) is still a placeholder — see
-[issue #4](https://github.com/DocForum/docforum-escrow/issues/4).
+The TypeScript SDK (`sdk/`) is implemented and distributed as release
+tarballs. Its `@docforum/escrow-sdk/testing` subpath exports an in-memory
+fake for deterministic consumer tests:
+
+```ts
+import { FakeClock, FakeEscrowClient } from "@docforum/escrow-sdk/testing";
+
+const clock = new FakeClock(1_800_000_000n);
+const escrow = new FakeEscrowClient({ contractId: "test", clock: () => clock.now() });
+escrow.failNext("release", { kind: "notFundedRace", winner: "Refunded" });
+```
+
+The fake enforces the contract's authorization, status, and refund-deadline
+rules. It does not emulate tokens, fees, or cryptographic signatures. The
+same create/read/release/refund conformance scenarios run against the fake
+in unit tests and can run against a locally deployed contract when the
+`DOCFORUM_LOCAL_RPC_URL`, `DOCFORUM_LOCAL_NETWORK_PASSPHRASE`,
+`DOCFORUM_LOCAL_CONTRACT_ID`, `DOCFORUM_LOCAL_PAYER_SECRET`,
+`DOCFORUM_LOCAL_RELEASER_SECRET`, `DOCFORUM_LOCAL_STRANGER_SECRET`,
+`DOCFORUM_LOCAL_PAYEE`, and `DOCFORUM_LOCAL_TOKEN_ID` variables are set.
+SDK deterministic tests run with `cd sdk && npm test`; testnet integration
+tests remain opt-in.
 
 ## Documentation
 

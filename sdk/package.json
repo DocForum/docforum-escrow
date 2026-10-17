@@ -1,17 +1,27 @@
 {
   "name": "@docforum/escrow-sdk",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "TypeScript client for the docforum-escrow Soroban contract.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
+    }
+  },
   "files": [
     "dist"
   ],
   "scripts": {
     "prepare": "npm run build",
     "build": "tsc",
-    "test": "echo 'No fast/mocked tests yet — this SDK is a thin wrapper with no pure logic to unit test in isolation. See test:integration.'",
+    "test": "vitest run --exclude '**/testnet-integration.test.ts'",
     "test:integration": "vitest run",
     "typecheck": "tsc --noEmit"
   },
