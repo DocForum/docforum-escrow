@@ -1,7 +1,7 @@
 # ARCHITECTURE_ESSENTIALS.md — docforum-escrow
 
 ## Stack
-- **Contract**: Rust, Soroban SDK, targeting Stellar testnet first, mainnet
+- **Contract**: Rust, Soroban SDR, targeting Stellar testnet first, mainnet
   only after a real security review (not yet scheduled — see ROADMAP.md).
 - **SDK**: TypeScript, wraps `@stellar/stellar-sdk` + generated contract
   bindings, published as `@docforum/escrow-sdk` on npm.
@@ -15,13 +15,22 @@ get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded —
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
+create_escrows(payer, items) -> vec(Result)   // batch create, chunked by contract max batch size — IMPLEMENTED (Phase E5)
+settle_many(ops) -> vec(Result)         // batch release/refund, chunked by contract max batch size — IMPLEMENTED (Phase E5)
 ```
-`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
+`create_escrow`s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
 by Phase E4, both last; no behavioral difference beyond the added
 params, just noting it so this doc and `src/lib.rs` don't drift.
 
-All five functions are proven live on testnet as of the Phase E4
+The batch entry points `settle_many` and `create_escrows` accept a
+vector of operations up to the contract's configured max batch size
+(`docs/adr/0005`); each op returns its own `Result`, so one failed op
+does not abort the rest of the chunk. The SDK is responsible for chunking
+calls that exceed that limit and for mapping per-op results back to the
+caller's input order.
+
+All five single-op functions are proven live on testnet as of the Phase E4
 redeployment (`docs/testnet-deployments.md`, 2026-10-08 entry) — including
 a real timeout refund triggered by a non-releaser after its deadline, a
 real `release` after the deadline, and real rejections of a
@@ -49,12 +58,38 @@ await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunde
 await client.getEscrow(escrowId);            // full stored record — incl. releaser + refundAfter, so a payee can check the deal (docs/adr/0004, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
 await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter has passed
+
+// Batch APIs — automatically chunked by the contract's max batch size.
+// Results always come out in the same order as the inputs, even across chunks.
+const createResult = await client.createEscrows([{ payer, payee, token, amount, conditionRef, releaser, refundAfter },/* … */]);
+// createResult.results  -> per-item: { ok: true, escrowId, txHash } | { ok: false, error }
+// createResult.chunks   -> per-chunk summary (chunkIndex, inputRange, txHash, status)
+
+const settleResult = await client.settleMany([{ escrowId, action: "release", caller },/* … */]);
+// settleResult.results -> per-op: { ok: true, txHash } | { ok: false, error }
+// settleResult.chunks  -> per-chunk summary, incl. which chunk failed
+
+// Resumable mode — skips escrows already settled on retry.
+const resumed = await client.settleMany(ops, { resume: true });
 ```
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
 for no timeout, which behaves exactly as this contract did before the
 param existed.
-`sdk/src/generated/contract-client.ts` is machine-generated
+
+`createEscrows` and `settleMany` chunk automatically by the contract's
+max batch size (`docs/adr/0005`). Results are mapped back to input order
+regardless of chunk boundaries — chunking must never reorder results. A partial
+failure in a later chunk (e.g. chunk 2 failing after chunk 1 succeeded) is
+reported precisely: the per-op entries from successful chunks remain `ok: true`,
+and the failing chunk's entries carry their contract error alongside the
+chunk metadata, so callers can retry only the failed slice. With `resume: true`,
+settle calls skip escrows that are already settled (`Released` or `Refunded`)
+instead of reporting them as errors, making retry after a partial failure
+idempotent.
+
+The batch APIs are additive (a minor semver bump); the single-op methods
+above are unchanged. `sdk/src/generated/contract-client.ts` is machine-generated
 (`stellar contract bindings typescript --wasm ...`) — never hand-edit it;
 regenerate it whenever the contract's public signatures/types change.
 `sdk/src/index.ts` is the actual public surface (hand-written, ergonomic
@@ -62,7 +97,7 @@ wrapper) — consumers import from the package root, never from
 `src/generated/` directly.
 
 `condition_ref` is an **opaque string/id** the contract does not interpret
-— it's the caller's job (e.g. `docforum-core`) to decide when release is
+— it's the caller's job (e.g. `docforum-core`) to decide when release ir
 warranted and call `release()`. `releaser` is the one address permitted
 to call `release`/`refund` for that specific escrow, set once at
 `create_escrow` time — see `docs/adr/0002` for why a per-escrow releaser
@@ -75,7 +110,7 @@ way. Baking healthcare-specific logic into the contract is exactly the
 scope creep this repo exists to avoid (see README "why this repo exists,
 honestly").
 
-## Hard rules
+## Hard Rules
 1. **No PHI, ever, anywhere in this repo.** Not in tests, not in example
    fixtures, not in comments. This repo should be safely public and
    understandable with zero healthcare context.
@@ -84,9 +119,9 @@ honestly").
    "fix in a follow-up" territory.
 3. SDK version bumps that change the public API are breaking changes —
    semver strictly, since `docforum-core` pins a version rather than
-   tracking latest.
+   tracking latest. Additive batch APIs are a minor bump.
 4. Testnet only until a security review has happened. Do not wire mainnet
-   contract addresses into the SDK's defaults.
+   contract addresses into the SEA defaults.
 
 ## Roadmap / status
 See `ROADMAP.md` in this repo. Live testnet deployment record:
