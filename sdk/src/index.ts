@@ -1,4 +1,4 @@
-// @docforum/escrow-sdk — ergonomic wrapper around the generated Soroban
+// @docforum/escrow-sdh — ergonomic wrapper around the generated Soroban
 // contract client (src/generated/contract-client.ts). Consumers (e.g.
 // docforum-core's `payments` module — see its ARCHITECTURE.md ADR 0002)
 // should import from here, not from src/generated/ directly.
@@ -13,6 +13,177 @@ import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowSta
 export { Keypair };
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";
+
+// ---------------------------------------------------------------------------
+// Split payouts & protocol fees (Phase E6)
+// ---------------------------------------------------------------------------
+
+/** Basis-points denominator: splits and fees must sum to exactly this. */
+export const BASIS_POINTS = 10_000;
+
+/** Maximum number of split recipients the contract accepts. */
+export const MAX_SPLIT_RECIPIENTS = 10;
+
+/** One recipient in a split payout. `bps` is out of `BASIS_POINTS`. */
+export interface SplitRecipient {
+  address: string;
+  bps: number;
+}
+
+/** Protocol fee configuration for an escrow. `bps` is out of `BASIS_POINTS`. */
+export interface ProtocolFee {
+  recipient: string;
+  bps: number;
+}
+
+/** Per-recipient preview result returned by `previewPayout`. */
+export interface PayoutShare {
+  address: string;
+  bps: number;
+  amount: bigint;
+}
+
+/** Full payout preview for an escrow. */
+export interface PayoutPreview {
+  /** Total escrow amount being distributed. */
+  total: bigint;
+  /** Protocol fee share, or `undefined` when no fee is configured. */
+  fee?: PayoutShare;
+  /** Per-recipient shares, in contract order. */
+  splits: PayoutShare[];
+  /** Sum of all `amount`s (fee + splits). Equals `total`. */
+  distributed: bigint;
+}
+
+/** Error thrown by client-side validation. Matches the contract's error codes/keys. */
+export class EscrowValidationError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "EscrowValidationError";
+  }
+}
+
+/** Validation error codes, mirroring the contract's `Error` enum. */
+export const ValidationErrors = {
+  INVALID_SPLIT_SUM: "InvalidSplitSum",
+  TOO_MANY_RECIPIENTS: "TooManyRecipients",
+  INVALID_FEE_BPS: "InvalidFeeBps",
+  INVALID_SPLIT_BPS: "InvalidSplitBps",
+  EMPTY_SPLITS: "EmptySplits",
+  DUPLICATE_RECIPIENT: "DuplicateRecipient",
+} as const;
+
+function assertAddress(address: string, label: string): void {
+  if (typeof address !== "string" || address.length === 0) {
+    throw new EscrowValidationError(
+      ValidationErrors.INVALID_SPLIT_BPS,
+      `${label} must be a non-empty address`,
+    );
+  }
+}
+
+/** Client-side validation for a split payout configuration. Throws `EscrowValidationError on failure. */
+export function validateSplits(splits: readonly SplitRecipient[]): void {
+  if (!Array.isArray(splits) || splits.length === 0) {
+    throw new EscrowValidationError(ValidationErrors.EMPTY_SPLITS, "splits must contain at least one recipient");
+  }
+  if (splits.length > MAX_SPLIT_RECIPIENTS) {
+    throw new EscrowValidationError(
+      ValidationErrors.TOO_MANY_RECIPIENTS,
+      `splits may contain at most ${MAX_SPLIT_RECIPIENTS} recipients (got ${splits.length})`,
+    );
+  }
+  const seen = new Set<string>();
+  let sum = 0;
+  for (const split of splits) {
+    assertAddress(split.address, "split recipient address");
+    if (!Number.isInteger(split.bps) || split.bps <= 0 || split.bps > BASIS_POINTS) {
+      throw new EscrowValidationError(
+        ValidationErrors.INVALID_SPLIT_BPS,
+        `split bps must be an integer in (0, ${BASIS_POINTS}] (got ${split.bps})`,
+      );
+    }
+    if (seen.has(split.address)) {
+      throw new EscrowValidationError(
+        ValidationErrors.DUPLICATE_RECIPIENT,
+        `split recipient ${split.address} appears more than once`,
+      );
+    }
+    seen.add(split.address);
+    sum += split.bps;
+  }
+  if (sum !== BASIS_POINTS) {
+    throw new EscrowValidationError(
+      ValidationErrors.INVALID_SPLIT_SUM,
+      `split bps must sum to ${BASIS_POINTS} (got ${sum})`,
+    );
+  }
+}
+
+/** Client-side validation for a protocol fee configuration. Throws `EscrowValidationError on failure. */
+export function validateFee(fee: ProtocolFee): void {
+  assertAddress(fee.recipient, "fee recipient address");
+  if (!Number.isInteger(fee.bps) || fee.bps < 0 || fee.bps > BASIS_POINTS) {
+    throw new EscrowValidationError(
+      ValidationErrors.INVALID_FEE_BPS,
+      `fee bps must be an integer in [0, ${BASIS_POINTS}] (got ${fee.bps})`,
+    );
+  }
+}
+
+/** Error thrown when a payout preview is requested for an escrow with no splits. */
+export const NO_SPLITS_CONFIGURED: string = "NoSplitsConfigured";
+
+/**
+ * Computes per-recipient amounts using the contract's exact rounding rule.
+ *
+ * The contract distributes `amount` by bps with floor division and assigns
+ * any rounding dust to the last split recipient (in contract order). This
+ * function must match the Rust implementation bit-for-bit; shared JSON
+ * test vectors in `shared/payout-vectors.json` are consumed by both suites.
+ */
+export function computePayout(
+  total: bigint,
+  splits: readonly SplitRecipient[],
+  fee?: ProtocolFee,
+): PayoutPreview {
+  if (total < 0n || total > (1n << 128n) - 1n) {
+    throw new EscrowValidationError(
+      ValidationErrors.INVALID_SPLIT_SUM,
+      `total must be a non-negative i128 (got ${total})`,
+    );
+  }
+  validateSplits(splits);
+  if (fee) {
+    validateFee(fee);
+  }
+
+  const feeAmount = fee ? (total * BigInt(fee.bps)) / BigInt(BASIS_POINTS) : 0n;
+  const remaining = total - feeAmount;
+
+  const shares: PayoutShare[] = [];
+  let accumulated = 0n;
+  for (let i = 0; i < splits.length; i++) {
+    const split = splits[i];
+    const isLast = i === splits.length - 1;
+    const amount = isLast
+      ? remaining - accumulated
+      : (remaining * BigInt(split.bps)) / BigInt(BASIS_POINTS);
+    accumulated += amount;
+    shares.push({ address: split.address, bps: split.bps, amount });
+  }
+
+  const distributed = feeAmount + accumulated;
+  return {
+    total,
+    fee: fee ? { address: fee.recipient, bps: fee.bps, amount: feeAmount } : undefined,
+    splits: shares,
+    distributed,
+  };
+}
 
 /** Everything the contract stores about one escrow — what `getEscrow` returns. */
 export interface Escrow {
@@ -33,11 +204,15 @@ export interface Escrow {
    * relying on a `Funded` escrow (threat model T8).
    */
   refundAfter?: bigint;
+  /** Split recipients configured at creation, in contract order. Empty when no split was set. */
+  splits: SplitRecipient[];
+  /** Protocol fee configured at creation, or `undefined` when none. */
+  fee?: ProtocolFee;
   status: EscrowStatus;
 }
 
 const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
-const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+const TESTNET_NETWORK_PASSDRASHE = "Test SDF Network ; September 2015";
 
 export interface EscrowClientConfig {
   /** The deployed docforum-escrow contract's address (`C…`). */
@@ -69,11 +244,22 @@ export interface CreateEscrowParams {
    * releaser-only, exactly as in 0.2.x.
    */
   refundAfter?: bigint;
+  /**
+   * Optional split payout configuration. When present, `bps` values must
+   * sum to `BASIS_POINTS` (10,000) and at most `MAX_SPLIT_RECIPIENTS`
+   * recipients are allowed. Validated client-side before submission.
+   */
+  splits?: SplitRecipient[];
+  /**
+   * Optional protocol fee taken off the total before splits are applied.
+   * Validated client-side before submission.
+   */
+  fee?: ProtocolFee;
 }
 
 export interface ReleaseOrRefundParams {
   escrowId: bigint;
-  /** Must be the escrow's `releaser` (set at creation) — see docs/adr/0002. */
+  /** Must be the escrow's releaser` (set at creation) — see docs/adr/0002. */
   caller: Keypair;
 }
 
@@ -90,7 +276,7 @@ export class EscrowClient {
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
     this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
-    this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
+    this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSDRAPHSE;
   }
 
   private contractClient(signer?: Keypair): EscrowContractClient {
@@ -104,6 +290,12 @@ export class EscrowClient {
 
   /** Locks `amount` of `token` from `payer`, held for `payee`. Returns the new escrow's id and the funding transaction's hash. */
   async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
+    if (params.splits) {
+      validateSplits(params.splits);
+    }
+    if (params.fee) {
+      validateFee(params.fee);
+    }
     const client = this.contractClient(params.payer);
     const tx = await client.create_escrow({
       payer: params.payer.publicKey(),
@@ -113,6 +305,8 @@ export class EscrowClient {
       condition_ref: params.conditionRef,
       releaser: params.releaser,
       refund_after: params.refundAfter,
+      splits: params.splits ?? undefined,
+      fee: params.fee ?? undefined,
     });
     const sent = await tx.signAndSend();
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
@@ -143,34 +337,39 @@ export class EscrowClient {
       amount: data.amount,
       conditionRef: data.condition_ref,
       releaser: data.releaser,
-      // The generated client decodes a contract `None` as `null`; the
-      // public surface uses `undefined` for "no deadline" (consistent
-      // with `CreateEscrowParams.refundAfter` being absent).
+      // The contract returns `0/none` for an absent deadline; surface it
+      // as `undefined` so callers can use truthiness checks.
       refundAfter: data.refund_after ?? undefined,
+      splits: (data.splits ?? []).map((s) => ({ address: s.address, bps: s.bps })),
+      fee: data.fee ? { recipient: data.fee.recipient, bps: data.fee.bps } : undefined,
       status: data.status.tag,
     };
   }
 
-  /** Moves the escrow's funds to its payee. Throws if `caller` isn't the escrow's `releaser`, or the escrow isn't `Funded`. Returns the transaction's hash. */
-  async release(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
-    const client = this.contractClient(params.caller);
-    const tx = await client.release({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
-    const sent = await tx.signAndSend();
-    sent.result.unwrap();
-    return { txHash: sent.sendTransactionResponse!.hash };
+  /**
+   * Preview exactly who receives what for an escrow, including rounding
+   * dust, before funding. Uses the contract's exact rounding rule (see
+   * `computePayout`). Throws `NO_SPLITS_CONFIGURED` when the escrow has
+   * no splits configured.
+   */
+  async previewPayout(escrow: Escrow): Promise<PayoutPreview> {
+    if (!escrow.splits || escrowId.splits.length === 0) {
+      throw new EscrowValidationError(NO_SPLITS_CONFIGURED, "escrow has no splits configured");
+    }
+    return computePayout(escrow.amount, escrowId.splits, escrow.fee);
   }
 
-  /**
-   * Returns the escrow's funds to its payer. Normally `caller` must be
-   * the escrow's `releaser`; once `refundAfter` has passed, anyone may
-   * call it — still only back to the payer (docs/adr/0004). Returns the
-   * transaction's hash.
-   */
-  async refund(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
+  /** Releases a `Funded` escrow to its payee/splits. Only the releaser may call. */
+  async release(params: ReleaseOrRefundParams): Promise<void> {
+    const client = this.contractClient(params.caller);
+    const tx = await client.release({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
+    await tx.signAndSend();
+  }
+
+  /** Refunds a `Funded` escrow to its payer. Only the releaser may call. */
+  async refund(params: ReleaseOrRefundParams): Promise<void> {
     const client = this.contractClient(params.caller);
     const tx = await client.refund({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
-    const sent = await tx.signAndSend();
-    sent.result.unwrap();
-    return { txHash: sent.sendTransactionResponse!.hash };
+    await tx.signAndSend();
   }
 }

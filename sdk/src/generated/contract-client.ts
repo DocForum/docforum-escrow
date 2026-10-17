@@ -62,21 +62,36 @@ export interface EscrowData {
   payee: string;
   payer: string;
   /**
- * Optional deadline (unix seconds) after which `refund` opens to
- * anyone — still only back to `payer`. `None` means no timeout,
- * behaviour identical to before this field existed — see docs/adr/0004.
- */
-refund_after: Option<u64>;
+   * Split payout recipients and their basis-point shares (summing to
+   * 10,000). Empty/absent means a single-recipient payout to `payee`.
+   */
+  splits: Option<Array<SplitRecipient>>;
   /**
- * The only address permitted to call `release`/`refund` on this
- * escrow. Set once at `create_escrow` time — see docs/adr/0002.
- */
-releaser: string;
+   * Protocol fee in basis points (0–10,000) taken from `amount` before
+   * the remainder is split among recipients.
+   */
+  fee_bps: Option<u32>;
+  /**
+   * Optional deadline (unix seconds) after which `refund` opens to
+   * anyone — still only back to `payer`. `None` means no timeout,
+   * behaviour identical to before this field existed — see docs/adr/0004.
+   */
+  refund_after: Option<u64>;
+  /**
+   * The only address permitted to call `release`/`refund` on this
+   * escrow. Set once at `create_escrow` time — see docs/adr/0002.
+   */
+  releaser: string;
   status: EscrowStatus;
   token: string;
 }
 
 export type EscrowStatus = {tag: "Funded", values: void} | {tag: "Released", values: void} | {tag: "Refunded", values: void};
+
+export interface SplitRecipient {
+  recipient: string;
+  bps: u32;
+}
 
 export interface Client {
   /**
@@ -136,7 +151,7 @@ export interface Client {
    * Requires `payer` auth (the contract moves their funds). Returns
    * the new escrow's id.
    */
-  create_escrow: ({payer, payee, token, amount, condition_ref, releaser, refund_after}: {payer: string, payee: string, token: string, amount: i128, condition_ref: string, releaser: string, refund_after: Option<u64>}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u64>>>
+  create_escrow: ({payer, payee, token, amount, condition_ref, releaser, refund_after, splits, fee_bps}: {payer: string, payee: string, token: string, amount: i128, condition_ref: string, releaser: string, refund_after: Option<u64>, splits: Option<Array<SplitRecipient>>, fee_bps: Option<u32>}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u64>>>
 
 }
 export class Client extends ContractClient {

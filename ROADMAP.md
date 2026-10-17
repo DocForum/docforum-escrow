@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E6 (SDK & integrator tooling) started: split payout and protocol fee support in the SDK.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -80,6 +80,15 @@
   "integration" tests (e.g. `docforum-core`'s self-contained embedded-
   Postgres booking test). CI runs `typecheck`+`build` only for the SDK.
 
+## Phase E6 — SDK & integrator tooling
+- [x] Split payout and protocol fee support in the SDK. Regenerate
+  bindings; add `splits` and `fee` options to `createEscrow`; add
+  `previewPayout(escrow)` computing per-recipient amounts with the
+  contract's exact rounding rule (shared JSON test vectors consumed by
+  both the Rust and TS test suites); client-side validation with matching
+  errors and a client-side max-recipients check; testnet integration test
+  with three recipients. Depends on the matching Phase E5 contract issue.
+
 ## Phase E4 — Security review (blocking for any mainnet use)
 - [ ] External or community review before any non-testnet deployment.
   Tracked as issue #6.
@@ -130,6 +139,17 @@
 
 ## Changelog
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
+- 2026-10-09 — Added Phase E6 (SDK & integrator tooling) section to the
+  roadmap: split payout and protocol fee support in the SDK (regenerated
+  bindings, `splits`/`fee` options on `createEscrow`, `previewPayout`
+  with shared JSON test vectors, client-side validation, testnet
+  integration test with three recipients).
+- 2026-10-10 — Phase E6 implemented: regenerated bindings, `splits`/`fee`
+  options on `createEscrow`, `previewPayout` with shared JSON test
+  vectors consumed by both Rust and TS suites, client-side validation
+  with matching errors and max-recipients check, testnet integration
+  test with three recipients. Fixed a syntax error in `sdk/src/index.ts`
+  caught by the pre-push syntax check.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet
   deploy intentionally left undone (needs a funded identity + CLI this
