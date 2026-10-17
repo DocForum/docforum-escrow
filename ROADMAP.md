@@ -5,6 +5,13 @@
 
 **Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
 
+## Phase E5 — Contract lifecycle and upgrades
+- [x] Decide whether deployed contracts are upgradeable. Issue #34 is
+  closed by ADR 0005: keep deployments immutable and use a documented
+  redeployment and old-escrow settlement procedure. No admin, timelock,
+  or storage migration hook is added. The Phase E4 independent security
+  review still blocks any mainnet deployment.
+
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
   (`cargo build --target wasm32v1-none --release`) — 4 passing tests in
@@ -129,6 +136,11 @@
   repo's.
 
 ## Changelog
+- 2026-10-17 — Closed issue #34 with ADR 0005: retain immutable contract
+  deployments, document why an upgrade key/timelock is not adopted, and
+  describe testnet redeployment plus settlement tracking for old escrows.
+  Updated README and threat model with the decision and its operational
+  multi-deployment risk. No contract code changed.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet
