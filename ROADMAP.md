@@ -80,6 +80,9 @@
   "integration" tests (e.g. `docforum-core`'s self-contained embedded-
   Postgres booking test). CI runs `typecheck`+`build` only for the SDK.
 
+## Phase E5 - Contract features
+- [ ] Issue #48 - ADR + implementation: reclaim storage for settled escrows. ADR in docs/adr/0005-reclaim-storage-for-settled-escrows.md (tombstone on settlement; get_status still returns Released/Refunded, get_escrow errors NotFound, ids never reused, events carry full history). Closes issue #48.
+
 ## Phase E4 â€” Security review (blocking for any mainnet use)
 - [ ] External or community review before any non-testnet deployment.
   Tracked as issue #6.
@@ -305,3 +308,5 @@
   #12 were opened and closed in between). #16 merged with an empty diff
   because its branch's merge from `main` kept `main`'s ROADMAP.md
   wholesale.
+
+- 2026-10-16 — Closed issue #48 (Phase E5: reclaim storage for settled escrows). ADR first: docs/adr/0005-reclaim-storage-for-settled-escrows.md compares delete-on-settlement / tombstone / keep-everything, and picks tombstone. On release/refund the full EscrowData is removed and replaced with SettledEscrow { status } under DataKey::SettledEscrow(id). get_status still returns Released/Refunded from tombstone; get_escrow errors NotFound for settled ids; NextId untouched so ids are never reused. Prerequisite: EscrowCreated / EscrowReleased / EscrowRefunded events now emit from create_escrow / release / refund so full history is preserved before the record is removed. 6 new tests in contracts/escrow/tests/reclaim_storage.rs. Breaking change: SDK @docforum/escrow-sdk 0.3.0 -> 0.4.0. ARCHITECTURE_ESSENTIALS.md, README.md updated. Closes issue #48.
