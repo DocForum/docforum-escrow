@@ -60,6 +60,8 @@ jobs:
 
       - run: npm run build
 
+      - run: npm test
+
       # Deliberately NOT run here: `npm run test:integration`
       # (tests/testnet-integration.test.ts) — it depends on live testnet
       # + Friendbot funding, a materially different reliability profile
