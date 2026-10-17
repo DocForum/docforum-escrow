@@ -11,6 +11,8 @@ import { Keypair } from "@stellar/stellar-sdk";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
 
 export { Keypair };
+export { EscrowIndexerClient } from "./indexer-client.js";
+export type { EscrowIndexerClientConfig, EscrowPage, IndexedEscrow } from "./indexer-client.js";
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";
 

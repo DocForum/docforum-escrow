@@ -14,7 +14,7 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, String};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -120,6 +120,7 @@ impl EscrowContract {
             refund_after,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        Self::publish_state(&env, symbol_short!("created"), id, &data);
         Ok(id)
     }
 
@@ -176,6 +177,7 @@ impl EscrowContract {
 
         data.status = EscrowStatus::Released;
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        Self::publish_state(&env, symbol_short!("released"), escrow_id, &data);
         Ok(())
     }
 
@@ -214,7 +216,29 @@ impl EscrowContract {
 
         data.status = EscrowStatus::Refunded;
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        Self::publish_state(&env, symbol_short!("refunded"), escrow_id, &data);
         Ok(())
+    }
+
+    fn publish_state(env: &Env, action: soroban_sdk::Symbol, id: u64, data: &EscrowData) {
+        let status = match &data.status {
+            EscrowStatus::Funded => symbol_short!("Funded"),
+            EscrowStatus::Released => symbol_short!("Released"),
+            EscrowStatus::Refunded => symbol_short!("Refunded"),
+        };
+        env.events().publish(
+            (symbol_short!("ESCROW"), action, id),
+            (
+                data.payer.clone(),
+                data.payee.clone(),
+                data.token.clone(),
+                data.amount,
+                data.condition_ref.clone(),
+                data.releaser.clone(),
+                data.refund_after,
+                status,
+            ),
+        );
     }
 
     fn next_id(env: &Env) -> u64 {
