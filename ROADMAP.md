@@ -129,6 +129,9 @@
   repo's.
 
 ## Changelog
+- 2026-10-17 — Added SDK support for relayed release/refund submission
+  (issue #86): the releaser signs a ten-ledger authorization entry, while a
+  separate relayer signs and pays for the transaction envelope.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

@@ -7,7 +7,7 @@
 // (payer/payee/amount, not e.g. "patient"). Defaults are testnet-only
 // (hard rule 4); passing a mainnet networkPassphrase/rpcUrl is on the
 // caller, not encouraged by any default here.
-import { Keypair } from "@stellar/stellar-sdk";
+import { contract, Keypair, rpc } from "@stellar/stellar-sdk";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
 
 export { Keypair };
@@ -75,6 +75,19 @@ export interface ReleaseOrRefundParams {
   escrowId: bigint;
   /** Must be the escrow's `releaser` (set at creation) — see docs/adr/0002. */
   caller: Keypair;
+}
+
+/** The relayer pays the transaction fee; the releaser signs only contract auth. */
+export interface RelayedAuthorizationParams {
+  escrowId: bigint;
+  releaser: Keypair;
+  relayer: Keypair;
+}
+
+/** Serialized, simulated transaction containing a short-lived signed auth entry. */
+export interface RelayedAuthorization {
+  transaction: string;
+  expiresAtLedger: number;
 }
 
 /**
@@ -172,5 +185,67 @@ export class EscrowClient {
     const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Simulate `release` as the relayer and return a signed, short-lived auth
+   * transaction for the releaser. The transaction is not submitted here.
+   */
+  async authorizeRelease(params: RelayedAuthorizationParams): Promise<RelayedAuthorization> {
+    const client = this.contractClient(params.relayer);
+    const tx = await client.release({
+      escrow_id: params.escrowId,
+      caller: params.releaser.publicKey(),
+    });
+    const expiresAtLedger = await this.authExpiryLedger();
+    const { signAuthEntry } = contract.basicNodeSigner(params.releaser, this.networkPassphrase);
+    await tx.signAuthEntries({
+      address: params.releaser.publicKey(),
+      expiration: expiresAtLedger,
+      signAuthEntry,
+    });
+    return { transaction: tx.toJSON(), expiresAtLedger };
+  }
+
+  /**
+   * Simulate `refund` as the relayer and return a signed, short-lived auth
+   * transaction for the releaser. Timeout refunds remain contract-permissioned.
+   */
+  async authorizeRefund(params: RelayedAuthorizationParams): Promise<RelayedAuthorization> {
+    const client = this.contractClient(params.relayer);
+    const tx = await client.refund({
+      escrow_id: params.escrowId,
+      caller: params.releaser.publicKey(),
+    });
+    const expiresAtLedger = await this.authExpiryLedger();
+    const { signAuthEntry } = contract.basicNodeSigner(params.releaser, this.networkPassphrase);
+    await tx.signAuthEntries({
+      address: params.releaser.publicKey(),
+      expiration: expiresAtLedger,
+      signAuthEntry,
+    });
+    return { transaction: tx.toJSON(), expiresAtLedger };
+  }
+
+  /** Submit a previously authorized transaction; the relayer signs the envelope and pays the fee. */
+  async submitRelayed(
+    kind: "release" | "refund",
+    authorization: RelayedAuthorization,
+    relayer: Keypair,
+  ): Promise<{ txHash: string }> {
+    const client = this.contractClient(relayer);
+    const tx = kind === "release"
+      ? client.fromJSON.release(authorization.transaction)
+      : client.fromJSON.refund(authorization.transaction);
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  private async authExpiryLedger(): Promise<number> {
+    // Ten ledgers is short enough to limit replay exposure while allowing
+    // the releaser to return the authorization to the relayer.
+    const latest = await new rpc.Server(this.rpcUrl).getLatestLedger();
+    return latest.sequence + 10;
   }
 }
