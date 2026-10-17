@@ -59,11 +59,7 @@ param existed.
 regenerate it whenever the contract's public signatures/types change.
 `sdk/src/index.ts` is the actual public surface (hand-written, ergonomic
 wrapper) — consumers import from the package root, never from
-`src/generated/` directly.
-
-`condition_ref` is an **opaque string/id** the contract does not interpret
-— it's the caller's job (e.g. `docforum-core`) to decide when release is
-warranted and call `release()`. `releaser` is the one address permitted
+`src/generated/` directly.`condition_ref` is an **opaque string/id** the contract does not interpret, bounded to 64 bytes at creation (error `ConditionRefTooLong = 7`; SDK constant `MAX_CONDITION_REF_LENGTH`) — it's the caller's job (e.g. `docforum-core`) to decide when release is warranted and call `release()`. `releaser` is the one address permitted
 to call `release`/`refund` for that specific escrow, set once at
 `create_escrow` time — see `docs/adr/0002` for why a per-escrow releaser
 was chosen over a single contract-level admin. The one exception is the

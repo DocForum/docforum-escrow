@@ -246,6 +246,15 @@ behave like SEP-41.
   `condition_ref` strings. The caller pays the rent for what they write,
   and `NextId` is a `u64`, so this isn't a meaningful attack. Listed so
   a reviewer doesn't need to rediscover it.
+- **Mitigation (Phase E5):** `condition_ref` is bounded to 64 bytes and
+  validated at creation (contract error `ConditionRefTooLong = 7`);
+  the SDK also validates client-side via `MAX_CONDITION_REF_LENGTH`.
+  64 bytes was chosen to fit a UUID (36 chars), a short urn identifier,
+  or a human-readable label, while capping per-escrow storage and event
+  payload cost. Current observed refs in tests are far shorter
+  ("opaque-condition-ref", "sdk-integration-test-release"). Breaking
+  for integrators passing longer refs — checked `docforum-core`'s usage
+  pattern (opaque record id) and it stays well within the bound.
 
 ## 4. SDK-specific notes (`sdk/src/index.ts`)
 

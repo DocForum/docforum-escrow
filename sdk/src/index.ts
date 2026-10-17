@@ -39,6 +39,17 @@ export interface Escrow {
 const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
 const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
 
+/**
+ * Maximum allowed length of `conditionRef` in bytes — must match the
+ * contract's bound (currently 64 bytes, see contracts/escrow/src/lib.rs
+ * and docs/threat-model.md T10). Validated client-side so callers fail
+ * fast instead of paying network fees for a rejected transaction.
+ *
+ * Keep in sync with the contract: if the contract bound changes, update
+ * this constant and bump the SDK's semver (hard rule 3).
+ */
+export const MAX_CONDITION_REF_LENGTH = 64;
+
 export interface EscrowClientConfig {
   /** The deployed docforum-escrow contract's address (`C…`). */
   contractId: string;
@@ -104,6 +115,11 @@ export class EscrowClient {
 
   /** Locks `amount` of `token` from `payer`, held for `payee`. Returns the new escrow's id and the funding transaction's hash. */
   async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
+    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+      throw new Error(
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+      );
+    }
     const client = this.contractClient(params.payer);
     const tx = await client.create_escrow({
       payer: params.payer.publicKey(),

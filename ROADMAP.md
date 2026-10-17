@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (bound condition_ref length) started — see below; not yet redeployed to testnet.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -122,6 +122,21 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E5 — Bound condition_ref length and validate it at creation
+- [x] Pick a maximum length (64 bytes) based on observed integrator usage
+  (UUIDs, short labels; existing test refs far shorter), document the
+  rationale, and reject longer refs with a new error code
+  (`ConditionRefTooLong = 7`) at creation — closes issue #57.
+- [x] Update the SDK to validate the same bound client-side with a shared
+  constant (`MAX_CONDITION_REF_LENGTH`), so callers fail fast instead of
+  paying network fees for a rejected transaction.
+- [x] Update T10 in `docs/threat-model.md` with the bound and rationale,
+  and update `README.md` + `ARCHITECTURE_ESSENTIALS.md` to surface the
+  new contract/SDK surface. Contract tests added in
+  `contracts/escrow/tests/create_escrow.rs` (hard rule 2).
+- [ ] Redeploy to testnet with the new error code and verify live.
+  (Breaking contract change — needs a new deployment + tarball per ADR 0003.)
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -129,6 +144,11 @@
   repo's.
 
 ## Changelog
+- 2026-10-17 — Phase E5 started: bounded `condition_ref` to 64 bytes at
+  creation (new error `ConditionRefTooLong = 7`), added contract test,
+  added SDK client-side validation (`MAX_CONDITION_REF_LENGTH`), updated
+  T10, README and ARCHITECTURE_ESSENTIALS.md. Not yet redeployed to
+  testnet. Closes issue #57.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

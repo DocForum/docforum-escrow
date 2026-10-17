@@ -97,3 +97,45 @@ fn get_status_errors_for_unknown_escrow() {
     let result = client.try_get_status(&999);
     assert!(result.is_err());
 }
+
+#[test]
+fn create_escrow_rejects_condition_ref_that_is_too_long() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (token_id, _token, asset) = setup(&env);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    asset.mint(&payer, &1_000);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // 64 bytes is accepted (the bound is inclusive).
+    let max_ref = "a".repeat(64);
+    let result = client.try_create_escrow(
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(&env, &max_ref),
+        &releaser,
+        &None,
+    );
+    assert!(result.is_ok());
+
+    // 65 bytes is rejected with ConditionRefTooLong.
+    let too_long_ref = "a".repeat(65);
+    let result = client.try_create_escrow(
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(&env, &too_long_ref),
+        &releaser,
+        &None,
+    );
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err(), docforum_escrow::Error::ConditionRefTooLong);
+}

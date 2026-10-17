@@ -40,7 +40,7 @@ Two reasons, stated plainly rather than blended together:
 
 | Function | Status | Description |
 |---|---|---|
-| `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id` | ✅ Implemented | Pulls `amount` of `token` from `payer` (requires `payer` auth), stores an opaque `condition_ref`, sets status `Funded`. Rejects non-positive amounts, and any `refund_after` that isn't strictly in the future. |
+| `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id` | ✅ Implemented | Pulls `amount` of `token` from `payer` (requires `payer` auth), stores an opaque `condition_ref` (max 64 bytes — Phase E5 bound), sets status `Funded`. Rejects non-positive amounts, any `refund_after` that isn't strictly in the future, and any `condition_ref` longer than 64 bytes (`ConditionRefTooLong`, error 7). |
 | `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
@@ -61,7 +61,11 @@ for the decision and what it means for payees.
 call `release`/`refund`, never **why**. `condition_ref` is an opaque
 string the contract stores but never interprets — all domain
 interpretation (what counts as "fulfilled," who's authorized to attest to
-it) is the consuming application's job. See
+it) is the consuming application's job. The contract bounds `condition_ref`
+to 64 bytes at creation (error 7, `ConditionRefTooLong`) to keep storage
+and event costs predictable (threat model T10, Phase E5); the SDK
+validates the same bound client-side via `MAX_CONDITION_REF_LENGTH`.
+See
 [ADR 0001](docs/adr/0001-generic-escrow-not-healthcare-specific.md).
 
 ## How it's used
