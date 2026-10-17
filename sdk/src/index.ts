@@ -1,3 +1,4 @@
+
 // @docforum/escrow-sdk — ergonomic wrapper around the generated Soroban
 // contract client (src/generated/contract-client.ts). Consumers (e.g.
 // docforum-core's `payments` module — see its ARCHITECTURE.md ADR 0002)
@@ -11,6 +12,26 @@ import { Keypair } from "@stellar/stellar-sdk";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
 
 export { Keypair };
+
+/**
+ * Basis-point denominator used by the contract for split payouts and the
+ * protocol fee. Recipient splits must sum to exactly this value.
+ */
+export const BPS_DENOMINATOR = 10_000n;
+
+/** Maximum number of recipients the contract accepts in a split payout. */
+export const MAX_SPLIT_RECIPIENTS = 10;
+
+/** One entry in a split payout: an address and its share in basis points. */
+export interface SplitRecipient {
+  /** Destination address (`G…`) that receives this share. */
+  recipient: string;
+  /** Share of the escrow amount, in basis points (1 bps = 0.01%). */
+  bps: number;
+}
+
+/** Protocol fee applied to an escrow, in basis points. */
+export type ProtocolFee = number;
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";
 
@@ -33,6 +54,14 @@ export interface Escrow {
    * relying on a `Funded` escrow (threat model T8).
    */
   refundAfter?: bigint;
+  /**
+   * Split payout recipients, in contract order. Empty when the escrow pays
+   * a single `payee` (legacy behaviour). When non-empty, `payee` is unused
+   * and funds are distributed per `previewPayout`.
+   */
+  splits: SplitRecipient[];
+  /** Protocol fee in basis points applied to this escrow. */
+  fee: ProtocolFee;
   status: EscrowStatus;
 }
 
@@ -69,12 +98,111 @@ export interface CreateEscrowParams {
    * releaser-only, exactly as in 0.2.x.
    */
   refundAfter?: bigint;
+  /**
+   * Optional split payout. When provided, must contain between 1 and
+   * `MAX_SPLIT_RECIPIENTS` entries whose `bps` sum to exactly
+   * `BPS_DENOMINATOR` (10,000). When omitted, funds go entirely to `payee`.
+   */
+  splits?: SplitRecipient[];
+  /**
+   * Optional protocol fee in basis points, in `[0, BPS_DENOMINATOR]`.
+   * Deducted from the escrow amount before splits are applied.
+   */
+  fee?: ProtocolFee;
 }
 
 export interface ReleaseOrRefundParams {
   escrowId: bigint;
   /** Must be the escrow's `releaser` (set at creation) — see docs/adr/0002. */
   caller: Keypair;
+}
+
+/** A single recipient's computed payout, as returned by `previewPayout`. */
+export interface PayoutShare {
+  /** Destination address. */
+  recipient: string;
+  /** Exact amount this recipient receives, in token base units. */
+  amount: bigint;
+}
+
+/** Result of `previewPayout`: per-recipient amounts plus the protocol fee. */
+export interface PayoutPreview {
+  /** Amount routed to each recipient, in contract order. */
+  shares: PayoutShare[];
+  /** Amount routed to the protocol fee collector. */
+  feeAmount: bigint;
+  /** Sum of `shares[].amount` plus `feeAmount`; equals the escrow amount. */
+  total: bigint;
+}
+
+/** Thrown by client-side validation before any network call is made. */
+export class EscrowValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EscrowValidationError";
+  }
+}
+
+/**
+ * Validates `splits` and `fee` against the contract's rules, throwing
+ * `EscrowValidationError` with a message matching the contract's error.
+ */
+export function validateSplits(splits: SplitRecipient[] | undefined, fee: ProtocolFee | undefined): void {
+  if (fee !== undefined) {
+    if (!Number.isInteger(fee) || fee < 0 || BigInt(fee) > BPS_DENOMINATOR) {
+      throw new EscrowValidationError("InvalidFee: fee must be an integer in [0, 10000] bps");
+    }
+  }
+  if (splits === undefined) {
+    return;
+  }
+  if (splits.length === 0) {
+    throw new EscrowValidationError("EmptySplits: splits must contain at least one recipient");
+  }
+  if (splits.length > MAX_SPLIT_RECIPIENTS) {
+    throw new EscrowValidationError(
+      `TooManyRecipients: splits may contain at most ${MAX_SPLIT_RECIPIENTS} recipients`,
+    );
+  }
+  let sum = 0n;
+  for (const split of splits) {
+    if (!Number.isInteger(split.bps) || split.bps < 0) {
+      throw new EscrowValidationError("InvalidSplit: each split bps must be a non-negative integer");
+    }
+    sum += BigInt(split.bps);
+  }
+  if (sum !== BPS_DENOMINATOR) {
+    throw new EscrowValidationError(
+      `InvalidSplitSum: splits must sum to ${BPS_DENOMINATOR} bps (got ${sum})`,
+    );
+  }
+}
+
+/**
+ * Computes per-recipient amounts for `escrow` using the contract's exact
+ * rounding rule: the fee is floored first, then each split amount is
+ * floored, and any rounding dust is added to the final recipient so the
+ * shares always sum to the escrow amount minus the fee. Matches the Rust
+ * implementation bit-for-bit (see shared test vectors).
+ */
+export function previewPayout(escrow: Escrow): PayoutPreview {
+  const feeAmount = (escrow.amount * BigInt(escrow.fee)) / BPS_DENOMINATOR;
+  const distributable = escrow.amount - feeAmount;
+  const splits = escrow.splits.length > 0
+    ? escrow.splits
+    : [{ recipient: escrow.payee, bps: Number(BPS_DENOMINATOR) }];
+  const shares: PayoutShare[] = [];
+  let allocated = 0n;
+  for (let i = 0; i < splits.length; i++) {
+    const split = splits[i];
+    const isLast = i === splits.length - 1;
+    const amount = isLast
+      ? distributable - allocated
+      : (distributable * BigInt(split.bps)) / BPS_DENOMINATOR;
+    allocated += amount;
+    shares.push({ recipient: split.recipient, amount });
+  }
+  return { shares, feeAmount, total: escrow.amount };
 }
 
 /**
@@ -104,6 +232,7 @@ export class EscrowClient {
 
   /** Locks `amount` of `token` from `payer`, held for `payee`. Returns the new escrow's id and the funding transaction's hash. */
   async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
+    validateSplits(params.splits, params.fee);
     const client = this.contractClient(params.payer);
     const tx = await client.create_escrow({
       payer: params.payer.publicKey(),
@@ -113,6 +242,8 @@ export class EscrowClient {
       condition_ref: params.conditionRef,
       releaser: params.releaser,
       refund_after: params.refundAfter,
+      splits: params.splits?.map((s) => ({ recipient: s.recipient, bps: s.bps })),
+      fee: params.fee,
     });
     const sent = await tx.signAndSend();
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
@@ -147,8 +278,16 @@ export class EscrowClient {
       // public surface uses `undefined` for "no deadline" (consistent
       // with `CreateEscrowParams.refundAfter` being absent).
       refundAfter: data.refund_after ?? undefined,
+      splits: (data.splits ?? []).map((s) => ({ recipient: s.recipient, bps: s.bps })),
+      fee: data.fee ?? 0,
       status: data.status.tag,
     };
+  }
+
+  /** Read-only: previews per-recipient amounts for `escrowId` before funding. */
+  async previewPayout(escrowId: bigint): Promise<PayoutPreview> {
+    const escrow = await this.getEscrow(escrowId);
+    return previewPayout(escrow);
   }
 
   /** Moves the escrow's funds to its payee. Throws if `caller` isn't the escrow's `releaser`, or the escrow isn't `Funded`. Returns the transaction's hash. */
