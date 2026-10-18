@@ -153,6 +153,13 @@ The TypeScript SDK (`sdk/`) wraps the contract and provides event history
 and subscription helpers. The SDK helpers are versioned 0.4.0; lifecycle
 event monitoring becomes active after issue #9 adds contract events.
 
+The SDK runtime matrix is checked in CI against Node.js 20, 22, and 24,
+Bun, Deno 2, and Chromium via Playwright. Node.js 20 is a compatibility
+probe; supported Node.js versions start at 22 because the current
+`@stellar/stellar-sdk` dependency requires Node.js 22 or newer. The runtime
+and browser smoke checks use local fixtures and make no testnet calls or
+require secrets.
+
 ## Documentation
 
 | Doc | Purpose |

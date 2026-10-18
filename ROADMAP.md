@@ -131,6 +131,11 @@
 - [x] Recorded event fixture tests cover decoding, unknown topics, cursor
   resumption, retention errors, and subscription stopping. Depends on
   contract lifecycle events from issue #9; no contract changes here.
+- [x] Issue #83 runtime compatibility matrix: Node.js 20/22/24, Bun, Deno,
+  and a Playwright Chromium smoke test using local fixtures. Node.js 20 is
+  a compatibility probe; supported Node.js versions start at 22 to match
+  the Stellar SDK dependency. Checks do not access testnet or require
+  secrets.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -139,6 +144,12 @@
   repo's.
 
 ## Changelog
+- 2026-10-18 — Issue #83 (Phase E6): added CI runtime checks for Node.js
+  20/22/24, Bun, Deno 2, and Playwright Chromium. Added local-only runtime
+  and browser smoke checks, declared Node.js 22+ support to match
+  `@stellar/stellar-sdk`, and documented Node.js 20 as a compatibility
+  probe. No contract changes.
+
 - 2026-10-17 — Issue #63 (Phase E6): added SDK `getEvents` pagination and
   typed lifecycle-event decoding, preserving unknown topic variants for
   forward compatibility. Added cursor-resumable serial polling with
