@@ -3,7 +3,11 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
+ security/issue-89-phase-e7-scripted-deterministic-contract
 **Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR-0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E7 (deterministic deployment) started.**
+
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm.**
+ main
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -107,6 +111,7 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+ security/issue-89-phase-e7-scripted-deterministic-contract
 ## Phase in E7 — Verification, testing & release engineering
 - [ ] Scripted, deterministic contract deployment with automatic
   deployment records. Tracked as the Phase in E7 issue. Scope:
@@ -122,6 +127,24 @@
   Definition of done includes one real testnet deployment done with
   the script (link the record).
 
+## Phase E6 — SDK & integrator tooling
+- [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
+  triggered by an `sdk-v*` tag: builds, typechecks, tests, runs
+  `npm publish --provenance`, and attaches the tarball to the GitHub
+  Release (kept for existing consumers per ADR 0003). Uses npm trusted
+  publishing (OIDC, `id-token: write`) so no long-lived token sits in
+  secrets; refuses to publish if the tag doesn't match `package.json`'s
+  version. Closes issue #16.
+- [x] Adopted changesets (`.changeset/`, `@changesets/cli`) for version
+  bumps and changelogs; `sdk/package.json` gained `changeset`/
+  `version`/`release` scripts and `publishConfig` with provenance.
+- [x] Superseding ADR written: `docs/adr/0005` supersedes ADR 0003's
+  interim tarball-only decision now that npm publishing is going live.
+- [ ] One-time human steps (npm org creation, trusted-publisher setup for
+  the release workflow) — documented in `CONTRIBUTING.md`; not yet done,
+  so `sdk-v0.3.0` is not yet published to npm.
+ main
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -129,7 +152,22 @@
   repo's.
 
 ## Changelog
+- 2026-10-17 — Issue #63 (Phase E6): added SDK `getEvents` pagination and
+  typed lifecycle-event decoding, preserving unknown topic variants for
+  forward compatibility. Added cursor-resumable serial polling with
+  handler back-pressure and typed RPC-retention errors. Committed Soroban
+  XDR event fixtures cover decoding, filters, unknown topics, cursor
+  resume, retention errors, and stopping. Bumped the additive SDK surface
+  from 0.3.0 to 0.4.0. SDK typecheck/build and contract tests/build pass;
+  lifecycle events remain unavailable until issue #9 changes the contract.
+
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
+- 2026-10-09 — Phase E6 started: added `.github/workflows/release-sdk.yml`
+  (tag-triggered `sdk-v*` build/test/`npm publish --provenance` + GitHub
+  Release tarball, OIDC trusted publishing, tag/version guard), adopted
+  changesets, wrote `docs/adr/0005` superseding ADR 0003, and documented
+  the one-time npm org/trusted-publishing human steps in `CONTRIBUTING.md`.
+  npm publish itself still pending those human steps. Closes issue #16.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet
   deploy intentionally left undone (needs a funded identity + CLI this
