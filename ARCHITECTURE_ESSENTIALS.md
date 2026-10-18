@@ -50,6 +50,15 @@ await client.getEscrow(escrowId);            // full stored record — incl. rel
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
 await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter has passed
 ```
+`CreateEscrowParams.payer` and `ReleaseOrRefundParams.caller` accept a
+`Keypair` or Stellar SDK `Signer` (for wallet adapters and external signing
+services). The `docforum-escrow` command is published as an npm bin by the
+SDK package and supports create/status/show/release/refund plus event listing.
+Its local signer inputs are a key file, an environment variable (default
+`DOCFORUM_SECRET_KEY`), or a hidden interactive prompt; never pass secret
+keys in command arguments. State-changing operations ask for confirmation
+unless `--yes` is supplied. `--dry-run` simulates without submitting.
+
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
 for no timeout, which behaves exactly as this contract did before the

@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3 SDK wrappers done; distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress; independent review remains required before mainnet use. Phase E6 operator CLI (issue #88) in progress.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -122,6 +122,9 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E6 — SDK & integrator tooling
+- [ ] [#88](https://github.com/DocForum/docforum-escrow/issues/88) Operator CLI: create, inspect, release, refund, and list contract events. Implementation underway: CLI commands, signer sources, JSON output, simulation, confirmation, and parser tests.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -129,6 +132,7 @@
   repo's.
 
 ## Changelog
+- 2026-10-18 — Started Phase E6 / issue #88: added the `docforum-escrow` SDK CLI with create/status/show/release/refund and event-list commands, key-file/environment/hidden-prompt signing, explicit confirmation, dry-run and JSON modes. Added parser tests and SDK signer-interface support. Verification and local-network integration work in progress.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet

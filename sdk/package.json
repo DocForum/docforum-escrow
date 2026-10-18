@@ -1,6 +1,6 @@
 {
   "name": "@docforum/escrow-sdk",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "TypeScript client for the docforum-escrow Soroban contract.",
   "type": "module",
   "main": "dist/index.js",
@@ -8,10 +8,14 @@
   "files": [
     "dist"
   ],
+  "bin": {
+    "docforum-escrow": "dist/cli.js"
+  },
   "scripts": {
     "prepare": "npm run build",
     "build": "tsc",
-    "test": "echo 'No fast/mocked tests yet — this SDK is a thin wrapper with no pure logic to unit test in isolation. See test:integration.'",
+    "test": "vitest run tests/cli-args.test.ts",
+    "test:unit": "vitest run tests/cli-args.test.ts",
     "test:integration": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -19,6 +23,7 @@
     "@stellar/stellar-sdk": "^16.0.1"
   },
   "devDependencies": {
+    "@types/node": "^26.6.5",
     "typescript": "^5.6.2",
     "vitest": "^4.1.11"
   }

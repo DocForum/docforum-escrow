@@ -1,5 +1,33 @@
 # Testnet deployments
 
+## Operator CLI
+
+The SDK package installs the `docforum-escrow` command. From this repository,
+run `npm ci && npm link` in `sdk/` to use it locally. The current deployment
+is testnet only; the CLI defaults to the Stellar testnet RPC and passphrase.
+Create a signer file with restrictive permissions (`chmod 600`) or set
+`DOCFORUM_SECRET_KEY`; the CLI also accepts `--signer-env NAME` to select a
+different environment variable. Without either source it prompts with hidden
+input. Do not put secret keys in argv.
+
+```bash
+docforum-escrow create --contract-id CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5 \
+  --payee G... --token CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC \
+  --amount 1000000 --condition-ref order-123 --releaser G... --json
+docforum-escrow status --contract-id CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5 --escrow-id 0 --json
+docforum-escrow show --contract-id CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5 --escrow-id 0 --json
+docforum-escrow release --contract-id CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5 --escrow-id 0 --yes
+docforum-escrow refund --contract-id CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5 --escrow-id 0 --dry-run --json
+docforum-escrow list --contract-id CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5 --from-events --start-ledger 1 --json
+```
+
+`--dry-run` performs Soroban simulation and skips submission. Mutating commands
+require interactive confirmation; use `--yes` for automated submitters.
+Mainnet passphrases are rejected unless `--allow-mainnet` is passed explicitly.
+`list --from-events` returns contract events in the selected ledger range; the
+current escrow contract does not yet publish lifecycle events, so this may be
+empty until event support is added.
+
 ## `docforum_escrow` — 2026-10-08 (Phase E4: `refund_after` timeout refund + `get_escrow`)
 
 | | |

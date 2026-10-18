@@ -121,8 +121,9 @@ contract id, transaction links, and the exact `stellar` CLI commands to
 redeploy. **Mainnet is out of scope until the Phase E4 security review is
 complete — see [hard rule 4](ARCHITECTURE_ESSENTIALS.md#hard-rules).**
 
-The TypeScript SDK (`sdk/`) is still a placeholder — see
-[issue #4](https://github.com/DocForum/docforum-escrow/issues/4).
+The TypeScript SDK and operator CLI are in [`sdk/`](sdk/). The CLI keeps
+signing secrets out of command arguments; see the operator guide in
+[`docs/testnet-deployments.md`](docs/testnet-deployments.md).
 
 ## Documentation
 
