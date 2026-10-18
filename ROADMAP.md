@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -122,20 +122,22 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
-## Phase E6 — SDK event history and subscriptions
-- [x] `getEvents` decodes typed lifecycle events, supports ledger/cursor
-  pagination, event-type and escrow-id filters, and reports expired RPC
-  cursors as `EventCursorExpiredError`.
-- [x] `subscribe` polls serially with resumable cursors and configurable
-  intervals, applying back-pressure by awaiting each handler.
-- [x] Recorded event fixture tests cover decoding, unknown topics, cursor
-  resumption, retention errors, and subscription stopping. Depends on
-  contract lifecycle events from issue #9; no contract changes here.
-- [x] Issue #83 runtime compatibility matrix: Node.js 20/22/24, Bun, Deno,
-  and a Playwright Chromium smoke test using local fixtures. Node.js 20 is
-  a compatibility probe; supported Node.js versions start at 22 to match
-  the Stellar SDK dependency. Checks do not access testnet or require
-  secrets.
+## Phase E6 — SDK & integrator tooling
+- [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
+  triggered by an `sdk-v*` tag: builds, typechecks, tests, runs
+  `npm publish --provenance`, and attaches the tarball to the GitHub
+  Release (kept for existing consumers per ADR 0003). Uses npm trusted
+  publishing (OIDC, `id-token: write`) so no long-lived token sits in
+  secrets; refuses to publish if the tag doesn't match `package.json`'s
+  version. Closes issue #16.
+- [x] Adopted changesets (`.changeset/`, `@changesets/cli`) for version
+  bumps and changelogs; `sdk/package.json` gained `changeset`/
+  `version`/`release` scripts and `publishConfig` with provenance.
+- [x] Superseding ADR written: `docs/adr/0005` supersedes ADR 0003's
+  interim tarball-only decision now that npm publishing is going live.
+- [ ] One-time human steps (npm org creation, trusted-publisher setup for
+  the release workflow) — documented in `CONTRIBUTING.md`; not yet done,
+  so `sdk-v0.3.0` is not yet published to npm.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -160,6 +162,12 @@
   lifecycle events remain unavailable until issue #9 changes the contract.
 
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
+- 2026-10-09 — Phase E6 started: added `.github/workflows/release-sdk.yml`
+  (tag-triggered `sdk-v*` build/test/`npm publish --provenance` + GitHub
+  Release tarball, OIDC trusted publishing, tag/version guard), adopted
+  changesets, wrote `docs/adr/0005` superseding ADR 0003, and documented
+  the one-time npm org/trusted-publishing human steps in `CONTRIBUTING.md`.
+  npm publish itself still pending those human steps. Closes issue #16.
 - 2026-09-14 — Phase E1 implemented: `create_escrow`/`get_status` on
   `soroban-sdk` 27.0.6, 4 tests passing, wasm build verified. Testnet
   deploy intentionally left undone (needs a funded identity + CLI this
