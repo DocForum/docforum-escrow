@@ -18,6 +18,7 @@ raise_dispute(escrow_id, caller) -> result // payer or payee freezes a funded es
 resolve_dispute(escrow_id, caller, outcome) -> result // only the named arbiter; Release or Refund
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
+top_up(escrow_id, payer, amount) -> result // IMPLEMENTED in PR for issue #26 — original payer only, funded state only
 ```
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
@@ -52,7 +53,7 @@ import { DisputeClient, EscrowClient, Keypair } from "@docforum/escrow-sdk";
 
 const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
 const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter });
-await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
+await client.getStatus(escrowId);            // "Funded" | "Disputed" | "Released" | "Refunded"
 await client.getEscrow(escrowId);            // full stored record — incl. releaser, refundAfter, arbiter, and status
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
 await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter unless disputed
@@ -60,7 +61,15 @@ const disputes = new DisputeClient({ contractId });
 await disputes.createEscrowWithArbiter({ payer, payee, token, amount, conditionRef, releaser, arbiter });
 await disputes.raiseDispute({ escrowId, caller });
 await disputes.resolveDispute({ escrowId, caller: arbiter, outcome: "Release" | "Refund" });
+await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
+const stop = client.subscribe(handler, { cursor, pollIntervalMs }); // serial polling; await handler for back-pressure
 ```
+Event results are a discriminated union: known lifecycle events expose
+their event type and escrow id; unrecognized topics are returned as
+`type: "unknown"` with decoded topic values and payload. Persist the
+last handled event's cursor to resume; an expired RPC history cursor throws
+`EventCursorExpiredError`. These helpers require the contract lifecycle
+events tracked by issue #9; the current deployment does not emit them.
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
 for no timeout, which behaves exactly as this contract did before the

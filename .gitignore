@@ -3,8 +3,11 @@ dist/
 build/
 target/
 test_snapshots/
+temp_auto_push.bat
 *.tgz
 .env
 .env.local
 *.log
 .DS_Store
+.gitignore
+branch_structure.json
