@@ -10,6 +10,7 @@
 
 ## Contract surface
 ```
+__constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1 + E2 + E4)
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
@@ -17,6 +18,12 @@ release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
 top_up(escrow_id, payer, amount) -> result // IMPLEMENTED in PR for issue #26 — original payer only, funded state only
 ```
+The allowlist is fixed when the contract is deployed. `create_escrow`
+rejects any token outside a non-empty list with `DisallowedToken` (error
+code 7); an empty list preserves the prior open-token behavior. The
+current live deployment predates this constructor and must be redeployed
+before the allowlist protection is active.
+
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
 by Phase E4, both last; no behavioral difference beyond the added

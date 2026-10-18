@@ -165,7 +165,7 @@ behave like SEP-41.
   - Stellar Asset Contracts for issued assets can have **clawback**
     enabled by the issuer. A clawback against the contract address
     removes funds from the shared pool.
-- **Mitigations to consider:**
+- **Mitigations:**
   - ~~In `create_escrow`, check the contract's token balance before and
     after the transfer, and reject (or record the real delta) if it
     doesn't rise by exactly `amount`.~~ **Implemented (issue #12):**
@@ -180,6 +180,15 @@ behave like SEP-41.
     risk for now (documented, deliberately not solved here) — the
     practical mitigation stays with the consumer: allowlist only
     tokens without clawback, transfer fees, or rebasing.
+  - **Deploy-time token allowlist (issue #36):** the immutable
+    `__constructor(allowed_tokens)` records approved token addresses, and
+    `create_escrow` rejects any other token with `DisallowedToken` (error
+    code 7). An empty list deliberately preserves the legacy allow-all
+    behavior. Deployment operators must omit clawback-enabled, rebasing,
+    and fee-on-transfer tokens from the list. This prevents callers from
+    introducing arbitrary tokens but cannot stop an approved issuer from
+    clawing back funds later. **Not yet on testnet:** the current live
+    deployment predates the constructor.
   - Consumers: only use an allowlist of known tokens. The current
     consumer uses one configured token (`escrowTokenId`), which is good.
   - Document that payees must check the escrow's `token`, not just its
