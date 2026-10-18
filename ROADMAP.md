@@ -122,6 +122,16 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E5 — Contract features
+- [x] Immutable deploy-time token allowlist (issue #36):
+  `__constructor(allowed_tokens)` stores approved addresses;
+  `create_escrow` rejects unlisted tokens with append-only error code 7.
+  An empty list preserves allow-all behavior. Tests cover listed,
+  unlisted, and empty-list cases. Threat model, deployment guidance, and
+  contract API docs updated. **Not yet on testnet** — the current
+  deployment predates this constructor; a new testnet deployment and
+  verification are required before claiming the live contract is
+  protected. Closes issue #36.
 ## Phase E6 — SDK & integrator tooling
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
   triggered by an `sdk-v*` tag: builds, typechecks, tests, runs
@@ -146,12 +156,9 @@
   repo's.
 
 ## Changelog
-- 2026-10-18 — Issue #83 (Phase E6): added CI runtime checks for Node.js
-  20/22/24, Bun, Deno 2, and Playwright Chromium. Added local-only runtime
-  and browser smoke checks, declared Node.js 22+ support to match
-  `@stellar/stellar-sdk`, and documented Node.js 20 as a compatibility
-  probe. No contract changes.
-
+- 2026-10-16 — Implemented the immutable deploy-time token allowlist for
+  issue #36. Contract tests/docs updated; awaiting a new testnet deployment
+  before claiming the protection is live.
 - 2026-10-17 — Issue #63 (Phase E6): added SDK `getEvents` pagination and
   typed lifecycle-event decoding, preserving unknown topic variants for
   forward compatibility. Added cursor-resumable serial polling with

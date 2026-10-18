@@ -1,5 +1,9 @@
 use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
-use soroban_sdk::{testutils::Address as _, token::{StellarAssetClient, TokenClient}, Address, Env, String};
+use soroban_sdk::{
+    testutils::Address as _,
+    token::{StellarAssetClient, TokenClient},
+    Address, Env, String, Vec,
+};
 
 struct Fixture<'a> {
     client: EscrowContractClient<'a>,
@@ -13,17 +17,35 @@ struct Fixture<'a> {
 
 fn setup(env: &Env) -> Fixture<'_> {
     env.mock_all_auths();
-    let token_id = env.register_stellar_asset_contract_v2(Address::generate(env)).address();
+    let token_id = env
+        .register_stellar_asset_contract_v2(Address::generate(env))
+        .address();
     let token = TokenClient::new(env, &token_id);
     let asset = StellarAssetClient::new(env, &token_id);
     let payer = Address::generate(env);
     let payee = Address::generate(env);
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
     let client = EscrowContractClient::new(env, &contract_id);
-    let id = client.create_escrow(&payer, &payee, &token_id, &300, &String::from_str(env, "top-up"), &releaser, &None);
-    Fixture { client, token, payer, payee, releaser, contract_id, id }
+    let id = client.create_escrow(
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(env, "top-up"),
+        &releaser,
+        &None,
+    );
+    Fixture {
+        client,
+        token,
+        payer,
+        payee,
+        releaser,
+        contract_id,
+        id,
+    }
 }
 
 #[test]

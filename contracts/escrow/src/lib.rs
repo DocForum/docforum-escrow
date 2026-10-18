@@ -14,7 +14,10 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, String};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, String,
+    Vec,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -46,6 +49,7 @@ pub struct EscrowData {
 enum DataKey {
     Escrow(u64),
     NextId,
+    AllowedTokens,
 }
 
 #[contracterror]
@@ -64,6 +68,8 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    /// `token` is not in the immutable deploy-time allowlist.
+    DisallowedToken = 7,
     Overflow = 12,
 }
 
@@ -72,6 +78,14 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
+    /// Sets the immutable token allowlist at deployment. An empty list
+    /// preserves the legacy behavior and allows any token address.
+    pub fn __constructor(env: Env, allowed_tokens: Vec<Address>) {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedTokens, &allowed_tokens);
+    }
+
     /// Locks `amount` of `token` pulled from `payer`, held for `payee`,
     /// tagged with an opaque `condition_ref`. `releaser` is the only
     /// address that will later be permitted to call `release`/`refund`
@@ -90,6 +104,23 @@ impl EscrowContract {
         releaser: Address,
         refund_after: Option<u64>,
     ) -> Result<u64, Error> {
+        let allowed_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedTokens)
+            .unwrap_or(Vec::new(&env));
+        if !allowed_tokens.is_empty() {
+            let mut allowed = false;
+            for candidate in allowed_tokens.iter() {
+                if candidate == token {
+                    allowed = true;
+                    break;
+                }
+            }
+            if !allowed {
+                return Err(Error::DisallowedToken);
+            }
+        }
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
@@ -160,8 +191,13 @@ impl EscrowContract {
         let updated_amount = data.amount.checked_add(amount).ok_or(Error::Overflow)?;
         Self::transfer_in_exact(&env, &data.token, &payer, amount)?;
         data.amount = updated_amount;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
-        env.events().publish((symbol_short!("top_up"), escrow_id), (amount, updated_amount));
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        env.events().publish(
+            (symbol_short!("top_up"), escrow_id),
+            (amount, updated_amount),
+        );
         Ok(())
     }
 
@@ -195,7 +231,9 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
 
         data.status = EscrowStatus::Released;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
     }
 
@@ -233,7 +271,9 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
 
         data.status = EscrowStatus::Refunded;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
     }
 
@@ -243,7 +283,12 @@ impl EscrowContract {
         id
     }
 
-    fn transfer_in_exact(env: &Env, token: &Address, payer: &Address, amount: i128) -> Result<(), Error> {
+    fn transfer_in_exact(
+        env: &Env,
+        token: &Address,
+        payer: &Address,
+        amount: i128,
+    ) -> Result<(), Error> {
         let token_client = token::Client::new(env, token);
         let contract_address = env.current_contract_address();
         let balance_before = token_client.balance(&contract_address);
