@@ -177,9 +177,14 @@ behave like SEP-41.
     **cannot** catch is a token that takes funds back *after*
     creation: a clawback-enabled issuer can drain the shared pool
     later, and no creation-time check sees that. Accepted residual
-    risk for now (documented, deliberately not solved here) — the
-    practical mitigation stays with the consumer: allowlist only
-    tokens without clawback, transfer fees, or rebasing.
+    risk for now; the checker does not prevent a clawback. Consumers can
+    run the SDK's read-only `checkSolvency({ contractId, tokens })` on a
+    schedule to compare current balances with active escrow liabilities
+    and alert on a shortfall before later payouts fail. Its event rebuild is
+    complete only when the RPC retention window includes the full event
+    history (reported as `complete: true`); use a durable indexer when that
+    is not available. Continue to allowlist tokens without clawback,
+    transfer fees, or rebasing.
   - Consumers: only use an allowlist of known tokens. The current
     consumer uses one configured token (`escrowTokenId`), which is good.
   - Document that payees must check the escrow's `token`, not just its

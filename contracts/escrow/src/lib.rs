@@ -14,7 +14,9 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{
+    contract, contracterror, contractevent, contractimpl, contracttype, token, Address, Env, String,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,6 +42,50 @@ pub struct EscrowData {
     /// anyone — still only back to `payer`. `None` means no timeout,
     /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
+}
+
+// Lifecycle events carry the token and amount needed by read-only solvency
+// checkers. Keep the payload aligned with the SDK event decoder.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowCreated {
+    #[topic]
+    pub escrow_id: u64,
+    #[topic]
+    pub payer: Address,
+    #[topic]
+    pub payee: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub condition_ref: String,
+    pub releaser: Address,
+    pub refund_after: Option<u64>,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowReleased {
+    #[topic]
+    pub escrow_id: u64,
+    #[topic]
+    pub payer: Address,
+    #[topic]
+    pub payee: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowRefunded {
+    #[topic]
+    pub escrow_id: u64,
+    #[topic]
+    pub payer: Address,
+    #[topic]
+    pub payee: Address,
+    pub token: Address,
+    pub amount: i128,
 }
 
 #[contracttype]
@@ -120,6 +166,17 @@ impl EscrowContract {
             refund_after,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        EscrowCreated {
+            escrow_id: id,
+            payer: data.payer.clone(),
+            payee: data.payee.clone(),
+            token: data.token.clone(),
+            amount: data.amount,
+            condition_ref: data.condition_ref.clone(),
+            releaser: data.releaser.clone(),
+            refund_after: data.refund_after,
+        }
+        .publish(&env);
         Ok(id)
     }
 
@@ -175,7 +232,17 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
 
         data.status = EscrowStatus::Released;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        EscrowReleased {
+            escrow_id,
+            payer: data.payer,
+            payee: data.payee,
+            token: data.token,
+            amount: data.amount,
+        }
+        .publish(&env);
         Ok(())
     }
 
@@ -213,7 +280,17 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
 
         data.status = EscrowStatus::Refunded;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        EscrowRefunded {
+            escrow_id,
+            payer: data.payer,
+            payee: data.payee,
+            token: data.token,
+            amount: data.amount,
+        }
+        .publish(&env);
         Ok(())
     }
 

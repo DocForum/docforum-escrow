@@ -41,7 +41,7 @@ behaviour is exactly what it was before: releaser-only refunds, forever.
 
 ## TypeScript SDK surface (`sdk/`)
 ```ts
-import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
+import { EscrowClient, Keypair, checkSolvency } from "@docforum/escrow-sdk";
 
 const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
 const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter });
@@ -49,7 +49,20 @@ await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunde
 await client.getEscrow(escrowId);            // full stored record — incl. releaser + refundAfter, so a payee can check the deal (docs/adr/0004, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
 await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter has passed
+
+const report = await checkSolvency({ contractId, tokens: [tokenId] });
+// report.tokens[0]: balance, liabilities, shortfall, solvent, complete
 ```
+`checkSolvency` is read-only: it reads each token's contract balance and
+rebuilds outstanding amounts from `EscrowCreated`, `EscrowReleased`, and
+`EscrowRefunded` events. Soroban RPC keeps only a bounded event window. The
+report sets `complete: false` unless it can see the full event sequence from
+escrow id 0; consumers must treat an incomplete report as indeterminate and
+use a durable indexer for older contracts or larger histories. The current
+testnet deployment predates lifecycle events and therefore reports
+incomplete history until it is redeployed. The
+`docforum-solvency` CLI exits 1 for a complete shortfall and 2 for incomplete
+history or an error; see the README for cron usage.
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
 for no timeout, which behaves exactly as this contract did before the

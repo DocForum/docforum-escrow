@@ -121,15 +121,31 @@ contract id, transaction links, and the exact `stellar` CLI commands to
 redeploy. **Mainnet is out of scope until the Phase E4 security review is
 complete — see [hard rule 4](ARCHITECTURE_ESSENTIALS.md#hard-rules).**
 
-The TypeScript SDK (`sdk/`) is still a placeholder — see
-[issue #4](https://github.com/DocForum/docforum-escrow/issues/4).
+The TypeScript SDK (`sdk/`) wraps the contract and includes a read-only
+solvency checker. It compares each token balance with outstanding amounts
+rebuilt from lifecycle events; Soroban RPC's event retention is bounded, so
+an incomplete report must be treated as indeterminate. For cron, install the
+SDK and run:
+
+```bash
+npx --package @docforum/escrow-sdk docforum-solvency \
+  --contract-id CA... --tokens C...[,C...] \
+  --rpc-url https://soroban-testnet.stellar.org
+```
+
+The CLI exits `0` when every report is complete and solvent, `1` on a
+complete shortfall, and `2` when event history is incomplete or a request
+fails. The checker never signs or submits a transaction. The current
+testnet deployment predates lifecycle events, so it reports incomplete
+history; use a deployment that emits these events or a durable indexer for a
+complete scan. The current `@docforum/escrow-sdk` version is `0.4.0`.
 
 ## Documentation
 
 | Doc | Purpose |
 |---|---|
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
-| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E4 breakdown and current status. |
+| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E6 breakdown and current status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
 
@@ -137,8 +153,8 @@ The TypeScript SDK (`sdk/`) is still a placeholder — see
 
 **Phase E1 (contract skeleton): done.** `create_escrow` and `get_status`
 are implemented, tested, and deployed live on testnet — not just locally
-tested. Phases E2 (release/refund), E3 (TypeScript SDK), and E4 (security
-review, blocking for any mainnet use) are tracked as open issues:
+tested. Phase E6 now includes SDK solvency monitoring; Phase E4 security
+review remains in progress and blocks any mainnet use:
 
 | Issue | Phase | Complexity |
 |---|---|---|
