@@ -14,8 +14,7 @@
   "scripts": {
     "prepare": "npm run build",
     "build": "tsc",
-    "test": "vitest run tests/cli-args.test.ts",
-    "test:unit": "vitest run tests/cli-args.test.ts",
+    "test": "vitest run",
     "test:integration": "vitest run",
     "typecheck": "tsc --noEmit"
   },
