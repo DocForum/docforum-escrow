@@ -14,6 +14,12 @@ import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowSta
 export { Keypair };
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";
+/** Signer supported by Stellar's SDK, including external wallet adapters. */
+export type EscrowSigner = Keypair | Signer;
+
+function signerAddress(signer: EscrowSigner): string {
+  return signer instanceof Keypair ? signer.publicKey() : signer.address;
+}
 
 export type EscrowEventType = "created" | "released" | "refunded";
 interface EscrowEventBase {
@@ -104,7 +110,7 @@ export interface EscrowClientConfig {
 
 export interface CreateEscrowParams {
   /** Signs and pays for this call; funds are pulled from this account. */
-  payer: Keypair;
+  payer: EscrowSigner;
   payee: string;
   token: string;
   amount: bigint;
@@ -128,7 +134,7 @@ export interface CreateEscrowParams {
 export interface ReleaseOrRefundParams {
   escrowId: bigint;
   /** Must be the escrow's `releaser` (set at creation) — see docs/adr/0002. */
-  caller: Keypair;
+  caller: EscrowSigner;
 }
 
 /**
@@ -149,12 +155,12 @@ export class EscrowClient {
     this.rpc = new RpcServer(this.rpcUrl);
   }
 
-  private contractClient(signer?: Keypair): EscrowContractClient {
+  private contractClient(signer?: EscrowSigner): EscrowContractClient {
     return new EscrowContractClient({
       contractId: this.contractId,
       rpcUrl: this.rpcUrl,
       networkPassphrase: this.networkPassphrase,
-      ...(signer ? { publicKey: signer.publicKey(), signTransaction: signer } : {}),
+      ...(signer ? { publicKey: signerAddress(signer), signTransaction: signer } : {}),
     });
   }
 
@@ -162,7 +168,7 @@ export class EscrowClient {
   async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
     const client = this.contractClient(params.payer);
     const tx = await client.create_escrow({
-      payer: params.payer.publicKey(),
+      payer: signerAddress(params.payer),
       payee: params.payee,
       token: params.token,
       amount: params.amount,
@@ -210,7 +216,7 @@ export class EscrowClient {
   /** Moves the escrow's funds to its payee. Throws if `caller` isn't the escrow's `releaser`, or the escrow isn't `Funded`. Returns the transaction's hash. */
   async release(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
     const client = this.contractClient(params.caller);
-    const tx = await client.release({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
+    const tx = await client.release({ escrow_id: params.escrowId, caller: signerAddress(params.caller) });
     const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
@@ -224,7 +230,7 @@ export class EscrowClient {
    */
   async refund(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
     const client = this.contractClient(params.caller);
-    const tx = await client.refund({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
+    const tx = await client.refund({ escrow_id: params.escrowId, caller: signerAddress(params.caller) });
     const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
