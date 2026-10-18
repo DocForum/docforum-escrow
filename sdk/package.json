@@ -15,7 +15,7 @@
   "scripts": {
     "prepare": "npm run build",
     "build": "tsc",
-    "test": "vitest run tests/solvency.test.ts",
+    "test": "vitest run",
     "test:integration": "vitest run",
     "typecheck": "tsc --noEmit"
   },
