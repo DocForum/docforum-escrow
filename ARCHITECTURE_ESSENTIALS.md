@@ -10,6 +10,7 @@
 
 ## Contract surface
 ```
+feat/issue-39-phase-e5-per-token-liability-accounting-and-an
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phise E1 + E2 + E4)
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phise E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
@@ -19,6 +20,23 @@ solvency(token) -> (balance, liabilities)  // read-only: contract's on-chain tok
 ``b
 ```
 create_escrow` param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
+
+__constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
+create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1 + E2 + E4)
+get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
+get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
+release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
+refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
+top_up(escrow_id, payer, amount) -> result // IMPLEMENTED in PR for issue #26 — original payer only, funded state only
+```
+The allowlist is fixed when the contract is deployed. `create_escrow`
+rejects any token outside a non-empty list with `DisallowedToken` (error
+code 7); an empty list preserves the prior open-token behavior. The
+current live deployment predates this constructor and must be redeployed
+before the allowlist protection is active.
+
+`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
+ main
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
 by Phase E4, both last; no behavioral difference beyond the added
 params, just noting it so this doc and `src/lib.rs` don't drift.
@@ -74,8 +92,19 @@ await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunde
 await client.getEscrow(escrowId);            // full stored record — incl. releaser + refundAfter, so a payee can check the deal (docs/adr/0004, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
 await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter has passed
+ feat/issue-39-phase-e5-per-token-liability-accounting-and-an
 await client.solvency(token);            // { balance, liabilities } — read-only solvency view (Phase E5)
+
+await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
+const stop = client.subscribe(handler, { cursor, pollIntervalMs }); // serial polling; await handler for back-pressure
+ main
 ```
+Event results are a discriminated union: known lifecycle events expose
+their event type and escrow id; unrecognized topics are returned as
+`type: "unknown"` with decoded topic values and payload. Persist the
+last handled event's cursor to resume; an expired RPC history cursor throws
+`EventCursorExpiredError`. These helpers require the contract lifecycle
+events tracked by issue #9; the current deployment does not emit them.
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
 for no timeout, which behaves exactly as this contract did before the

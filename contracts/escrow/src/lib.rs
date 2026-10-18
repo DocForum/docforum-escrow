@@ -22,7 +22,10 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, String,
+    Vec,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -54,11 +57,15 @@ pub struct EscrowData {
 enum DataKey {
     Escrow(u64),
     NextId,
+ feat/issue-39-phase-e5-per-token-liability-accounting-and-an
     /// Total outstanding liability for a given token: the sum of
     /// `amount` across every escrow still in `Funded` status. Kept in
     /// persistent storage with an explicit TTL so it survives archival
     /// (see `bump_liability_ttl`).
     Liabilities(Address),
+
+    AllowedTokens,
+ main
 }
 
 #[contracterror]
@@ -77,9 +84,15 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+feat/issue-39-phase-e5-per-token-liability-accounting-and-an
     /// A liability counter would have overflowed or underflowed —
     /// indicates a bug in the accounting, never a user error.
     LiabilityOverflow = 7,
+
+    /// `token` is not in the immutable deploy-time allowlist.
+    DisallowedToken = 7,
+    Overflow = 12,
+ main
 }
 
 #[contract]
@@ -87,6 +100,14 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
+    /// Sets the immutable token allowlist at deployment. An empty list
+    /// preserves the legacy behavior and allows any token address.
+    pub fn __constructor(env: Env, allowed_tokens: Vec<Address>) {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedTokens, &allowed_tokens);
+    }
+
     /// Locks `amount` of `token` pulled from `payer`, held for `payee`,
     /// tagged with an opaque `condition_ref`. `releaser` is the only
     /// address that will later be permitted to call `release`/`refund`
@@ -105,6 +126,23 @@ impl EscrowContract {
         releaser: Address,
         refund_after: Option<u64>,
     ) -> Result<u64, Error> {
+        let allowed_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedTokens)
+            .unwrap_or(Vec::new(&env));
+        if !allowed_tokens.is_empty() {
+            let mut allowed = false;
+            for candidate in allowed_tokens.iter() {
+                if candidate == token {
+                    allowed = true;
+                    break;
+                }
+            }
+            if !allowed {
+                return Err(Error::DisallowedToken);
+            }
+        }
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
@@ -115,14 +153,7 @@ impl EscrowContract {
         }
         payer.require_auth();
 
-        let token_client = token::Client::new(&env, &token);
-        let contract_address = env.current_contract_address();
-        let balance_before = token_client.balance(&contract_address);
-        token_client.transfer(&payer, &contract_address, &amount);
-        let balance_after = token_client.balance(&contract_address);
-        if balance_after.checked_sub(balance_before) != Some(amount) {
-            return Err(Error::BalanceMismatch);
-        }
+        Self::transfer_in_exact(&env, &token, &payer, amount)?;
 
         let id = Self::next_id(&env);
         let data = EscrowData {
@@ -162,6 +193,37 @@ impl EscrowContract {
             .ok_or(Error::NotFound)
     }
 
+    /// Adds funds to a funded escrow without changing its parties or id.
+    /// Only its original payer may authorize the transfer.
+    pub fn top_up(env: Env, escrow_id: u64, payer: Address, amount: i128) -> Result<(), Error> {
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        payer.require_auth();
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+        if data.payer != payer {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        let updated_amount = data.amount.checked_add(amount).ok_or(Error::Overflow)?;
+        Self::transfer_in_exact(&env, &data.token, &payer, amount)?;
+        data.amount = updated_amount;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        env.events().publish(
+            (symbol_short!("top_up"), escrow_id),
+            (amount, updated_amount),
+        );
+        Ok(())
+    }
+
     /// Moves the escrowed `amount` to `payee`. Only the escrow's
     /// `releaser` (set at `create_escrow` time) may call this — the
     /// contract enforces WHO, never WHY (ADR 0001). Errors if the
@@ -192,8 +254,14 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
 
         data.status = EscrowStatus::Released;
+ feat/issue-39-phase-e5-per-token-liability-accounting-and-an
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
         Self::sub_liability(&env, &data.token, data.amount)?;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+ main
         Ok(())
     }
 
@@ -231,8 +299,14 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
 
         data.status = EscrowStatus::Refunded;
+ feat/issue-39-phase-e5-per-token-liability-accounting-and-an
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
         Self::sub_liability(&env, &data.token, data.amount)?;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+ main
         Ok(())
     }
 
@@ -253,6 +327,7 @@ impl EscrowContract {
         id
     }
 
+ feat/issue-39-phase-e5-per-token-liability-accounting-and-an
     fn get_liability(env: &Env, token: &Address) -> i128 {
         env.storage()
             .persistent()
@@ -286,4 +361,22 @@ impl EscrowContract {
     fn bump_liability_ttl(env: &Env, key: &DataKey) {
         env.storage().persistent().extend_ttl(key, 100, 1000);
     }
+
+    fn transfer_in_exact(
+        env: &Env,
+        token: &Address,
+        payer: &Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        let token_client = token::Client::new(env, token);
+        let contract_address = env.current_contract_address();
+        let balance_before = token_client.balance(&contract_address);
+        token_client.transfer(payer, &contract_address, &amount);
+        let balance_after = token_client.balance(&contract_address);
+        if balance_after.checked_sub(balance_before) != Some(amount) {
+            return Err(Error::BalanceMismatch);
+        }
+        Ok(())
+    }
+ main
 }
