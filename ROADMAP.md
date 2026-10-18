@@ -263,6 +263,12 @@
   added SDK client-side validation (`MAX_CONDITION_REF_LENGTH`), updated
   T10, README and ARCHITECTURE_ESSENTIALS.md. Not yet redeployed to
   testnet. Closes issue #57.
+- 2026-10-18 — Fixed PR #183's contract CI after merging newer `main`:
+  restored the `IntoVal` import, assigned `CallbackFailed` error code 8
+  after `DisallowedToken` code 7, supplied the callback opt-in and
+   allowlist constructor arguments in affected tests, and regenerated the
+   SDK binding from the merged contract spec. `cargo test` and the WASM
+   release build pass locally.
 - 2026-10-16 — Implemented the immutable deploy-time token allowlist for
   issue #36. Contract tests/docs updated; awaiting a new testnet deployment
   before claiming the protection is live.

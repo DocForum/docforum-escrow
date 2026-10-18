@@ -3,7 +3,7 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype,
     testutils::Address as _,
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String,
+    Address, Env, String, Vec,
 };
 
 #[contracterror]
@@ -161,7 +161,7 @@ fn fixture(env: &Env) -> Fixture<'_> {
 
     let hook_id = env.register(PayeeHook, ());
     let hook = PayeeHookClient::new(&env, &hook_id);
-    let escrow_id = env.register(EscrowContract, ());
+    let escrow_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
     let escrow = EscrowContractClient::new(&env, &escrow_id);
     let id = escrow.create_escrow(
         &payer,

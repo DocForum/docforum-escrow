@@ -37,6 +37,7 @@ fn setup(env: &Env) -> Fixture<'_> {
         &String::from_str(env, "top-up"),
         &releaser,
         &None,
+        &false,
     );
     Fixture {
         client,
