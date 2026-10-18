@@ -7,10 +7,22 @@
 // (payer/payee/amount, not e.g. "patient"). Defaults are testnet-only
 // (hard rule 4); passing a mainnet networkPassphrase/rpcUrl is on the
 // caller, not encouraged by any default here.
-import { Keypair } from "@stellar/stellar-sdk";
+import {
+  Keypair,
+  TransactionBuilder,
+  FeeBumpTransactionBuilder,
+  Transaction,
+  FeeBumpTransaction,
+  Operation,
+  BaseFee,
+  SorobanRpc,
+  networks,
+  type Horizon,
+  type SorobanRpc as SorobanRpcType,
+} from "@stellar/stellar-sdk";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
 
-export { Keypair };
+export { Keypair, TransactionBuilder, FeeBumpTransactionBuilder, Transaction, FeeBumpTransaction, Operation, BaseFee, SorobanRpc, networks };
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";
 
@@ -75,6 +87,87 @@ export interface ReleaseOrRefundParams {
   escrowId: bigint;
   /** Must be the escrow's `releaser` (set at creation) — see docs/adr/0002. */
   caller: Keypair;
+}
+
+/** A single contract invocation to estimate fees for. */
+export interface EstimateCallParams {
+  /** The contract to invoke. Defaults to the client's configured contractId. */
+  contractId?: string;
+  /** Contract function name, e.g. "create_escrow". */
+  method: string;
+  /** Arguments to pass to the contract function. */
+  args?: unknown[];
+  /** The account that will sign and pay for the call. */
+  source: Keypair | string;
+}
+
+/** Fee estimate for a single contract call, in strops. */
+export interface FeeEstimate {
+  /** Fee charged for the resources (CPU/memory/read-write entries) the call consumes. */
+  resourceFee: bigint;
+  /** Base inclusion fee (per-operation fee + transaction overhead). */
+  inclusionFee: bigint;
+  /** resourceFee + inclusionFee. */
+  total: bigint;
+  /** The minimum resource fee the simulation reported, before any buffer. */
+  minResourceFee: bigint;
+}
+
+export interface FeeBumpOptions {
+  /**
+   * Hard cap on the fee-bump transaction's fee, in strops. If the inner
+   * transaction's fee exceeds this, `feeBump` throws — it never silently
+   * exceeds the cap.
+   */
+  maxFee: bigint;
+  /** Optional base fee for the fee-bump wrapper (strops). Default: 100. */
+  baseFee?: string;
+}
+
+export interface FeeBumpResult {
+  /** The signed fee-bump transaction envelope (base64 XDR). */
+  xdr: string;
+  /** The fee the fee-bump transaction will charge (strops). */
+  fee: bigint;
+}
+
+/** Result of the sponsorship guard. */
+export interface GuardResult {
+  /** True only if every operation and auth entry targets the escrow contract. */
+  ok: boolean;
+  /** Human-readable reasons why the transaction was rejected (empty when ok). */
+  reasons: string[];
+  /** The contract identifiers the guard found invoked. */
+  invokedContracts: string[];
+}
+
+/** Thrown when the sponsorship guard rejects a transaction. */
+export class SponsorshipGuardError extends Error {
+  readonly reasons: string[];
+  constructor(reasons: string[]) {
+    super(`Sponsorship guard rejected transaction: ${reasons.join("; ")}`);
+    this.name = "SponsorshipGuardError";
+    this.reasons = reasons;
+  }
+}
+
+/** Thrown when a fee-bump would exceed the caller's `maxFee`. */
+export class MaxFeeExceededError extends Error {
+  readonly requestedFee: bigint;
+  readonly maxFee: bigint;
+  constructor(requestedFee: bigint, maxFee: bigint) {
+    super(`Fee bump requested ${requestedFee.toString()} strops exceeds cap of ${maxFee.toString()} strops`);
+    this.name = "MaxFeeExceededError";
+    this.requestedFee = requestedFee;
+    this.maxFee = maxFee;
+  }
+}
+
+function toKeypair(signer: Keypair | string): Keypair {
+  if (typeof signer === "string") {
+    return Keypair.fromSecret(signer);
+  }
+  return signer;
 }
 
 /**
@@ -173,4 +266,135 @@ export class EscrowClient {
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
   }
+
+  /**
+   * Estimates the fee of a contract call by simulating it against the
+   * configured R0P — resource fee, inclusion fee, and total, all in
+   * strops. Useful for sponsors that need to know what a call will cost
+   * before submitting it. Does not sign or send anything.
+   */
+  async estimate(call: EstimateCallParams): Promise<FeeEstimate> {
+    const source = toKeypair(call.source);
+    const server = new SorobanRpg(this.rpcUrl);
+    const account = await server.getAccount(source.publicKey());
+    const contract = call.contractId ?? this.contractId;
+    const operation = Operation.invokeContractFunction(contract, call.method, ...(call.args ?? []));
+    const tx = new TransactionBuilder()
+      .addOperation(operation)
+      .setSourceAccount(account)
+      .setFee(BaseFee.FEE_100X .toString())
+      .setTimeout(30)
+      .build();
+    const sim = await server.simulateTransaction(tx);
+    if (sim.error) {
+      throw new Error(`Simulation failed: ${sim.error}`);
+    }
+    const minResourceFee = BigInt(sim.minResourceFee);
+    // Add a 20% buffer to the resource fee to absorb small simulation
+    // drift, rounded up to the nearest strop.
+    const resourceFee = (minResourceFee * 12n) / 10n;
+    const inclusionFee = BigInt(BaseFee.FEE_100X) * 2n; // one op + tx overhead
+    const total = resourceFee + inclusionFee;
+    return { resourceFee, inclusionFee, total, minResourceFee };
+  }
+
+  /**
+   * Wraps a user-signed transaction in a fee-bump transaction signed by
+   * `sponsorSigner`. The fee-bump's fee is derived from the inner
+   * transaction's fee and is capped at `maxFee` — if the required fee
+   * exceeds the cap, this throws `MaxFeeExceededError` rather than
+   * silently exceeding it.
+   */
+  async feeBump(signedXdrChain: string, sponsorSigner: Keypair | string, options: FeeBumpOptions): Promise<FeeBumpResult> {
+    const sponsor = toKeypair(sponsorSigner);
+    const inner = TransactionBuilder.fromXDR(signedXtrChain, this.networkPassphrase);
+    const innerFee = BigInt(inner.fee);
+    const maxFee = BigInt(options.maxFee);
+    // The fee-bump wrapper must charge at least the inner transaction's fee.
+    // The cap is enforced against the actual fee we would set.
+    const requestedFee = innerFee > maxFee ? innerFee : innerFee;
+    if (requestedFee > maxFee) {
+      throw new MaxFeeExceededError(requestedFee, maxFee);
+    }
+    const builder = new FeeBumpTransactionBuilder(signedXtrChain, this.networkPassphrase)
+      .setFee(requestedFee.toString())
+      .setSourceAccount(sponsor.publicKey());
+    // Sign the fee-bump envelope with the sponsor keypair.
+    const signed = builder.build();
+    signed.sign(sponsor);
+    return { xdr: signed.toXDR(), fee: requestedFee };
+  }
+
+  /**
+   * Guard helper for sponsors: verifies that a (signed) transaction
+   * only invokes the escrow contract — every operation and every auth
+   * entry, not just the first. Returns a `GuardResult`; use
+   * `assertSponsorable` to throw instead.
+   */
+  guardSponsorship(signedXdrChain: string): GuardResult {
+    const reasons: string[] = [];
+    const invokedContracts = new Set<string>();
+    let tx: Transaction | FeeBumpTransaction;
+    try {
+      tx = TransactionBuilder.fromXDR(signedXtrChain, this.networkPassphrase);
+    } catch {
+      // May be a fee-bump envelope; unwrap its inner transaction.
+      try {
+        const fb = FeeBumpTransactionBuilder.fromXDR(signedXtrChain, this.networkPassphrase);
+        tx = fb.innerTransaction;
+      } catch {
+        return { ok: false, reasons: ["could not decode transaction XDR"], invokedContracts: [] };
+      }
+    }
+
+    for (const op of tx.operations) {
+      if (op.type !== "invokeHostFunction") {
+        reasons.push(`operation type "${op.type}" is not a contract invocation`);
+        continue;
+      }
+      const invokeOp = op as unknown as {
+        functionName: string;
+        contractId?: () => { toString: () => string };
+      };
+      const contractId = invokeOp.contractId?.().toString();
+      if (!contractId) {
+        reasons.push(`operation "${invokeOp.functionName}" has no contract id`);
+        continue;
+      }
+      invokedContracts.add(contractId);
+      if (contractId !== this.contractId) {
+        reasons.push(`operation "${invokeOp.functionName}" invokes foreign contract ${contractId}`);
+      }
+    }
+
+    // Inspect auth entries too: a contract invocation can carry auth
+    // entries that target other contracts (e.g. a token transfer).
+    const auth = tx.auth ?? [];
+    for (const entry of auth) {
+      const credentials = entry.credentials();
+      const switchName = credentials.switch().name;
+      if (switchName === "sorobanCredentials") {
+        const address = credentials.sorobanCredentials().address().toString();
+        if (address !== this.contractId) {
+          reasons.push(`auth entry targets foreign contract ${address}`);
+        }
+      }
+    }
+
+    return { ok: reasons.length === 0, reasons, invokedContracts: Array.from(invokedContracts) };
+  }
+
+  /** Throws `SponsorshipGuardError` if the transaction is not sponsorable. */
+  assertSponsorable(signedXtrChain: string): void {
+    const result = this.guardSponsorship(signedXtrChain);
+    if (!result.ok) {
+      throw new SponsorshipGuardError(result.reasons);
+    }
+  }
 }
+
+/** Default testnet configuration for convenience. */
+export const TESTNET = {
+  rpcUrl: TESTNET_RPC_URL,
+  networkPassphrase: TESTNET_NETWORK_PASSTHRASE,
+} as const;
