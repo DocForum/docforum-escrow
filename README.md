@@ -134,15 +134,27 @@ contract id, transaction links, and the exact `stellar` CLI commands to
 redeploy. **Mainnet is out of scope until the Phase E4 security review is
 complete — see [hard rule 4](ARCHITECTURE_ESSENTIALS.md#hard-rules).**
 
-The TypeScript SDK (`sdk/`) is still a placeholder — see
-[issue #4](https://github.com/DocForum/docforum-escrow/issues/4).
+The SDK supports relayed release/refund calls. `authorizeRelease` and
+`authorizeRefund` simulate the invocation, ask the releaser to sign only
+its short-lived contract authorization entry, and return a serialized
+transaction. `submitRelayed` restores that transaction and lets a separate
+relayer sign the envelope and pay its fee. The auth entry is bound to the
+simulated invocation and expires after ten ledgers:
+
+```ts
+const authorization = await client.authorizeRelease({ escrowId, releaser, relayer });
+const { txHash } = await client.submitRelayed("release", authorization, relayer);
+```
+
+Keep the serialized authorization private until submission and do not
+retry it after its expiration ledger.
 
 ## Documentation
 
 | Doc | Purpose |
 |---|---|
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
-| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E4 breakdown and current status. |
+| [`ROADMAP.md`](ROADMAP.md) | Phase breakdown and current status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
 

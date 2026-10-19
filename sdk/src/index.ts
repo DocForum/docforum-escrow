@@ -167,6 +167,19 @@ export interface ReleaseOrRefundParams {
   caller: Keypair;
 }
 
+/** The relayer pays the transaction fee; the releaser signs only contract auth. */
+export interface RelayedAuthorizationParams {
+  escrowId: bigint;
+  releaser: Keypair;
+  relayer: Keypair;
+}
+
+/** Serialized, simulated transaction containing a short-lived signed auth entry. */
+export interface RelayedAuthorization {
+  transaction: string;
+  expiresAtLedger: number;
+}
+
 /**
  * Thin client for the docforum-escrow Soroban contract. Wraps
  * `create_escrow`/`get_status`/`get_escrow`/`release`/`refund` with plain
