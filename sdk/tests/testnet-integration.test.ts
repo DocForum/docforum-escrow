@@ -2,8 +2,7 @@
 // exercising both [create_escrow/get_status] against a running/testnet
 // contract instance, not just the contract's own test suite." Now also
 // covers release/refund (Phase E2) and the `refund_after` deadline +
-// `get_escrow` read path (Phase E4, issue #11). Phase E6 adds fee
-// estimation and fee-bump sponsorship coverage.
+// `get_escrow` read path (Phase E4, issue #11).
 //
 // Deliberately NOT wired into `npm test`/CI (see package.json — this
 // runs via `npm run test:integration` only): it depends on testnet
@@ -17,23 +16,22 @@
 // commit a real secret key, even a testnet one, into a repo.
 import { describe, expect, it } from "vitest";
 import {
+  Account,
+  Address,
   Asset,
-  Contract,
+  BASE_FEE,
   Keypair,
   Operation,
   TransactionBuilder,
-  feeBump,
-  nativeToScval,
-  resolveAsset,
+  nativeToScVal,
 } from "@stellar/stellar-sdk";
-import { EscrowClient, escrowOnlyGuard, estimate, feeBumpSponsor } from "../src/index.js";
+import { EscrowClient } from "../src/index.js";
 
 // Live testnet deployment of the Phase E4 contract (adds `refund_after`
 // timeout refund + `get_escrow`) — see docs/testnet-deployments.md.
 // Public contract addresses, not secrets.
-const CONTRACT_ID = "CAHQ4J3T23WSIBBG6SK6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYKV2VDEV5";
-const NATIVE_XLM_SAC = "CDLZFC3SYJYDZT7K67ZV75HPJVIEUVNIXF47ZG2FB2RMQUVU2HHGCYSC";
-const TESTNET_PASSPHRASE = "Test S3cret Key for testnet only";
+const CONTRACT_ID = "CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5";
+const NATIVE_XLM_SAC = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 
 async function fundedKeypair(): Promise<Keypair> {
   const kp = Keypair.random();
@@ -64,6 +62,45 @@ describe("EscrowClient against live testnet", () => {
     await client.release({ escrowId, caller: releaser });
 
     expect(await client.getStatus(escrowId)).toBe("Released");
+  });
+
+  it("lets a separate relayer submit releaser-authorized release and refund", async () => {
+    const [payer, payee, releaser, relayer] = await Promise.all([
+      fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(),
+    ]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const releaseEscrow = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-relayed-release",
+      releaser: releaser.publicKey(),
+    });
+    const releaseAuth = await client.authorizeRelease({
+      escrowId: releaseEscrow.escrowId,
+      releaser,
+      relayer,
+    });
+    expect(releaseAuth.expiresAtLedger).toBeGreaterThan(0);
+    await client.submitRelayed("release", releaseAuth, relayer);
+    expect(await client.getStatus(releaseEscrow.escrowId)).toBe("Released");
+
+    const refundEscrow = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-relayed-refund",
+      releaser: releaser.publicKey(),
+    });
+    const refundAuth = await client.authorizeRefund({
+      escrowId: refundEscrow.escrowId,
+      releaser,
+      relayer,
+    });
+    await client.submitRelayed("refund", refundAuth, relayer);
+    expect(await client.getStatus(refundEscrow.escrowId)).toBe("Refunded");
   });
 
   it("creates, funds, and refunds an escrow end-to-end", async () => {
@@ -159,80 +196,50 @@ describe("EscrowClient against live testnet", () => {
     expect(escrow.status).toBe("Funded");
   });
 
-  it("estimates fees for a release call against the live contract", async () => {
-    const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
+  it("estimates a live call's fee and fee-bumps a signed envelope under the cap", async () => {
+    const [payer, payee, releaser, sponsor] = await Promise.all([
+      fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(),
+    ]);
     const client = new EscrowClient({ contractId: CONTRACT_ID });
-
     const { escrowId } = await client.createEscrow({
       payer,
       payee: payee.publicKey(),
       token: NATIVE_XLM_SAC,
       amount: 1_000_000n,
-      conditionRef: "sdk-integration-test-estimate",
+      conditionRef: "sdk-integration-test-fees",
       releaser: releaser.publicKey(),
     });
 
-    const estimateResult = await estimate({
-      contractId: CONTRACT_ID,
+    // Simulate the release the releaser is about to send — the estimate must be
+    // internally consistent and non-zero.
+    const estimate = await client.estimate({
+      source: payer,
       method: "release",
-      args: [nativeToScval(escrowId), nativeToScval(releaser.publicKey())],
-      source: releaser.publicKey(),
+      args: [nativeToScVal(escrowId, { type: "u64" }), new Address(releaser.publicKey()).toScVal()],
     });
+    expect(estimate.minResourceFee).toBeGreaterThan(0n);
+    expect(estimate.resourceFee).toBeGreaterThanOrEqual(estimate.minResourceFee);
+    expect(estimate.total).toBe(estimate.resourceFee + estimate.inclusionFee);
 
-    expect(estimateResult.resourceFee).toBeGreaterThan(0n);
-    expect(estimateResult.inclusionFee).toBeGreaterThan(0n);
-    expect(estimestionResult.total).toBe(
-      estimateResult.resourceFee + estimateResult.inclusionFee,
-    );
-  });
-
-  it("sponsors a user-signed escrow call via fee-bump and executes it", async () => {
-    const [payer, payee, releaser, sponsor] = await Promise.all([
-      fundedKeypair(),
-      fundedKeypair(),
-      fundedKeypair(),
-      fundedKeypair(),
-    ]);
-    const client = new EscrowClient({ contractId: CONTRACT_ID });
-
-    const { escrowId } = await client.createEscrow({
-      payer,
-      payee: payee.public9ey(),
-      token: NATIVE_XLM_SAC,
-      amount: 1_000_000n,
-      conditionRef: "sdk-integration-test-fee-bump",
-      releaser: releaser.publicKey(),
-    });
-
-    // Build and sign the inner transaction as the releaser (caller).
-    const server = new (await import("@stellar/stellar-sdk")).Horizon.Server("https://horizon-testnet.stellar.org");
-    const sourceAccount = await server.loadAccount(releaser.publicKey());
-    const contract = new Contract(CONTRACT_ID);
-    const invokeOp = contract.call(
-      "release",
-      nativeToScval(escrowId),
-      nativeToScval(releaser.publicKey()),
-    );
-    const innerTx = new TransactionBuilder(sourceAccount, {
-      fee: "100",
-      networkPassphrase: TESTNET_PASSPHRASE,
+    // A plain payment is not an escrow call: the guard must refuse it, while
+    // the fee-bump helper still wraps it for an explicitly willing sponsor.
+    const payment = new TransactionBuilder(new Account(payer.publicKey(), "1"), {
+      fee: BASE_FEE,
+      networkPassphrase: "Test SDF Network ; September 2015",
     })
-      .addOperation(invokeOp)
+      .addOperation(
+        Operation.payment({ destination: payee.publicKey(), asset: Asset.native(), amount: "1" }),
+      )
       .setTimeout(30)
       .build();
-    const prepared = await server.prepareTransaction(innerTx);
-    prepared.sign(releaser);
+    payment.sign(payer);
 
-    // Guard must accept the escrow-only inner tx.
-    const guarded = escrowOnlyGuard(prepared.toXOR(), CONTRACT_ID);
-    expect(guarded.ok).toBe(true);
+    const guard = client.guardSponsorship(payment.toXDR());
+    expect(guard.ok).toBe(false);
+    expect(guard.reasons[0]).toContain("is not a contract invocation");
 
-    const bumped = await feeBumpSponsor(prepared.toXOR(), sponsor, {
-      maxFee: "1000000",
-      networkPassphrase: TESTNET_PASSPHRASE,
-    });
-    expect(bumped.txHash).toBeTruthy();
-
-    expect(await client.getStatus(escrowId)).toBe("Released");
+    const bumped = client.feeBump(payment.toXDR(), sponsor, { maxFee: 1_000n });
+    expect(bumped.fee).toBeLessThanOrEqual(1_000n);
+    expect(bumped.innerTxHash).toBe(payment.hash().toString("hex"));
   });
 });

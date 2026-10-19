@@ -10,12 +10,20 @@
 
 ## Contract surface
 ```
+__constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1 + E2 + E4)
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
+top_up(escrow_id, payer, amount) -> result // IMPLEMENTED in PR for issue #26 — original payer only, funded state only
 ```
+The allowlist is fixed when the contract is deployed. `create_escrow`
+rejects any token outside a non-empty list with `DisallowedToken` (error
+code 7); an empty list preserves the prior open-token behavior. The
+current live deployment predates this constructor and must be redeployed
+before the allowlist protection is active.
+
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
 by Phase E4, both last; no behavioral difference beyond the added
@@ -34,7 +42,7 @@ historical record.
 
 `refund_after` is an optional unix timestamp in seconds set once at
 creation (`docs/adr/0004`): after it passes **anyone** may call
-refund`, but the destination is unchanged — always the stored `payer` —
+`refund`, but the destination is unchanged — always the stored `payer` —
 and `release` is never gated by it, so the releaser can still release
 after the deadline (whoever lands first wins). No `refund_after` means
 behaviour is exactly what it was before: releaser-only refunds, forever.
@@ -49,17 +57,27 @@ await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunde
 await client.getEscrow(escrowId);            // full stored record — incl. releaser + refundAfter, so a payee can check the deal (docs/adr/0004, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
 await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter has passed
-
-// Phase E6: fee estimation + fee-bump sponsorship
-await client.estimate(call);
-// { resourceFee: string, inclusionFee: string, totalFee: string } — from simulation
-
-await client.feeBump(signedXdr, sponsorSigner, { maxFee });
-// { txHash, xdr } — wraps a user-signed tx in a fee-bump; rejects if the required fee exceeds maxFee
-
-// Guard: verifies the inner tx only invokes the escrow contract (every op + auth entry)
-await client.assertEscrowOnly(signedXdr, { contractId }); // throws EscrowGuardError on any foreign op/auth entry
+await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
+const stop = client.subscribe(handler, { cursor, pollIntervalMs }); // serial polling; await handler for back-pressure
+await client.estimate({ source, method, args }); // { resourceFee, inclusionFee, total, minResourceFee } — simulation only, 20% resource buffer
+client.guardSponsorship(signedXdr);          // { ok, reasons, invokedContracts } — every op + contract auth entry must target this escrow
+client.feeBump(signedXdr, sponsor, { maxFee, baseFee? }); // { xdr, fee, innerTxHash } — throws MaxFeeExceededError, never overshoots the cap
 ```
+`estimate` never signs or submits; it simulates against the client's RPC
+and reports stroops. `guardSponsorship` is the pre-sponsorship check for
+transactions that come from someone else: it rejects foreign contract
+invocations, non-invocation operations, contract-address auth entries
+pointing elsewhere, and already-bumped envelopes, while allowing the
+account auth entries (payer/releaser) a legitimate escrow call carries.
+`feeBump` charges `baseFee × (inner operations + 1)` and validates the
+cap before building the envelope, so a fee spike fails loudly instead of
+silently costing more than the sponsor agreed to.
+Event results are a discriminated union: known lifecycle events expose
+their event type and escrow id; unrecognized topics are returned as
+`type: "unknown"` with decoded topic values and payload. Persist the
+last handled event's cursor to resume; an expired RPC history cursor throws
+`EventCursorExpiredError`. These helpers require the contract lifecycle
+events tracked by issue #9; the current deployment does not emit them.
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
 for no timeout, which behaves exactly as this contract did before the
@@ -71,18 +89,11 @@ regenerate it whenever the contract's public signatures/types change.
 wrapper) — consumers import from the package root, never from
 `src/generated/` directly.
 
-Fee estimation and fee-bump sponsorship (`estimate`, `feeBump`, `assertEscrowOnly`)
-are purely client-side helpers: they simulate and wrap transactions but
-change no contract state and add no contract functions. `feeBump` always
-enforces its caller-supplied `maxFee` — it never silently exceeds it — and
-assertEscrowOnly` inspects every operation and every auth entry, not just
-the first, before a sponsor signs.
-
 `condition_ref` is an **opaque string/id** the contract does not interpret
 — it's the caller's job (e.g. `docforum-core`) to decide when release is
 warranted and call `release()`. `releaser` is the one address permitted
 to call `release`/`refund` for that specific escrow, set once at
-create_escrow` time — see `docs/adr/0002` for why a per-escrow releaser
+`create_escrow` time — see `docs/adr/0002` for why a per-escrow releaser
 was chosen over a single contract-level admin. The one exception is the
 timeout: once `refund_after` has passed, **anyone** may call `refund` for
 that escrow, still only back to `payer` — see `docs/adr/0004` for why

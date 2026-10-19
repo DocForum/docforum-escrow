@@ -8,23 +8,75 @@
 // (hard rule 4); passing a mainnet networkPassphrase/rpcUrl is on the
 // caller, not encouraged by any default here.
 import {
-  Keypair,
-  TransactionBuilder,
-  FeeBumpTransactionBuilder,
-  Transaction,
+  Address,
+  BASE_FEE,
   FeeBumpTransaction,
+  Keypair,
   Operation,
-  BaseFee,
-  SorobanRpc,
-  networks,
-  type Horizon,
-  type SorobanRpc as SorobanRpcType,
+  Transaction,
+  TransactionBuilder,
+  scValToNative,
+  xdr,
 } from "@stellar/stellar-sdk";
+import { Api, Server as RpcServer } from "@stellar/stellar-sdk/rpc";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
 
-export { Keypair, TransactionBuilder, FeeBumpTransactionBuilder, Transaction, FeeBumpTransaction, Operation, BaseFee, SorobanRpc, networks };
+export { Keypair };
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";
+
+export type EscrowEventType = "created" | "released" | "refunded";
+interface EscrowEventBase {
+  ledger: number;
+  cursor: string;
+  transactionHash: string;
+  data: unknown;
+}
+/**
+ * Unknown variants are retained with decoded topics so newer contract event
+ * schemas remain observable to older SDK consumers instead of crashing.
+ */
+export type EscrowEvent = (EscrowEventBase & {
+  type: EscrowEventType;
+  escrowId: bigint;
+}) | (EscrowEventBase & {
+  type: "unknown";
+  eventName?: string;
+  escrowId?: bigint;
+  topics: unknown[];
+});
+export type GetEventsParams = {
+  types?: EscrowEventType[];
+  escrowId?: bigint;
+} & (
+  | { /** First ledger to scan (inclusive). */ fromLedger: number; cursor?: never }
+  | { /** Opaque RPC cursor returned from a prior page/event. */ cursor: string; fromLedger?: never }
+);
+export interface GetEventsResult { events: EscrowEvent[]; nextCursor: string; }
+
+/** The requested cursor predates the event history retained by the RPC server. */
+export class EventCursorExpiredError extends Error {
+  readonly name = "EventCursorExpiredError";
+  constructor(message = "The event cursor is older than the RPC server's retention window.") { super(message); }
+}
+
+export interface SubscribeOptions {
+  cursor?: string;
+  pollIntervalMs?: number;
+  types?: EscrowEventType[];
+  escrowId?: bigint;
+  onError?: (error: unknown) => void;
+}
+
+function safeScValToNative(value: xdr.ScVal): unknown {
+  try { return scValToNative(value); }
+  catch { return { xdr: value.toXDR("base64") }; }
+}
+
+function isRetentionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /cursor.{0,40}(older|retention|oldest)|older.{0,40}(cursor|ledger|retention)|start ledger.{0,40}(oldest|retention)/i.test(message);
+}
 
 /** Everything the contract stores about one escrow — what `getEscrow` returns. */
 export interface Escrow {
@@ -89,55 +141,74 @@ export interface ReleaseOrRefundParams {
   caller: Keypair;
 }
 
-/** A single contract invocation to estimate fees for. */
-export interface EstimateCallParams {
-  /** The contract to invoke. Defaults to the client's configured contractId. */
-  contractId?: string;
-  /** Contract function name, e.g. "create_escrow". */
-  method: string;
-  /** Arguments to pass to the contract function. */
-  args?: unknown[];
-  /** The account that will sign and pay for the call. */
-  source: Keypair | string;
+/** The relayer pays the transaction fee; the releaser signs only contract auth. */
+export interface RelayedAuthorizationParams {
+  escrowId: bigint;
+  releaser: Keypair;
+  relayer: Keypair;
 }
 
-/** Fee estimate for a single contract call, in strops. */
+/** Serialized, simulated transaction containing a short-lived signed auth entry. */
+export interface RelayedAuthorization {
+  transaction: string;
+  expiresAtLedger: number;
+}
+
+// ---------------------------------------------------------------------------
+// Fee estimation + sponsorship (issue #70)
+// ---------------------------------------------------------------------------
+
+/** A single contract invocation to estimate the fee of. */
+export interface EstimateCallParams {
+  /** Contract to invoke. Defaults to the client's configured `contractId`. */
+  contractId?: string;
+  /** Contract function name, e.g. `"create_escrow"`. */
+  method: string;
+  /** Already-encoded contract arguments (`xdr.ScVal[]`). */
+  args?: xdr.ScVal[];
+  /** Account that would sign and pay for the call. */
+  source: Keypair;
+}
+
+/** Components of a simulated contract call's fee, in stroops. */
 export interface FeeEstimate {
-  /** Fee charged for the resources (CPU/memory/read-write entries) the call consumes. */
+  /** Resource fee charged for CPU/memory/ledger entries, buffered for drift. */
   resourceFee: bigint;
-  /** Base inclusion fee (per-operation fee + transaction overhead). */
+  /** Inclusion fee: base fee × number of operations. */
   inclusionFee: bigint;
-  /** resourceFee + inclusionFee. */
+  /** `resourceFee + inclusionFee` — what the call is expected to cost. */
   total: bigint;
-  /** The minimum resource fee the simulation reported, before any buffer. */
+  /** The unbuffered resource fee the simulation reported. */
   minResourceFee: bigint;
 }
 
 export interface FeeBumpOptions {
   /**
-   * Hard cap on the fee-bump transaction's fee, in strops. If the inner
-   * transaction's fee exceeds this, `feeBump` throws — it never silently
-   * exceeds the cap.
+   * Hard cap, in stroops, on the fee-bump transaction's fee. If the fee the
+   * bump requires would exceed it, `feeBump` throws `MaxFeeExceededError`
+   * instead of silently exceeding the cap.
    */
   maxFee: bigint;
-  /** Optional base fee for the fee-bump wrapper (strops). Default: 100. */
-  baseFee?: string;
+  /** Base fee per operation for the wrapper, in stroops. Default: the network base fee (100). */
+  baseFee?: bigint;
 }
 
 export interface FeeBumpResult {
-  /** The signed fee-bump transaction envelope (base64 XDR). */
+  /** Signed fee-bump envelope, base64 XDR. */
   xdr: string;
-  /** The fee the fee-bump transaction will charge (strops). */
+  /** Fee the fee-bump transaction will charge, in stroops. */
   fee: bigint;
+  /** Hash of the inner (sponsored) transaction — the one that actually executes. */
+  innerTxHash: string;
 }
 
-/** Result of the sponsorship guard. */
+/** Outcome of the sponsorship guard. */
 export interface GuardResult {
-  /** True only if every operation and auth entry targets the escrow contract. */
+  /** True only when every operation and contract-address auth entry targets the escrow contract. */
   ok: boolean;
-  /** Human-readable reasons why the transaction was rejected (empty when ok). */
+  /** Human-readable rejection reasons, empty when `ok`. */
   reasons: string[];
-  /** The contract identifiers the guard found invoked. */
+  /** Every contract id the transaction invokes. */
   invokedContracts: string[];
 }
 
@@ -156,18 +227,39 @@ export class MaxFeeExceededError extends Error {
   readonly requestedFee: bigint;
   readonly maxFee: bigint;
   constructor(requestedFee: bigint, maxFee: bigint) {
-    super(`Fee bump requested ${requestedFee.toString()} strops exceeds cap of ${maxFee.toString()} strops`);
+    super(`Fee-bump requires ${requestedFee} stroops, above the maxFee cap of ${maxFee}`);
     this.name = "MaxFeeExceededError";
     this.requestedFee = requestedFee;
     this.maxFee = maxFee;
   }
 }
 
-function toKeypair(signer: Keypair | string): Keypair {
-  if (typeof signer === "string") {
-    return Keypair.fromSecret(signer);
-  }
-  return signer;
+/** Default headroom added to the simulated resource fee: 20% (2000 bps). */
+export const DEFAULT_RESOURCE_FEE_BUFFER_BPS = 2_000;
+
+/**
+ * Pure fee arithmetic, split out so it can be unit-tested without an RPC.
+ * The buffer is applied to the resource fee only (inclusion fee is already
+ * deterministic) and rounds up, so an estimate is never a strop short.
+ */
+export function computeFeeEstimate(input: {
+  minResourceFee: bigint;
+  inclusionFee: bigint;
+  bufferBps?: number;
+}): FeeEstimate {
+  const { minResourceFee, inclusionFee } = input;
+  const bufferBps = input.bufferBps ?? DEFAULT_RESOURCE_FEE_BUFFER_BPS;
+  if (minResourceFee < 0n) throw new RangeError("minResourceFee must not be negative.");
+  if (inclusionFee < 0n) throw new RangeError("inclusionFee must not be negative.");
+  if (!Number.isInteger(bufferBps) || bufferBps < 0) throw new RangeError("bufferBps must be a non-negative integer.");
+  const resourceFee = (minResourceFee * BigInt(10_000 + bufferBps) + 9_999n) / 10_000n;
+  return { resourceFee, inclusionFee, total: resourceFee + inclusionFee, minResourceFee };
+}
+
+/** Decode a contract address out of an `xdr.ScAddress`, or `undefined` for account addresses. */
+function contractAddressOf(scAddress: xdr.ScAddress): string | undefined {
+  if (scAddress.switch().name !== "scAddressTypeContract") return undefined;
+  return Address.fromScAddress(scAddress).toString();
 }
 
 /**
@@ -179,11 +271,13 @@ export class EscrowClient {
   private readonly contractId: string;
   private readonly rpcUrl: string;
   private readonly networkPassphrase: string;
+  private readonly rpc: RpcServer;
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
     this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
     this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
+    this.rpc = new RpcServer(this.rpcUrl);
   }
 
   private contractClient(signer?: Keypair): EscrowContractClient {
@@ -268,133 +362,217 @@ export class EscrowClient {
   }
 
   /**
-   * Estimates the fee of a contract call by simulating it against the
-   * configured R0P — resource fee, inclusion fee, and total, all in
-   * strops. Useful for sponsors that need to know what a call will cost
-   * before submitting it. Does not sign or send anything.
+   * Estimates what a contract call will cost, in stroops, by simulating it
+   * against the configured RPC. Nothing is signed or submitted.
+   *
+   * The resource fee carries a 20% buffer over the simulated minimum (rounded
+   * up), because simulation can be a strop or two short of the real charge;
+   * `minResourceFee` exposes the raw figure for callers that want their own
+   * margin. Sponsors should treat `total` as the expected cost, not a promise
+   * — fee-bump it with `maxFee` set to the most they are willing to pay.
    */
   async estimate(call: EstimateCallParams): Promise<FeeEstimate> {
-    const source = toKeypair(call.source);
-    const server = new SorobanRpg(this.rpcUrl);
-    const account = await server.getAccount(source.publicKey());
-    const contract = call.contractId ?? this.contractId;
-    const operation = Operation.invokeContractFunction(contract, call.method, ...(call.args ?? []));
-    const tx = new TransactionBuilder()
-      .addOperation(operation)
-      .setSourceAccount(account)
-      .setFee(BaseFee.FEE_100X .toString())
+    const contractId = call.contractId ?? this.contractId;
+    const account = await this.rpc.getAccount(call.source.publicKey());
+    const transaction = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        Operation.invokeContractFunction({
+          contract: contractId,
+          function: call.method,
+          args: call.args ?? [],
+        }),
+      )
       .setTimeout(30)
       .build();
-    const sim = await server.simulateTransaction(tx);
-    if (sim.error) {
-      throw new Error(`Simulation failed: ${sim.error}`);
+
+    const simulation = await this.rpc.simulateTransaction(transaction);
+    if (Api.isSimulationError(simulation)) {
+      throw new Error(`Simulation failed for ${call.method}: ${simulation.error}`);
     }
-    const minResourceFee = BigInt(sim.minResourceFee);
-    // Add a 20% buffer to the resource fee to absorb small simulation
-    // drift, rounded up to the nearest strop.
-    const resourceFee = (minResourceFee * 12n) / 10n;
-    const inclusionFee = BigInt(BaseFee.FEE_100X) * 2n; // one op + tx overhead
-    const total = resourceFee + inclusionFee;
-    return { resourceFee, inclusionFee, total, minResourceFee };
+    return computeFeeEstimate({
+      minResourceFee: BigInt(simulation.minResourceFee),
+      inclusionFee: BigInt(BASE_FEE) * BigInt(transaction.operations.length),
+    });
   }
 
   /**
-   * Wraps a user-signed transaction in a fee-bump transaction signed by
-   * `sponsorSigner`. The fee-bump's fee is derived from the inner
-   * transaction's fee and is capped at `maxFee` — if the required fee
-   * exceeds the cap, this throws `MaxFeeExceededError` rather than
-   * silently exceeding it.
+   * Wraps an already-signed transaction in a fee-bump paid by `sponsorSigner`.
+   *
+   * The wrapper's fee is `baseFee × (inner operations + 1)`, charged by the
+   * fee-bump envelope; the cap is checked before anything is built, so a spike
+   * either fits `maxFee` or throws `MaxFeeExceededError` — it is never silently
+   * exceeded. Run `guardSponsorship` first when the inner transaction comes
+   * from someone else.
    */
-  async feeBump(signedXdrChain: string, sponsorSigner: Keypair | string, options: FeeBumpOptions): Promise<FeeBumpResult> {
-    const sponsor = toKeypair(sponsorSigner);
-    const inner = TransactionBuilder.fromXDR(signedXtrChain, this.networkPassphrase);
-    const innerFee = BigInt(inner.fee);
+  feeBump(signedXdr: string, sponsorSigner: Keypair, options: FeeBumpOptions): FeeBumpResult {
+    const inner = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+    if (!(inner instanceof Transaction)) {
+      throw new TypeError("feeBump expects a regular signed transaction, not an already fee-bumped envelope.");
+    }
+    const baseFee = options.baseFee ?? BigInt(BASE_FEE);
+    if (baseFee < 1n) throw new RangeError("baseFee must be at least 1 strop.");
     const maxFee = BigInt(options.maxFee);
-    // The fee-bump wrapper must charge at least the inner transaction's fee.
-    // The cap is enforced against the actual fee we would set.
-    const requestedFee = innerFee > maxFee ? innerFee : innerFee;
-    if (requestedFee > maxFee) {
-      throw new MaxFeeExceededError(requestedFee, maxFee);
-    }
-    const builder = new FeeBumpTransactionBuilder(signedXtrChain, this.networkPassphrase)
-      .setFee(requestedFee.toString())
-      .setSourceAccount(sponsor.publicKey());
-    // Sign the fee-bump envelope with the sponsor keypair.
-    const signed = builder.build();
-    signed.sign(sponsor);
-    return { xdr: signed.toXDR(), fee: requestedFee };
+    if (maxFee < 0n) throw new RangeError("maxFee must not be negative.");
+
+    // A fee-bump envelope carries one operation (the wrapped inner tx), so it
+    // costs baseFee × (inner ops + 1). The inner fee itself is refunded.
+    const fee = baseFee * BigInt(inner.operations.length + 1);
+    if (fee > maxFee) throw new MaxFeeExceededError(fee, maxFee);
+
+    const bump = TransactionBuilder.buildFeeBumpTransaction(
+      sponsorSigner,
+      baseFee.toString(),
+      inner,
+      this.networkPassphrase,
+    );
+    bump.sign(sponsorSigner);
+    return { xdr: bump.toXDR(), fee, innerTxHash: inner.hash().toString("hex") };
   }
 
   /**
-   * Guard helper for sponsors: verifies that a (signed) transaction
-   * only invokes the escrow contract — every operation and every auth
-   * entry, not just the first. Returns a `GuardResult`; use
-   * `assertSponsorable` to throw instead.
+   * Verifies that a transaction only touches this escrow contract before a
+   * sponsor pays for it. Every operation is inspected, and so is every
+   * contract-address auth entry — an invocation can otherwise smuggle in a
+   * transfer authorized against another contract. Account-address auth entries
+   * (the payer/releaser signatures) are expected and allowed.
    */
-  guardSponsorship(signedXdrChain: string): GuardResult {
+  guardSponsorship(signedXdr: string): GuardResult {
     const reasons: string[] = [];
     const invokedContracts = new Set<string>();
-    let tx: Transaction | FeeBumpTransaction;
+
+    let inner: Transaction | FeeBumpTransaction;
     try {
-      tx = TransactionBuilder.fromXDR(signedXtrChain, this.networkPassphrase);
-    } catch {
-      // May be a fee-bump envelope; unwrap its inner transaction.
-      try {
-        const fb = FeeBumpTransactionBuilder.fromXDR(signedXtrChain, this.networkPassphrase);
-        tx = fb.innerTransaction;
-      } catch {
-        return { ok: false, reasons: ["could not decode transaction XDR"], invokedContracts: [] };
-      }
+      inner = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+    } catch (error) {
+      return {
+        ok: false,
+        reasons: [`could not decode transaction envelope: ${error instanceof Error ? error.message : String(error)}`],
+        invokedContracts: [],
+      };
+    }
+    // A fee-bump envelope is not sponsorable again; unwrap it so the inner
+    // transaction is what gets judged (its hash is what executes).
+    const transaction = inner instanceof FeeBumpTransaction ? inner.innerTransaction : inner;
+    if (inner instanceof FeeBumpTransaction) {
+      reasons.push("envelope is already a fee-bump transaction");
     }
 
-    for (const op of tx.operations) {
-      if (op.type !== "invokeHostFunction") {
-        reasons.push(`operation type "${op.type}" is not a contract invocation`);
+    for (const operation of transaction.operations) {
+      if (operation.type !== "invokeHostFunction") {
+        reasons.push(`operation type "${operation.type}" is not a contract invocation`);
         continue;
       }
-      const invokeOp = op as unknown as {
-        functionName: string;
-        contractId?: () => { toString: () => string };
-      };
-      const contractId = invokeOp.contractId?.().toString();
+      const fn = operation.func;
+      if (fn.switch().name !== "hostFunctionTypeInvokeContract") {
+        reasons.push(`host function "${fn.switch().name}" is not a contract invocation`);
+        continue;
+      }
+      const contractId = contractAddressOf(fn.invokeContract().contractAddress());
       if (!contractId) {
-        reasons.push(`operation "${invokeOp.functionName}" has no contract id`);
+        reasons.push("contract invocation has no contract address");
         continue;
       }
       invokedContracts.add(contractId);
       if (contractId !== this.contractId) {
-        reasons.push(`operation "${invokeOp.functionName}" invokes foreign contract ${contractId}`);
+        reasons.push(`operation invokes foreign contract ${contractId}`);
       }
-    }
 
-    // Inspect auth entries too: a contract invocation can carry auth
-    // entries that target other contracts (e.g. a token transfer).
-    const auth = tx.auth ?? [];
-    for (const entry of auth) {
-      const credentials = entry.credentials();
-      const switchName = credentials.switch().name;
-      if (switchName === "sorobanCredentials") {
-        const address = credentials.sorobanCredentials().address().toString();
-        if (address !== this.contractId) {
-          reasons.push(`auth entry targets foreign contract ${address}`);
+      for (const entry of operation.auth ?? []) {
+        const credentials = entry.credentials();
+        if (credentials.switch().name !== "sorobanCredentialsAddress") continue;
+        const authContract = contractAddressOf(credentials.address().address());
+        if (authContract && authContract !== this.contractId) {
+          reasons.push(`auth entry targets foreign contract ${authContract}`);
         }
       }
     }
 
-    return { ok: reasons.length === 0, reasons, invokedContracts: Array.from(invokedContracts) };
+    if (transaction.operations.length === 0) reasons.push("transaction has no operations");
+    return { ok: reasons.length === 0, reasons, invokedContracts: [...invokedContracts] };
   }
 
-  /** Throws `SponsorshipGuardError` if the transaction is not sponsorable. */
-  assertSponsorable(signedXtrChain: string): void {
-    const result = this.guardSponsorship(signedXtrChain);
-    if (!result.ok) {
-      throw new SponsorshipGuardError(result.reasons);
+  /** Throws `SponsorshipGuardError` when `guardSponsorship` would reject. */
+  assertSponsorable(signedXdr: string): void {
+    const result = this.guardSponsorship(signedXdr);
+    if (!result.ok) throw new SponsorshipGuardError(result.reasons);
+  }
+
+  /** Reads one page of lifecycle events emitted by this escrow contract. */
+  async getEvents(params: GetEventsParams): Promise<GetEventsResult> {
+    if (params.cursor !== undefined && params.fromLedger !== undefined) {
+      throw new TypeError("Provide either cursor or fromLedger, not both.");
     }
+    if (params.fromLedger !== undefined && (!Number.isSafeInteger(params.fromLedger) || params.fromLedger < 1)) {
+      throw new RangeError("fromLedger must be a positive safe integer.");
+    }
+    const filter: Api.EventFilter = { type: "contract", contractIds: [this.contractId] };
+    const request: Api.GetEventsRequest = "cursor" in params && params.cursor !== undefined
+      ? { cursor: params.cursor, filters: [filter], limit: 100 }
+      : { startLedger: params.fromLedger, filters: [filter], limit: 100 };
+    let response: Api.GetEventsResponse;
+    try {
+      response = await this.rpc.getEvents(request);
+    } catch (error) {
+      if (isRetentionError(error)) throw new EventCursorExpiredError(error instanceof Error ? error.message : undefined);
+      throw error;
+    }
+    const allowed = params.types ? new Set(params.types) : undefined;
+    const events: EscrowEvent[] = [];
+    for (const raw of response.events) {
+      if (raw.type !== "contract" || raw.contractId?.toString() !== this.contractId) continue;
+      const nativeTopics = raw.topic.map(safeScValToNative);
+      const eventName = nativeTopics.find((v) => v === "created" || v === "released" || v === "refunded") as EscrowEventType | undefined;
+      const unknownName = nativeTopics.find((v) => typeof v === "string") as string | undefined;
+      const type = eventName;
+      if (type && allowed && !allowed.has(type)) continue;
+      const rawId = nativeTopics.find((v): v is bigint | number => typeof v === "bigint" || (typeof v === "number" && Number.isSafeInteger(v)));
+      const escrowId = rawId === undefined ? undefined : BigInt(rawId);
+      if (params.escrowId !== undefined && escrowId !== params.escrowId) continue;
+      const base = { ledger: raw.ledger, cursor: raw.id, transactionHash: raw.txHash, data: safeScValToNative(raw.value) };
+      if (type && escrowId !== undefined) events.push({ ...base, type, escrowId });
+      else events.push({ ...base, type: "unknown", ...(unknownName ? { eventName: unknownName } : {}), ...(escrowId !== undefined ? { escrowId } : {}), topics: nativeTopics });
+    }
+    return { events, nextCursor: response.cursor };
+  }
+
+  /**
+   * Polls event pages in order. Each handler call is awaited before the next
+   * event is delivered, so slow handlers apply back-pressure without drops.
+   * The returned stop function ends polling; persist the last delivered
+   * event cursor (or the cursor from getEvents) to resume after restart.
+   */
+  subscribe(handler: (event: EscrowEvent) => void | Promise<void>, options: SubscribeOptions = {}): () => void {
+    const pollIntervalMs = options.pollIntervalMs ?? 5_000;
+    if (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 1) throw new RangeError("pollIntervalMs must be at least 1.");
+    let stopped = false;
+    let cursor = options.cursor;
+    const poll = async (): Promise<void> => {
+      while (!stopped) {
+        try {
+          const page = cursor !== undefined
+            ? await this.getEvents({ cursor, types: options.types, escrowId: options.escrowId })
+            : await this.getEvents({ fromLedger: (await this.rpc.getLatestLedger()).sequence, types: options.types, escrowId: options.escrowId });
+          for (const event of page.events) {
+            if (stopped) break;
+            await handler(event);
+            cursor = event.cursor;
+          }
+          // Advance across pages with no matching events, including filtered events.
+          cursor = page.nextCursor;
+        } catch (error) {
+          if (!stopped) {
+            if (options.onError) options.onError(error);
+            else queueMicrotask(() => { throw error; });
+          }
+          return;
+        }
+        if (!stopped) await new Promise<void>((resolve) => setTimeout(resolve, pollIntervalMs));
+      }
+    };
+    void poll();
+    return () => { stopped = true; };
   }
 }
-
-/** Default testnet configuration for convenience. */
-export const TESTNET = {
-  rpcUrl: TESTNET_RPC_URL,
-  networkPassphrase: TESTNET_NETWORK_PASSTHRASE,
-} as const;
