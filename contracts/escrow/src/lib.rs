@@ -74,7 +74,7 @@ pub enum Error {
     /// creation so no on-chain storage is wasted on an oversized ref.
     ConditionRefTooLong = 7,
     /// `token` is not in the immutable deploy-time allowlist.
-    DisallowedToken = 7,
+    DisallowedToken = 8,
     Overflow = 12,
 }
 
@@ -101,15 +101,6 @@ impl EscrowContract {
     /// Requires `payer` auth (the contract moves their funds). Returns
     /// the new escrow's id.
     pub fn create_escrow(
-    env: Env,
-    payer: Address,
-    payee: Address,
-    token: Address,
-    amount: i128,
-    condition_ref: String,
-    releaser: Address,
-    refund_after: Option<u64>,
-) -> Result<u64, Error> {
         env: Env,
         payer: Address,
         payee: Address,

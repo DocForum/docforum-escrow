@@ -133,7 +133,7 @@ fn create_escrow_rejects_condition_ref_that_is_too_long() {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // 64 bytes is accepted (the bound is inclusive).
@@ -161,5 +161,5 @@ fn create_escrow_rejects_condition_ref_that_is_too_long() {
         &None,
     );
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), docforum_escrow::Error::ConditionRefTooLong);
+    assert_eq!(result.unwrap_err(), Ok(docforum_escrow::Error::ConditionRefTooLong));
 }
