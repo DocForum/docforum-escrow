@@ -7,12 +7,66 @@
 // (payer/payee/amount, not e.g. "patient"). Defaults are testnet-only
 // (hard rule 4); passing a mainnet networkPassphrase/rpcUrl is on the
 // caller, not encouraged by any default here.
-import { Keypair } from "@stellar/stellar-sdk";
+import { Address, Keypair, Hash, xdr } from "@stellar/stellar-sdk";
+import { Server as RpcServer, type Api } from "@stellar/stellar-sdk/rpc";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
 
 export { Keypair };
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";
+
+export type EscrowEventType = "created" | "released" | "refunded";
+interface EscrowEventBase {
+  ledger: number;
+  cursor: string;
+  transactionHash: string;
+  data: unknown;
+}
+/**
+ * Unknown variants are retained with decoded topics so newer contract event
+ * schemas remain observable to older SDK consumers instead of crashing.
+ */
+export type EscrowEvent = (EscrowEventBase & {
+  type: EscrowEventType;
+  escrowId: bigint;
+}) | (EscrowEventBase & {
+  type: "unknown";
+  eventName?: string;
+  escrowId?: bigint;
+  topics: unknown[];
+});
+export type GetEventsParams = {
+  types?: EscrowEventType[];
+  escrowId?: bigint;
+} & (
+  | { /** First ledger to scan (inclusive). */ fromLedger: number; cursor?: never }
+  | { /** Opaque RPC cursor returned from a prior page/event. */ cursor: string; fromLedger?: never }
+);
+export interface GetEventsResult { events: EscrowEvent[]; nextCursor: string; }
+
+/** The requested cursor predates the event history retained by the RPC server. */
+export class EventCursorExpiredError extends Error {
+  readonly name = "EventCursorExpiredError";
+  constructor(message = "The event cursor is older than the RPC server's retention window.") { super(message); }
+}
+
+export interface SubscribeOptions {
+  cursor?: string;
+  pollIntervalMs?: number;
+  types?: EscrowEventType[];
+  escrowId?: bigint;
+  onError?: (error: unknown) => void;
+}
+
+function safeScValToNative(value: xdr.ScVal): unknown {
+  try { return scValToNative(value); }
+  catch { return { xdr: value.toXDR("base64") }; }
+}
+
+function isRetentionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /cursor.{0,40}(older|retention|oldest)|older.{0,40}(cursor|ledger|retention)|start ledger.{0,40}(oldest|retention)/i.test(message);
+}
 
 /** Everything the contract stores about one escrow — what `getEscrow` returns. */
 export interface Escrow {
@@ -37,7 +91,7 @@ export interface Escrow {
 }
 
 const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
-const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+const TESTNET_NETWORK_PASSHRASE = "Test SDF Network ; September 2015";
 
 export interface EscrowClientConfig {
   /** The deployed docforum-escrow contract's address (`C…`). */
@@ -77,6 +131,19 @@ export interface ReleaseOrRefundParams {
   caller: Keypair;
 }
 
+/** The relayer pays the transaction fee; the releaser signs only contract auth. */
+export interface RelayedAuthorizationParams {
+  escrowId: bigint;
+  releaser: Keypair;
+  relayer: Keypair;
+}
+
+/** Serialized, simulated transaction containing a short-lived signed auth entry. */
+export interface RelayedAuthorization {
+  transaction: string;
+  expiresAtLedger: number;
+}
+
 /**
  * Thin client for the docforum-escrow Soroban contract. Wraps
  * `create_escrow`/`get_status`/`get_escrow`/`release`/`refund` with plain
@@ -86,11 +153,31 @@ export class EscrowClient {
   private readonly contractId: string;
   private readonly rpcUrl: string;
   private readonly networkPassphrase: string;
+  private readonly rpc: RpcServer;
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
     this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
-    this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
+    this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSHRASE;
+    this.rpc = new RpcServer(this.rpcUrl);
+  }
+
+  /**
+   * Builds an `EscrowClient` for the instance that `factoryClient` deployed
+   * (or will deploy) for `integrator`. This is the recommended way for an
+   * integrator to obtain an `EscrowClient` without hardcoding a contract id.
+   *
+   * The instance address is computed offline via `predictInstanceAddress`, so this
+   * works before deployment as well as after — the resulting client's calls
+   * will only succeed once the instance actually exists on chain.
+   */
+  static forIntegrator(factoryClient: FactoryClient, integrator: string): EscrowClient {
+    const instanceId = factoryClient.predictInstanceAddress(integrator);
+    return new EscrowClient({
+      contractId: instanceId,
+      rpcUrl: factoryClient.rpcUrl,
+      networkPassphrase: factoryClient.networkPassphrase,
+    });
   }
 
   private contractClient(signer?: Keypair): EscrowContractClient {
@@ -173,4 +260,215 @@ export class EscrowClient {
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
   }
+
+  /** Reads one page of lifecycle events emitted by this escrow contract. */
+  async getEvents(params: GetEventsParams): Promise<GetEventsResult> {
+    if (params.cursor !== undefined && params.fromLedger !== undefined) {
+      throw new TypeError("Provide either cursor or fromLedger, not both.");
+    }
+    if (params.fromLedger !== undefined && (!Number.isSafeInteger(params.fromLedger) || params.fromLedger < 1)) {
+      throw new RangeError("fromLedger must be a positive safe integer.");
+    }
+    const filter: Api.EventFilter = { type: "contract", contractIds: [this.contractId] };
+    const request: Api.GetEventsRequest = "cursor" in params && params.cursor !== undefined
+      ? { cursor: params.cursor, filters: [filter], limit: 100 }
+      : { startLedger: params.fromLedger, filters: [filter], limit: 100 };
+    let response: Api.GetEventsResponse;
+    try {
+      response = await this.rpc.getEvents(request);
+    } catch (error) {
+      if (isRetentionError(error)) throw new EventCursorExpiredError(error instanceof Error ? error.message : undefined);
+      throw error;
+    }
+    const allowed = params.types ? new Set(params.types) : undefined;
+    const events: EscrowEvent[] = [];
+    for (const raw of response.events) {
+      if (raw.type !== "contract" || raw.contractId?.toString() !== this.contractId) continue;
+      const nativeTopics = raw.topic.map(safeScValToNative);
+      const eventName = nativeTopics.find((v) => v === "created" || v === "released" || v === "refunded") as EscrowEventType | undefined;
+      const unknownName = nativeTopics.find((v) => typeof v === "string") as string | undefined;
+      const type = eventName;
+      if (type && allowed && !allowed.has(type)) continue;
+      const rawId = nativeTopics.find((v): v is bigint | number => typeof v === "bigint" || (typeof v === "number" && Number.isSafeInteger(v)));
+      const escrowId = rawId === undefined ? undefined : BigInt(rawId);
+      if (params.escrowId !== undefined && escrowId !== params.escrowId) continue;
+      const base = { ledger: raw.ledger, cursor: raw.id, transactionHash: raw.txHash, data: safeScValToNative(raw.value) };
+      if (type && escrowId !== undefined) events.push({ ...base, type, escrowId });
+      else events.push({ ...base, type: "unknown", ...(unknownName ? { eventName: unknownName } : {}), ...(escrowId !== undefined ? { escrowId } : {}), topics: nativeTopics });
+    }
+    return { events, nextCursor: response.cursor };
+  }
+
+  /**
+   * Polls event pages in order. Each handler call is awaited before the next
+   * event is delivered, so slow handlers apply back-pressure without drops.
+   * The returned stop function ends polling; persist the last delivered
+   * event cursor (or the cursor from getEvents) to resume after
+   */
+  async subscribe(options: SubscribeOptions, onEvent: (event: EscrowEvent) => Promise<void> | void): Promise<() => void> {
+    const pollIntervalMs = options.pollIntervalMs ?? 5000;
+    if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 0) {
+      throw new RangeError("pollIntervalMs must be a non-negative safe integer.");
+    }
+    let stopped = false;
+    let cursor = options.cursor;
+    const sleep = (ms: number) => new Promise<void>(((resolve) => setTimeout(resolve, ms)));
+    const loop = async (): Promise<void> => {
+      while (!stopped) {
+        try {
+          const params: GetEventsParams = cursor !== undefined
+            ? { cursor, ...(options.types ? { types: options.types } : {}), ...(options.escrowId !== undefined ? { escrowId: options.escrowId } : {}) }
+            : { fromLedger: 1, ...(options.types ? { types: options.types } : {}), ...(options.escrowId !== undefined ? { escrowId: options.escrowId } : {}) };
+          const page = await this.getEvents(params);
+          for (const event of page.events) {
+            if (stopped) return;
+            await onEvent(event);
+          }
+          cursor = page.nextCursor;
+        } catch (error) {
+          if (options.onError) options.onError(error);
+          else throw error;
+        }
+        if (!stopped) await sleep(pollIntervalMs);
+      }
+    };
+    void loop();
+    return () => { stopped = true; };
+  }
+}
+
+/** Configuration for `FactoryClient`. */
+export interface FactoryClientConfig {
+  /** The deployed escrow factory contract's address (`C…`). */
+  factoryId: string;
+  /** Default: Soroban testnet RPC. */
+  rpcUrl?: string;
+  /** Default: Stellar testnet passphrase. */
+  networkPassphrase?: string;
+}
+
+export interface DeployInstanceParams {
+  /** The integrator address the instance is dedicated to (`G…` or `C…`). */
+  integrator: string;
+  /** Signs and pays for the deployment call. */
+  signer: Keypair;
+  /**
+   * Optional deterministic salt. Defaults no salt (contract derives one
+   * from the integrator address). Pass the same salt to
+   * `predictInstanceAddress` to know the address before deployment.
+   */
+  salt?: Buffer;
+}
+
+export interface DeployInstanceResult {
+  /** The deployed instance's contract address (`C…`). */
+  instanceId: string;
+  /** The deployment transaction's hash. */
+  txHash: string;
+  /** True when the instance already existed and no deployment was sent. */
+  alreadyDeployed: boolean;
+}
+
+/**
+ * Client for the escrow factory contract: deploy or discover per-integrator
+ * escrow instances. The instance address is deterministic and can be
+ * computed offline via `predictInstanceAddress`.
+ */
+export class FactoryClient {
+  readonly factoryId: string;
+  readonly rpcUrl: string;
+  readonly networkPassphrase: string;
+  private readonly rpc: RpcServer;
+
+  constructor(config: FactoryClientConfig) {
+    this.factoryId = config.factoryId;
+    this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
+    this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
+    this.rpc = new RpcServer(this.rpcUrl);
+  }
+
+  /**
+   * Computes the address the factory would deploy for `integrator` at
+   * `salt`, entirely offline (no network call). Matches the
+   * contract's `deploy_instance` derivation exactly.
+   */
+  predictInstanceAddress(integrator: string, salt?: Buffer): string {
+    return predictInstanceAddress(this.factoryId, salt, );
+  }
+
+  /**
+   * Deploys a new escrow instance for `integrator`. If the instance already
+   * exists, returns its address with `alreadyDeployed: true` and does not
+   * send a transaction.
+   */
+  async deployInstance(params: DeployInstanceParams): Promise<DeployInstanceResult> {
+    const existing = await this.getInstance(params.integrator);
+    if (existing !== undefined) {
+      return { instanceId: existing, txHash: "", alreadyDeployed: true };
+    }
+    const predicted = this.predictInstanceAddress(params.integrator, params.salt);
+    const client = this.factoryContractClient(params.signer);
+    const tx = await client.deploy_instance({
+      integrator: params.integrator,
+      salt: params.salt ?? null,
+    });
+    const sent = await tx.signAndSend();
+    const instanceId = sent.result.unwrap();
+    if (instanceId !== predicted) {
+      throw new Error(
+        `Factory deployed ${instanceId} but the offline prediction was ${predicted}. ` +
+          "This indicates a prediction/deployment mismatch — please report it.",
+      );
+    }
+    return { instanceId: instanceId, txHash: sent.sendTransactionResponse!.hash, alreadyDeployed: false };
+  }
+
+  /**
+   * Returns the instance address for `integrator` if it has been deployed,
+   * or `undefined` otherwise. Read-only.
+   */
+  async getInstance(integrator: string): Promise<string | undefined> {
+    const client = this.factoryContractClient();
+    const tx = await client.get_instance({ integrator: integrator });
+    const result = tx.result;
+    if (!result.isOk()) return undefined;
+    const value = result.unwrap();
+    return value ?? undefined;
+  }
+
+  private factoryContractClient(signer?: Keypair): FactoryContractClient {
+    return new FactoryContractClient({
+      contractId: this.factoryId,
+      rpcUrl: this.rpcUrl,
+      networkPassphrase: this.networkPassphrase,
+      ...(signer ? { publicKey: signer.publicKey(), signTransaction: signer } : {}),
+    });
+  }
+}
+
+/**
+ * Computes the deterministic address of an escrow instance deployed by
+ * `factoryId`, offline. This must match the contract's own derivation
+ * exactly (the integration test asserts this).
+ *
+ * The address is derived from `Hash(factoryId xdr || salt bytes)` interpreted
+ * as a Stellar contract address. When `salt` is omitted the contract derives
+ * the salt from the integrator address, so this function requires it to
+ * be passed explicitly for a meaningful prediction.
+ */
+export function predictInstanceAddress(factoryId: string, salt?: Buffer): string {
+  if (salt === undefined) {
+    throw new TypeError(
+      "predictInstanceAddress requires the salt used at deployment; " +
+        "the contract derives it from the integrator address, so pass it explicitly.",
+    );
+  }
+  const factoryAddress = new Address(factoryId);
+  const saltXock = xdr.ScVal.scvVoid();
+  const preimage = Buffer.concat([
+    factoryAddress.toScVal().toXDR(),
+    Buffer.from(salt),
+  ]);
+  const hash = Hash.sha256(preimage);
+  return Address.contract(hash).toString();
 }

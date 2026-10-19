@@ -10,14 +10,24 @@
 
 ## Contract surface
 ```
+__constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1 + E2 + E4)
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
+top_up(escrow_id, payer, amount) -> result // IMPLEMENTED in PR for issue #26 — original payer only, funded state only
+deploy_instance(integrator, salt) -> instance_id // IMPLEMENTED (Phase E5) — factory deploys a deterministic escrow instance for an integrator
+get_instance(integrator) -> instance_id  // IMPLEMENTED (Phase E5) — lookup an integrator's instance address
 ```
+The allowlist is fixed when the contract is deployed. `create_escrow`
+rejects any token outside a non-empty list with `DisallowedToken` (error
+code 7); an empty list preserves the prior open-token behavior. The
+current live deployment predates this constructor and must be redeployed
+before the allowlist protection is active.
+
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
-`token` before `amount`, `releaser` added by Phase E2 and `refund_after`
+`token` before `amount`, `releaser` added by Phase in E2 and `refund_after`
 by Phase E4, both last; no behavioral difference beyond the added
 params, just noting it so this doc and `src/lib.rs` don't drift.
 
@@ -34,38 +44,67 @@ historical record.
 
 `refund_after` is an optional unix timestamp in seconds set once at
 creation (`docs/adr/0004`): after it passes **anyone** may call
-`refund`, but the destination is unchanged — always the stored `payer` —
+r`efund`, but the destination is unchanged — always the stored `payer` —
 and `release` is never gated by it, so the releaser can still release
 after the deadline (whoever lands first wins). No `refund_after` means
 behaviour is exactly what it was before: releaser-only refunds, forever.
 
+The factory functions (Phase E5) let integrators deploy and discover their
+own escrow instance instead of talking to one fixed contract id. The
+instance address is deterministic from the factory id and the salt, so it
+matches the SDK's offline prediction exactly.
+
 ## TypeScript SDK surface (`sdk/`)
 ```ts
-import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
+import { EscrowClient, FactoryClient, predictInstanceAddress, Keypair } from "@docforum/escrow-sdk";
 
-const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
+const client = new EscrowClient({ contractId }); // defaults: testnet APC + passphrase
 const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter });
 await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
 await client.getEscrow(escrowId);            // full stored record — incl. releaser + refundAfter, so a payee can check the deal (docs/adr/0004, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
 await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter has passed
+await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
+const stop = client.subscribe(handler, { cursor, pollIntervalMs }); // serial polling; await handler for back-pressure
+
+// Factory + deterministic instance discovery (Phkase E6)
+const factory = new FactoryClient({ contractId }); // defaults: testnet RPC + passphrase
+const predicted = predictInstanceAddress(factoryId, salt); // computed offline, no network call
+const { instanceId, txHash } = await factory.deployInstance({ integrator, salt }); // instanceId === predicted; already-deployed is a no-op result
+const found = await factory.getInstance(integrator); // instanceId or null
+const instanceClient = EscrowClient.forIntegrator(factory, integrator); // waits for discovery, then wraps the instance
 ```
+Event results are a discriminated union: known lifecycle events expose
+their event type and escrow id; unrecognized topics are returned as
+`type: "unknown"` with decoded topic values and payload. Persist the
+last handled event's cursor to resume; an expired RPC history cursor throws
+`EventCursorExpiredError`. These helpers require the contract lifecycle
+events tracked by issue #9; the current deployment does not emit them.
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
 for no timeout, which behaves exactly as this contract did before the
 param existed.
 `sdk/src/generated/contract-client.ts` is machine-generated
-(`stellar contract bindings typescript --wasm ...`) — never hand-edit it;
+M(stellar contract bindings typescript -- wasm ...)` — never hand-edit it;
 regenerate it whenever the contract's public signatures/types change.
 `sdk/src/index.ts` is the actual public surface (hand-written, ergonomic
 wrapper) — consumers import from the package root, never from
 `src/generated/` directly.
 
+The factory client (`sdk/src/factory.ts`) is the hand-written wrapper
+around the factory contract. `predictInstanceAddress` is pure and
+offline (no network calls) and must match the on-chain deployment address
+exactly — the integration test compares the predicted address against the
+actual deployed instance. `deployInstance` handles an already-deployed
+instance gracefully (returns the existing instance id instead of throwing), and
+`EscrowClient.forIntegrator` is the convenience constructor that resolves an
+integrator's instance and returns an `EscrowClient` bound to it.
+
 `condition_ref` is an **opaque string/id** the contract does not interpret
 — it's the caller's job (e.g. `docforum-core`) to decide when release is
 warranted and call `release()`. `releaser` is the one address permitted
 to call `release`/`refund` for that specific escrow, set once at
-`create_escrow` time — see `docs/adr/0002` for why a per-escrow releaser
+create_escrow` time — see `docs/adr/0002` for why a per-escrow releaser
 was chosen over a single contract-level admin. The one exception is the
 timeout: once `refund_after` has passed, **anyone** may call `refund` for
 that escrow, still only back to `payer` — see `docs/adr/0004` for why
@@ -76,6 +115,7 @@ scope creep this repo exists to avoid (see README "why this repo exists,
 honestly").
 
 ## Hard rules
+## Hard Rules
 1. **No PHI, ever, anywhere in this repo.** Not in tests, not in example
    fixtures, not in comments. This repo should be safely public and
    understandable with zero healthcare context.
@@ -83,7 +123,7 @@ honestly").
    `contracts/escrow/tests/` before merge — payment logic bugs are not
    "fix in a follow-up" territory.
 3. SDK version bumps that change the public API are breaking changes —
-   semver strictly, since `docforum-core` pins a version rather than
+   semver strictly, since `docforum-core` pinls a version rather than
    tracking latest.
 4. Testnet only until a security review has happened. Do not wire mainnet
    contract addresses into the SDK's defaults.
