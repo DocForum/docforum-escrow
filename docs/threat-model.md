@@ -177,6 +177,23 @@ value. **Reviewers should challenge these ratings.**
   to every path a SEP-41 token could use to reach this contract,
   including through an intermediate third contract.
 
+### T11 — Malicious or failing release callback · **Medium (payee opt-in)**
+- A payee contract that authorizes `create_escrow` while
+  `notify_payee` is true opts in to the callback. The payer cannot opt a
+  payee in without its authorization. The payee can still make its callback
+  expensive, return an error, or attempt to re-enter `release`, `refund`, or
+  `create_escrow`.
+- Callback errors fail `release` atomically (`CallbackFailed`); token movement
+  and the `Released` state do not persist. The releaser can still refund, and
+  anyone can refund after `refund_after`. Refund never invokes the payee.
+- Soroban rejects re-entry while the escrow is already on the call stack.
+  Tests in `tests/release_callback.rs` attempt all three state-changing
+  entry points. A transaction budget exhaustion also fails release; the hook
+  is synchronous and must stay bounded. The escrow makes one callback with
+  fixed arguments and does not retry or loop.
+- The payee must authorize creation when `notify_payee` is true. Only use it
+  for a contract address implementing `on_escrow_released(u64, i128)`; a
+  consenting address without the method cannot complete release. See ADR 0005.
 ### T5 — Malicious or non-standard `token` · **Medium**
 `token` is any address the payer supplies. The contract trusts it to
 behave like SEP-41.
