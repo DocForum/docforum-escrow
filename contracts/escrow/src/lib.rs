@@ -57,7 +57,6 @@ pub struct EscrowData {
 enum DataKey {
     Escrow(u64),
     NextId,
- feat/issue-39-phase-e5-per-token-liability-accounting-and-an
     /// Total outstanding liability for a given token: the sum of
     /// `amount` across every escrow still in `Funded` status. Kept in
     /// persistent storage with an explicit TTL so it survives archival
@@ -65,7 +64,6 @@ enum DataKey {
     Liabilities(Address),
 
     AllowedTokens,
- main
 }
 
 #[contracterror]
@@ -84,15 +82,13 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
-feat/issue-39-phase-e5-per-token-liability-accounting-and-an
     /// A liability counter would have overflowed or underflowed —
     /// indicates a bug in the accounting, never a user error.
     LiabilityOverflow = 7,
 
     /// `token` is not in the immutable deploy-time allowlist.
-    DisallowedToken = 7,
+    DisallowedToken = 8,
     Overflow = 12,
- main
 }
 
 #[contract]
