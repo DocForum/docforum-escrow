@@ -7,7 +7,7 @@
 // (payer/payee/amount, not e.g. "patient"). Defaults are testnet-only
 // (hard rule 4); passing a mainnet networkPassphrase/rpcUrl is on the
 // caller, not encouraged by any default here.
-import { Address, Keypair, Hash, xdr } from "@stellar/stellar-sdk";
+import { Address, Keypair, Hash, scValToNative, xdr } from "@stellar/stellar-sdk";
 import { Server as RpcServer, type Api } from "@stellar/stellar-sdk/rpc";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
 
@@ -92,6 +92,7 @@ export interface Escrow {
 
 const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
 const TESTNET_NETWORK_PASSHRASE = "Test SDF Network ; September 2015";
+const TESTNET_NETWORK_PASSPHRASE = TESTNET_NETWORK_PASSHRASE;
 
 export interface EscrowClientConfig {
   /** The deployed docforum-escrow contract's address (`C…`). */
@@ -158,7 +159,7 @@ export class EscrowClient {
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
     this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
-    this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSHRASE;
+    this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
     this.rpc = new RpcServer(this.rpcUrl);
   }
 
@@ -303,36 +304,37 @@ export class EscrowClient {
    * Polls event pages in order. Each handler call is awaited before the next
    * event is delivered, so slow handlers apply back-pressure without drops.
    * The returned stop function ends polling; persist the last delivered
-   * event cursor (or the cursor from getEvents) to resume after
+   * event cursor (or the cursor from getEvents) to resume after restart.
    */
-  async subscribe(options: SubscribeOptions, onEvent: (event: EscrowEvent) => Promise<void> | void): Promise<() => void> {
-    const pollIntervalMs = options.pollIntervalMs ?? 5000;
-    if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 0) {
-      throw new RangeError("pollIntervalMs must be a non-negative safe integer.");
-    }
+  subscribe(handler: (event: EscrowEvent) => void | Promise<void>, options: SubscribeOptions = {}): () => void {
+    const pollIntervalMs = options.pollIntervalMs ?? 5_000;
+    if (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 1) throw new RangeError("pollIntervalMs must be at least 1.");
     let stopped = false;
     let cursor = options.cursor;
-    const sleep = (ms: number) => new Promise<void>(((resolve) => setTimeout(resolve, ms)));
-    const loop = async (): Promise<void> => {
+    const poll = async (): Promise<void> => {
       while (!stopped) {
         try {
-          const params: GetEventsParams = cursor !== undefined
-            ? { cursor, ...(options.types ? { types: options.types } : {}), ...(options.escrowId !== undefined ? { escrowId: options.escrowId } : {}) }
-            : { fromLedger: 1, ...(options.types ? { types: options.types } : {}), ...(options.escrowId !== undefined ? { escrowId: options.escrowId } : {}) };
-          const page = await this.getEvents(params);
+          const page = cursor !== undefined
+            ? await this.getEvents({ cursor, types: options.types, escrowId: options.escrowId })
+            : await this.getEvents({ fromLedger: (await this.rpc.getLatestLedger()).sequence, types: options.types, escrowId: options.escrowId });
           for (const event of page.events) {
-            if (stopped) return;
-            await onEvent(event);
+            if (stopped) break;
+            await handler(event);
+            cursor = event.cursor;
           }
+          // Advance across pages with no matching events, including filtered events.
           cursor = page.nextCursor;
         } catch (error) {
-          if (options.onError) options.onError(error);
-          else throw error;
+          if (!stopped) {
+            if (options.onError) options.onError(error);
+            else queueMicrotask(() => { throw error; });
+          }
+          return;
         }
-        if (!stopped) await sleep(pollIntervalMs);
+        if (!stopped) await new Promise<void>((resolve) => setTimeout(resolve, pollIntervalMs));
       }
     };
-    void loop();
+    void poll();
     return () => { stopped = true; };
   }
 }
