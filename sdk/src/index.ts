@@ -298,4 +298,42 @@ export class EscrowClient {
     }
     return { events, nextCursor: response.cursor };
   }
+
+  /**
+   * Polls event pages in order. Each handler call is awaited before the next
+   * event is delivered, so slow handlers apply back-pressure without drops.
+   * The returned stop function ends polling; persist the last delivered
+   * event cursor (or the cursor from getEvents) to resume after restart.
+   */
+  subscribe(handler: (event: EscrowEvent) => void | Promise<void>, options: SubscribeOptions = {}): () => void {
+    const pollIntervalMs = options.pollIntervalMs ?? 5_000;
+    if (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 1) throw new RangeError("pollIntervalMs must be at least 1.");
+    let stopped = false;
+    let cursor = options.cursor;
+    const poll = async (): Promise<void> => {
+      while (!stopped) {
+        try {
+          const page = cursor !== undefined
+            ? await this.getEvents({ cursor, types: options.types, escrowId: options.escrowId })
+            : await this.getEvents({ fromLedger: (await this.rpc.getLatestLedger()).sequence, types: options.types, escrowId: options.escrowId });
+          for (const event of page.events) {
+            if (stopped) break;
+            await handler(event);
+            cursor = event.cursor;
+          }
+          // Advance across pages with no matching events, including filtered events.
+          cursor = page.nextCursor;
+        } catch (error) {
+          if (!stopped) {
+            if (options.onError) options.onError(error);
+            else queueMicrotask(() => { throw error; });
+          }
+          return;
+        }
+        if (!stopped) await new Promise<void>((resolve) => setTimeout(resolve, pollIntervalMs));
+      }
+    };
+    void poll();
+    return () => { stopped = true; };
+  }
 }

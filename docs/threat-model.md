@@ -194,8 +194,8 @@ behave like SEP-41.
   - Stellar Asset Contracts for issued assets can have **clawback**
     enabled by the issuer. A clawback against the contract address
     removes funds from the shared pool.
-- Mitigations:
-  - ~~)In `create_escrow`, check the contract's token balance before and
+- **Mitigations:**
+  - ~~In `create_escrow`, check the contract's token balance before and
     after the transfer, and reject (or record the real delta) if it
     doesn't rise by exactly `amount`.~~ **Implemented (issue #12):**
     `create_escrow` now rejects with `BalanceMismatch` unless the
@@ -216,9 +216,12 @@ behave like SEP-41.
     behavior. Deployment operators must omit clawback-enabled, rebasing,
     and fee-on-transfer tokens from the list. This prevents callers from
     introducing arbitrary tokens but cannot stop an approved issuer from
-    clawing back funds later. **Not yet implemented in this document's
-    scope commit; tracked here as the planned closure of the clawback
-    residual above.**
+    clawing back funds later. **Not yet on testnet:** the current live
+    deployment predates the constructor.
+  - Consumers: only use an allowlist of known tokens. The current
+    consumer uses one configured token (`escrowTokenId`), which is good.
+  - Document that payees must check the escrow's `token`, not just its
+    status.
 - Reviewer, please verify: the balance-delta check cannot be bypassed
   by a token that reports a fake `balance`, and that the allowlist
   constructor is actually immutable on the deployed WASM.
