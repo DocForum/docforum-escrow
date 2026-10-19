@@ -33,6 +33,17 @@ complete — see [hard rule 4](../ARCHITECTURE_ESSENTIALS.md#hard-rules).
 
 ---
 
+## Pending redeployment: deploy-time token allowlist (issue #36)
+
+The current live deployment below predates the immutable
+`__constructor(allowed_tokens)` allowlist and does not enforce it. After
+the issue #36 contract change is released, deploy a new contract on
+testnet with the approved token addresses supplied to the constructor.
+Record its contract ID, WASM hash, deployment transaction, source commit,
+and verification calls here only after that deployment has actually
+completed. Until then, the allowlist is available in source and local
+contract tests only; do not treat the existing testnet ID as protected.
+
 ## `docforum_escrow` — 2026-10-08 (Phase E4: `refund_after` timeout refund + `get_escrow`)
 
 | | |
@@ -96,7 +107,7 @@ contract's own (`0–3`).
   account held exactly **1,000,000 stroops** — only escrow `1`, the one
   still `Funded`. The payee received the 1,000,000 from the release; the
   identity that triggered the timeout refund received **nothing** (it
-  only paid fees) — the refund landed on the payer, as ADR0004
+  only paid fees) — the refund landed on the payer, as ADR0004
   requires.
 - **SDK integration suite**: all 5 tests in
   `sdk/tests/testnet-integration.test.ts` pass against this contract id
