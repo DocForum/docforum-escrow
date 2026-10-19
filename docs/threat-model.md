@@ -25,7 +25,7 @@ in this document still describes the same design.*
 
 | # | Invariant | Enforced by |
 |---|---|---|
-| I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination. |
+| I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination. The `transfer_payee` function (issue #45, Phase E5) lets the current payee reassign the release destination to a new address — only the current payee may authorise this; the payer and releaser have no power to redirect funds via this path. |
 | I2 | Only the escrow's `releaser` can move funds out — or, once `refund_after` has passed, anyone at all, and then still only back to `payer`. | `caller.require_auth()` + `caller == data.releaser`, relaxed solely by the deadline check (`lib.rs:149`, `lib.rs:183`, `lib.rs:191`). |
 | I3 | Each escrow pays out at most once. | `status == Funded` check before transfer, status written after — shared by release and both refund paths. |
 | I4 | An escrow only exists, or grows, if the declared funds were actually transferred in. | `payer.require_auth()` + shared exact-balance-delta verification on create/top-up before storage is updated. |
@@ -47,7 +47,7 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 | Actor | Can do | Trusted for |
 |---|---|---|
 | `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser` | Nothing after creation. Has no on-chain power to cancel. |
-| `payee` | Receive funds | Nothing. Has **no on-chain power at all**, including no way to object to a refund. |
+| `payee` | Receive funds; reassign future payout to a new address via `transfer_payee` (only while `Funded`, requires their auth) | Nothing beyond the payee-transfer path. Has **no on-chain power to trigger settlement** — they cannot force a release or block a refund. |
 | `releaser` | `release` or `refund` its escrows, once | Choosing the correct outcome. This is the main trust assumption. |
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |
 | Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds back to that escrow's `payer` | Nothing. |
@@ -255,6 +255,44 @@ behave like SEP-41.
   `condition_ref` strings. The caller pays the rent for what they write,
   and `NextId` is a `u64`, so this isn't a meaningful attack. Listed so
   a reviewer doesn't need to rediscover it.
+
+### T11 — Payee key compromise or loss · **Medium (new surface from issue #45)**
+- **What changed:** `transfer_payee` (Phase E5) gives the current `payee`
+  the ability to redirect the release destination to a new address, while
+  the escrow is `Funded`. This is the first on-chain power the payee has
+  had. It adds a new attack surface.
+- **Key compromised:** if an attacker steals the payee's key they can
+  transfer the payee claim to an address they control, then wait for
+  the releaser to release (or, if a `refund_after` deadline is in the
+  past, call `refund` — still only to the payer, so the payer does not
+  lose funds in the refund path). The realistic theft scenario is:
+  attacker calls `transfer_payee` to their address, releaser then
+  releases normally, attacker gets the payout.
+  - Blast radius: limited to escrows where the attacker knows (or can
+    scan for) the payee address and the escrow is still `Funded`.
+  - The payer's and releaser's keys are unaffected; the releaser can
+    still refund rather than release if they detect the compromise.
+- **Key lost:** if the payee loses their key they **cannot** call
+  `transfer_payee` (they can't sign). This function is a rotation tool,
+  not a recovery tool. A payee who has lost their key cannot reassign
+  their claim. Document this limitation clearly to consumers.
+  - After key loss, the only on-chain resolution is for the `releaser`
+    to refund to the payer, or to wait for a `refund_after` timeout
+    (if one was set). There is no payee-side recovery path.
+- **Mitigations:**
+  - Payees: rotate wallet keys before the old device or key material is
+    compromised — use `transfer_payee` proactively.
+  - Consumers: before relying on a `Funded` escrow, check `get_escrow`
+    to confirm the current `payee` matches your expected address (the
+    payee may have already rotated).
+  - The contract prevents the two most obvious misuse vectors:
+    `new_payee == contract_address` (would lock funds) and
+    `new_payee == payer` (would let a colluding payee redirect to payer,
+    turning a release into a de-facto payer refund that bypasses refund
+    auth). These are rejected with `InvalidNewPayee` (error code 8).
+  - The releaser cannot use `transfer_payee` — they have no power over
+    the payee field. This is enforced by `current_payee.require_auth()`
+    plus the `current_payee == data.payee` check.
 
 ## 4. SDK-specific notes (`sdk/src/index.ts`)
 

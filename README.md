@@ -51,6 +51,7 @@ deployment, so choosing an empty list deliberately disables the protection.
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
 | `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
+| `transfer_payee(escrow_id, current_payee, new_payee) -> Result<()>` | ✅ Implemented | Lets the current `payee` reassign the release destination to a new address. Only the payee may authorise this; only while `Funded`. `new_payee` may not be the contract address or the payer. This is a rotation tool — a payee who has lost their key cannot use it. |
 
 ```
 EscrowStatus = Funded | Released | Refunded
@@ -113,7 +114,7 @@ Requires a Rust toolchain with the `wasm32v1-none` target.
 git clone https://github.com/DocForum/docforum-escrow.git
 cd docforum-escrow/contracts/escrow
 
-# Run the test suite (28 tests, all passing today)
+# Run the test suite (40 tests, all passing today)
 cargo test
 
 # Build the deployable contract

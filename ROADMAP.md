@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5: token allowlist (issue #36) and payee rights transfer (issue #45) implemented and tested. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm.**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -132,6 +132,23 @@
   deployment predates this constructor; a new testnet deployment and
   verification are required before claiming the live contract is
   protected. Closes issue #36.
+- [x] Payee rights transfer (issue #45): `transfer_payee(escrow_id,
+  current_payee, new_payee)` lets the current payee reassign the release
+  destination to a new address while the escrow is `Funded`. Only the
+  current payee may authorise this call — the payer and releaser have no
+  power to redirect funds via this path. `new_payee` may not be the
+  contract's own address (would permanently lock funds) or the payer
+  (would let a colluding payee redirect a release to the payer, bypassing
+  refund auth). Emits a `pay_xfer` event. This is a rotation tool: a
+  payee who has already lost their key cannot use it (they cannot sign).
+  Key loss remains an operational risk the payee must mitigate off-chain.
+  12 tests in `contracts/escrow/tests/transfer_payee.rs` covering the
+  happy path, release/refund after transfer, chained transfers,
+  auth rejection for stranger/payer/releaser, and both rejected
+  `new_payee` targets. Error code 8 (`InvalidNewPayee`). Threat model
+  I1 updated; T11 added covering the new payee-key attack surface.
+  `ARCHITECTURE_ESSENTIALS.md` and `README.md` contract surface updated.
+  Closes issue #45.
 ## Phase E6 — SDK & integrator tooling
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
   triggered by an `sdk-v*` tag: builds, typechecks, tests, runs
@@ -159,6 +176,16 @@
 - 2026-10-16 — Implemented the immutable deploy-time token allowlist for
   issue #36. Contract tests/docs updated; awaiting a new testnet deployment
   before claiming the protection is live.
+- 2026-10-19 — Implemented Phase E5 payee rights transfer (issue #45):
+  `transfer_payee(escrow_id, current_payee, new_payee)` — only the
+  current payee may authorise; only while `Funded`; `new_payee` may not
+  be the contract address or the payer (error code 8 `InvalidNewPayee`);
+  emits `pay_xfer` event. 12 tests in
+  `contracts/escrow/tests/transfer_payee.rs`. Threat model I1 updated,
+  T11 added. `ARCHITECTURE_ESSENTIALS.md` and `README.md` contract
+  surface tables updated. This is a wallet-rotation tool — key loss is
+  not recoverable on-chain (documented in T11). Closes issue #45.
+
 - 2026-10-17 — Issue #63 (Phase E6): added SDK `getEvents` pagination and
   typed lifecycle-event decoding, preserving unknown topic variants for
   forward compatibility. Added cursor-resumable serial polling with
