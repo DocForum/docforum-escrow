@@ -1,1 +1,425 @@
-Ly8gQGRvY2ZvcnVtL2VzY3Jvdy1zZGkg4oCUIGVyZ29ub21pYyB3cmFwcGVyIGFyb3VuZCB0aGUgZ2VuZXJhdGVkIFNvcm9iYW4KLy8gY29udHJhY3QgY2xpZW50IChzcmMvZ2VuZXJhdGVkL2NvbnRyYWN0LWNsaWVudC50cykuIENvbnN1bWVycyAoZS5nLgovLyBkb2Nmb3J1bS1jb3JlJ3MgYHBheW1lbnRzYCBtb2R1bGUg4oCUIHNlZSBpdHMgQVJDSElURUNUVVJFLm1kIEFEUiAwMDAyKQovLyBzaG91bGQgaW1wb3J0IGZyb20gaGVyZSwgbm90IGZyb20gc3JjL2dlbmVyYXRlZC8gZGlyZWN0bHkuCi8vCi8vIE5vIFBISSwgbm8gaGVhbHRoY2FyZSBjb25jZXB0cyBoZXJlIChoYXJkIHJ1bGUgMSkg4oCUIHR5cGVzIHN0YXkgZ2VuZXJpYwovLyAocGF5ZXIvcGF5ZWUvYW1vdW50LCBub3QgZS5nLiAicGF0aWVudCIpLiBEZWZhdWx0cyBhcmUgdGVzdG5ldC1vbmx5Ci8vIChoYXJkIHJ1bGUgNCk7IG1haW5uZXQgcmVxdWlyZXMgYW4gZXhwbGljaXQgYGFsbG93TWFpbm5ldDogdHJ1ZWAgb3B0LWluCi8vIGFuZCBpcyBuZXZlciB3aXJlZCBpbnRvIGFueSBkZWZhdWx0IGhlcmUuCmltcG9ydCB7IEtleXBhaXIgfSBmcm9tICBAc3RlbGxhci9zdGVsbGFyLXNkayI7CmltcG9ydCB7IENsaWVudCBhcyBFc2Nyb3dDb250cmFjdENsaWVudCwgdHlwZSBFc2Nyb3dTdGF0dXMgYXMgR2VuZXJhdGVkRXNjcm93U3RhdHVzIH0gZnJvbSAiLi9nZW5lcmF0ZWQvY29udHJhY3QtY2xpZW50LmpzIjsKCmV4cG9ydCB7IEtleXBhaXIgfTsKCmV4cG9ydCB0eXBlIEVzY3Jvd1N0YXR1cyA9ICJGdW5kZWQiIHwgIlJlbGVhc2VkIiB8ICJSZWZ1bmRlZCI7CgovKiogRXZlcnl0aGluZyB0aGUgY29udHJhY3Qgc3RvcmVzIGFib3V0IG9uZSBlc2Nyb3cg4oCUIHdoYXQgYGdldEVzY3Jvd2AgcmV0dXJucy4gKi8KZXhwb3J0IGludGVyZmFjZSBFc2Nyb3cgewogIHBheWVyOiBzdHJpbmc7CiAgcGF5ZWU6IHN0cmluZzsKICB0b2tlbjogc3RyaW5nOwogIGFtb3VudDogYmlnaW50OwogIGNvbmRpdGlvblJlZjogc3RyaW5nOwogIC8qKgogICAqIFRoZSBhZGRyZXNzIHBlcm1pdHRlZCB0byBjYWxsIGByZWxlYXNlYC9gcmVmdW5kYCAoZG9jcy9hZHIvMDAwMikg4oCUCiAgICogdW5sZXNzIGByZWZ1bmRBZnRlcmAgaGFzIHBhc3NlZCwgaW4gd2hpY2ggY2FzZSBhbnlvbmUgbWF5IHJlZnVuZC4KICAgKi8KICByZWxlYXNlcjogc3RyaW5nOwogIC8qKgogICAqIE9wdGlvbmFsIGRlYWRsaW5lIGluIHVuaXggc2Vjb25kcyBhZnRlciB3aGljaCAqKmFueW9uZSoqIG1heSByZWZ1bmQg4oCUCiAgICogYWx3YXlzIGJhY2sgdG8gYHBheWVyYCAoZG9jcy9hZHIvMDAwNCkuIGB1bmRlZmluZWRgIG1lYW5zIG5vIHRpbWVvdXQ6CiAgICogcmVmdW5kcyBzdGF5IHJlbGVhc2VyLW9ubHkgZm9yZXZlci4gUGF5ZWVzIHNob3VsZCBjaGVjayB0aGlzIGJlZm9yZQogICAqIHJlbHlpbmcgb24gYSBgRnVuZGVkYCBlc2Nyb3cgKHRocmVhdCBtb2RlbCBUOCkuCiAgICovCiAgcmVmdW5kQWZ0ZXI/OiBiaWdpbnQ7CiAgc3RhdHVzOiBFc2Nyb3dTdGF0dXM7Cn0KCmNvbnN0IFRFU1RORVRfUlBDX1VSTCA9ICJodHRwczovL3Nvcm9iYW4tdGVzdG5ldC5zdGVsbGFyLm9yZyI7CmNvbnN0IFRFU1RORVRfTkVUV09SS19QQVNTVEhSQVNFID0gIlRlc3QgU0RGIE5ldHdvcmsgOyBTZXB0ZW1iZXIgMjAxNSI7CmNvbnN0IEZVVFVSRU5FVF9SUENfVVJMID0gImh0dHBzOi8vcnBjLWZ1dHVyZW5ldC5zdGVsbGFyLm9yZyI7CmNvbnN0IEZVVFVSRU5FVF9ORVRXT1JLX1BBU1NUSFJBU0UgPSAiVGVzdCBTRUEgRnV0dXJlIE5ldHdvcmsgOyBPY3RvYmVyIDIwMjIiOwpjb25zdCBMT0NBTF9SUENfVVJMID0gImh0dHA6Ly9sb2NhbGhvc3Q6ODAwMC9zb3JvYmFuL3JwYyI7CmNvbnN0IExPQ0FMX05FVFdPUktfUEFTU1BIUkFTRSA9ICJTdGFuZGFsb25lIE5ldHdvcmsgOyBGZWJydWFyeSAyMDE3IjsKY29uc3QgTUFJTk5FVF9SUENfVVJMID0gImh0dHBzOi8vc29yb2Jhbi1tYWlubmV0LnN0ZWxsYXIub3JnIjsKY29uc3QgTUFJTk5FVF9ORVRXT1JLX1BBU1NQSFJBU0UgPSAiUHVibGljIEdsb2JhbCBTdGVsbGFyIE5ldHdvcmsgOyBTZXB0ZW1iZXIgMjAxNSI7CgovKioKICogQSBuYW1lZCBuZXR3b3JrIHByZXNldDogUlBDIFVSTCwgbmV0d29yayBwYXNzcGhyYXNlLCBhbmQgKG9wdGlvbmFsbHkpCiAqIGtub3duIGNvbnRyYWN0IGlkcyBmb3IgdGhhdCBuZXR3b3JrLiBQcmVzZXRzIGFyZSB0aGUgcmVjb21tZW5kZWQgd2F5IHRvCiAqIGNvbmZpZ3VyZSBhbiBgRXNjcm93Q2xpZW50YDsgY3VzdG9tIG5ldHdvcmtzIChlLmcuIGEgcHJpdmF0ZSBxdWlja3N0YXJ0KQogKiBjYW4gc3RpbGwgYmUgY29uZmlndXJlZCB2aWEgZXhwbGljaXQgYHJwY1VybGAvYG5ldHdvcmtQYXNzcGhyYXNlYC4KICovCmV4cG9ydCBpbnRlcmZhY2UgTmV0d29ya1ByZXNldCB7CiAgcmVhZG9ubHkgbmFtZTogc3RyaW5nOwogIHJlYWRvbmx5IHJwY1VybDogc3RyaW5nOwogIHJlYWRvbmx5IG5ldHdvcmtQYXNzcGhyYXNlOiBzdHJpbmc7CiAgLyoqIEtub3duIGRlcGxveWVkIGNvbnRyYWN0IGlkcyBvbiB0aGlzIG5ldHdvcmssIGtleWVkIGJ5IGNvbnRyYWN0IG5hbWUuICovCiAgcmVhZG9ubHkgY29udHJhY3RJZHM6IFJlYWRvbmx5PFJlY29yZDxzdHJpbmcsIHN0cmluZz4+Owp9CgovKioKICogTmFtZWQgbmV0d29yayBwcmVzZXRzLiBgbWFpbm5ldGAgaXMgaW50ZW50aW9uYWxseSAqKm5vdCoqIGV4cG9ydGVkIGhlcmUg4oCUCiAqIHNlZSBgTUFJTk5FVF9ORVRXT1JLX1BBU1NQSFJBU0VfVkFMVUVgIGFuZCB0aGUgYWxsb3dNYWlubmV0YCBndWFyZCBvbgogKiBgRXNjcm93Q2xpZW50Q29uZmlnYC4gSGFyZCБydWxlIDQ6IHRlc3RuZXQgb25seSB1bnRpbCB0aGUgc2VjdXJpdHkgcmV2aWV3LgogKi8KZXhwb3J0IGNvbnN0IG5ldHdvcmtzID0gewogIHRlc3RuZXQ6IHsKICAgIG5hbWU6ICJ0ZXN0bmV0IiwKICAgIHJwY1VybDogVEVTVE5FVF9SUENfVVJMLAogICAgbmV0d29ya1Bhc3NwaHJhc2U6IFRFU1RORVRfTkVUV09SS19QQVNTVEhSQVNFLAogICAgY29udHJhY3RJZHM6IHt9LAogIH0gYXMgY29uc3Qgc2F0aXNmaWVzIE5ldHdvcmtQcmVzZXQsCiAgZnV0dXJlbmV0OiB7CiAgICBuYW1lOiAiZnV0dXJlbmV0IiwKICAgIHJwY1VybDogRlVUVVJFTkVUX1JQQ19VUkwsCiAgICBuZXR3b3JrUGFzc3BocmFzZTogRlVUVVJFTkVUX05FVFdPUktfUEFTU1BIUkFTRSwKICAgIGNvbnRyYWN0SWRzOiB7fSwKICB9IGFzIGNvbnN0IHNhdGlzZmllcyBOZXR3b3JrUHJlc2V0LAogIGxvY2FsOiB7CiAgICBuYW1lOiAibG9jYWwiLAogICAgcnBjVXJsOiBMT0NBTF9SUENfVVJMLAogICAgbmV0d29ya1Bhc3NwaHJhc2U6IExPQ0FMX05FVFdPUktfUEFTU1BIUkFTRSwKICAgIGNvbnRyYWN0SWRzOiB7fSwKICB9IGFzIGNvbnN0IHNhdGlzZmllcyBOZXR3b3JrUHJlc2V0LAp9IGFzIGNvbnN0OwoKLyoqIFRoZSBtYWlubmV0IHBhc3NwaHJhc2Ug4oCUIG5ldmVyIHVzZWQgYXMgYSBkZWZhdWx0OyByZXF1aXJlcyBgYWxsb3dNYWlubmV0OiB0cnVlYC4gKi8KZXhwb3J0IGNvbnN0IE1BSU5ORVRfTkVUV09SS19QQVNTVEhSQVNFX1ZBTFVFID0gTUFJTk5FVF9ORVRXT1JLX1BBU1NQSFJBU0U7CgpmdW5jdGlvbiBpc01haW5uZXRQYXNzcGhyYXNlKHBhc3NwaHJhc2U6IHN0cmluZyk6IGJvb2xlYW4gewogIHJldHVybiBwYXNzcGhyYXNlID09PSBNQUlOTkVUX05FVFdPUktfUEFTU1BIUkFTRTsKfQoKZXhwb3J0IGludGVyZmFjZSBFc2Nyb3dDbGllbnRDb25maWcgewogIC8qKiBUaGUgZGVwbG95ZWQgZG9jZm9ydW0tZXNjcm93IGNvbnRyYWN0J3MgYWRkcmVzcyAoYEPigKZgKS4gKi8KICBjb250cmFjdElkOiBzdHJpbmc7CiAgLyoqCiAgICogQSBuYW1lZCBuZXR3b3JrIHByZXNldCAoZS5nLiBgbmV0d29ya3MudGVzdG5ldGApLiBXaGVuIHByb3ZpZGVkLAogICAqIGBycGNVcmxgIGFuZCBgbmV0d29ya1Bhc3NwaHJhc2VgIGRlZmF1bHQgdG8gdGhlIHByZXNldCdzIHZhbHVlcy4KICAgKiBEZWZhdWx0OiBgbmV0d29ya3MudGVzdG5ldGAuCiAgICovCiAgbmV0d29yaz86IE5ldHdvcmtQcmVzZXQ7CiAgLyoqIERlZmF1bHQ6IHRoZSBzZWxlY3RlZCBwcmVzZXQncyBSUEMgVVJMIC0gU29yb2JhbiB0ZXN0bmV0IFJQQy4gKi8KICBycGNVcmw/OiBzdHJpbmc7CiAgLyoqIERlZmF1bHQ6IHRoZSBzZWxlY3RlZCBwcmVzZXQncyBwYXNzcGhyYXNlIC0gU3RlbGxhciB0ZXN0bmV0IHBhc3NwaHJhc2UuICovCiAgbmV0d29ya1Bhc3NwaHJhc2U/OiBzdHJpbmc7CiAgLyoqCiAgICogTXVzdCBiZSBgdHJ1ZWAgdG8gY29uc3RydWN0IGEgY2xpZW50IHdob3NlIGBuZXR3b3JrUGFzc3BocmFzZWAgaXMgdGhlCiAgICogU3RlbGxhciBtYWlubmV0IHBhc3NwaHJhc2UuIEhhcmQgcnVsZSA0OiBtYWlubmV0IGlzIG5ldmVyIHdpcmVkIGludG8KICAgKiBkZWZhdWx0czsgdGhpcyBpcyBhIGRlbGliZXJhdGUsIGV4cGxpY2l0IG9wdC1pbi4gSWdub3JlZCBvdGhlcndpc2UuCiAgICovCiAgYWxsb3dNYWlubmV0PzogYm9vbGVhbjsKfQoKZXhwb3J0IGludGVyZmFjZSBDcmVhdGVFc2Nyb3dQYXJhbXMgewogIC8qKiBTaWducyBhbmQgcGF5cyBmb3IgdGhpcyBjYWxsOyBmdW5kcyBhcmUgcHVsbGVkIGZyb20gdGhpcyBhY2NvdW50LiAqLwogIHBheWVyOiBLZXlwYWlyOwogIHBheWVlOiBzdHJpbmc7CiAgdG9rZW46IHN0cmluZzsKICBhbW91bnQ6IGJpZ2ludDsKICBjb25kaXRpb25SZWY6IHN0cmluZzsKICAvKioKICAgKiBUaGUgb25seSBhZGRyZXNzIGxhdGVyIHBlcm1pdHRlZCB0byBjYWxsIGByZWxlYXNlYC9gcmVmdW5kYCBvbiB0aGlzCiAgICogZXNjcm93IChzZWUgZG9jZm9ydW0tZXNjcm93J3MgZG9jcy9hZHIvMDAwMikuIFR5cGljYWxseSB0aGUgY2FsbGluZwogICAqIGFwcGxpY2F0aW9uJ3Mgb3duIHNlcnZpY2UgaWRlbnRpdHksIG5vdCB0aGUgcGF5ZXIgb3IgcGF5ZWUuCiAgICovCiAgcmVsZWFzZXI6IHN0cmluZzsKICAvKioKICAgKiBPcHRpb25hbCB1bml4IHRpbWVzdGFtcCAoc2Vjb25kcykgYWZ0ZXIgd2hpY2ggYW55b25lIG1heSByZWZ1bmQgdGhpcwogICAqIGVzY3JvdyDigJQgYWx3YXlzIGJhY2sgdG8gYHBheWVyYCAoZG9jcy9hZHIvMDAwNCkuIE11c3QgYmUgc3RyaWN0bHkgaW4KICAgKiB0aGUgZnV0dXJlIGF0IGNyZWF0aW9uLCBvciB0aGUgY29udHJhY3QgcmVqZWN0cyB3aXRoCiAgICogYEludmFsaWRSZWZ1bmRBZnRlcmAgKGVycm9yIDUpLiBPbWl0IGZvciBubyB0aW1lb3V0OiByZWZ1bmRzIHN0YXkKICAgKiByZWxlYXNlci1vbmx5LCBleGFjdGx5IGFzIGluIDAuMi54LgogICAqLwogIHJlZnVuZEFmdGVyPzogYmlnaW50Owp9CgpleHBvcnQgaW50ZXJmYWNlIFJlbGVhc2VPclJlZnVuZFBhcmFtcyB7CiAgZXNjcm93SWQ6IGJpZ2ludDsKICAvKiogTXVzdCBiZSB0aGUgZXNjcm93J3MgYHJlbGVhc2VyYCAoc2V0IGF0IGNyZWF0aW9uKSDigJQgc2VlIGRvY3MvYWRyLzAwMDIuICovCiAgY2FsbGVyOiBLZXlwYWlyOwp9CgovKioKICogVGhpbiBjbGllbnQgZm9yIHRoZSBkb2Nmb3J1bS1lc2Nyb3cgU29yb2JhbiBjb250cmFjdC4gV3JhcHMKICogYGNyZWF0ZV9lc2Nyb3dgL2BnZXRfc3RhdHVzYC9gZ2V0X2VzY3Jvd2AvYHJlbGVhc2VgL2ByZWZ1bmRgIHdpdGggcGxhaW4KICogVHlwZVNjcmlwdCB0eXBlcyBhbmQgbm8gbWFudWFsIFhEUi9zaWduaW5nIHBsdW1iaW5nLgogKi8KZXhwb3J0IGNsYXNzIEVzY3Jvd0NsaWVudCB7CiAgcHJpdmF0ZSByZWFkb25seSBjb250cmFjdElkOiBzdHJpbmc7CiAgcHJpdmF0ZSByZWFkb25seSBycGNVcmw6IHN0cmluZzsKICBwcml2YXRlIHJlYWRvbmx5IG5ldHdvcmtQYXNzcGhyYXNlOiBzdHJpbmc7CiAgLyoqIENhY2hlZCByZXN1bHQgb2YgdGhlIGZpcnN0LWNhbGwgYGdldE5ldHdvcmtgIHBhc3NwaHJhc2UgY2hlY2suICovCiAgcHJpdmF0ZSBuZXR3b3JrVmVyaWZpZWQ6IFByb21pc2U8dm9pZD4gfCB1bmRlZmluZWQ7CgogIGNvbnN0cnVjdG9yKGNvbmZpZzogRXNjcm93Q2xpZW50Q29uZmlnKSB7CiAgICBjb25zdCBwcmVzZXQgPSBjb25maWcubmV0d29yayA/PyBuZXR3b3Jrcy50ZXN0bmV0OwogICAgY29uc3QgbmV0d29ya1Bhc3NwaHJhc2UgPSBjb25maWcubmV0d29ya1Bhc3NwaHJhc2UgPz8gcHJlc2V0Lm5ldHdvcmtQYXNzcGhyYXNlOwogICAgaWYgKGlzTWFpbm5ldFBhc3NwaHJhc2UobmV0d29ya1Bhc3NwaHJhc2UpICYmIGNvbmZpZy5hbGxvd01haW5uZXQgIT09IHRydWUpIHsKICAgICAgdGhyb3cgbmV3IEVycm9yKAogICAgICAgICJSZWZ1c2luZyB0byBjb25zdHJ1Y3QgRXNjcm93Q2xpZW50IHdpdGggdGhlIG1haW5uZXQgbmV0d29yayBwYXNzcGhyYXNlLiAiICsKICAgICAgICAgICJIYXJkIHJ1bGUgNDogdGVzdG5ldCBvbmx5IHVudGlsIHRoZSBzZWN1cml0eSByZXZpZXcuICIgKwogICAgICAgICAgIlBhc3MgYGFsbG93TWFpbm5ldDogdHJ1ZWAgdG8gb3B0IGluIGRlbGliZXJhdGVseS4iLAogICAgICApOwogICAgfQogICAgdGhpcy5jb250cmFjdElkID0gY29uZmlnLmNvbnRyYWN0SWQ7CiAgICB0aGlzLnJwY1VybCA9IGNvbmZpZy5ycGNVcmwgPz8gcHJlc2V0LnJwY1VybDsKICAgIHRoaXMubmV0d29ya1Bhc3NwaHJhc2UgPSBuZXR3b3JrUGFzc3BocmFzZTsKICB9CgogIC8qKgogICAqIFZlcmlmaWVzIChvbmNlLCB0aGVuIGNhY2hlZCkgdGhhdCB0aGUgUlBDJ3MgcmVwb3J0ZWQgbmV0d29yayBwYXNzcGhyYXNlCiAgICogbWF0Y2hlcyB0aGUgY29uZmlndXJlZCBvbmUuIEd1YXJkcyBhZ2FpbnN0IGEgY3VzdG9tIGBycGNVcmxgIHBvaW50aW5nIGF0CiAgICogYSBkaWZmZXJlbnQgbmV0d29yayB0aGFuIHRoZSBjb25maWd1cmVkIHBhc3NwaHJhc2Ug4oCUIGluY2x1ZGluZyBhIGN1c3RvbQogICAqIGBycGNVcmxgIHRoYXQgcmVzb2x2ZXMgdG8gbWFpbm5ldCB3aGlsZSB0aGUgY2FsbGVyIGNvbmZpZ3VyZWQgdGVzdG5ldC4KICAgKi8KICBwcml2YXRlIGFzeW5jIGVuc3VyZU5ldHdvcmtWZXJpZmllZCgpOiBQcm9taXNlPHZvaWQ+IHsKICAgIGlmICghdGhpcy5uZXR3b3JrVmVyaWZpZWQpIHsKICAgICAgdGhpcy5uZXR3b3JrVmVyaWZpZWQgPSAoYXN5bmMgKCkgPT4gewogICAgICAgIGNvbnN0IGNsaWVudCA9IHRoaXMuY29udHJhY3RDbGllbnQoKTsKICAgICAgICBjb25zdCBzZXJ2ZXIgPSAoY2xpZW50IGFzIHVua25vd24gYXMgeyBzZXJ2ZXI6IHsgZ2V0TmV0d29yaygpOiBQcm9taXNlPHsgcGFzc3BocmFzZTogc3RyaW5nIH0+IH0gfSkuc2VydmVyOwogICAgICAgIGNvbnN0IHsgcGFzc3BocmFzZSB9ID0gYXdhaXQgc2VydmVyLmdldE5ldHdvcmsoKTsKICAgICAgICBpZiAocGFzc3BocmFzZSAhPT0gdGhpcy5uZXR3b3JrUGFzc3BocmFzZSkgewogICAgICAgICAgdGhyb3cgbmV3IEVycm9yKAogICAgICAgICAgICBgUlBDIG5ldHdvcmsgcGFzc3BocmFzZSBtaXNtYXRjaDogY29uZmlndXJlZCAiJHt0aGlzLm5ldHdvcmtQYXNzcGhyYXNlfSIgYCArCiAgICAgICAgICAgICAgYGJ1dCBSIFBDIHJlcG9ydHMgIiR7cGFzc3BocmFzZX0iLiBSZWZ1c2luZyB0byBwcm9jZWVkLmAsCiAgICAgICAgICApOwogICAgICAgIH0KICAgICAgfSkoKTsKICAgIH0KICAgIHJldHVybiB0aGlzLm5ldHdvcmtWZXJpZmllZDsKICB9CgogIHByaXZhdGUgY29udHJhY3RDbGllbnQoc2lnbmVyPzogS2V5cGFpcik6IEVzY3Jvd0NvbnRyYWN0Q2xpZW50IHsKICAgIHJldHVybiBuZXcgRXNjcm93Q29udHJhY3RDbGllbnQoewogICAgICBjb250cmFjdElkOiB0aGlzLmNvbnRyYWN0SWQsCiAgICAgIHJwY1VybDogdGhpcy5ycGNVcmwsCiAgICAgIG5ldHdvcmtQYXNzcGhyYXNlOiB0aGlzLm5ldHdvcmtQYXNzcGhyYXNlLAogICAgICAuLi4oc2lnbmVyID8geyBwdWJsaWNLZXk6IHNpZ25lci5wdWJsaWNLZXkoKSwgc2lnblRyYW5zYWN0aW9uOiBzaWduZXIgfSA6IHt9KSwKICAgIH0pOwogIH0KCiAgLyoqIExvY2tzIGBhbW91bnRgIG9mIGB0b2tlbmAgZnJvbSBgcGF5ZXJgLCBoZWxkIGZvciBgcGF5ZWVgLiBSZXR1cm5zIHRoZSBuZXcgZXNjcm93J3MgaWQgYW5kIHRoZSBmdW5kaW5nIHRyYW5zYWN0aW9uJ3MgaGFzaC4gKi8KICBhc3luYyBjcmVhdGVFc2Nyb3cocGFyYW1zOiBDcmVhdGVFc2Nyb3dQYXJhbXMpOiBQcm9taXNlPHsgZXNjcm93SWQ6IGJpZ2ludDsgdHhIYXNoOiBzdHJpbmcgfT4gewogICAgYXdhaXQgdGhpcy5lbnN1cmVOZXR3b3JrVmVyaWZpZWQoKTsKICAgIGNvbnN0IGNsaWVudCA9IHRoaXMuY29udHJhY3RDbGllbnQocGFyYW1zLnBheWVyKTsKICAgIGNvbnN0IHR4ID0gYXdhaXQgY2xpZW50LmNyZWF0ZV9lc2Nyb3coewogICAgICBwYXllcjogcGFyYW1zLnBheWVyLnB1YmxpY0tleSgpLAogICAgICBwYXllZTogcGFyYW1zLnBheWVlLAogICAgICB0b2tlbjogcGFyYW1zLnRva2VuLAogICAgICBhbW91bnQ6IHBhcmFtcy5hbW91bnQsCiAgICAgIGNvbmRpdGlvbl9yZWY6IHBhcmFtcy5jb25kaXRpb25SZWYsCiAgICAgIHJlbGVhc2VyOiBwYXJhbXMucmVsZWFzZXIsCiAgICAgIHJlZnVuZF9hZnRlcjogcGFyYW1zLnJlZnVuZEFmdGVyLAogICAgfSk7CiAgICBjb25zdCBzZW50ID0gYXdhaXQgdHguc2lnbkFuZFNlbmQoKTsKICAgIHJldHVybiB7IGVzY3Jvd0lkOiBzZW50LnJlc3VsdC51bndyYXAoKSwgdHhIYXNoOiBzZW50LnNlbmRUcmFuc2FjdGlvblJlc3BvbnNlIS5oYXNoIH07CiAgfQoKICAvKiogUmVhZC1vbmx5IHN0YXR1cyBxdWVyeS4gVGhyb3dzIGlmIGBlc2Nyb3dJZGAgZG9lc24ndCBleGlzdC4gKi8KICBhc3luYyBnZXRTdGF0dXMoZXNjcm93SWQ6IGJpZ2ludCk6IFByb21pc2U8RXNjcm93U3RhdHVzPiB7CiAgICBhd2FpdCB0aGlzLmVuc3VyZU5ldHdvcmtWZXJpZmllZCgpOwogICAgY29uc3QgY2xpZW50ID0gdGhpcy5jb250cmFjdENsaWVudCgpOwogICAgY29uc3QgdHggPSBhd2FpdCBjbGllbnQuZ2V0X3N0YXR1cyh7IGVzY3Jvd19pZDogZXNjcm93SWQgfSk7CiAgICBjb25zdCBzdGF0dXMgPSB0eC5yZXN1bHQudW53cmFwKCkgYXMgR2VuZXJhdGVkRXNjcm93U3RhdHVzOwogICAgcmV0dXJuIHN0YXR1cyBhcyBFc2Nyb3dTdGF0dXM7CiAgfQoKICAvKiogUmVhZC1vbmx5IGZ1bGwtcmVjb3JkIHF1ZXJ5LiBUaHJvd3MgaWYgYGVzY3Jvd0lkYCBkb2Vzbid0IGV4aXN0LiAqLwogIGFzeW5jIGdldEVzY3Jvdyhlc2Nyb3dJZDogYmlnaW50KTogUHJvbWlzZTxFc2Nyb3c+IHsKICAgIGF3YWl0IHRoaXMuZW5zdXJlTmV0d29ya1ZlcmlmaWVkKCk7CiAgICBjb25zdCBjbGllbnQgPSB0aGlzLmNvbnRyYWN0Q2xpZW50KCk7CiAgICBjb25zdCB0eCA9IGF3YWl0IGNsaWVudC5nZXRfZXNjcm93KHsgZXNjcm93X2lkOiBlc2Nyb3dJZCB9KTsKICAgIGNvbnN0IGRhdGEgPSB0eC5yZXN1bHQudW53cmFwKCk7CiAgICByZXR1cm4gewogICAgICBwYXllcjogZGF0YS5wYXllciwKICAgICAgcGF5ZWU6IGRhdGEucGF5ZWUsCiAgICAgIHRva2VuOiBkYXRhLnRva2VuLAogICAgICBhbW91bnQ6IGRhdGEuYW1vdW50LAogICAgICBjb25kaXRpb25SZWY6IGRhdGEuY29uZGl0aW9uX3JlZiwKICAgICAgcmVsZWFzZXI6IGRhdGEucmVsZWFzZXIsCiAgICAgIHJlZnVuZEFmdGVyOiBkYXRhLnJlZnVuZF9hZnRlciA/PyB1bmRlZmluZWQsCiAgICAgIHN0YXR1czogZGF0YS5zdGF0dXMgYXMgRXNjcm93U3RhdHVzLAogICAgfTsKICB9CgogIC8qKiBSZWxlYXNlcyBhIGBGdW5kZWRgIGVzY3JvdyB0byBpdHMgcGF5ZWUuIE9ubHkgdGhlIGVzY3JvdydzIGByZWxlYXNlcmAgbWF5IGNhbGwgdGhpcy4gKi8KICBhc3luYyByZWxlYXNlKHBhcmFtczogUmVsZWFzZU9yUmVmdW5kUGFyYW1zKTogUHJvbWlzZTx7IHR4SGFzaDogc3RyaW5nIH0+IHsKICAgIGF3YWl0IHRoaXMuZW5zdXJlTmV0d29ya1ZlcmlmaWVkKCk7CiAgICBjb25zdCBjbGllbnQgPSB0aGlzLmNvbnRyYWN0Q2xpZW50KHBhcmFtcy5jYWxsZXIpOwogICAgY29uc3QgdHggPSBhd2FpdCBjbGllbnQucmVsZWFzZSh7IGVzY3Jvd19pZDogcGFyYW1zLmVzY3Jvd0lkLCBjYWxsZXI6IHBhcmFtcy5jYWxsZXIucHVibGljS2V5KCkgfSk7CiAgICBjb25zdCBzZW50ID0gYXdhaXQgdHguc2lnbkFuZFNlbmQoKTsKICAgIHJldHVybiB7IHR4SGFzaDogc2VudC5zZW5kVHJhbnNhY3Rpb25SZXNwb25zZSEuaGFzaCB9OwogIH0KCiAgLyoqIFJlZnVuZHMgYSBgRnVuZGVkYCBlc2Nyb3cgdG8gaXRzIHBheWVyLiBUaGUgcmVsZWFzZXIgbWF5IGFsd2F5cyBjYWxsIHRoaXM7IGFueW9uZSBtYXkgYWZ0ZXIgYHJlZnVuZEFmdGVyYC4gKi8KICBhc3luYyByZWZ1bmQocGFyYW1zOiBSZWxlYXNlT3JSZWZ1bmRQYXJhbXMpOiBQcm9taXNlPHsgdHhIYXNoOiBzdHJpbmcgfT4gewogICAgYXdhaXQgdGhpcy5lbnN1cmVOZXR3b3JrVmVyaWZpZWQoKTsKICAgIGNvbnN0IGNsaWVudCA9IHRoaXMuY29udHJhY3RDbGllbnQocGFyYW1zLmNhbGxlcik7CiAgICBjb25zdCB0eCA9IGF3YWl0IGNsaWVudC5yZWZ1bmQoeyBlc2Nyb3dfaWQ6IHBhcmFtcy5lc2Nyb3dJZCwgY2FsbGVyOiBwYXJhbXMuY2FsbGVyLnB1YmxpY0tleSgpIH0pOwogICAgY29uc3Qgc2VudCA9IGF3YWl0IHR4LnNpZ25BbmRTZW5kKCk7CiAgICByZXR1cm4geyB0eEhhc2g6IHNlbnQuc2VuZFRyYW5zYWN0aW9uUmVzcG9uc2UhLmhhc2ggfTsKICB9Cn0K
+// @docforum/escrow-sdk — ergonomic wrapper around the generated Soroban
+// contract client (src/generated/contract-client.ts). Consumers (e.g.
+// docforum-core's `payments` module — see its ARCHITECTURE.md ADR 0002)
+// should import from here, not from src/generated/ directly.
+//
+// No PHI, no healthcare concepts here (hard rule 1) — types stay generic
+// (payer/payee/amount, not e.g. "patient"). Defaults are testnet-only
+// (hard rule 4); mainnet requires an explicit `allowMainnet: true` opt-in
+// and is never wired into any default here.
+import { Keypair, scValToNative, xdr } from "@stellar/stellar-sdk";
+import { Server as RpcServer, type Api } from "@stellar/stellar-sdk/rpc";
+import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
+
+export { Keypair };
+
+export type EscrowStatus = "Funded" | "Released" | "Refunded";
+
+export type EscrowEventType = "created" | "released" | "refunded";
+interface EscrowEventBase {
+  ledger: number;
+  cursor: string;
+  transactionHash: string;
+  data: unknown;
+}
+/**
+ * Unknown variants are retained with decoded topics so newer contract event
+ * schemas remain observable to older SDK consumers instead of crashing.
+ */
+export type EscrowEvent = (EscrowEventBase & {
+  type: EscrowEventType;
+  escrowId: bigint;
+}) | (EscrowEventBase & {
+  type: "unknown";
+  eventName?: string;
+  escrowId?: bigint;
+  topics: unknown[];
+});
+export type GetEventsParams = {
+  types?: EscrowEventType[];
+  escrowId?: bigint;
+} & (
+  | { /** First ledger to scan (inclusive). */ fromLedger: number; cursor?: never }
+  | { /** Opaque RPC cursor returned from a prior page/event. */ cursor: string; fromLedger?: never }
+);
+export interface GetEventsResult { events: EscrowEvent[]; nextCursor: string; }
+
+/** The requested cursor predates the event history retained by the RPC server. */
+export class EventCursorExpiredError extends Error {
+  readonly name = "EventCursorExpiredError";
+  constructor(message = "The event cursor is older than the RPC server's retention window.") { super(message); }
+}
+
+export interface SubscribeOptions {
+  cursor?: string;
+  pollIntervalMs?: number;
+  types?: EscrowEventType[];
+  escrowId?: bigint;
+  onError?: (error: unknown) => void;
+}
+
+function safeScValToNative(value: xdr.ScVal): unknown {
+  try { return scValToNative(value); }
+  catch { return { xdr: value.toXDR("base64") }; }
+}
+
+function isRetentionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /cursor.{0,40}(older|retention|oldest)|older.{0,40}(cursor|ledger|retention)|start ledger.{0,40}(oldest|retention)/i.test(message);
+}
+
+/** Everything the contract stores about one escrow — what `getEscrow` returns. */
+export interface Escrow {
+  payer: string;
+  payee: string;
+  token: string;
+  amount: bigint;
+  conditionRef: string;
+  /**
+   * The address permitted to call `release`/`refund` (docs/adr/0002) —
+   * unless `refundAfter` has passed, in which case anyone may refund.
+   */
+  releaser: string;
+  /**
+   * Optional deadline in unix seconds after which **anyone** may refund —
+   * always back to `payer` (docs/adr/0004). `undefined` means no timeout:
+   * refunds stay releaser-only forever. Payees should check this before
+   * relying on a `Funded` escrow (threat model T8).
+   */
+  refundAfter?: bigint;
+  status: EscrowStatus;
+}
+
+const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
+const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+const FUTURENET_RPC_URL = "https://rpc-futurenet.stellar.org";
+const FUTURENET_NETWORK_PASSPHRASE = "Test SDF Future Network ; October 2022";
+const LOCAL_RPC_URL = "http://localhost:8000/soroban/rpc";
+const LOCAL_NETWORK_PASSPHRASE = "Standalone Network ; February 2017";
+const MAINNET_RPC_URL = "https://soroban-mainnet.stellar.org";
+const MAINNET_NETWORK_PASSPHRASE = "Public Global Stellar Network ; September 2015";
+
+/**
+ * A named network preset: RPC URL, network passphrase, and (optionally)
+ * known contract ids for that network. Presets are the recommended way to
+ * configure an `EscrowClient`; custom networks (e.g. a private quickstart)
+ * can still be configured via explicit `rpcUrl`/`networkPassphrase`.
+ */
+export interface NetworkPreset {
+  readonly name: string;
+  readonly rpcUrl: string;
+  readonly networkPassphrase: string;
+  /** Known deployed contract ids on this network, keyed by contract name. */
+  readonly contractIds: Readonly<Record<string, string>>;
+}
+
+/**
+ * Named network presets. `mainnet` is intentionally **not** exported here —
+ * see `MAINNET_NETWORK_PASSPHRASE_VALUE` and the allowMainnet guard on
+ * `EscrowClientConfig`. Hard rule 4: testnet only until the security review.
+ */
+export const networks = {
+  testnet: {
+    name: "testnet",
+    rpcUrl: TESTNET_RPC_URL,
+    networkPassphrase: TESTNET_NETWORK_PASSPHRASE,
+    contractIds: {},
+  } as const satisfies NetworkPreset,
+  futurenet: {
+    name: "futurenet",
+    rpcUrl: FUTURENET_RPC_URL,
+    networkPassphrase: FUTURENET_NETWORK_PASSPHRASE,
+    contractIds: {},
+  } as const satisfies NetworkPreset,
+  local: {
+    name: "local",
+    rpcUrl: LOCAL_RPC_URL,
+    networkPassphrase: LOCAL_NETWORK_PASSPHRASE,
+    contractIds: {},
+  } as const satisfies NetworkPreset,
+} as const;
+
+/** The mainnet passphrase — never used as a default; requires `allowMainnet: true`. */
+export const MAINNET_NETWORK_PASSPHRASE_VALUE = MAINNET_NETWORK_PASSPHRASE;
+
+function isMainnetPassphrase(passphrase: string): boolean {
+  return passphrase === MAINNET_NETWORK_PASSPHRASE;
+}
+
+export interface EscrowClientConfig {
+  /** The deployed docforum-escrow contract's address (`C…`). */
+  contractId: string;
+  /**
+   * A named network preset (e.g. `networks.testnet`). When provided,
+   * `rpcUrl` and `networkPassphrase` default to the preset's values.
+   * Default: `networks.testnet`.
+   */
+  network?: NetworkPreset;
+  /** Default: the selected preset's RPC URL — Soroban testnet RPC. */
+  rpcUrl?: string;
+  /** Default: the selected preset's passphrase — Stellar testnet passphrase. */
+  networkPassphrase?: string;
+  /**
+   * Must be `true` to construct a client whose `networkPassphrase` is the
+   * Stellar mainnet passphrase. Hard rule 4: mainnet is never wired into
+   * defaults; this is a deliberate, explicit opt-in. Ignored otherwise.
+   */
+  allowMainnet?: boolean;
+}
+
+export interface CreateEscrowParams {
+  /** Signs and pays for this call; funds are pulled from this account. */
+  payer: Keypair;
+  payee: string;
+  token: string;
+  amount: bigint;
+  conditionRef: string;
+  /**
+   * The only address later permitted to call `release`/`refund` on this
+   * escrow (see docforum-escrow's docs/adr/0002). Typically the calling
+   * application's own service identity, not the payer or payee.
+   */
+  releaser: string;
+  /**
+   * Optional unix timestamp (seconds) after which anyone may refund this
+   * escrow — always back to `payer` (docs/adr/0004). Must be strictly in
+   * the future at creation, or the contract rejects with
+   * `InvalidRefundAfter` (error 5). Omit for no timeout: refunds stay
+   * releaser-only, exactly as in 0.2.x.
+   */
+  refundAfter?: bigint;
+}
+
+export interface ReleaseOrRefundParams {
+  escrowId: bigint;
+  /** Must be the escrow's `releaser` (set at creation) — see docs/adr/0002. */
+  caller: Keypair;
+}
+
+/** The relayer pays the transaction fee; the releaser signs only contract auth. */
+export interface RelayedAuthorizationParams {
+  escrowId: bigint;
+  releaser: Keypair;
+  relayer: Keypair;
+}
+
+/** Serialized, simulated transaction containing a short-lived signed auth entry. */
+export interface RelayedAuthorization {
+  transaction: string;
+  expiresAtLedger: number;
+}
+
+/**
+ * Thin client for the docforum-escrow Soroban contract. Wraps
+ * `create_escrow`/`get_status`/`get_escrow`/`release`/`refund` with plain
+ * TypeScript types and no manual XDR/signing plumbing.
+ */
+export class EscrowClient {
+  private readonly contractId: string;
+  private readonly rpcUrl: string;
+  private readonly networkPassphrase: string;
+  private readonly rpc: RpcServer;
+  /** Cached result of the first-call `getNetwork` passphrase check. */
+  private networkVerified: Promise<void> | undefined;
+
+  constructor(config: EscrowClientConfig) {
+    const preset = config.network ?? networks.testnet;
+    const networkPassphrase = config.networkPassphrase ?? preset.networkPassphrase;
+    if (isMainnetPassphrase(networkPassphrase) && config.allowMainnet !== true) {
+      throw new Error(
+        "Refusing to construct EscrowClient with the mainnet network passphrase. " +
+          "Hard rule 4: testnet only until the security review. " +
+          "Pass `allowMainnet: true` to opt in deliberately.",
+      );
+    }
+    this.contractId = config.contractId;
+    this.rpcUrl = config.rpcUrl ?? preset.rpcUrl;
+    this.networkPassphrase = networkPassphrase;
+    this.rpc = new RpcServer(this.rpcUrl);
+  }
+
+  /**
+   * Verifies (once, then cached) that the RPC's reported network passphrase
+   * matches the configured one. Guards against a custom `rpcUrl` pointing at
+   * a different network than the configured passphrase — including a custom
+   * `rpcUrl` that resolves to mainnet while the caller configured testnet.
+   */
+  private async ensureNetworkVerified(): Promise<void> {
+    if (!this.networkVerified) {
+      this.networkVerified = (async () => {
+        const client = this.contractClient();
+        const server = (client as unknown as { server: { getNetwork(): Promise<{ passphrase: string }> } }).server;
+        const { passphrase } = await server.getNetwork();
+        if (passphrase !== this.networkPassphrase) {
+          throw new Error(
+            `RPC network passphrase mismatch: configured "${this.networkPassphrase}" ` +
+              `but RPC reports "${passphrase}". Refusing to proceed.`,
+          );
+        }
+      })();
+    }
+    return this.networkVerified;
+  }
+
+  private contractClient(signer?: Keypair): EscrowContractClient {
+    return new EscrowContractClient({
+      contractId: this.contractId,
+      rpcUrl: this.rpcUrl,
+      networkPassphrase: this.networkPassphrase,
+      ...(signer ? { publicKey: signer.publicKey(), signTransaction: signer } : {}),
+    });
+  }
+
+  /** Locks `amount` of `token` from `payer`, held for `payee`. Returns the new escrow's id and the funding transaction's hash. */
+  async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
+    await this.ensureNetworkVerified();
+    const client = this.contractClient(params.payer);
+    const tx = await client.create_escrow({
+      payer: params.payer.publicKey(),
+      payee: params.payee,
+      token: params.token,
+      amount: params.amount,
+      condition_ref: params.conditionRef,
+      releaser: params.releaser,
+      refund_after: params.refundAfter,
+    });
+    const sent = await tx.signAndSend();
+    return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /** Read-only status query. Throws if `escrowId` doesn't exist. */
+  async getStatus(escrowId: bigint): Promise<EscrowStatus> {
+    await this.ensureNetworkVerified();
+    const client = this.contractClient();
+    const tx = await client.get_status({ escrow_id: escrowId });
+    const status: GeneratedEscrowStatus = tx.result.unwrap();
+    return status.tag;
+  }
+
+  /**
+   * Read-only: everything stored about `escrowId` — including
+   * `releaser` and `refundAfter`, which payees should check before
+   * relying on a `Funded` escrow (docs/adr/0004, threat model T8).
+   * Throws if `escrowId` doesn't exist.
+   */
+  async getEscrow(escrowId: bigint): Promise<Escrow> {
+    await this.ensureNetworkVerified();
+    const client = this.contractClient();
+    const tx = await client.get_escrow({ escrow_id: escrowId });
+    const data = tx.result.unwrap();
+    return {
+      payer: data.payer,
+      payee: data.payee,
+      token: data.token,
+      amount: data.amount,
+      conditionRef: data.condition_ref,
+      releaser: data.releaser,
+      // The generated client decodes a contract `None` as `null`; the
+      // public surface uses `undefined` for "no deadline" (consistent
+      // with `CreateEscrowParams.refundAfter` being absent).
+      refundAfter: data.refund_after ?? undefined,
+      status: data.status.tag,
+    };
+  }
+
+  /** Moves the escrow's funds to its payee. Throws if `caller` isn't the escrow's `releaser`, or the escrow isn't `Funded`. Returns the transaction's hash. */
+  async release(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
+    await this.ensureNetworkVerified();
+    const client = this.contractClient(params.caller);
+    const tx = await client.release({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Returns the escrow's funds to its payer. Normally `caller` must be
+   * the escrow's `releaser`; once `refundAfter` has passed, anyone may
+   * call it — still only back to the payer (docs/adr/0004). Returns the
+   * transaction's hash.
+   */
+  async refund(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
+    await this.ensureNetworkVerified();
+    const client = this.contractClient(params.caller);
+    const tx = await client.refund({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /** Reads one page of lifecycle events emitted by this escrow contract. */
+  async getEvents(params: GetEventsParams): Promise<GetEventsResult> {
+    if (params.cursor !== undefined && params.fromLedger !== undefined) {
+      throw new TypeError("Provide either cursor or fromLedger, not both.");
+    }
+    if (params.fromLedger !== undefined && (!Number.isSafeInteger(params.fromLedger) || params.fromLedger < 1)) {
+      throw new RangeError("fromLedger must be a positive safe integer.");
+    }
+    const filter: Api.EventFilter = { type: "contract", contractIds: [this.contractId] };
+    const request: Api.GetEventsRequest = "cursor" in params && params.cursor !== undefined
+      ? { cursor: params.cursor, filters: [filter], limit: 100 }
+      : { startLedger: params.fromLedger, filters: [filter], limit: 100 };
+    let response: Api.GetEventsResponse;
+    try {
+      response = await this.rpc.getEvents(request);
+    } catch (error) {
+      if (isRetentionError(error)) throw new EventCursorExpiredError(error instanceof Error ? error.message : undefined);
+      throw error;
+    }
+    const allowed = params.types ? new Set(params.types) : undefined;
+    const events: EscrowEvent[] = [];
+    for (const raw of response.events) {
+      if (raw.type !== "contract" || raw.contractId?.toString() !== this.contractId) continue;
+      const nativeTopics = raw.topic.map(safeScValToNative);
+      const eventName = nativeTopics.find((v) => v === "created" || v === "released" || v === "refunded") as EscrowEventType | undefined;
+      const unknownName = nativeTopics.find((v) => typeof v === "string") as string | undefined;
+      const type = eventName;
+      if (type && allowed && !allowed.has(type)) continue;
+      const rawId = nativeTopics.find((v): v is bigint | number => typeof v === "bigint" || (typeof v === "number" && Number.isSafeInteger(v)));
+      const escrowId = rawId === undefined ? undefined : BigInt(rawId);
+      if (params.escrowId !== undefined && escrowId !== params.escrowId) continue;
+      const base = { ledger: raw.ledger, cursor: raw.id, transactionHash: raw.txHash, data: safeScValToNative(raw.value) };
+      if (type && escrowId !== undefined) events.push({ ...base, type, escrowId });
+      else events.push({ ...base, type: "unknown", ...(unknownName ? { eventName: unknownName } : {}), ...(escrowId !== undefined ? { escrowId } : {}), topics: nativeTopics });
+    }
+    return { events, nextCursor: response.cursor };
+  }
+
+  /**
+   * Polls event pages in order. Each handler call is awaited before the next
+   * event is delivered, so slow handlers apply back-pressure without drops.
+   * The returned stop function ends polling; persist the last delivered
+   * event cursor (or the cursor from getEvents) to resume after restart.
+   */
+  subscribe(handler: (event: EscrowEvent) => void | Promise<void>, options: SubscribeOptions = {}): () => void {
+    const pollIntervalMs = options.pollIntervalMs ?? 5_000;
+    if (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 1) throw new RangeError("pollIntervalMs must be at least 1.");
+    let stopped = false;
+    let cursor = options.cursor;
+    const poll = async (): Promise<void> => {
+      while (!stopped) {
+        try {
+          const page = cursor !== undefined
+            ? await this.getEvents({ cursor, types: options.types, escrowId: options.escrowId })
+            : await this.getEvents({ fromLedger: (await this.rpc.getLatestLedger()).sequence, types: options.types, escrowId: options.escrowId });
+          for (const event of page.events) {
+            if (stopped) break;
+            await handler(event);
+            cursor = event.cursor;
+          }
+          // Advance across pages with no matching events, including filtered events.
+          cursor = page.nextCursor;
+        } catch (error) {
+          if (!stopped) {
+            if (options.onError) options.onError(error);
+            else queueMicrotask(() => { throw error; });
+          }
+          return;
+        }
+        if (!stopped) await new Promise<void>((resolve) => setTimeout(resolve, pollIntervalMs));
+      }
+    };
+    void poll();
+    return () => { stopped = true; };
+  }
+}
