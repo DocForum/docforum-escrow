@@ -10,11 +10,13 @@
 
 ## Contract surface
 ```
+__constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1 + E2 + E4)
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phkase E4)
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phkase E2) — only escrow_id's `releaser` may call this, only while Funded
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
+ feat/issue-29-phase-e5-batch-release-and-refund-for-fast
 settle_many(caller, ops) -> results     // IMPLEMENTED (Phase E5) — best-effort batch of release/refund ops; auth is per-op, not per-batch; one failed op does not abort the rest
 ```
 The contract surface is now six functions. `settle_many` takes a
@@ -23,6 +25,15 @@ returns a `Vec<SettleResult>` where
 `SettleResult = OkSettled | NotFound | Unauthorized | NotFunded`. The
 batch is bounded by `MAX_BATCH_SIZE = 20` (`InvalidBatch` if empty or
 longer). See `docs/adr/0005` for the best-effort vs. atomic decision.
+
+top_up(escrow_id, payer, amount) -> result // IMPLEMENTED in PR for issue #26 — original payer only, funded state only
+```
+The allowlist is fixed when the contract is deployed. `create_escrow`
+rejects any token outside a non-empty list with `DisallowedToken` (error
+code 7); an empty list preserves the prior open-token behavior. The
+current live deployment predates this constructor and must be redeployed
+before the allowlist protection is active.
+ main
 
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
 `token` before `amount`, `releaser` added by Phase E2 and `refund_after`
@@ -62,8 +73,19 @@ await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunde
 await client.getEscrow(escrowId);            // full stored record — incl. releaser + refundAfter, so a payee can check the deal (docs/adr/0004, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
 await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter has passed
+ feat/issue-29-phase-e5-batch-release-and-refund-for-fast
 await client.settleMany({ caller, ops });   // { results } — best-effort batch; ops = [{ escrowId, op }], op = "release" | "refund"
+
+await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
+const stop = client.subscribe(handler, { cursor, pollIntervalMs }); // serial polling; await handler for back-pressure
+main
 ```
+Event results are a discriminated union: known lifecycle events expose
+their event type and escrow id; unrecognized topics are returned as
+`type: "unknown"` with decoded topic values and payload. Persist the
+last handled event's cursor to resume; an expired RPC history cursor throws
+`EventCursorExpiredError`. These helpers require the contract lifecycle
+events tracked by issue #9; the current deployment does not emit them.
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 and in the future or the contract rejects with `InvalidRefundAfter`); omit it
 for no timeout, which behaves exactly as this contract did before the
