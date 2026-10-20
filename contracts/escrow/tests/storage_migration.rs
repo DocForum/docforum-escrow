@@ -41,9 +41,27 @@ struct EscrowDataV2Fixture {
 }
 
 #[contracttype]
+#[derive(Clone)]
+struct EscrowDataV3Fixture {
+    payer: Address,
+    payee: Address,
+    token: Address,
+    amount: i128,
+    condition_ref: String,
+    status: EscrowStatus,
+    releasers: Vec<Address>,
+    threshold: u32,
+    refund_after: Option<u64>,
+    notify_payee: bool,
+    requires_acceptance: bool,
+    accepted_at: Option<u64>,
+}
+
+#[contracttype]
 enum StoredEscrowDataFixture {
     V1(EscrowDataV1Fixture),
     V2(EscrowDataV2Fixture),
+    V3(EscrowDataV3Fixture),
 }
 
 struct Fixture<'a> {
@@ -76,7 +94,7 @@ fn setup(env: &Env) -> Fixture<'_> {
     }
 }
 
-fn assert_written_as_v2(env: &Env, f: &Fixture<'_>, expected_status: EscrowStatus) {
+fn assert_written_as_v3(env: &Env, f: &Fixture<'_>, expected_status: EscrowStatus) {
     env.as_contract(&f.contract_id, || {
         let stored: StoredEscrowDataFixture = env
             .storage()
@@ -84,8 +102,15 @@ fn assert_written_as_v2(env: &Env, f: &Fixture<'_>, expected_status: EscrowStatu
             .get(&DataKeyFixture::Escrow(0))
             .expect("state-changing action writes a tagged layout");
         match stored {
-            StoredEscrowDataFixture::V2(v2) => assert_eq!(v2.status, expected_status),
-            StoredEscrowDataFixture::V1(_) => panic!("legacy record was not migrated on write"),
+            StoredEscrowDataFixture::V3(v3) => {
+                assert_eq!(v3.status, expected_status);
+                assert_eq!(v3.releasers.len(), 1);
+                assert_eq!(v3.threshold, 1);
+                assert!(!v3.notify_payee);
+                assert!(!v3.requires_acceptance);
+                assert_eq!(v3.accepted_at, None);
+            }
+            _ => panic!("legacy record was not migrated to tagged V3"),
         }
     });
 }
@@ -116,11 +141,11 @@ fn legacy_seven_field_map_is_read_and_migrated_on_release() {
     f.client.release(&0, &f.releaser);
 
     assert_eq!(TokenClient::new(&env, &f.token_id).balance(&f.payee), 300);
-    assert_written_as_v2(&env, &f, EscrowStatus::Released);
+    assert_written_as_v3(&env, &f, EscrowStatus::Released);
 }
 
 #[test]
-fn current_eight_field_map_is_read_and_migrated_on_refund() {
+fn historical_eight_field_map_is_read_and_migrated_on_refund() {
     let env = Env::default();
     let f = setup(&env);
     let current = EscrowDataV2Fixture {
@@ -142,11 +167,11 @@ fn current_eight_field_map_is_read_and_migrated_on_refund() {
     assert_eq!(f.client.get_escrow(&0).refund_after, None);
     f.client.refund(&0, &f.releaser);
     assert_eq!(TokenClient::new(&env, &f.token_id).balance(&f.payer), 300);
-    assert_written_as_v2(&env, &f, EscrowStatus::Refunded);
+    assert_written_as_v3(&env, &f, EscrowStatus::Refunded);
 }
 
 #[test]
-fn tagged_v1_variant_is_upgraded_to_the_latest_tagged_record_on_write() {
+fn tagged_v1_variant_is_upgraded_to_tagged_v3_on_write() {
     let env = Env::default();
     let f = setup(&env);
     let old = EscrowDataV1Fixture {
@@ -166,5 +191,59 @@ fn tagged_v1_variant_is_upgraded_to_the_latest_tagged_record_on_write() {
     });
 
     f.client.release(&0, &f.releaser);
-    assert_written_as_v2(&env, &f, EscrowStatus::Released);
+    assert_written_as_v3(&env, &f, EscrowStatus::Released);
+}
+
+#[test]
+fn current_twelve_field_map_is_read_and_migrated_to_tagged_v3_on_write() {
+    let env = Env::default();
+    let f = setup(&env);
+    let mut releasers = Vec::new(&env);
+    releasers.push_back(f.releaser.clone());
+    let current = EscrowDataV3Fixture {
+        payer: f.payer.clone(),
+        payee: f.payee.clone(),
+        token: f.token_id.clone(),
+        amount: 300,
+        condition_ref: String::from_str(&env, "current-v3"),
+        status: EscrowStatus::Funded,
+        releasers,
+        threshold: 1,
+        refund_after: None,
+        notify_payee: false,
+        requires_acceptance: false,
+        accepted_at: None,
+    };
+    env.as_contract(&f.contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKeyFixture::Escrow(0), &current);
+    });
+    assert_eq!(f.client.get_escrow(&0).threshold, 1);
+    f.client.release(&0, &f.releaser);
+    assert_written_as_v3(&env, &f, EscrowStatus::Released);
+}
+
+#[test]
+fn tagged_v2_variant_is_upgraded_to_tagged_v3_on_write() {
+    let env = Env::default();
+    let f = setup(&env);
+    let old = EscrowDataV2Fixture {
+        payer: f.payer.clone(),
+        payee: f.payee.clone(),
+        token: f.token_id.clone(),
+        amount: 300,
+        condition_ref: String::from_str(&env, "tagged-v2"),
+        status: EscrowStatus::Funded,
+        releaser: f.releaser.clone(),
+        refund_after: None,
+    };
+    env.as_contract(&f.contract_id, || {
+        env.storage().persistent().set(
+            &DataKeyFixture::Escrow(0),
+            &StoredEscrowDataFixture::V2(old),
+        );
+    });
+    f.client.release(&0, &f.releaser);
+    assert_written_as_v3(&env, &f, EscrowStatus::Released);
 }
