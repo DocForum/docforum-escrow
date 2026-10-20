@@ -81,9 +81,8 @@ func TestIntegrationReleaseLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create escrow: %v", err)
 	}
-	if created.EscrowID == 0 {
-		t.Fatal("create escrow returned id 0")
-	}
+	// The contract's NextId counter starts at 0, so a fresh deployment really
+	// does hand out escrow id 0; only the transaction hash must be non-empty.
 	if created.TxHash == "" {
 		t.Fatal("create escrow returned an empty transaction hash")
 	}

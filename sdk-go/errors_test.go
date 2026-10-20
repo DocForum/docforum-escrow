@@ -173,13 +173,16 @@ func TestReturnValueFromMeta(t *testing.T) {
 
 func TestStatusDecoding(t *testing.T) {
 	for _, status := range []EscrowStatus{EscrowStatusFunded, EscrowStatusReleased, EscrowStatusRefunded} {
-		got, err := decodeStatus(scvU32(uint32(status)))
+		got, err := decodeStatus(scvStatus(status))
 		if err != nil || got != status {
-			t.Fatalf("decodeStatus(%d) = %v, %v", status, got, err)
+			t.Fatalf("decodeStatus(%s) = %v, %v", status, got, err)
 		}
 	}
-	if _, err := decodeStatus(scvU32(99)); err == nil {
+	if _, err := decodeStatus(scvVec([]xdr.ScVal{scvSymbol("Settled")})); err == nil {
 		t.Fatal("decodeStatus accepted an unknown status")
+	}
+	if _, err := decodeStatus(scvU32(uint32(EscrowStatusFunded))); err == nil {
+		t.Fatal("decodeStatus accepted a bare integer")
 	}
 	if EscrowStatusFunded.String() != "Funded" || !EscrowStatusRefunded.IsValid() {
 		t.Fatal("status String/IsValid failed")

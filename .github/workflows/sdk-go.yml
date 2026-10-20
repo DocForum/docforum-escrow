@@ -125,15 +125,28 @@ jobs:
       - name: Configure local network
         run: |
           set -euo pipefail
-          stellar network add local \
+          # "local" is already a built-in CLI network, so use a distinct name.
+          stellar network add escrow-local \
             --rpc-url "http://localhost:8000/rpc" \
             --network-passphrase "Standalone Network ; February 2017"
 
       - name: Generate and fund deployer identity
         run: |
           set -euo pipefail
-          stellar keys generate deployer --network local --fund --overwrite
-          stellar keys address deployer
+          stellar keys generate deployer --network escrow-local --overwrite
+          # RPC health can be ready before quickstart finishes starting Horizon
+          # and friendbot, so retry the faucet instead of racing startup.
+          for attempt in $(seq 1 60); do
+            if stellar keys fund deployer --network escrow-local; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "::error::friendbot did not fund deployer"
+              exit 1
+            fi
+            sleep 2
+          done
+          stellar keys public-key deployer
 
       - name: Deploy native asset SAC and escrow contract
         id: deploy
@@ -145,19 +158,19 @@ jobs:
           stellar contract asset deploy \
             --asset native \
             --source-account deployer \
-            --network local \
+            --network escrow-local \
             --alias native-token
-          token_id=$(stellar contract alias show native-token --network local)
+          token_id=$(stellar contract alias show native-token --network escrow-local)
 
           # __constructor(allowed_tokens: Vec<Address>) — empty list keeps the
           # legacy open-token behavior, which is fine for an ephemeral local net.
           stellar contract deploy \
             --wasm "$wasm" \
             --source-account deployer \
-            --network local \
+            --network escrow-local \
             --alias escrow \
-            -- allowed_tokens '[]'
-          contract_id=$(stellar contract alias show escrow --network local)
+            -- --allowed_tokens '[]'
+          contract_id=$(stellar contract alias show escrow --network escrow-local)
 
           echo "token_id=$token_id"
           echo "contract_id=$contract_id"

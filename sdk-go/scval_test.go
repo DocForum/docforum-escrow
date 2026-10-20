@@ -211,7 +211,7 @@ func TestDecodeEscrowDataWithoutOptionalFields(t *testing.T) {
 		{Key: scvSymbol("token"), Val: mustAddress(t, testContractID)},
 		{Key: scvSymbol("amount"), Val: mustI128(t, big.NewInt(7))},
 		{Key: scvSymbol("condition_ref"), Val: scvString("")},
-		{Key: scvSymbol("status"), Val: scvU32(uint32(EscrowStatusReleased))},
+		{Key: scvSymbol("status"), Val: scvStatus(EscrowStatusReleased)},
 		{Key: scvSymbol("releasers"), Val: scvVec([]xdr.ScVal{mustAddress(t, keypair.MustRandom().Address())})},
 		{Key: scvSymbol("threshold"), Val: scvU32(1)},
 		{Key: scvSymbol("refund_after"), Val: scvVoid()},

@@ -81,6 +81,12 @@ func scvSymbol(s string) xdr.ScVal {
 	return val
 }
 
+// scvStatus encodes an EscrowStatus the way the contract's unit enum is
+// represented in Soroban: a one-element vec holding the variant name.
+func scvStatus(s EscrowStatus) xdr.ScVal {
+	return scvVec([]xdr.ScVal{scvSymbol(s.String())})
+}
+
 func scvBytes(b []byte) xdr.ScVal {
 	val, _ := xdr.NewScVal(xdr.ScValTypeScvBytes, xdr.ScBytes(b))
 	return val
@@ -235,16 +241,27 @@ func decodeMap(v xdr.ScVal) (map[string]xdr.ScVal, error) {
 	return fields, nil
 }
 
+// decodeStatus decodes the contract's EscrowStatus enum. Soroban encodes a
+// unit enum variant as a one-element vec holding the variant name, e.g.
+// ScvVec([ScvSymbol("Funded")]), not as a bare integer.
 func decodeStatus(v xdr.ScVal) (EscrowStatus, error) {
-	raw, err := decodeU32(v)
-	if err != nil {
-		return 0, err
+	if v.Type != xdr.ScValTypeScvVec || v.Vec == nil || *v.Vec == nil {
+		return 0, fmt.Errorf("escrow: expected EscrowStatus enum ScVal, got %s", v.Type)
 	}
-	status := EscrowStatus(raw)
-	if !status.IsValid() {
-		return 0, fmt.Errorf("escrow: unknown EscrowStatus value %d", raw)
+	variants := **v.Vec
+	if len(variants) != 1 || variants[0].Type != xdr.ScValTypeScvSymbol || variants[0].Sym == nil {
+		return 0, fmt.Errorf("escrow: malformed EscrowStatus enum ScVal")
 	}
-	return status, nil
+	switch name := string(*variants[0].Sym); name {
+	case "Funded":
+		return EscrowStatusFunded, nil
+	case "Released":
+		return EscrowStatusReleased, nil
+	case "Refunded":
+		return EscrowStatusRefunded, nil
+	default:
+		return 0, fmt.Errorf("escrow: unknown EscrowStatus variant %q", name)
+	}
 }
 
 // decodeEscrow decodes the contracttype EscrowData struct from an ScVal map.
@@ -398,7 +415,7 @@ func escrowDataScVal(e Escrow) (xdr.ScVal, error) {
 		{Key: scvSymbol("token"), Val: token},
 		{Key: scvSymbol("amount"), Val: amount},
 		{Key: scvSymbol("condition_ref"), Val: scvString(e.ConditionRef)},
-		{Key: scvSymbol("status"), Val: scvU32(uint32(e.Status))},
+		{Key: scvSymbol("status"), Val: scvStatus(e.Status)},
 		{Key: scvSymbol("releasers"), Val: scvVec(releasers)},
 		{Key: scvSymbol("threshold"), Val: scvU32(e.Threshold)},
 		{Key: scvSymbol("refund_after"), Val: scvOptionU64(e.RefundAfter)},
