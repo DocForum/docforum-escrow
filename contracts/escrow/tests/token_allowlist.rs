@@ -31,6 +31,7 @@ fn create_escrow(
         &String::from_str(env, "allowlist-test"),
         &Address::generate(env),
         &None,
+        &false,
     )
 }
 
@@ -59,6 +60,7 @@ fn configured_allowlist_accepts_listed_token_and_rejects_unlisted_token() {
             &String::from_str(&env, "allowlist-test"),
             &Address::generate(&env),
             &None,
+            &false,
         )
         .is_err());
 }
