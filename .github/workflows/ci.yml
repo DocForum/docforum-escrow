@@ -32,15 +32,76 @@ jobs:
       - name: cargo test
         run: cargo test
 
+      # Issue #120: test snapshots are committed so events, storage and auth
+      # changes show up as reviewable diffs. `cargo test` above rewrites them;
+      # any difference from the committed files means the test run produced a
+      # snapshot nobody reviewed. Contribution flow: `cargo test`, inspect
+      # `git diff contracts/escrow/test_snapshots`, commit intentionally.
+      - name: Fail if committed test snapshots changed
+        run: |
+          set -eu
+          if [ -n "$(git status --porcelain -- test_snapshots)" ]; then
+            echo "::error::cargo test changed committed Soroban snapshots under contracts/escrow/test_snapshots."
+            git status --porcelain -- test_snapshots
+            git --no-pager diff -- test_snapshots
+            echo "Review the snapshot change (events/storage/auth), then commit it with your change. See CONTRIBUTING.md."
+            exit 1
+          fi
+          echo "Committed test snapshots match this run."
+
       - name: cargo build --release (wasm)
         run: cargo build --target wasm32v1-none --release
 
       - name: Confirm wasm artifact exists
         run: test -f target/wasm32v1-none/release/docforum_escrow.wasm
 
-  sdk:
-    name: TypeScript SDK (typecheck + build)
+  # Issue #121: the committed generated client must be exactly what the pinned
+  # Stellar CLI generates from the current contract WASM. Catches both a
+  # contract change without regeneration and a hand edit to the generated file.
+  # It never commits: the job fails and tells the contributor to regenerate.
+  sdk-bindings:
+    name: SDK bindings match contract WASM
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+
+      - name: Install pinned Stellar CLI
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version=//p' scripts/stellar-cli-version)
+          checksum=$(sed -n 's/^linux-x86_64-sha256=//p' scripts/stellar-cli-version)
+          url="https://github.com/stellar/stellar-cli/releases/download/v${version}/stellar-cli-${version}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o /tmp/stellar-cli.tar.gz "$url"
+          echo "${checksum}  /tmp/stellar-cli.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf /tmp/stellar-cli.tar.gz -C "$HOME/.local/bin"
+          "$HOME/.local/bin/stellar" --version
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Check generated SDK bindings
+        run: ./scripts/check-generated-bindings.sh
+
+  sdk-node:
+    name: TypeScript SDK (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22, 24]
     defaults:
       run:
         working-directory: sdk
@@ -49,8 +110,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # @stellar/stellar-sdk requires Node >=22.
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: npm
           cache-dependency-path: sdk/package-lock.json
 
@@ -60,8 +120,67 @@ jobs:
 
       - run: npm run build
 
+      # Offline only: events fixture decoding plus quorum input validation.
+      # Never the live testnet suite (see the note at the end of this file).
+      - run: npm run test:offline
+
+      - run: npm run test:runtime
+
+  sdk-bun:
+    name: TypeScript SDK (Bun)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+      - uses: oven-sh/setup-bun@v2
+      - run: npm ci
+        working-directory: sdk
+      - run: npm run build
+        working-directory: sdk
+      - run: bun tests/runtime-smoke.mjs
+        working-directory: sdk
+
+  sdk-deno:
+    name: TypeScript SDK (Deno)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: npm ci
+        working-directory: sdk
+      - run: npm run build
+        working-directory: sdk
+      - run: deno run tests/runtime-smoke.mjs
+        working-directory: sdk
+
+  sdk-browser:
+    name: TypeScript SDK (Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+      - run: npm ci
+        working-directory: sdk
+      - run: npx playwright install --with-deps chromium
+        working-directory: sdk
+      - run: npm run test:browser
+        working-directory: sdk
+
       # Deliberately NOT run here: `npm run test:integration`
-      # (tests/testnet-integration.test.ts) — it depends on live testnet
-      # + Friendbot funding, a materially different reliability profile
-      # than this job's deterministic checks. Run it manually; see that
-      # file's own comment for why.
+      # (tests/testnet-integration.test.ts) depends on live testnet and
+      # Friendbot funding. Runtime checks use local fixtures only.

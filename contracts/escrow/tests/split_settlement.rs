@@ -2,7 +2,7 @@ use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
     testutils::Address as _,
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String,
+    Address, Env, String, Vec,
 };
 
 struct Fixture<'a> {
@@ -24,7 +24,7 @@ fn setup(env: &Env) -> Fixture<'_> {
     let payee = Address::generate(env);
     let releaser = Address::generate(env);
     asset.mint(&payer, &500);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
     let client = EscrowContractClient::new(env, &contract_id);
     let id = client.create_escrow(
         &payer,
@@ -45,7 +45,7 @@ fn split_settlement_supports_zero_full_and_partial_payouts() {
     zero.client.settle(&zero.id, &zero.releaser, &0);
     assert_eq!(zero.token.balance(&zero.payee), 0);
     assert_eq!(zero.token.balance(&zero.payer), 500);
-    assert_eq!(zero.client.get_status(&zero.id), EscrowStatus::Settled);
+    assert_eq!(zero.client.get_status(&zero.id), EscrowStatus::Released);
 
     let full = setup(&env);
     full.client.settle(&full.id, &full.releaser, &300);
