@@ -186,3 +186,30 @@ jobs:
       # Deliberately NOT run here: `npm run test:integration`
       # (tests/testnet-integration.test.ts) depends on live testnet and
       # Friendbot funding. Runtime checks use local fixtures only.
+
+  escrow-react:
+    name: React hooks package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            sdk/package-lock.json
+            packages/escrow-react/package-lock.json
+      # The hooks package links the SDK via `file:../../sdk`; build it first so
+      # type resolution sees dist/*.d.ts.
+      - run: npm ci
+        working-directory: sdk
+      - run: npm run build
+        working-directory: sdk
+      - run: npm ci
+        working-directory: packages/escrow-react
+      - run: npm run typecheck
+        working-directory: packages/escrow-react
+      - run: npm test
+        working-directory: packages/escrow-react
+      - run: npm run build
+        working-directory: packages/escrow-react

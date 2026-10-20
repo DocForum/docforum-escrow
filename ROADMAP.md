@@ -213,6 +213,33 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `sdk/tests/fees.test.ts` (wired into CI as `npm run test:unit`) plus a
   live-testnet estimate/fee-bump case in `testnet-integration.test.ts`;
   additive SDK surface, `0.4.0 → 0.5.0`. Closes issue #70.
+- [x] React hooks package (issue #126) — `packages/escrow-react`,
+  published name `@docforum/escrow-react`. TanStack Query v5 peer.
+  `useEscrow(id)` polls `getEscrow` and stops at `Released`/`Refunded`;
+  `useEscrowActions(signer)` invalidates the query after a settlement and
+  resolves wallet rejection as `{ status: "rejected" }`; `useEscrowTimeline`
+  counts down to `refundAfter` with a documented ledger-vs-local clock
+  caveat. Hooks only — no UI. 14 React Testing Library tests with a fake
+  client and a dedicated CI job. Demo in `examples/web-demo/`.
+- [x] Stellar Wallets Kit adapter (issue #127) —
+  `WalletsKitSigner` on the `@docforum/escrow-sdk/signers/wallets-kit`
+  subpath, implementing the SDK's SEP-43 `Signer` surface. The kit is an
+  optional peer dependency and is injected, so there is no runtime import and
+  server bundles stay wallet-free. Typed `WalletNetworkMismatchError` before
+  signing; user rejection returned as SEP-43 `-4` rather than thrown. 12
+  offline fake-kit tests.
+- [x] Go client SDK (issue #128) — `sdk-go/`, module
+  `github.com/DocForum/docforum-escrow/sdk-go`. `CreateEscrow`, `GetStatus`,
+  `GetEscrow`, `Release`, `Refund` (+ `TopUp` and approval paths), typed
+  contract errors, `big.Int` i128 amounts, offline unit tests and an opt-in
+  quickstart integration suite with its own CI workflow.
+- [x] OpenTelemetry instrumentation hooks (issue #129) — optional
+  `instrumentation`/`onEvent` on `EscrowClient`, spans for `simulate`,
+  `sign`, `submit` and `confirm`. No tracer/observer means no clock read and
+  no span allocation. Attributes carry contract id, function, escrow id,
+  transaction hash and retry count; addresses are opt-in only
+  (`includeAddresses: true`). 7 offline tests assert span production and the
+  disabled path.
 
 ## Phase E7 — Verification, testing & release engineering
 - [x] **PR malware scan** — `.github/workflows/pr-malware-scan.yml` + `.github/scripts/pr-malware-scan.cjs`, on every PR push. Flags editor/devcontainer autorun tasks, npm install hooks, typosquatted packages and Actions, non-registry dependency sources, payloads disguised as fonts/images, base64/whitespace obfuscation, exfiltration endpoints, reverse shells and miners. HIGH findings fail the `Malware scan` check, label the PR `security-review` and @mention the author; one comment per PR, updated in place. Reads the PR as data only (never checks out or runs it). Added 2026-10-20 after a VS Code autorun payload (escrow #163) and a typosquatted action (escrow #176). Manual backfill (Actions → PR malware scan → Run workflow, `prs: all`) scans PRs opened before the scanner and records a `Malware scan` commit status, which satisfies the required check.
@@ -254,6 +281,22 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   repo's.
 
 ## Changelog
+- 2026-10-20 — Phase E6 integrator tooling (issues #126, #127, #128, #129).
+  **#127:** `EscrowClient` now accepts a SEP-43 `Signer` anywhere it accepted
+  a `Keypair`; added `WalletsKitSigner` on the
+  `@docforum/escrow-sdk/signers/wallets-kit` subpath with an injected,
+  optional Wallets Kit peer and no runtime import of it. Wrong-network
+  signing throws `WalletNetworkMismatchError`; user rejection is a normal
+  SEP-43 `-4` outcome. **#129:** optional `instrumentation`/`onEvent` with
+  `simulate`/`sign`/`submit`/`confirm` spans and retry counts; addresses
+  opt-in only; the disabled path does no timing work. SDK `0.5.0 → 0.6.0`
+  (additive). **#126:** new `@docforum/escrow-react` package with
+  `useEscrow`, `useEscrowActions`, `useEscrowTimeline`, React Query caching
+  and polling that stops at terminal statuses; 14 RTL tests and a CI job.
+  **#128:** new `sdk-go/` client with typed contract errors, `big.Int` i128
+  amounts, offline tests and an opt-in quickstart integration workflow.
+  Added `examples/web-demo/`, docs and roadmap entries. Closes #126, #127,
+  #128, #129.
 - 2026-10-19 — Issue #70 (Phase E6): added `estimate`, `feeBump`,
   `guardSponsorship` and `assertSponsorable` to the SDK. Estimation runs
   through the client's RPC and reports the resource fee with a buffered
