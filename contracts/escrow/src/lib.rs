@@ -20,7 +20,7 @@
 
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, symbol_short, token,
-    Address, Env, String, Vec,
+    Address, Env, IntoVal, String, Vec,
 };
 
 /// Largest allowed releaser set for one escrow. Ten covers every
@@ -62,6 +62,13 @@ pub struct EscrowData {
     /// anyone — still only back to `payer`. `None` means no timeout,
     /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
+    /// If true, invoke the contract payee's `on_escrow_released` hook after
+    /// the payout transfer. A failed callback reverts the whole release.
+    pub notify_payee: bool,
+    /// Whether release requires the payee's explicit acceptance.
+    pub requires_acceptance: bool,
+    /// Ledger timestamp at which the payee accepted, if any.
+    pub accepted_at: Option<u64>,
 }
 
 // Lifecycle events carry the token and amount needed by read-only solvency
@@ -138,6 +145,9 @@ pub enum Error {
     ConditionRefTooLong = 7,
     /// `token` is not in the immutable deploy-time allowlist.
     DisallowedToken = 8,
+    /// The opted-in payee callback returned an error or could not be
+    /// invoked. The release transaction (including its transfer) rolls back.
+    CallbackFailed = 9,
     Overflow = 12,
     /// The releaser set is empty, or `threshold` is 0 or larger than the
     /// number of releasers — see docs/adr/0007.
@@ -153,6 +163,9 @@ pub enum Error {
     DuplicateApprover = 16,
     /// The same address appeared twice in the releaser set at creation.
     DuplicateReleaser = 17,
+    AcceptanceRequired = 18,
+    AcceptanceNotConfigured = 19,
+    AlreadyAccepted = 20,
 }
 
 #[contract]
@@ -169,13 +182,14 @@ impl EscrowContract {
     }
 
     /// Locks `amount` of `token` pulled from `payer`, held for `payee`,
-    /// tagged with an opaque `condition_ref` (max 64 bytes — see
-    /// docs/threat-model.md T10). `releaser` is the address permitted to
-    /// call `release`/`refund` on this escrow (docs/adr/0002).
-    /// `refund_after` is an optional unix timestamp after which `refund`
-    /// opens to any caller, always back to `payer` (docs/adr/0004).
-    /// Requires `payer` auth (the contract moves their funds). For an
-    /// M-of-N releaser set use `create_escrow_with_releasers` instead.
+    /// docs/threat-model.md T10 and ROADMAP.md Phase E5). `releaser` is the
+    /// address permitted to call `release`/`refund` on this escrow
+    /// (docs/adr/0002). `refund_after` is optional (docs/adr/0004).
+    /// `notify_payee` opts an implementing contract payee into
+    /// `on_escrow_released(escrow_id, amount)` (docs/adr/0005). The payer
+    /// must authorize creation, and the payee must also authorize if
+    /// `notify_payee` is true. For M-of-N releasers use
+    /// `create_escrow_with_releasers`.
     pub fn create_escrow(
         env: Env,
         payer: Address,
@@ -185,6 +199,7 @@ impl EscrowContract {
         condition_ref: String,
         releaser: Address,
         refund_after: Option<u64>,
+        notify_payee: bool,
     ) -> Result<u64, Error> {
         let mut releasers = Vec::new(&env);
         releasers.push_back(releaser);
@@ -198,7 +213,69 @@ impl EscrowContract {
             releasers,
             1,
             refund_after,
+            notify_payee,
+            false,
         )
+    }
+
+    /// Creates an escrow with an opt-in payee acceptance gate. Existing
+    /// integrations can keep using `create_escrow`, which defaults this off.
+    pub fn create_escrow_with_acceptance(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        requires_acceptance: bool,
+    ) -> Result<u64, Error> {
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        Self::create_escrow_inner(
+            &env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            1,
+            refund_after,
+            false,
+            requires_acceptance,
+        )
+    }
+
+    /// Records the payee's acceptance for an opted-in funded escrow.
+    pub fn accept(env: Env, escrow_id: u64, payee: Address) -> Result<(), Error> {
+        payee.require_auth();
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+        if data.payee != payee {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        if !data.requires_acceptance {
+            return Err(Error::AcceptanceNotConfigured);
+        }
+        if data.accepted_at.is_some() {
+            return Err(Error::AlreadyAccepted);
+        }
+        let accepted_at = env.ledger().timestamp();
+        data.accepted_at = Some(accepted_at);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        env.events()
+            .publish((symbol_short!("accepted"), escrow_id), (payee, accepted_at));
+        Ok(())
     }
 
     /// Same as `create_escrow`, but the escrow is settled by M-of-N
@@ -218,6 +295,7 @@ impl EscrowContract {
         releasers: Vec<Address>,
         threshold: u32,
         refund_after: Option<u64>,
+        notify_payee: bool,
     ) -> Result<u64, Error> {
         Self::create_escrow_inner(
             &env,
@@ -229,6 +307,8 @@ impl EscrowContract {
             releasers,
             threshold,
             refund_after,
+            notify_payee,
+            false,
         )
     }
 
@@ -377,6 +457,8 @@ impl EscrowContract {
         releasers: Vec<Address>,
         threshold: u32,
         refund_after: Option<u64>,
+        notify_payee: bool,
+        requires_acceptance: bool,
     ) -> Result<u64, Error> {
         let allowed_tokens: Vec<Address> = env
             .storage()
@@ -403,6 +485,9 @@ impl EscrowContract {
         Self::check_releaser_set(env, &releasers, threshold)?;
 
         payer.require_auth();
+        if notify_payee {
+            payee.require_auth();
+        }
 
         Self::transfer_in_exact(env, &token, &payer, amount)?;
 
@@ -417,6 +502,9 @@ impl EscrowContract {
             releasers,
             threshold,
             refund_after,
+            notify_payee,
+            requires_acceptance,
+            accepted_at: None,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         EscrowCreated {
@@ -512,10 +600,17 @@ impl EscrowContract {
         data: &mut EscrowData,
         settled: EscrowStatus,
     ) -> Result<(), Error> {
+        let notify_payee = data.notify_payee && settled == EscrowStatus::Released;
         let destination = match settled {
             EscrowStatus::Released => data.payee.clone(),
             _ => data.payer.clone(),
         };
+        if settled == EscrowStatus::Released
+            && data.requires_acceptance
+            && data.accepted_at.is_none()
+        {
+            return Err(Error::AcceptanceRequired);
+        }
         data.status = settled;
         env.storage()
             .persistent()
@@ -523,6 +618,18 @@ impl EscrowContract {
 
         let token_client = token::Client::new(env, &data.token);
         token_client.transfer(&env.current_contract_address(), &destination, &data.amount);
+        if notify_payee {
+            let args = (escrow_id, data.amount).into_val(env);
+            let callback = env.try_invoke_contract::<(), soroban_sdk::Error>(
+                &data.payee,
+                &soroban_sdk::Symbol::new(env, "on_escrow_released"),
+                args,
+            );
+            match callback {
+                Ok(Ok(())) => {}
+                _ => return Err(Error::CallbackFailed),
+            }
+        }
         match &data.status {
             EscrowStatus::Released => EscrowReleased {
                 escrow_id,

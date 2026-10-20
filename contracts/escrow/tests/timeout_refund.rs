@@ -60,6 +60,7 @@ fn fund_escrow(env: &Env, refund_after: Option<u64>) -> Fixture<'_> {
         &String::from_str(env, "opaque-condition-ref"),
         &releaser,
         &refund_after,
+        &false,
     );
 
     Fixture {
@@ -129,6 +130,7 @@ fn create_escrow_rejects_deadline_already_passed_or_now() {
         &String::from_str(&env, "ref-now"),
         &releaser,
         &Some(CREATED_AT),
+        &false,
     );
     let past = client.try_create_escrow(
         &payer,
@@ -138,6 +140,7 @@ fn create_escrow_rejects_deadline_already_passed_or_now() {
         &String::from_str(&env, "ref-past"),
         &releaser,
         &Some(CREATED_AT - 1),
+        &false,
     );
 
     assert!(now.is_err());
