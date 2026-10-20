@@ -9,7 +9,7 @@ use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
     testutils::{Address as _, Events as _},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String,
+    Address, Env, String, Vec,
 };
 
 fn setup<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
@@ -37,7 +37,7 @@ fn fund_escrow(env: &Env, amount: i128) -> Fixture<'_> {
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
     let client = EscrowContractClient::new(env, &contract_id);
 
     let escrow_id = client.create_escrow(
@@ -50,7 +50,15 @@ fn fund_escrow(env: &Env, amount: i128) -> Fixture<'_> {
         &None,
     );
 
-    Fixture { client, contract_id, token, payer, payee, releaser, escrow_id }
+    Fixture {
+        client,
+        contract_id,
+        token,
+        payer,
+        payee,
+        releaser,
+        escrow_id,
+    }
 }
 
 // --- release() ---
@@ -63,7 +71,14 @@ fn release_transfers_funds_to_payee_and_marks_released() {
 
     f.client.release(&f.escrow_id, &f.releaser);
 
-    assert_eq!(env.events().all().filter_by_contract(&f.contract_id).events().len(), 1);
+    assert_eq!(
+        env.events()
+            .all()
+            .filter_by_contract(&f.contract_id)
+            .events()
+            .len(),
+        1
+    );
     assert_eq!(f.token.balance(&f.payee), 300);
     assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Released);
 }
@@ -105,7 +120,14 @@ fn refund_transfers_funds_back_to_payer_and_marks_refunded() {
 
     f.client.refund(&f.escrow_id, &f.releaser);
 
-    assert_eq!(env.events().all().filter_by_contract(&f.contract_id).events().len(), 1);
+    assert_eq!(
+        env.events()
+            .all()
+            .filter_by_contract(&f.contract_id)
+            .events()
+            .len(),
+        1
+    );
     assert_eq!(f.token.balance(&f.payer), 1_000); // full 1,000 minted, 300 returned
     assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Refunded);
 }
