@@ -14,6 +14,8 @@
 // releaser set (`create_escrow_with_releasers`) — see docs/adr/0007.
 // Single-releaser escrows are stored as a one-address set with threshold 1
 // and behave exactly as before.
+// Phase E5 (issue #114): dependency-aware creation stores local escrow
+// dependencies separately from EscrowData; only release is gated.
 //
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
@@ -42,6 +44,13 @@ pub enum EscrowStatus {
     Funded,
     Released,
     Refunded,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowDependency {
+    pub escrow_id: u64,
+    pub required_status: EscrowStatus,
 }
 
 #[contracttype]
@@ -84,6 +93,7 @@ pub struct EscrowData {
 #[contracttype]
 enum DataKey {
     Escrow(u64),
+    Dependency(u64),
     NextId,
     AllowedTokens,
 }
@@ -135,6 +145,12 @@ pub enum Error {
     /// `refund_to` was the escrow contract's own address — funds sent
     /// there on refund could never be moved again (docs/adr/0009).
     InvalidRefundTo = 21,
+    /// A dependency must point to an existing escrow with a lower id.
+    InvalidDependency = 22,
+    DependencyNotFound = 23,
+    DependencyUnsatisfied = 24,
+    /// Dependencies may require a terminal status, not `Funded`.
+    InvalidDependencyStatus = 25,
 }
 
 #[contract]
@@ -190,6 +206,42 @@ impl EscrowContract {
             notify_payee,
             false,
             refund_to,
+            None,
+        )
+    }
+
+    /// Same as `create_escrow`, with an additional local escrow release
+    /// dependency. The dependency must reference an existing, lower-id
+    /// escrow and require `Released` or `Refunded`.
+    pub fn create_escrow_with_dependency(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        notify_payee: bool,
+        refund_to: Option<Address>,
+        depends_on: EscrowDependency,
+    ) -> Result<u64, Error> {
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        Self::create_escrow_inner(
+            &env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            1,
+            refund_after,
+            notify_payee,
+            false,
+            refund_to,
+            Some(depends_on),
         )
     }
 
@@ -222,6 +274,40 @@ impl EscrowContract {
             false,
             requires_acceptance,
             refund_to,
+            None,
+        )
+    }
+
+    /// Creates an acceptance-gated escrow with a local release dependency.
+    pub fn create_acceptance_dependency(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        requires_acceptance: bool,
+        refund_to: Option<Address>,
+        depends_on: EscrowDependency,
+    ) -> Result<u64, Error> {
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        Self::create_escrow_inner(
+            &env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            1,
+            refund_after,
+            false,
+            requires_acceptance,
+            refund_to,
+            Some(depends_on),
         )
     }
 
@@ -288,6 +374,39 @@ impl EscrowContract {
             notify_payee,
             false,
             refund_to,
+            None,
+        )
+    }
+
+    /// Creates an M-of-N escrow with a local release dependency.
+    pub fn create_releasers_dependency(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releasers: Vec<Address>,
+        threshold: u32,
+        refund_after: Option<u64>,
+        notify_payee: bool,
+        refund_to: Option<Address>,
+        depends_on: EscrowDependency,
+    ) -> Result<u64, Error> {
+        Self::create_escrow_inner(
+            &env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            threshold,
+            refund_after,
+            notify_payee,
+            false,
+            refund_to,
+            Some(depends_on),
         )
     }
 
@@ -312,6 +431,15 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::NotFound)
+    }
+
+    /// Read-only accessor for the local release dependency, if configured.
+    pub fn get_dependency(env: Env, escrow_id: u64) -> Result<Option<EscrowDependency>, Error> {
+        Self::load(&env, escrow_id)?;
+        Ok(env
+            .storage()
+            .persistent()
+            .get(&DataKey::Dependency(escrow_id)))
     }
 
     /// Adds funds to a funded escrow without changing its parties or id.
@@ -359,6 +487,7 @@ impl EscrowContract {
         let mut data = Self::load(&env, escrow_id)?;
         Self::check_single_caller(&data, &caller)?;
         Self::check_funded(&data)?;
+        Self::check_dependency(&env, escrow_id)?;
 
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
     }
@@ -377,6 +506,7 @@ impl EscrowContract {
         let mut data = Self::load(&env, escrow_id)?;
         Self::check_approvals(&env, &data, &approvers)?;
         Self::check_funded(&data)?;
+        Self::check_dependency(&env, escrow_id)?;
 
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
     }
@@ -443,6 +573,7 @@ impl EscrowContract {
         notify_payee: bool,
         requires_acceptance: bool,
         refund_to: Option<Address>,
+        depends_on: Option<EscrowDependency>,
     ) -> Result<u64, Error> {
         let allowed_tokens: Vec<Address> = env
             .storage()
@@ -471,6 +602,20 @@ impl EscrowContract {
         if refund_to == env.current_contract_address() {
             return Err(Error::InvalidRefundTo);
         }
+        let id = Self::peek_next_id(env);
+        if let Some(dependency) = &depends_on {
+            if dependency.escrow_id >= id {
+                return Err(Error::InvalidDependency);
+            }
+            if dependency.required_status == EscrowStatus::Funded {
+                return Err(Error::InvalidDependencyStatus);
+            }
+            let _: EscrowData = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Escrow(dependency.escrow_id))
+                .ok_or(Error::DependencyNotFound)?;
+        }
 
         payer.require_auth();
         if notify_payee {
@@ -496,6 +641,11 @@ impl EscrowContract {
             refund_to,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        if let Some(dependency) = depends_on {
+            env.storage()
+                .persistent()
+                .set(&DataKey::Dependency(id), &dependency);
+        }
         Ok(id)
     }
 
@@ -625,6 +775,25 @@ impl EscrowContract {
         Ok(())
     }
 
+    fn check_dependency(env: &Env, escrow_id: u64) -> Result<(), Error> {
+        let Some(dependency) = env
+            .storage()
+            .persistent()
+            .get::<_, EscrowDependency>(&DataKey::Dependency(escrow_id))
+        else {
+            return Ok(());
+        };
+        let required: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(dependency.escrow_id))
+            .ok_or(Error::DependencyNotFound)?;
+        if required.status != dependency.required_status {
+            return Err(Error::DependencyUnsatisfied);
+        }
+        Ok(())
+    }
+
     fn contains(list: &Vec<Address>, candidate: &Address) -> bool {
         for item in list.iter() {
             if &item == candidate {
@@ -638,6 +807,10 @@ impl EscrowContract {
         let id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
         env.storage().instance().set(&DataKey::NextId, &(id + 1));
         id
+    }
+
+    fn peek_next_id(env: &Env) -> u64 {
+        env.storage().instance().get(&DataKey::NextId).unwrap_or(0)
     }
 
     fn transfer_in_exact(

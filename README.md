@@ -47,13 +47,17 @@ deployment, so choosing an empty list deliberately disables the protection.
 |---|---|---|
 | `__constructor(allowed_tokens)` | ✅ Implemented | Stores the immutable deploy-time token allowlist; an empty list allows all tokens. |
 | `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to) -> escrow_id` | ✅ Implemented locally (callback not deployed) | Pulls funds from `payer`, stores a bounded `condition_ref`, and stores the single `releaser` as a one-address set with threshold 1. Optional `refund_to` (default: `payer`) fixes where every refund goes, set once under the funder's signature; it may not be the contract itself ([ADR 0009](docs/adr/0009-sponsored-funding-refund-to.md)). Requires payer auth; when `notify_payee` is true, also requires payee auth and calls `on_escrow_released` on release. |
+| `create_escrow_with_dependency(..., depends_on) -> escrow_id` | ✅ Implemented locally | Single-releaser version with a local dependency. References an existing lower-ID escrow and requires its `Released` or `Refunded` status. |
 | `create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id` | ✅ Implemented locally | Optional payee acceptance gate. When enabled, the payee must call `accept(escrow_id, payee)` before a releaser can release; refunds remain available. |
+| `create_acceptance_dependency(..., depends_on) -> escrow_id` | ✅ Implemented locally | Acceptance-gated version with the same local dependency rules. |
 | `accept(escrow_id, payee)` | ✅ Implemented locally | Payee-authorized, one-time acceptance for a funded escrow configured with the acceptance gate. |
 | `create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id` | ✅ Implemented | Same, but settles by M-of-N: 1–10 distinct `releasers` (`MAX_RELEASERS`), `1 <= threshold <= releasers.len()`. Callback opt-in has the same payee-authorization requirement. See [ADR 0007](docs/adr/0007-in-contract-m-of-n-releaser-quorum.md). |
+| `create_releasers_dependency(..., depends_on) -> escrow_id` | ✅ Implemented locally | M-of-N creation with a local release dependency; all approval release paths enforce it. |
 | `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releasers`, `threshold`, `refund_after` and `refund_to`, so payees can check the deal before relying on it. |
-| `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser` when the threshold is 1; moves funds to `payee`. Never gated by `refund_after`. |
-| `release_with_approvals(escrow_id, approvers) -> Result<()>` | ✅ Implemented | M-of-N release: at least `threshold` distinct releasers, each authorizing this exact invocation. Approvals are not stored, so nothing can be replayed. Only while `Funded`. |
+| `get_dependency(escrow_id) -> Option<EscrowDependency>` | ✅ Implemented locally | Read-only dependency metadata; errors for an unknown escrow. |
+| `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser` when the threshold is 1; moves funds to `payee`. Dependent escrows also require the configured status. Never gated by `refund_after`. |
+| `release_with_approvals(escrow_id, approvers) -> Result<()>` | ✅ Implemented | M-of-N release: at least `threshold` distinct releasers, each authorizing this exact invocation. Approvals are not stored, so nothing can be replayed. Only while `Funded`; a dependency is checked before payout. |
 | `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to the escrow's `refund_to` (the `payer` unless set otherwise at creation). The `releaser` may always call it (threshold 1); once `refund_after` has passed, anyone may — still only to `refund_to` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
 | `refund_with_approvals(escrow_id, approvers) -> Result<()>` | ✅ Implemented | M-of-N refund with the same approval rules; the timeout path above needs no approvals. |
 | `top_up(escrow_id, payer, amount) -> Result<()>` | ✅ Implemented | Adds funds to a `Funded` escrow; original payer only. Emits a `top_up` event. |
@@ -78,6 +82,36 @@ payout, so the "destinations are fixed at creation" invariant (I1) holds.
 Omit it and behaviour is exactly as before. Make sure the destination
 can hold the token: if the transfer to it fails, so does the refund. See
 [ADR 0009](docs/adr/0009-sponsored-funding-refund-to.md).
+
+## Dependent escrows
+
+Use `create_escrow_with_dependency` (or the corresponding acceptance-gated
+or quorum entry point) to set `depends_on: { escrow_id, required_status }`
+at creation. The referenced escrow must already exist in this contract
+deployment and have a lower ID than the new escrow. This monotonically
+increasing ID rule prevents cycles without a graph walk. Only the terminal
+statuses `Released` and `Refunded` can be required; `Funded` is rejected.
+The contract checks the referenced escrow's current status during both
+single-releaser and quorum release, before any payout. The dependency is
+stored separately from `EscrowData`, so existing escrow record layouts and
+creation entry points remain unchanged.
+
+Dependencies restrict release only. They never gate `refund` or
+`refund_with_approvals`: if an escrow required to be `Released` is refunded,
+its dependent escrow cannot be released, but can still use its existing
+authorized or timeout refund path. Dependencies are local to one contract
+deployment; cross-contract and cross-deployment references are unsupported.
+The SDK exposes this through `createDependentEscrow`,
+`createDependentQuorumEscrow`, and `getDependency`.
+These entry points require a contract deployment containing the new methods;
+the current testnet deployment predates this change.
+
+```ts
+const { escrowId: followupId } = await client.createDependentEscrow({
+  payer, payee, token, amount, conditionRef, releaser,
+  dependsOn: { escrowId: earlierEscrowId, requiredStatus: "Released" },
+});
+```
 
 Single-releaser escrows are unchanged by the M-of-N option: `create_escrow`
 stores the one address with `threshold = 1`, `release`/`refund` behave exactly

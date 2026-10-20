@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (contract features) now includes the OZ-library evaluation (ADR 0006, no library adopted) and the optional in-contract M-of-N releaser quorum (ADR 0007, SDK 0.5.0) — implemented, tested and pending a testnet redeploy. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm. Fee estimation and fee-bump sponsorship helpers (issue #70) are implemented in the SDK, `0.5.0`. Phase E7 (verification/release engineering) started: committed Soroban test snapshots with a CI drift check (issue #120) and a CI check that generated SDK bindings match the contract WASM (issue #121).**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (contract features) includes the OZ-library evaluation (ADR 0006), the optional M-of-N releaser quorum (ADR 0007, SDK 0.5.0), and dependent escrows (issue #114, implemented and tested; pending a testnet redeploy). Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm. Fee estimation and fee-bump sponsorship helpers (issue #70) are implemented in the SDK, `0.5.0`. Phase E7 (verification/release engineering) started: committed Soroban test snapshots with a CI drift check (issue #120) and a CI check that generated SDK bindings match the contract WASM (issue #121).**
 
 ## Payee acceptance (issue #25)
 
@@ -167,6 +167,16 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   append-only errors 13–17. 19 tests in `tests/quorum.rs`; single-releaser
   suites unchanged and green. Breaking read shape → SDK 0.5.0, bindings
   regenerated. **Not yet on testnet** — the live deployment predates it.
+- [x] **Dependent escrows** (issue #114) — additive dependency-aware
+  creation for single-releaser, acceptance-gated and M-of-N escrows;
+  existing lower-ID escrows only, requiring a terminal status. Both release
+  paths check the dependency on-chain; refunds remain independent.
+  Dependency metadata uses a separate storage key so the existing
+  `EscrowData` layout and creation entry points stay unchanged. Nine
+  contract tests plus SDK validation tests cover ordering, refunds,
+  authorization and invalid dependencies. Additive SDK surface (0.6.0 →
+  0.7.0), with bindings regenerated.
+  **Not yet on testnet.**
 - [x] Sponsored funding: a funder distinct from the refund recipient —
   issue #28. **ADR first:** `docs/adr/0009` answers the two questions the
   issue poses — a separate refund destination **is** compatible with
@@ -278,6 +288,15 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   repo's.
 
 ## Changelog
+- 2026-10-20 — Issue #114 (Phase E5): added dependency-aware creation for
+  single-releaser, acceptance-gated and quorum escrows, with on-chain status
+  checks in both release paths. Dependencies are restricted to existing
+  lower-ID escrows and terminal statuses; refund paths are unchanged.
+  Separate dependency storage preserves the `EscrowData` layout. Nine
+  contract tests cover satisfied/unsatisfied/refunded dependencies, chains,
+  invalid references, authorization and state integrity. SDK APIs and
+  generated bindings were updated with a minor changeset (0.6.0 → 0.7.0).
+  README and architecture docs updated. Not deployed to testnet.
 - 2026-10-19 — Issue #70 (Phase E6): added `estimate`, `feeBump`,
   `guardSponsorship` and `assertSponsorable` to the SDK. Estimation runs
   through the client's RPC and reports the resource fee with a buffered
