@@ -18,6 +18,12 @@ accounting (`liabilities[token]`) and a read-only `solvency(token)` view
 were added, so T5's shared-pool risk is now observable on-chain. See §1
 I6, T5, T6, and §6.*
 
+*Updated 2026-10-20 for issues #118/#119: §1 I2 and §2 now describe the
+releaser set with a threshold instead of a single address; T1 and T2 record
+the in-contract M-of-N mitigation and its limits; T4 records the
+checks-effects-interactions change (now implemented); T8 tells payees to read
+`releasers` + `threshold`; the §6 checklist item for T4 is closed.*
+
 *Updated 2026-10-08 for issue #11 (Phase E4): the timeout refund path
 from T2's candidate list was decided in `docs/adr/0004` and implemented
 (`refund_after` + `get_escrow`), so T2, T8 and the §6 checklist below now
@@ -31,8 +37,8 @@ in this document still describes the same design.*
 | # | Invariant | Enforced by |
 |---|---|---|
 | I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination. |
-| I2 | Only the escrow's `releaser` can move funds out — or, once `refund_after` has passed, anyone at all, and then still only back to `payer`. | `caller.require_auth()` + `caller == data.releaser`, relaxed solely by the deadline check (`lib.rs:149`, `lib.rs:183`, `lib.rs:191`). |
-| I3 | Each escrow pays out at most once. | `status == Funded` check before transfer, status written after — shared by release and both refund paths. |
+| I2 | Only the escrow's releasers can move funds out — `threshold` distinct ones when the escrow was created M-of-N (ADR 0007) — or, once `refund_after` has passed, anyone at all, and then still only back to `payer`. | `require_auth()` per caller/approver + membership in the stored `releasers` set + the threshold check (`check_single_caller`, `check_approvals`), relaxed solely by the deadline check in `refund`. Duplicate approvers are rejected. |
+| I3 | Each escrow pays out at most once. | `status == Funded` check and terminal status write before transfer/callback; failures roll back atomically. |
 | I4 | An escrow only exists, or grows, if the declared funds were actually transferred in. | `payer.require_auth()` + shared exact-balance-delta verification on create/top-up before storage is updated. |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
 | I6 | `liabilities[token]` equals the sum of `amount` over every still-`Funded` escrow in that token, at all times. | Every state change that creates or settles an escrow updates the counter in the same invocation (`create_escrow`, `release`, `refund`). Property test in `tests/liabilities.rs`. |
@@ -54,7 +60,7 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 |---|---|---|
 | `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser` | Nothing after creation. Has no on-chain power to cancel. |
 | `payee` | Receive funds | Nothing. Has **no on-chain power at all**, including no way to object to a refund. |
-| `releaser` | `release` or `refund` its escrows, once | Choosing the correct outcome. This is the main trust assumption. |
+| `releaser` (one address, or an M-of-N `releasers` set, ADR 0007) | `release` or `refund` its escrows, once — a quorum escrow needs `threshold` distinct releasers on one call | Choosing the correct outcome. This is the main trust assumption; a quorum splits it across the set. |
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |
 | Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds back to that escrow's `payer` | Nothing. |
 | Anyone | Call `solvency(token)` to read `(balance, liabilities)` | Nothing. Read-only view. |
@@ -88,6 +94,16 @@ value. **Reviewers should challenge these ratings.**
   - Make the `releaser` a Stellar multisig account (e.g. 2-of-3 signers).
     This works with no contract change, because `require_auth` on an
     account address checks that account's own signer thresholds.
+  - **In-contract M-of-N (implemented, issue #119 / ADR 0007):** create the
+    escrow with `create_escrow_with_releasers(releasers, threshold)`. A
+    single leaked key is then insufficient at `threshold > 1`; the attacker
+    needs `threshold` distinct keys and must get all of them into one
+    invocation. No separate account has to be administered, which removes
+    the "one service key controls every escrow" pattern from the previous
+    bullet. Limits: an attacker holding `threshold` keys is equivalent to a
+    single stolen key today (collusion is not prevented, only made
+    costlier), and the set is immutable — a compromised member cannot be
+    removed from an existing escrow.
   - Keep the releaser key in a KMS/HSM, not as an environment variable.
   - In the consumer, rotate releaser keys periodically for **new**
     escrows, so a leak only reaches escrows from that key's period.
@@ -119,6 +135,12 @@ value. **Reviewers should challenge these ratings.**
   - [ ] Operationally: back up the releaser key, or use a multisig as in
     T1, which also covers loss of one signer. Callers should pass a
     `refund_after` sized to their longest plausible fulfilment window.
+  - [x] **M-of-N in the contract (issue #119 / ADR 0007):** a lost member
+    no longer locks the escrow *if* the remaining set can still reach the
+    threshold; if it cannot, the escrow behaves like a lost releaser and
+    needs `refund_after`. This is a trade-off, not a cure: a 2-of-3 escrow
+    with one lost key has no margin, and an M-of-N escrow with no deadline
+    and too few available signers is still locked forever.
 
 ### T3 — Double-spend / double payout · **Low (believed mitigated)**
 - `release`/`refund` check `status == Funded` and fail with `NotFunded`
@@ -145,6 +167,12 @@ value. **Reviewers should challenge these ratings.**
 - **Recommendation anyway:** write `status` before calling `transfer`
   (checks-effects-interactions). It costs nothing. It also means safety
   doesn't depend on a host rule a reader might not know about.
+- **Implemented (2026-10-20, ADR 0006):** all four settlement paths go
+  through `settle()`, which writes the settled status and then transfers.
+  A failing payout rolls the whole invocation back, so an escrow cannot end
+  up `Released`/`Refunded` with the funds still in the contract — pinned by
+  `tests/malicious_token.rs::failed_payout_leaves_the_escrow_funded`. The
+  host re-entry prohibition is now defence in depth, not the only control.
 - **Update (issue #12):** a test-only mock token that re-enters
   `release` from inside its `transfer` is rejected by the host with
   "Contract re-entry is not allowed" — an unrecoverable context error,
@@ -156,6 +184,23 @@ value. **Reviewers should challenge these ratings.**
   to every path a SEP-41 token could use to reach this contract,
   including through an intermediate third contract.
 
+### T11 — Malicious or failing release callback · **Medium (payee opt-in)**
+- A payee contract that authorizes `create_escrow` while
+  `notify_payee` is true opts in to the callback. The payer cannot opt a
+  payee in without its authorization. The payee can still make its callback
+  expensive, return an error, or attempt to re-enter `release`, `refund`, or
+  `create_escrow`.
+- Callback errors fail `release` atomically (`CallbackFailed`); token movement
+  and the `Released` state do not persist. The releaser can still refund, and
+  anyone can refund after `refund_after`. Refund never invokes the payee.
+- Soroban rejects re-entry while the escrow is already on the call stack.
+  Tests in `tests/release_callback.rs` attempt all three state-changing
+  entry points. A transaction budget exhaustion also fails release; the hook
+  is synchronous and must stay bounded. The escrow makes one callback with
+  fixed arguments and does not retry or loop.
+- The payee must authorize creation when `notify_payee` is true. Only use it
+  for a contract address implementing `on_escrow_released(u64, i128)`; a
+  consenting address without the method cannot complete release. See ADR 0005.
 ### T5 — Malicious or non-standard `token` · **Medium**
 `token` is any address the payer supplies. The contract trusts it to
 behave like SEP-41.
@@ -187,7 +232,6 @@ behave like SEP-41.
     risk for now (documented, deliberately not solved here) — the
     practical mitigation stays with the consumer: allowlist only
     tokens without clawback, transfer fees, or rebasing.
- feat/issue-39-phase-e5-per-token-liability-accounting-and-an
   - **Observability (issue #13):** `liabilities[token]` now tracks the
     total outstanding amount the contract owes in that token, and
     `solvency(token)` returns `(balance, liabilities)`. A monitor can
@@ -210,7 +254,6 @@ behave like SEP-41.
     introducing arbitrary tokens but cannot stop an approved issuer from
     clawing back funds later. **Not yet on testnet:** the current live
     deployment predates the constructor.
- main
   - Consumers: only use an allowlist of known tokens. The current
     consumer uses one configured token (`escrowTokenId`), which is good.
   - Document that payees must check the escrow's `token`, not just its
@@ -261,6 +304,11 @@ behave like SEP-41.
   locked under the stored `releaser`'s control." It does **not** mean
   "the funds are committed to me." A payee should check who the
   `releaser` is before relying on an escrow.
+- **With an M-of-N releaser set (issue #119, `docs/adr/0007`), what a payee
+  must check changes:** fewer than `threshold` colluding releasers cannot
+  settle early, but `threshold` colluding releasers can — read `releasers`
+  and `threshold` together with `refundAfter` before treating a `Funded`
+  escrow as a commitment.
 - **With a `refund_after` (issue #11, `docs/adr/0004`), the commitment
   also expires:** after the deadline anyone can return the funds to the
   payer, so a payee must treat such an escrow as *time-bounded*. Read the
@@ -286,6 +334,28 @@ behave like SEP-41.
   `condition_ref` strings. The caller pays the rent for what they write,
   and `NextId` is a `u64`, so this isn't a meaningful attack. Listed so
   a reviewer doesn't need to rediscover it.
+- **Mitigation (Phase E5):** `condition_ref` is bounded to 64 bytes and
+  validated at creation (contract error `ConditionRefTooLong = 7`);
+  the SDK also validates client-side via `MAX_CONDITION_REF_LENGTH`.
+  64 bytes was chosen to fit a UUID (36 chars), a short urn identifier,
+  or a human-readable label, while capping per-escrow storage and event
+  payload cost. Current observed refs in tests are far shorter
+  ("opaque-condition-ref", "sdk-integration-test-release"). Breaking
+  for integrators passing longer refs — checked `docforum-core`'s usage
+  pattern (opaque record id) and it stays well within the bound.
+
+### T11 — Malicious or failing release callback · **Medium (payee opt-in)**
+- The payer cannot opt a payee into callbacks without its authorization:
+  when `notify_payee` is true, both single-releaser and quorum creation call
+  `payee.require_auth()`. The payee contract can still consume transaction
+  budget, fail, or attempt to re-enter `release`, `refund`, or `create_escrow`.
+- Callback errors fail `release` atomically (`CallbackFailed`); token movement
+  and the `Released` state do not persist. The releaser can still refund, and
+  anyone can refund after `refund_after`. Refund never invokes the payee.
+- Soroban rejects re-entry while the escrow is on the call stack. Tests in
+  `tests/release_callback.rs` cover release/refund/create attempts; the same
+  settlement helper handles single and quorum releases. The callback is one
+  synchronous call with fixed arguments and no retries or loops. See ADR 0005.
 
 ## 4. SDK-specific notes (`sdk/src/index.ts`)
 
@@ -327,7 +397,9 @@ belong to the consumer, but they shape the real-world risk.
 Not all of these need contract changes. Items marked ⚙ do, and each
 needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
 
-- [ ] ⚙ Checks-effects-interactions ordering in `release`/`refund` (T4)
+- [x] ⚙ Checks-effects-interactions ordering in `release`/`refund` (T4)
+      — done 2026-10-20 (ADR 0006): all settlement paths write status first
+      via `settle()`, with a rollback test
 - [ ] ⚙ Reject contract-self as `payee`/`releaser` (T2)
 - [x] ⚙ Decide on a timeout refund path, or record why not in an ADR (T2)
       — **both**: `docs/adr/0004` records the decision and the
