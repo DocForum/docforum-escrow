@@ -32,6 +32,7 @@ fn create_escrow(
         &Address::generate(env),
         &None,
         &false,
+        &None,
     )
 }
 
@@ -61,6 +62,7 @@ fn configured_allowlist_accepts_listed_token_and_rejects_unlisted_token() {
             &Address::generate(&env),
             &None,
             &false,
+            &None,
         )
         .is_err());
 }
