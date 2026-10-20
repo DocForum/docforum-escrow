@@ -47,6 +47,8 @@ deployment, so choosing an empty list deliberately disables the protection.
 |---|---|---|
 | `__constructor(allowed_tokens)` | ✅ Implemented | Stores the immutable deploy-time token allowlist; an empty list allows all tokens. |
 | `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee) -> escrow_id` | ✅ Implemented locally (callback not deployed) | Pulls funds from `payer`, stores a bounded `condition_ref`, and stores the single `releaser` as a one-address set with threshold 1. Requires payer auth; when `notify_payee` is true, also requires payee auth and calls `on_escrow_released` on release. |
+| `create_escrow_with_acceptance(..., requires_acceptance) -> escrow_id` | ✅ Implemented locally | Optional payee acceptance gate. When enabled, the payee must call `accept(escrow_id, payee)` before a releaser can release; refunds remain available. |
+| `accept(escrow_id, payee)` | ✅ Implemented locally | Payee-authorized, one-time acceptance for a funded escrow configured with the acceptance gate. |
 | `create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee) -> escrow_id` | ✅ Implemented | Same, but settles by M-of-N: 1–10 distinct `releasers` (`MAX_RELEASERS`), `1 <= threshold <= releasers.len()`. Callback opt-in has the same payee-authorization requirement. See [ADR 0007](docs/adr/0007-in-contract-m-of-n-releaser-quorum.md). |
 | `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releasers`, `threshold` and `refund_after`, so payees can check the deal before relying on it. |
@@ -177,6 +179,47 @@ const { escrowId } = await client.createQuorumEscrow({
   threshold: 2,
 });
 await client.releaseWithApprovals({ escrowId, approvers: [a, c] });
+```
+
+### Fee estimation and fee-bump sponsorship
+
+Sponsors can price a call before paying for it, and wrap a user-signed
+transaction in a fee-bump with a hard cap. `estimate` simulates against
+the configured RPC — nothing is signed or sent — and returns the resource
+fee (with a 20% buffer over the simulated minimum, rounded up), the
+inclusion fee, and their total, all in stroops:
+
+```ts
+import { Address, nativeToScVal } from "@stellar/stellar-sdk";
+
+const estimate = await client.estimate({
+  source: payer,
+  method: "release",
+  args: [nativeToScVal(escrowId, { type: "u64" }), new Address(releaser).toScVal()],
+});
+if (estimate.total > budget) throw new Error("too expensive to sponsor");
+```
+
+`guardSponsorship` decides whether a transaction is safe to sponsor: it
+inspects **every** operation and every contract-address auth entry, and
+rejects anything that is not an invocation of the escrow contract (a
+foreign contract id, a smuggled payment, a double fee-bump). Account
+auth entries — the payer's and releaser's signatures — are expected and
+allowed:
+
+```ts
+const guard = client.guardSponsorship(signedXdr);
+if (!guard.ok) throw new Error(guard.reasons.join("; "));
+// or: client.assertSponsorable(signedXdr) — throws SponsorshipGuardError
+```
+
+`feeBump` wraps the signed envelope for the sponsor. Its fee is
+`baseFee × (inner operations + 1)` (the inner fee is refunded), and it
+throws `MaxFeeExceededError` before building anything if that would
+exceed `maxFee` — the cap is never silently overshot:
+
+```ts
+const { xdr, fee } = client.feeBump(signedXdr, sponsor, { maxFee: 10_000n });
 ```
 
 ## Documentation
