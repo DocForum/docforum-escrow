@@ -236,6 +236,12 @@
                 "map": [
                   {
                     "key": {
+                      "symbol": "accepted_at"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "amount"
                     },
                     "val": {
@@ -296,6 +302,14 @@
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5"
                         }
                       ]
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "requires_acceptance"
+                    },
+                    "val": {
+                      "bool": false
                     }
                   },
                   {
