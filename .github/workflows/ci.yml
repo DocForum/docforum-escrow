@@ -199,8 +199,8 @@ jobs:
           cache-dependency-path: |
             sdk/package-lock.json
             packages/escrow-react/package-lock.json
-      # The hooks package links the SDK via `file:../../sdk`; build it first so
-      # type resolution sees dist/*.d.ts.
+      # The hooks package resolves the SDK's types from `sdk/dist` via a
+      # tsconfig path (the SDK is an optional peer), so build it first.
       - run: npm ci
         working-directory: sdk
       - run: npm run build

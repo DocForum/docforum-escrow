@@ -8,7 +8,13 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "@docforum/escrow-sdk": ["../../sdk/dist/index.d.ts"],
+      "@docforum/escrow-sdk/signers/wallets-kit": ["../../sdk/dist/signers/wallets-kit.d.ts"],
+      "@docforum/escrow-react": ["../../packages/escrow-react/dist/index.d.ts"]
+    }
   },
   "include": ["src"]
 }

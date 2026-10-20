@@ -8,6 +8,16 @@ contract logic.
 npm install @docforum/escrow-react @docforum/escrow-sdk @tanstack/react-query react
 ```
 
+`@docforum/escrow-sdk` is an **optional peer**: the hooks import only its types
+(the client is injected, so there is no runtime SDK import), but you will
+normally install it to create that client. When working inside this repo,
+build the SDK once before `npm run typecheck`/`npm run build` so TypeScript can
+resolve its declarations:
+
+```bash
+cd ../../sdk && npm ci && npm run build
+```
+
 ## Setup
 
 The hooks use [TanStack Query](https://tanstack.com/query) (React Query v5), so
