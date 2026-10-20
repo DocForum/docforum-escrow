@@ -106,6 +106,13 @@ export interface Escrow {
   refundAfter?: bigint;
   /** Whether to call the contract payee's on_escrow_released hook. Defaults to false. */
   notifyPayee: boolean;
+  /**
+   * Where every refund (releaser or timeout) sends the funds. Fixed at
+   * creation; equals `payer` unless a sponsored escrow set a different
+   * destination (docs/adr/0009). Payees can read it to see who a
+   * reversal would pay.
+   */
+  refundTo: string;
   status: EscrowStatus;
 }
 
@@ -164,6 +171,15 @@ export interface CreateEscrowParams {
   refundAfter?: bigint;
   /** Opt a contract payee into on_escrow_released(escrowId, amount). Defaults to false. */
   notifyPayee?: boolean;
+  /**
+   * Optional refund destination distinct from `payer` (the funder), for
+   * sponsored escrows (docs/adr/0009). All refund paths — releaser and
+   * timeout — pay this address, never the funder. Set once here under the
+   * funder's signature and immutable afterwards. Omit to refund the
+   * `payer`, exactly as in 0.3.x. Must not be the contract's own address
+   * (rejected with `InvalidRefundTo`, error 21).
+   */
+  refundTo?: string;
 }
 
 export interface ReleaseOrRefundParams {
@@ -197,6 +213,8 @@ export interface CreateQuorumEscrowParams {
   refundAfter?: bigint;
   /** Opt a contract payee into `on_escrow_released`; requires payee authorization. */
   notifyPayee?: boolean;
+  /** Optional refund destination distinct from `payer` (docs/adr/0009); defaults to `payer`. */
+  refundTo?: string;
 }
 
 /** An M-of-N settlement: each keypair signs the contract auth entry. */
@@ -376,6 +394,7 @@ export class EscrowClient {
       releaser: params.releaser,
       refund_after: params.refundAfter,
       notify_payee: params.notifyPayee ?? false,
+      refund_to: params.refundTo,
     });
     const sent = await tx.signAndSend();
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
@@ -433,6 +452,7 @@ export class EscrowClient {
       threshold: params.threshold,
       refund_after: params.refundAfter,
       notify_payee: params.notifyPayee ?? false,
+      refund_to: params.refundTo,
     });
     const sent = await tx.signAndSend();
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
@@ -461,6 +481,7 @@ export class EscrowClient {
       // with `CreateEscrowParams.refundAfter` being absent).
       refundAfter: data.refund_after ?? undefined,
       notifyPayee: data.notify_payee,
+      refundTo: data.refund_to,
       status: data.status.tag,
     };
   }
@@ -475,7 +496,8 @@ export class EscrowClient {
   }
 
   /**
-   * Returns the escrow's funds to its payer. Normally `caller` must be
+   * Returns the escrow's funds to its `refundTo` (the payer unless a
+   * sponsored escrow set another destination, docs/adr/0009). Normally `caller` must be
    * the escrow's `releaser`; once `refundAfter` has passed, anyone may
    * call it — still only back to the payer (docs/adr/0004). Returns the
    * transaction's hash.
