@@ -38,7 +38,7 @@ and §6 below for the new tooling and the lock-out rules it enforces.*
 | # | Invariant | Enforced by |
 |---|---|---|
 | I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination. |
-| I2 | Only the escrow's releasers can move funds out — `threshold` distinct ones when the escrow was created M-of-N (ADR 0007) — or, once `refund_after` has passed, anyone at all, and then still only back to `payer`. | `require_auth()` per caller/approver + membership in the stored `releasers` set + the threshold check (`check_single_caller`, `check_approvals`), relaxed solely by the deadline check in `refund`. Duplicate approvers are rejected. |
+| I2 | Only the escrow's releasers can move funds out — `threshold` distinct ones when the escrow was created M-of-N (ADR 0007); release additionally requires payee acceptance when configured — or, once `refund_after` has passed, anyone at all, and then still only back to `payer`. | `require_auth()` per caller/approver + membership in the stored `releasers` set + the threshold check (`check_single_caller`, `check_approvals`), relaxed solely by the deadline check in `refund`. Duplicate approvers are rejected. |
 | I3 | Each escrow pays out at most once. | `status == Funded` check and terminal status write before transfer/callback; failures roll back atomically. |
 | I4 | An escrow only exists, or grows, if the declared funds were actually transferred in. | `payer.require_auth()` + shared exact-balance-delta verification on create/top-up before storage is updated. |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR-0001). |
@@ -59,7 +59,7 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 | Actor | Can do | Trusted for |
 |---|---|---|
 | `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser` | Nothing after creation. Has no on-chain power to cancel. |
-| `payee` | Receive funds | Nothing. Has **no on-chain power at all**, including no way to object to a refund. |
+| `payee` | Receive funds; optionally accept an escrow before release | Without the opt-in acceptance gate, has no on-chain power to object to release or refund. |
 | `releaser` (one address, or an M-of-N `releasers` set, ADR 0007) | `release` or `refund` its escrows, once — a quorum escrow needs `threshold` distinct releasers on one call | Choosing the correct outcome. This is the main trust assumption; a quorum splits it across the set. |
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |
 | Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds back to that escrow's `payer` | Nothing. |
