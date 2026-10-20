@@ -2,7 +2,7 @@
 // The lock opens at the exact configured ledger timestamp. Refund
 // authorization and behavior remain independent from the release lock.
 
-use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus, Error};
+use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
     token::{StellarAssetClient, TokenClient},
@@ -36,9 +36,9 @@ fn setup<'a>(env: &Env, release_at: Option<u64>, refund_at: Option<u64>) -> Fixt
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (soroban_sdk::Vec::<Address>::new(env),));
     let client = EscrowContractClient::new(env, &contract_id);
-    let escrow_id = client.create_escrow(
+    let escrow_id = client.create_escrow_release_time(
         &payer,
         &payee,
         &token_id,
@@ -46,10 +46,19 @@ fn setup<'a>(env: &Env, release_at: Option<u64>, refund_at: Option<u64>) -> Fixt
         &String::from_str(env, "opaque-condition-ref"),
         &releaser,
         &refund_at,
+        &false,
         &release_at,
     );
 
-    Fixture { client, token, contract_id, payer, payee, releaser, escrow_id }
+    Fixture {
+        client,
+        token,
+        contract_id,
+        payer,
+        payee,
+        releaser,
+        escrow_id,
+    }
 }
 
 #[test]
@@ -97,18 +106,30 @@ fn creation_rejects_release_time_in_the_past_or_after_refund_deadline() {
     let releaser = Address::generate(&env);
     let asset = StellarAssetClient::new(&env, &token_id);
     asset.mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (soroban_sdk::Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let past = client.try_create_escrow(
-        &payer, &payee, &token_id, &300,
-        &String::from_str(&env, "past-release"), &releaser,
-        &Some(REFUND_AT), &Some(CREATED_AT - 1),
+    let past = client.try_create_escrow_release_time(
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(&env, "past-release"),
+        &releaser,
+        &Some(REFUND_AT),
+        &false,
+        &Some(CREATED_AT - 1),
     );
-    let after_refund = client.try_create_escrow(
-        &payer, &payee, &token_id, &300,
-        &String::from_str(&env, "late-release"), &releaser,
-        &Some(REFUND_AT), &Some(REFUND_AT + 1),
+    let after_refund = client.try_create_escrow_release_time(
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(&env, "late-release"),
+        &releaser,
+        &Some(REFUND_AT),
+        &false,
+        &Some(REFUND_AT + 1),
     );
 
     assert_eq!(past, Err(Ok(Error::InvalidReleaseNotBefore)));
@@ -121,5 +142,8 @@ fn creation_rejects_release_time_in_the_past_or_after_refund_deadline() {
 fn release_time_equal_to_refund_deadline_is_valid() {
     let env = Env::default();
     let f = setup(&env, Some(REFUND_AT), Some(REFUND_AT));
-    assert_eq!(f.client.get_escrow(&f.escrow_id).release_not_before, Some(REFUND_AT));
+    assert_eq!(
+        f.client.get_escrow(&f.escrow_id).release_not_before,
+        Some(REFUND_AT)
+    );
 }

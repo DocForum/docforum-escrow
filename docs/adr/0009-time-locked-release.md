@@ -1,4 +1,4 @@
-# ADR 0005: Optional `release_not_before` guard
+# ADR 0009: Optional `release_not_before` guard
 
 Status: Accepted (2026-10-16)
 
@@ -12,8 +12,9 @@ the existing refund path.
 
 ## Decision
 
-1. `create_escrow` accepts a final optional `release_not_before` unix
-   timestamp. `None` preserves the existing immediate-release behavior.
+1. `create_escrow_release_time` accepts an optional unix timestamp.
+   The existing `create_escrow` entry point remains unchanged and preserves
+   immediate-release behavior.
 2. A specified timestamp cannot be earlier than the current ledger timestamp.
    When `refund_after` is also set, `release_not_before` must be no later
    than it. Equality is permitted: at that timestamp both release and
@@ -32,10 +33,7 @@ the existing refund path.
 - `EscrowData` and `create_escrow` change, so deployments must use newly
   generated WASM; existing immutable deployments are unaffected.
 - The generated TypeScript contract client must be regenerated from that
-  WASM before the SDK can pass the new argument or decode the new field.
-  It is intentionally left untouched in this change because the repository
-  instructions prohibit hand-editing generated bindings and this work does
-  not build WASM.
+  WASM before the SDK can decode the new field.
 - An escrow-wide delay may be too coarse for future milestone payments. A
   later tranche design must define its own per-tranche timing semantics.
 - This is a timing gate, not a new identity or reason check. The contract
