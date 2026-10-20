@@ -14,7 +14,6 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-feat/issue-29-phase-e5-batch-release-and-refund-for-fast
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Vec};
 
 use soroban_sdk::{
