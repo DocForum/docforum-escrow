@@ -37,6 +37,7 @@ fn setup(env: &Env) -> Fixture<'_> {
         &releaser,
         &None,
         &true,
+        &None,
     );
     Fixture {
         client,
@@ -99,6 +100,7 @@ fn legacy_creation_keeps_acceptance_opt_out() {
         &releaser,
         &None,
         &false,
+        &None,
     );
     let data = client.get_escrow(&id);
     assert!(!data.requires_acceptance);
