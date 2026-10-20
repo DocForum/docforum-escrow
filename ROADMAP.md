@@ -212,6 +212,7 @@
   regeneration. Instructions in `sdk/src/generated/README.md`; the
   previously stale committed bindings (missing `top_up`, errors 6–8) were
   regenerated here.
+- [x] **PR conflict notifier** — `.github/workflows/pr-conflict-notifier.yml` + `.github/scripts/pr-conflict-notifier.js`. On every push to `main` (and every 3h) it labels open PRs that conflict with `main` as `needs-rebase` and @mentions the author once per push with rebase steps; the label clears itself when the conflict is resolved. Runs from `main` only and never checks out PR code.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -449,3 +450,4 @@
   #12 were opened and closed in between). #16 merged with an empty diff
   because its branch's merge from `main` kept `main`'s ROADMAP.md
   wholesale.
+- 2026-10-20 — Added the PR conflict notifier workflow (see the CI item above): maintainers no longer need to manually ask authors to rebase after each merge.
