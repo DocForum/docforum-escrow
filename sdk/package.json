@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:integration": "vitest run",
     "test:fixtures": "vitest run tests/events.test.ts",
+    "test:offline": "vitest run tests/events.test.ts tests/quorum-validation.test.ts",
     "typecheck": "tsc --noEmit",
     "test:runtime": "node tests/runtime-smoke.mjs",
     "test:browser": "node tests/browser-smoke.mjs"
