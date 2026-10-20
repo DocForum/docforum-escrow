@@ -3,7 +3,7 @@ use soroban_sdk::{
     contracttype,
     testutils::Address as _,
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String,
+    Address, Env, String, Vec,
 };
 
 // These test-only types intentionally reproduce the contract's storage key
@@ -60,7 +60,7 @@ fn setup(env: &Env) -> Fixture<'_> {
     let token_id = env
         .register_stellar_asset_contract_v2(Address::generate(env))
         .address();
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
     let payer = Address::generate(env);
     let payee = Address::generate(env);
     let releaser = Address::generate(env);

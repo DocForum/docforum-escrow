@@ -15,8 +15,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env, String, TryFromVal,
-    TryIntoVal, Val,
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, Map,
+    String, TryFromVal, TryIntoVal, Val, Vec,
 };
 
 #[contracttype]
@@ -88,6 +88,7 @@ enum StoredEscrowData {
 enum DataKey {
     Escrow(u64),
     NextId,
+    AllowedTokens,
 }
 
 #[contracterror]
@@ -106,6 +107,9 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    /// `token` is not in the immutable deploy-time allowlist.
+    DisallowedToken = 7,
+    Overflow = 12,
     /// A persistent escrow value does not match a supported historical or
     /// versioned layout; fail closed instead of guessing at its contents.
     UnsupportedStorageVersion = 20,
@@ -116,6 +120,14 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
+    /// Sets the immutable token allowlist at deployment. An empty list
+    /// preserves the legacy behavior and allows any token address.
+    pub fn __constructor(env: Env, allowed_tokens: Vec<Address>) {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedTokens, &allowed_tokens);
+    }
+
     /// Locks `amount` of `token` pulled from `payer`, held for `payee`,
     /// tagged with an opaque `condition_ref`. `releaser` is the only
     /// address that will later be permitted to call `release`/`refund`
@@ -134,6 +146,23 @@ impl EscrowContract {
         releaser: Address,
         refund_after: Option<u64>,
     ) -> Result<u64, Error> {
+        let allowed_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedTokens)
+            .unwrap_or(Vec::new(&env));
+        if !allowed_tokens.is_empty() {
+            let mut allowed = false;
+            for candidate in allowed_tokens.iter() {
+                if candidate == token {
+                    allowed = true;
+                    break;
+                }
+            }
+            if !allowed {
+                return Err(Error::DisallowedToken);
+            }
+        }
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
@@ -144,14 +173,7 @@ impl EscrowContract {
         }
         payer.require_auth();
 
-        let token_client = token::Client::new(&env, &token);
-        let contract_address = env.current_contract_address();
-        let balance_before = token_client.balance(&contract_address);
-        token_client.transfer(&payer, &contract_address, &amount);
-        let balance_after = token_client.balance(&contract_address);
-        if balance_after.checked_sub(balance_before) != Some(amount) {
-            return Err(Error::BalanceMismatch);
-        }
+        Self::transfer_in_exact(&env, &token, &payer, amount)?;
 
         let id = Self::next_id(&env);
         let data = EscrowData {
@@ -181,6 +203,31 @@ impl EscrowContract {
     /// threat model T8). Errors on an unknown id.
     pub fn get_escrow(env: Env, escrow_id: u64) -> Result<EscrowData, Error> {
         Self::load_escrow(&env, escrow_id)
+    }
+
+    /// Adds funds to a funded escrow without changing its parties or id.
+    /// Only its original payer may authorize the transfer.
+    pub fn top_up(env: Env, escrow_id: u64, payer: Address, amount: i128) -> Result<(), Error> {
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        payer.require_auth();
+        let mut data = Self::load_escrow(&env, escrow_id)?;
+        if data.payer != payer {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        let updated_amount = data.amount.checked_add(amount).ok_or(Error::Overflow)?;
+        Self::transfer_in_exact(&env, &data.token, &payer, amount)?;
+        data.amount = updated_amount;
+        Self::save_escrow(&env, escrow_id, &data);
+        env.events().publish(
+            (symbol_short!("top_up"), escrow_id),
+            (amount, updated_amount),
+        );
+        Ok(())
     }
 
     /// Moves the escrowed `amount` to `payee`. Only the escrow's
@@ -262,11 +309,20 @@ impl EscrowContract {
 
         // Before version tags existed, Soroban stored named contract structs
         // directly as maps. Decode only the two exact historical schemas.
-        if let Ok(v1) = EscrowDataV1::try_from_val(env, &raw) {
-            return Ok(Self::from_v1(v1));
-        }
-        if let Ok(v2) = EscrowDataV2::try_from_val(env, &raw) {
-            return Ok(Self::from_v2(v2));
+        if let Ok(map) = Map::<Val, Val>::try_from_val(env, &raw) {
+            match map.len() {
+                8 => {
+                    let v2 = EscrowDataV2::try_from_val(env, &raw)
+                        .map_err(|_| Error::UnsupportedStorageVersion)?;
+                    return Ok(Self::from_v2(v2));
+                }
+                7 => {
+                    let v1 = EscrowDataV1::try_from_val(env, &raw)
+                        .map_err(|_| Error::UnsupportedStorageVersion)?;
+                    return Ok(Self::from_v1(v1));
+                }
+                _ => {}
+            }
         }
 
         // New records are tagged enums (ScVal::Vec). Unknown variants and
@@ -320,5 +376,22 @@ impl EscrowContract {
             releaser: v2.releaser,
             refund_after: v2.refund_after,
         }
+    }
+
+    fn transfer_in_exact(
+        env: &Env,
+        token: &Address,
+        payer: &Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        let token_client = token::Client::new(env, token);
+        let contract_address = env.current_contract_address();
+        let balance_before = token_client.balance(&contract_address);
+        token_client.transfer(payer, &contract_address, &amount);
+        let balance_after = token_client.balance(&contract_address);
+        if balance_after.checked_sub(balance_before) != Some(amount) {
+            return Err(Error::BalanceMismatch);
+        }
+        Ok(())
     }
 }
