@@ -18,12 +18,20 @@ import {
   scValToNative,
   xdr,
 } from "@stellar/stellar-sdk";
-import { Api, Server as RpcServer } from "@stellar/stellar-sdk/rpc";
+import { KeypairSigner } from "@stellar/stellar-sdk/contract";
+import { Server as RpcServer, type Api } from "@stellar/stellar-sdk/rpc";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
 
 export { Keypair };
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";
+
+export interface ExtendRefundAfterParams {
+  escrowId: bigint;
+  newDeadline: bigint;
+  payer: Keypair;
+  releaser: Keypair;
+}
 
 export type EscrowEventType = "created" | "released" | "refunded";
 interface EscrowEventBase {
@@ -708,6 +716,22 @@ export class EscrowClient {
       else events.push({ ...base, type: "unknown", ...(unknownName ? { eventName: unknownName } : {}), ...(escrowId !== undefined ? { escrowId } : {}), topics: nativeTopics });
     }
     return { events, nextCursor: response.cursor };
+  }
+
+
+  /** Extends a single-releaser escrow deadline with payer and releaser consent. */
+  async extendRefundAfter(params: ExtendRefundAfterParams): Promise<{ txHash: string }> {
+    const client = this.contractClient(params.payer);
+    const tx = await client.extend_refund_after({ escrow_id: params.escrowId, new_deadline: params.newDeadline });
+    const signers = new Map([[params.payer.publicKey(), params.payer], [params.releaser.publicKey(), params.releaser]]);
+    for (const address of tx.needsNonInvokerSigningBy()) {
+      const signer = signers.get(address);
+      if (!signer) throw new Error(`No provided signer can authorize ${address}`);
+      await tx.signAuthEntries({ address, signAuthEntry: new KeypairSigner(signer, this.networkPassphrase) });
+    }
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
   }
 
   /**
