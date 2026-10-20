@@ -1,4 +1,4 @@
-# ADR 0009: Payee-initiated voluntary refund
+# ADR 0010: Payee-initiated voluntary refund
 
 - **Status:** Accepted
 - **Date:** 2026-10-17
