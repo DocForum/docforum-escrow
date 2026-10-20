@@ -3,14 +3,11 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phases E1–E3 are implemented. Phase E4 balance-delta protection and timeout refunds are deployed on testnet; the independent security review remains open and blocks mainnet. Phase E5 contract features, including sponsored refunds (`refund_to`), are implemented, tested, and deployed on testnet as of 2026-10-20. The current SDK is strict-semver 0.6.0; publishing its `sdk-v0.6.0` GitHub release tarball and notifying `docforum-core` issue #32 remain pending authenticated release access. Phase E7 verification and release automation continue.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (contract features) now includes the OZ-library evaluation (ADR 0006, no library adopted) and the optional in-contract M-of-N releaser quorum (ADR 0007, SDK 0.5.0) — implemented, tested and pending a testnet redeploy. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm. Fee estimation and fee-bump sponsorship helpers (issue #70) are implemented in the SDK, `0.5.0`. Phase E7 (verification/release engineering) started: committed Soroban test snapshots with a CI drift check (issue #120) and a CI check that generated SDK bindings match the contract WASM (issue #121).**
 
 ## Payee acceptance (issue #25)
 
 An opt-in creation method can require the payee to authorize `accept` before release. Existing escrows keep the default behavior, and refunds remain available without acceptance. Acceptance is recorded in the escrow data.
-
-- [x] Implemented with contract tests and deployed on testnet 2026-10-20;
-  verified on the latest deployment recorded in `docs/testnet-deployments.md`.
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -119,8 +116,12 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   re-entry is not allowed"), aborting the whole invocation — fail-closed.
   Post-creation clawback remains possible by design and is documented in
   T5 as accepted residual risk. Deployed and verified with a real
-  fee-on-transfer rejection on 2026-10-20; see the latest entry in
-  `docs/testnet-deployments.md`. Closes issue #12.
+  fee-on-transfer rejection on testnet; see `docs/testnet-deployments.md`.
+  Closes issue #12.
+- [x] Redeploy current upstream `main` to testnet with live create, release,
+  refund, timeout-refund, and `BalanceMismatch` verification (issue #109).
+  The current contract ID and transaction links are in
+  `docs/testnet-deployments.md`; prior deployment records remain as history.
 - [ ] Rest of the `docs/threat-model.md` §6 pre-mainnet checklist, scoped
   into issues: [#8](https://github.com/DocForum/docforum-escrow/issues/8) write status before transfer + reject
   contract-self addresses (Trivial), [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium),
@@ -143,7 +144,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   new contract/SDK surface. Contract tests added in
   `contracts/escrow/tests/create_escrow.rs` (hard rule 2).
 - [x] Redeployed to testnet with `ConditionRefTooLong` on 2026-10-20;
-  live lifecycle and `BalanceMismatch` verification are recorded in
+  lifecycle and `BalanceMismatch` verification are recorded in
   `docs/testnet-deployments.md`.
 ## Phase E5 — Contract features
 - [x] **OpenZeppelin Stellar library evaluation** (issue #118) —
@@ -158,8 +159,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `settle()` — status written before the outbound transfer, with a
   rollback test (`tests/malicious_token.rs::failed_payout_leaves_the_escrow_funded`).
   Library pinning/update policy and the wasm/instruction-cost comparison
-  recorded in the ADR. The resulting contract implementation was deployed
-  on testnet 2026-10-20; see `docs/testnet-deployments.md`.
+  recorded in the ADR. **Not yet on testnet.**
 - [x] **In-contract M-of-N releaser quorum** (issue #119) —
   `docs/adr/0007`: optional `create_escrow_with_releasers(releasers,
   threshold)` (1–10 addresses, threshold 1..=len, no duplicates) plus
@@ -172,8 +172,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   return `ThresholdNotMet`. Timeout refunds stay open to anyone. New
   append-only errors 13–17. 19 tests in `tests/quorum.rs`; single-releaser
   suites unchanged and green. Breaking read shape → SDK 0.5.0, bindings
-  regenerated. Deployed and verified on testnet 2026-10-20; see
-  `docs/testnet-deployments.md`.
+  regenerated. **Not yet on testnet** — the live deployment predates it.
 - [x] Sponsored funding: a funder distinct from the refund recipient —
   issue #28. **ADR first:** `docs/adr/0009` answers the two questions the
   issue poses — a separate refund destination **is** compatible with
@@ -195,20 +194,20 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   parameter and `EscrowData` a field; `@docforum/escrow-sdk` 0.5.0 →
   0.6.0 (bindings regenerated, never hand-edited; adds `refundTo` on
   `createEscrow` and `getEscrow`). The current contract was deployed on
-  testnet 2026-10-20 and the SDK integration tests now target it. Publishing
-  the `sdk-v0.6.0` release tarball per ADR 0003 remains pending.
+  testnet 2026-10-20 and the SDK tests target it. Publishing the
+  `sdk-v0.6.0` release tarball per ADR 0003 remains pending.
 - [x] Immutable deploy-time token allowlist (issue #36):
   `__constructor(allowed_tokens)` stores approved addresses;
   `create_escrow` rejects unlisted tokens with append-only error code 7.
   An empty list preserves allow-all behavior. Tests cover listed,
   unlisted, and empty-list cases. Threat model, deployment guidance, and
   contract API docs updated. Deployed and verified with the immutable
-  testnet token allowlist on 2026-10-20. Closes issue #36.
+  testnet allowlist on 2026-10-20. Closes issue #36.
 - [x] Optional release callback (issue #53): both single-releaser and
   quorum creation require payee authorization when `notify_payee` is true;
   release calls `on_escrow_released` after transfer and rolls back atomically
   on failure. Re-entry tests cover release/refund/create attempts. ADR 0005
-  and threat-model T11 document the decision. Deployed to testnet
+  and threat-model T11 document the decision. Deployed on testnet
   2026-10-20.
 ## Phase E6 — SDK & integrator tooling
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
@@ -223,9 +222,9 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `version`/`release` scripts and `publishConfig` with provenance.
 - [x] Superseding ADR written: `docs/adr/0005` supersedes ADR 0003's
   interim tarball-only decision now that npm publishing is going live.
-- [ ] Publish current `sdk-v0.6.0` tarball per ADR 0003 and notify
-  `docforum-core` issue #32. Authenticated release access is required;
-  `sdk-v0.3.0` is stale and must not be reused.
+- [ ] One-time human steps (npm org creation, trusted-publisher setup for
+  the release workflow) — documented in `CONTRIBUTING.md`; not yet done,
+  so `sdk-v0.3.0` is not yet published to npm.
 - [x] Fee estimation and fee-bump sponsorship helpers (issue #70).
   `estimate({ source, method, args })` simulates a call and returns
   `resourceFee` (with a 20% buffer over the simulated minimum, rounded
@@ -283,14 +282,12 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   repo's.
 
 ## Changelog
-- 2026-10-20 — Issue #109: synced the branch with upstream main at
-  `80ce157`, including sponsored refund destinations. Deployed that source
-  to testnet and verified create, release, refund, timeout refund, and a
-  real `BalanceMismatch` rejection with the fee-on-transfer test token.
-  Updated SDK test contract IDs, README and architecture status; deployment
-  history and transaction links are in `docs/testnet-deployments.md`.
-  Publishing the current `sdk-v0.6.0` tarball and notifying
-  `docforum-core` #32 remain pending authenticated release access.
+
+> New entries go in `changelog.d/`, one file per PR — see
+> `changelog.d/README.md`. Maintainers fold them in here with
+> `node scripts/fold-changelog.mjs`. Please don't append to this section
+> directly.
+
 - 2026-10-19 — Issue #70 (Phase E6): added `estimate`, `feeBump`,
   `guardSponsorship` and `assertSponsorable` to the SDK. Estimation runs
   through the client's RPC and reports the resource fee with a buffered
@@ -332,8 +329,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   escrows store 1-of-1 and keep using `release`/`refund`). 19 new tests;
   57 contract tests green. SDK 0.4.0 → **0.5.0** (breaking read shape), with
   `createQuorumEscrow`/`releaseWithApprovals`/`refundWithApprovals`,
-  offline validation tests, and regenerated bindings. Deployed on testnet
-  2026-10-20 (see the #109 deployment record).
+  offline validation tests, and regenerated bindings. **Not yet on testnet.**
   **#120:** committed `test_snapshots/` for every test (57 files) and a CI
   drift check; documented how to update them intentionally and the
   last-invocation-only event-capture caveat.
@@ -358,8 +354,8 @@ An opt-in creation method can require the payee to authorize `accept` before rel
    SDK binding from the merged contract spec. `cargo test` and the WASM
    release build pass locally.
 - 2026-10-16 — Implemented the immutable deploy-time token allowlist for
-  issue #36. Contract tests/docs updated; deployed and verified on testnet
-  2026-10-20 (see the #109 deployment record).
+  issue #36. Contract tests/docs updated; awaiting a new testnet deployment
+  before claiming the protection is live.
 - 2026-10-17 — Issue #63 (Phase E6): added SDK `getEvents` pagination and
   typed lifecycle-event decoding, preserving unknown topic variants for
   forward compatibility. Added cursor-resumable serial polling with
@@ -562,6 +558,5 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   repo-wide, wasm release build succeeds. SDK bindings regenerated;
   `@docforum/escrow-sdk` 0.5.0 → 0.6.0 (breaking). I1 wording, actors, T1,
   T2, T8, new T11 and §6 in the threat model, `README.md` and
-  `ARCHITECTURE_ESSENTIALS.md` updated. The testnet redeployment and
-  verification are recorded under issue #109; the `sdk-v0.6.0` release
-  tarball remains pending.
+  `ARCHITECTURE_ESSENTIALS.md` updated. **Not done:** testnet redeploy and
+  the `sdk-v0.6.0` release tarball.

@@ -31,9 +31,10 @@ pausable/upgradeable/access modules were evaluated and rejected in
 `docs/adr/0006` precisely because they would add one.
 The allowlist is fixed when the contract is deployed. `create_escrow`
 rejects any token outside a non-empty list with `DisallowedToken` (error
-code 8); an empty list preserves the prior open-token behavior. The current
-testnet deployment includes the native XLM SAC and the BalanceMismatch test
-token in its allowlist; see `docs/testnet-deployments.md`.
+code 8); an empty list preserves the prior open-token behavior. The
+current testnet deployment includes the native XLM SAC and the
+BalanceMismatch test token in its immutable allowlist; see
+`docs/testnet-deployments.md`.
 
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to)`.
 `notify_payee` opts a contract payee into `on_escrow_released(escrow_id,
@@ -57,18 +58,32 @@ historical record.
 
 `refund_after` is an optional unix timestamp in seconds set once at
 creation (`docs/adr/0004`): after it passes **anyone** may call
-`refund`, but the destination is unchanged — always the stored `refund_to`
-(`payer` unless a different destination was fixed at creation) —
+`refund`, but the destination is unchanged — always the stored
+`refund_to`, which is the `payer` unless set otherwise at creation —
 and `release` is never gated by it, so the releaser can still release
 after the deadline (whoever lands first wins). No `refund_after` means
 behaviour is exactly what it was before: releaser-only refunds, forever.
+The timeout is the answer to "what if the releaser's key is lost?" (threat
+model T2): instead of locking funds permanently, a deadline lets anyone
+return them.
 
 `refund_to` (Phase E5, `docs/adr/0009`) is an optional address, set at
 creation under the funder's (`payer`'s) auth, that every refund path pays
 instead of `payer`. It is stored, immutable, never supplied at payout, and
 may not be the contract itself (`InvalidRefundTo`); omitted, it equals
 `payer` and behaviour is exactly as before. Invariant I1 is therefore
-"release → stored `payee`, refund → stored `refund_to`".
+"release → stored `payee`, refund → stored `refund_to`". Make sure the
+destination can hold the token: if the transfer to it fails, so does the
+refund.
+
+`release_with_approvals`/`refund_with_approvals` check that at least
+`threshold` distinct releasers each authorized this exact invocation.
+Approvals are never stored, so nothing can be replayed, and both work
+only while the escrow is `Funded`. The payee-acceptance gate
+(`docs/adr/0008`) only blocks release: refunds never need acceptance.
+
+The contract decides **who** may call `release`/`refund`, never **why**:
+`condition_ref` is opaque to it (`docs/adr/0001`).
 
 ## TypeScript SDK surface (`sdk/`)
 ```ts
