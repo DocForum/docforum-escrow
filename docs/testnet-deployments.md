@@ -1,5 +1,29 @@
 # Testnet deployments
 
+## Pending redeployment: M-of-N releaser quorum + `EscrowData` shape (issues #118, #119)
+
+The current live deployment predates the in-contract M-of-N releaser set
+(`create_escrow_with_releasers` / `release_with_approvals` /
+`refund_with_approvals`, `docs/adr/0007`) and the
+checks-effects-interactions ordering (`docs/adr/0006`). Its
+`get_escrow` also still returns a single `releaser` rather than
+`releasers` + `threshold`, which is a breaking read change (SDK 0.5.0).
+Deploy and record a new contract ID/WASM hash/source commit here only
+after a real testnet deployment and verification; until then treat the
+ID below as the Phase E4 contract, not as one that supports quorum
+escrows.
+
+## Pending redeployment: deploy-time token allowlist (issue #36)
+
+The current live deployment below predates the immutable
+`__constructor(allowed_tokens)` allowlist and does not enforce it. After
+the issue #36 contract change is released, deploy a new contract on
+testnet with the approved token addresses supplied to the constructor.
+Record its contract ID, WASM hash, deployment transaction, source commit,
+and verification calls here only after that deployment has actually
+completed. Until then, the allowlist is available in source and local
+contract tests only; do not treat the existing testnet ID as protected.
+
 ## `docforum_escrow` — 2026-10-08 (Phase E4: `refund_after` timeout refund + `get_escrow`)
 
 | | |

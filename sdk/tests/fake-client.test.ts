@@ -45,7 +45,7 @@ describe("FakeEscrowClient contract behavior", () => {
       token: "CTOKEN",
       amount: 500n,
       conditionRef: "test-record",
-      releaser: "GRELEASER",
+      releaser: releaser.publicKey(),
       refundAfter: clock.now() + 120n,
       status: "Funded",
     });
@@ -55,7 +55,7 @@ describe("FakeEscrowClient contract behavior", () => {
     const fake = client();
     const base = {
       payer, payee: "GPAYEE", token: "CTOKEN",
-      conditionRef: "test-record", releaser: "GRELEASER",
+      conditionRef: "test-record", releaser: releaser.publicKey(),
     };
 
     await expect(fake.createEscrow({ ...base, amount: 0n })).rejects.toMatchObject({ code: "InvalidAmount" });
