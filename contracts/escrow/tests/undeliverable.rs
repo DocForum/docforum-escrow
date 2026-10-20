@@ -21,7 +21,7 @@ fn unauthorized_sac_payee_leaves_escrow_funded_and_can_be_retried() {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (soroban_sdk::Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
     let escrow_id = client.create_escrow(
         &payer,
@@ -31,6 +31,7 @@ fn unauthorized_sac_payee_leaves_escrow_funded_and_can_be_retried() {
         &String::from_str(&env, "undeliverable-sac-payee"),
         &releaser,
         &None,
+        &false,
     );
 
     // This uses the SAC's actual authorization flag, rather than a mock
@@ -129,7 +130,7 @@ fn rejecting_contract_payee_returns_dedicated_error_without_settling() {
     token.set_balance(&payer, &1_000);
     let payee_id = env.register(RejectingPayee, ());
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (soroban_sdk::Vec::<Address>::new(&env),));
     token.set_escrow(&contract_id);
     let client = EscrowContractClient::new(&env, &contract_id);
     let escrow_id = client.create_escrow(
@@ -140,6 +141,7 @@ fn rejecting_contract_payee_returns_dedicated_error_without_settling() {
         &String::from_str(&env, "rejecting-contract-payee"),
         &releaser,
         &None,
+        &false,
     );
 
     let rejected = client.try_release(&escrow_id, &releaser);

@@ -14,9 +14,9 @@
 // contract's balance, so `create_escrow` verifies the balance rises by
 // exactly `amount` and rejects the escrow otherwise.
 
-use docforum_escrow::{Error, EscrowContract, EscrowContractClient};
+use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
-    contract, contractimpl, contracttype, testutils::Address as _, Address, Env, String,
+    contract, contractimpl, contracttype, testutils::Address as _, Address, Env, String, Vec,
 };
 
 #[contracttype]
@@ -26,6 +26,7 @@ enum MockKey {
     AttackEscrow,
     AttackId,
     AttackCaller,
+    PayoutBlocked,
 }
 
 fn mock_balance(env: &Env, id: &Address) -> i128 {
@@ -145,6 +146,42 @@ impl ReentrantToken {
     }
 }
 
+// --- FailingPayoutToken: honest funding, panics on an outbound payout ---
+
+#[contract]
+pub struct FailingPayoutToken;
+
+#[contractimpl]
+impl FailingPayoutToken {
+    pub fn set_balance(env: Env, id: Address, amount: i128) {
+        env.storage()
+            .persistent()
+            .set(&MockKey::Balance(id), &amount);
+    }
+
+    pub fn balance(env: Env, id: Address) -> i128 {
+        mock_balance(&env, &id)
+    }
+
+    pub fn arm(env: Env) {
+        env.storage()
+            .persistent()
+            .set(&MockKey::PayoutBlocked, &true);
+    }
+
+    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+        let armed: bool = env
+            .storage()
+            .persistent()
+            .get(&MockKey::PayoutBlocked)
+            .unwrap_or(false);
+        if armed {
+            panic!("payout blocked");
+        }
+        mock_debit_credit(&env, &from, &to, amount, amount);
+    }
+}
+
 // --- tests ---
 
 #[test]
@@ -159,7 +196,7 @@ fn create_escrow_rejects_lying_transfer() {
 
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_create_escrow(
@@ -170,6 +207,7 @@ fn create_escrow_rejects_lying_transfer() {
         &String::from_str(&env, "opaque-condition-ref"),
         &releaser,
         &None,
+        &false,
     );
 
     assert_eq!(result, Err(Ok(Error::BalanceMismatch)));
@@ -193,7 +231,7 @@ fn create_escrow_rejects_short_delivery() {
 
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_create_escrow(
@@ -204,6 +242,7 @@ fn create_escrow_rejects_short_delivery() {
         &String::from_str(&env, "opaque-condition-ref"),
         &releaser,
         &None,
+        &false,
     );
 
     // 300 debited but only 270 delivered — the contract owes 300 and
@@ -213,6 +252,44 @@ fn create_escrow_rejects_short_delivery() {
     // The whole invocation rolled back, including the token's own
     // internal state change.
     assert_eq!(token.balance(&payer), 1_000);
+}
+
+#[test]
+fn failed_payout_leaves_the_escrow_funded() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // Checks-effects-interactions (docs/adr/0006): `release` now writes the
+    // settled status before calling the token. A payout that fails must roll
+    // that write back, never leaving an escrow `Released` with the funds
+    // still in the contract.
+    let token_id = env.register(FailingPayoutToken, ());
+    let token = FailingPayoutTokenClient::new(&env, &token_id);
+    let payer = Address::generate(&env);
+    token.set_balance(&payer, &1_000);
+
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let escrow_id = client.create_escrow(
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(&env, "opaque-condition-ref"),
+        &releaser,
+        &None,
+        &false,
+    );
+
+    token.arm();
+    assert!(client.try_release(&escrow_id, &releaser).is_err());
+
+    assert_eq!(client.get_status(&escrow_id), EscrowStatus::Funded);
+    assert_eq!(token.balance(&contract_id), 300);
+    assert_eq!(token.balance(&payee), 0);
 }
 
 #[test]
@@ -228,7 +305,7 @@ fn reentrant_transfer_cannot_double_release() {
 
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Creating with this token is fine: the transfer in is honest, and
@@ -241,6 +318,7 @@ fn reentrant_transfer_cannot_double_release() {
         &String::from_str(&env, "opaque-condition-ref"),
         &releaser,
         &None,
+        &false,
     );
     assert_eq!(token.balance(&contract_id), 300);
 
