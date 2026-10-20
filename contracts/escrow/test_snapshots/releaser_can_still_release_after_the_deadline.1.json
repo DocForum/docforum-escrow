@@ -77,6 +77,9 @@
                 },
                 {
                   "u64": "1100"
+                },
+                {
+                  "bool": false
                 }
               ]
             }
@@ -276,6 +279,14 @@
                     },
                     "val": {
                       "string": "opaque-condition-ref"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "notify_payee"
+                    },
+                    "val": {
+                      "bool": false
                     }
                   },
                   {

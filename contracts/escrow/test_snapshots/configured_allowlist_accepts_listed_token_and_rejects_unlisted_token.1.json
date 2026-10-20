@@ -117,7 +117,10 @@
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5"
                 },
-                "void"
+                "void",
+                {
+                  "bool": false
+                }
               ]
             }
           },
@@ -334,6 +337,14 @@
                     },
                     "val": {
                       "string": "allowlist-test"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "notify_payee"
+                    },
+                    "val": {
+                      "bool": false
                     }
                   },
                   {

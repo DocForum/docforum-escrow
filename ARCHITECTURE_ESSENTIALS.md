@@ -11,8 +11,8 @@
 ## Contract surface
 ```
 __constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
-create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1 + E2 + E4)
-create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, 1..=10 releasers, 1 <= threshold <= len
+create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee) -> escrow_id   // Phase E5 callback implemented locally; not deployed
+create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, 1..=10 releasers, 1 <= threshold <= len
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
 release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser, threshold must be 1, only while Funded
@@ -29,14 +29,16 @@ pausable/upgradeable/access modules were evaluated and rejected in
 `docs/adr/0006` precisely because they would add one.
 The allowlist is fixed when the contract is deployed. `create_escrow`
 rejects any token outside a non-empty list with `DisallowedToken` (error
-code 7); an empty list preserves the prior open-token behavior. The
+code 8); an empty list preserves the prior open-token behavior. The
 current live deployment predates this constructor and must be redeployed
 before the allowlist protection is active.
 
-`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after)` —
-`token` before `amount`, `releaser` added by Phase E2 and `refund_after`
-by Phase E4, both last; no behavioral difference beyond the added
-params, just noting it so this doc and `src/lib.rs` don't drift.
+`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee)`.
+`notify_payee` opts a contract payee into `on_escrow_released(escrow_id,
+amount)`; when true, the payee must authorize creation as well as the payer.
+The quorum creation entry point has the same final callback flag. The SDK
+option defaults to false. Callback failure rolls release back atomically;
+see ADR 0005 for failure, gas, and stored-record compatibility.
 
 The Phase E4-era functions (`create_escrow`, `get_status`, `get_escrow`,
 `release`, `refund`) are proven live on testnet as of the Phase E4
@@ -62,8 +64,8 @@ behaviour is exactly what it was before: releaser-only refunds, forever.
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
 
 const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
-const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter });
-await client.createQuorumEscrow({ payer, payee, token, amount, conditionRef, releasers, threshold, refundAfter }); // M-of-N, ADR 0007
+const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter, notifyPayee: true });
+await client.createQuorumEscrow({ payer, payee, token, amount, conditionRef, releasers, threshold, refundAfter, notifyPayee: true }); // M-of-N, ADR 0007
 await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
 await client.getEscrow(escrowId);            // full stored record — incl. releasers + threshold + refundAfter, so a payee can check the deal (docs/adr/0004/0007, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must be a releaser and threshold must be 1

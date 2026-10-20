@@ -19,8 +19,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, String,
-    Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
+    IntoVal, String, Vec,
 };
 
 /// Largest allowed releaser set for one escrow. Ten covers every
@@ -62,6 +62,9 @@ pub struct EscrowData {
     /// anyone — still only back to `payer`. `None` means no timeout,
     /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
+    /// If true, invoke the contract payee's `on_escrow_released` hook after
+    /// the payout transfer. A failed callback reverts the whole release.
+    pub notify_payee: bool,
 }
 
 /// A stream vests linearly from `start` through `end`. A cliff delays
@@ -116,6 +119,9 @@ pub enum Error {
     ConditionRefTooLong = 7,
     /// `token` is not in the immutable deploy-time allowlist.
     DisallowedToken = 8,
+    /// The opted-in payee callback returned an error or could not be
+    /// invoked. The release transaction (including its transfer) rolls back.
+    CallbackFailed = 9,
     Overflow = 12,
     /// The releaser set is empty, or `threshold` is 0 or larger than the
     /// number of releasers — see docs/adr/0007.
@@ -152,13 +158,14 @@ impl EscrowContract {
     }
 
     /// Locks `amount` of `token` pulled from `payer`, held for `payee`,
-    /// tagged with an opaque `condition_ref` (max 64 bytes — see
-    /// docs/threat-model.md T10). `releaser` is the address permitted to
-    /// call `release`/`refund` on this escrow (docs/adr/0002).
-    /// `refund_after` is an optional unix timestamp after which `refund`
-    /// opens to any caller, always back to `payer` (docs/adr/0004).
-    /// Requires `payer` auth (the contract moves their funds). For an
-    /// M-of-N releaser set use `create_escrow_with_releasers` instead.
+    /// docs/threat-model.md T10 and ROADMAP.md Phase E5). `releaser` is the
+    /// address permitted to call `release`/`refund` on this escrow
+    /// (docs/adr/0002). `refund_after` is optional (docs/adr/0004).
+    /// `notify_payee` opts an implementing contract payee into
+    /// `on_escrow_released(escrow_id, amount)` (docs/adr/0005). The payer
+    /// must authorize creation, and the payee must also authorize if
+    /// `notify_payee` is true. For M-of-N releasers use
+    /// `create_escrow_with_releasers`.
     pub fn create_escrow(
         env: Env,
         payer: Address,
@@ -168,6 +175,7 @@ impl EscrowContract {
         condition_ref: String,
         releaser: Address,
         refund_after: Option<u64>,
+        notify_payee: bool,
     ) -> Result<u64, Error> {
         let mut releasers = Vec::new(&env);
         releasers.push_back(releaser);
@@ -181,6 +189,7 @@ impl EscrowContract {
             releasers,
             1,
             refund_after,
+            notify_payee,
         )
     }
 
@@ -201,6 +210,7 @@ impl EscrowContract {
         releasers: Vec<Address>,
         threshold: u32,
         refund_after: Option<u64>,
+        notify_payee: bool,
     ) -> Result<u64, Error> {
         Self::create_escrow_inner(
             &env,
@@ -212,6 +222,7 @@ impl EscrowContract {
             releasers,
             threshold,
             refund_after,
+            notify_payee,
         )
     }
 
@@ -243,6 +254,7 @@ impl EscrowContract {
             condition_ref,
             releaser,
             refund_after,
+            false,
         )?;
         env.storage()
             .persistent()
@@ -465,6 +477,7 @@ impl EscrowContract {
         releasers: Vec<Address>,
         threshold: u32,
         refund_after: Option<u64>,
+        notify_payee: bool,
     ) -> Result<u64, Error> {
         let allowed_tokens: Vec<Address> = env
             .storage()
@@ -491,6 +504,9 @@ impl EscrowContract {
         Self::check_releaser_set(env, &releasers, threshold)?;
 
         payer.require_auth();
+        if notify_payee {
+            payee.require_auth();
+        }
 
         Self::transfer_in_exact(env, &token, &payer, amount)?;
 
@@ -505,6 +521,7 @@ impl EscrowContract {
             releasers,
             threshold,
             refund_after,
+            notify_payee,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Ok(id)
@@ -609,6 +626,7 @@ impl EscrowContract {
             (EscrowStatus::Refunded, None) => (0, data.amount),
             (EscrowStatus::Funded, _) => return Err(Error::NotFunded),
         };
+        let notify_payee = data.notify_payee && settled == EscrowStatus::Released;
         let token_client = token::Client::new(env, &data.token);
         let contract_address = env.current_contract_address();
         if token_client.balance(&contract_address) < payee_amount + payer_amount {
@@ -633,6 +651,18 @@ impl EscrowContract {
         }
         if payer_amount > 0 {
             token_client.transfer(&contract_address, &data.payer, &payer_amount);
+        }
+        if notify_payee {
+            let args = (escrow_id, payee_amount).into_val(env);
+            let callback = env.try_invoke_contract::<(), soroban_sdk::Error>(
+                &data.payee,
+                &soroban_sdk::Symbol::new(env, "on_escrow_released"),
+                args,
+            );
+            match callback {
+                Ok(Ok(())) => {}
+                _ => return Err(Error::CallbackFailed),
+            }
         }
         Ok(())
     }

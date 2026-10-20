@@ -88,7 +88,10 @@
                 {
                   "u32": 2
                 },
-                "void"
+                "void",
+                {
+                  "bool": false
+                }
               ]
             }
           },
@@ -244,6 +247,14 @@
                     },
                     "val": {
                       "string": "quorum-ref"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "notify_payee"
+                    },
+                    "val": {
+                      "bool": false
                     }
                   },
                   {

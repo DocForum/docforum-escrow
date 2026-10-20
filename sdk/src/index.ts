@@ -94,6 +94,8 @@ export interface Escrow {
    * relying on a `Funded` escrow (threat model T8).
    */
   refundAfter?: bigint;
+  /** Whether to call the contract payee's on_escrow_released hook. Defaults to false. */
+  notifyPayee: boolean;
   status: EscrowStatus;
 }
 
@@ -150,6 +152,8 @@ export interface CreateEscrowParams {
    * releaser-only, exactly as in 0.2.x.
    */
   refundAfter?: bigint;
+  /** Opt a contract payee into on_escrow_released(escrowId, amount). Defaults to false. */
+  notifyPayee?: boolean;
 }
 
 export interface ReleaseOrRefundParams {
@@ -181,6 +185,8 @@ export interface CreateQuorumEscrowParams {
   threshold: number;
   /** See `CreateEscrowParams.refundAfter`. */
   refundAfter?: bigint;
+  /** Opt a contract payee into `on_escrow_released`; requires payee authorization. */
+  notifyPayee?: boolean;
 }
 
 /** An M-of-N settlement: each keypair signs the contract auth entry. */
@@ -251,6 +257,7 @@ export class EscrowClient {
       condition_ref: params.conditionRef,
       releaser: params.releaser,
       refund_after: params.refundAfter,
+      notify_payee: params.notifyPayee ?? false,
     });
     const sent = await tx.signAndSend();
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
@@ -307,6 +314,7 @@ export class EscrowClient {
       releasers: params.releasers,
       threshold: params.threshold,
       refund_after: params.refundAfter,
+      notify_payee: params.notifyPayee ?? false,
     });
     const sent = await tx.signAndSend();
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
@@ -334,6 +342,7 @@ export class EscrowClient {
       // public surface uses `undefined` for "no deadline" (consistent
       // with `CreateEscrowParams.refundAfter` being absent).
       refundAfter: data.refund_after ?? undefined,
+      notifyPayee: data.notify_payee,
       status: data.status.tag,
     };
   }

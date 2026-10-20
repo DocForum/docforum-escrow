@@ -1,4 +1,4 @@
-# ADR 0007: Linear vesting streams
+# ADR 0008: Linear vesting streams
 
 **Status:** accepted for streamed escrows
 

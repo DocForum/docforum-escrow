@@ -75,7 +75,10 @@
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
                 },
-                "void"
+                "void",
+                {
+                  "bool": false
+                }
               ]
             }
           },
@@ -231,6 +234,14 @@
                     },
                     "val": {
                       "string": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "notify_payee"
+                    },
+                    "val": {
+                      "bool": false
                     }
                   },
                   {
