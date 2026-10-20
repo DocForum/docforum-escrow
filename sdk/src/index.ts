@@ -23,9 +23,9 @@ import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowSta
 
 export { Keypair };
 
-export type EscrowStatus = "Funded" | "Released" | "Refunded";
+export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Disputed";
 
-export type EscrowEventType = "created" | "released" | "refunded";
+export type EscrowEventType = "created" | "released" | "refunded" | "disputed" | "resolved" | "settled";
 interface EscrowEventBase {
   ledger: number;
   cursor: string;
@@ -106,6 +106,19 @@ export interface Escrow {
   refundAfter?: bigint;
   /** Whether to call the contract payee's on_escrow_released hook. Defaults to false. */
   notifyPayee: boolean;
+  /**
+   * The address allowed to adjudicate a dispute over this escrow, set at
+   * creation time (`createEscrow({ arbiter })`). `undefined` for escrows
+   * created without one — those can be disputed but never resolved, so the
+   * parties should agree on an arbiter before funding.
+   */
+  arbiter?: string;
+  /**
+   * The arbiter's recorded resolution, in basis points of `amount`. Only
+   * present once `resolveDispute` has run; `settle` then pays both sides from
+   * it. `undefined` before a resolution.
+   */
+  splitBps?: { payerBps: number; payeeBps: number };
   status: EscrowStatus;
 }
 
@@ -162,6 +175,12 @@ export interface CreateEscrowParams {
    * releaser-only, exactly as in 0.2.x.
    */
   refundAfter?: bigint;
+  /**
+   * The only address allowed to adjudicate a dispute over this escrow. Omit
+   * to create a pre-E6 escrow that can be disputed but never resolved. Use
+   * `create_escrow_with_arbiter` under the hood when set.
+   */
+  arbiter?: string;
   /** Opt a contract payee into on_escrow_released(escrowId, amount). Defaults to false. */
   notifyPayee?: boolean;
 }
@@ -176,6 +195,45 @@ export interface ReleaseOrRefundParams {
    */
   caller: Keypair;
 }
+
+/** Opens a dispute on a `Funded` escrow (Phase E6, docs/adr/0009). */
+export interface RaiseDisputeParams {
+  escrowId: bigint;
+  /**
+   * Must be the escrow's `payer`, `payee`, or one of its `releasers`. The
+   * escrow moves to `Disputed`; `release`/`refund` are rejected until the
+   * arbiter's split is settled.
+   */
+  caller: Keypair;
+}
+
+/** Records the arbiter's split for a `Disputed` escrow (Phase E6). */
+export interface ResolveDisputeParams {
+  escrowId: bigint;
+  /** Must be the escrow's stored `arbiter`, and the escrow must be `Disputed`. */
+  caller: Keypair;
+  /** Basis points of `amount` returned to the payer (0..=10_000). */
+  payerBps: number;
+  /** Basis points of `amount` paid to the payee. `payerBps + payeeBps` must be 10_000. */
+  payeeBps: number;
+}
+
+/** Settles a resolved dispute (Phase E6) by paying both recorded shares. */
+export interface SettleParams {
+  escrowId: bigint;
+  /**
+   * Pays the transaction fee. Settlement itself requires no contract auth —
+   * the split was already authorised by the arbiter — so the escrow's funds
+   * cannot get stuck behind a disappeared arbiter.
+   */
+  signer: Keypair;
+}
+
+/**
+ * An action an address may take on an escrow right now, as reported by
+ * `availableActions`.
+ */
+export type EscrowAction = "release" | "refund" | "raiseDispute" | "resolveDispute" | "settle";
 
 /** Creation parameters for an M-of-N releaser escrow (docs/adr/0007). */
 export interface CreateQuorumEscrowParams {
@@ -367,16 +425,28 @@ export class EscrowClient {
       );
     }
     const client = this.contractClient(params.payer);
-    const tx = await client.create_escrow({
-      payer: params.payer.publicKey(),
-      payee: params.payee,
-      token: params.token,
-      amount: params.amount,
-      condition_ref: params.conditionRef,
-      releaser: params.releaser,
-      refund_after: params.refundAfter,
-      notify_payee: params.notifyPayee ?? false,
-    });
+    const tx = params.arbiter === undefined
+      ? await client.create_escrow({
+          payer: params.payer.publicKey(),
+          payee: params.payee,
+          token: params.token,
+          amount: params.amount,
+          condition_ref: params.conditionRef,
+          releaser: params.releaser,
+          refund_after: params.refundAfter,
+          notify_payee: params.notifyPayee ?? false,
+        })
+      : await client.create_escrow_with_arbiter({
+          payer: params.payer.publicKey(),
+          payee: params.payee,
+          token: params.token,
+          amount: params.amount,
+          condition_ref: params.conditionRef,
+          releaser: params.releaser,
+          refund_after: params.refundAfter,
+          arbiter: params.arbiter,
+          notify_payee: params.notifyPayee ?? false,
+        });
     const sent = await tx.signAndSend();
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
   }
@@ -446,8 +516,12 @@ export class EscrowClient {
    */
   async getEscrow(escrowId: bigint): Promise<Escrow> {
     const client = this.contractClient();
-    const tx = await client.get_escrow({ escrow_id: escrowId });
+    const [tx, disputeTx] = await Promise.all([
+      client.get_escrow({ escrow_id: escrowId }),
+      client.get_dispute({ escrow_id: escrowId }),
+    ]);
     const data = tx.result.unwrap();
+    const dispute = disputeTx.result.unwrap();
     return {
       payer: data.payer,
       payee: data.payee,
@@ -461,6 +535,11 @@ export class EscrowClient {
       // with `CreateEscrowParams.refundAfter` being absent).
       refundAfter: data.refund_after ?? undefined,
       notifyPayee: data.notify_payee,
+      // The generated client decodes a contract `None` as `null`.
+      arbiter: dispute.arbiter ?? undefined,
+      splitBps: dispute.resolved
+        ? { payerBps: dispute.payer_bps, payeeBps: dispute.payee_bps }
+        : undefined,
       status: data.status.tag,
     };
   }
@@ -483,6 +562,66 @@ export class EscrowClient {
   async refund(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
     const client = this.contractClient(params.caller);
     const tx = await client.refund({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Opens a dispute on a `Funded` escrow (Phase E6, docs/adr/0009). Callable
+   * by the payer, the payee, or any of the escrow's releasers; the escrow
+   * moves to `Disputed` and direct `release`/`refund` calls are rejected
+   * until the arbiter's split is settled. Returns the transaction's hash.
+   */
+  async raiseDispute(params: RaiseDisputeParams): Promise<{ txHash: string }> {
+    const client = this.contractClient(params.caller);
+    const tx = await client.raise_dispute({
+      escrow_id: params.escrowId,
+      caller: params.caller.publicKey(),
+    });
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Records the arbiter's split for a `Disputed` escrow as basis points of
+   * the escrowed amount (Phase E6). Only the escrow's `arbiter` may call it,
+   * once; `payerBps + payeeBps` must be 10_000. Recording moves no funds —
+   * call `settle` afterwards. Returns the transaction's hash.
+   */
+  async resolveDispute(params: ResolveDisputeParams): Promise<{ txHash: string }> {
+    for (const [name, bps] of [["payerBps", params.payerBps], ["payeeBps", params.payeeBps]] as const) {
+      if (!Number.isInteger(bps) || bps < 0 || bps > 10_000) {
+        throw new RangeError(`${name} must be an integer between 0 and 10_000, got ${bps}`);
+      }
+    }
+    if (params.payerBps + params.payeeBps !== 10_000) {
+      throw new RangeError(
+        `payerBps + payeeBps must equal 10_000, got ${params.payerBps + params.payeeBps}`
+      );
+    }
+    const client = this.contractClient(params.caller);
+    const tx = await client.resolve_dispute({
+      escrow_id: params.escrowId,
+      caller: params.caller.publicKey(),
+      payer_bps: params.payerBps,
+      payee_bps: params.payeeBps,
+    });
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Pays both sides of a resolved dispute from the recorded split (Phase E6).
+   * Permissionless: `signer` only pays the fee, because the arbiter already
+   * authorised the payout and it cannot be redirected. Throws if the arbiter
+   * hasn't recorded a split yet. Returns the transaction's hash.
+   */
+  async settle(params: SettleParams): Promise<{ txHash: string }> {
+    const client = this.contractClient(params.signer);
+    const tx = await client.settle({ escrow_id: params.escrowId });
     const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
@@ -696,7 +835,10 @@ export class EscrowClient {
     for (const raw of response.events) {
       if (raw.type !== "contract" || raw.contractId?.toString() !== this.contractId) continue;
       const nativeTopics = raw.topic.map(safeScValToNative);
-      const eventName = nativeTopics.find((v) => v === "created" || v === "released" || v === "refunded") as EscrowEventType | undefined;
+      const eventName = nativeTopics.find((v) =>
+        v === "created" || v === "released" || v === "refunded" ||
+        v === "disputed" || v === "resolved" || v === "settled"
+      ) as EscrowEventType | undefined;
       const unknownName = nativeTopics.find((v) => typeof v === "string") as string | undefined;
       const type = eventName;
       if (type && allowed && !allowed.has(type)) continue;
@@ -747,4 +889,45 @@ export class EscrowClient {
     void poll();
     return () => { stopped = true; };
   }
+}
+
+/**
+ * Pure mirror of the contract's transition rules: the actions `address` may
+ * take on `escrow` at ledger time `now` (Phase E6). Never claims a call the
+ * contract would reject if its inputs are accurate; conservative on time.
+ *
+ * **Ledger time, not the local clock.** `now` is compared against
+ * `escrow.refundAfter`, which the contract evaluates against its own ledger
+ * timestamp. Pass the latest ledger close time (from RPC or a recent
+ * transaction), not `Date.now()`, or the answer can disagree by the
+ * clock-skew margin.
+ *
+ * Quorum approvals (`releaseWithApprovals`/`refundWithApprovals`) are not
+ * modelled: they need a set of signers rather than one address.
+ */
+export function availableActions(escrow: Escrow, address: string, now: bigint): EscrowAction[] {
+  const actions: EscrowAction[] = [];
+  const isPayer = address === escrow.payer;
+  const isPayee = address === escrow.payee;
+  const isReleaser = escrow.releasers.includes(address);
+  const singleCaller = escrow.threshold === 1;
+
+  switch (escrow.status) {
+    case "Funded":
+      if (isReleaser && singleCaller) actions.push("release");
+      if ((isReleaser && singleCaller) || (escrow.refundAfter !== undefined && now >= escrow.refundAfter)) {
+        actions.push("refund");
+      }
+      if (isPayer || isPayee || isReleaser) actions.push("raiseDispute");
+      break;
+    case "Disputed":
+      if (address === escrow.arbiter && escrow.splitBps === undefined) actions.push("resolveDispute");
+      if (escrow.splitBps !== undefined) actions.push("settle");
+      break;
+    case "Released":
+    case "Refunded":
+      break;
+  }
+
+  return actions;
 }
