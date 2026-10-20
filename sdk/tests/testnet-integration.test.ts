@@ -15,7 +15,16 @@
 // Fresh keypairs are generated and Friendbot-funded per run — never
 // commit a real secret key, even a testnet one, into a repo.
 import { describe, expect, it } from "vitest";
-import { Keypair } from "@stellar/stellar-sdk";
+import {
+  Account,
+  Address,
+  Asset,
+  BASE_FEE,
+  Keypair,
+  Operation,
+  TransactionBuilder,
+  nativeToScVal,
+} from "@stellar/stellar-sdk";
 import { EscrowClient } from "../src/index.js";
 
 // Live testnet deployment of the Phase E4 contract (adds `refund_after`
@@ -232,6 +241,53 @@ describe("EscrowClient against live testnet", () => {
     const escrow = await client.getEscrow(escrowId);
     expect(escrow.refundAfter).toBeUndefined();
     expect(escrow.status).toBe("Funded");
+  });
+
+  it("estimates a live call's fee and fee-bumps a signed envelope under the cap", async () => {
+    const [payer, payee, releaser, sponsor] = await Promise.all([
+      fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(),
+    ]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-fees",
+      releaser: releaser.publicKey(),
+    });
+
+    // Simulate the release the releaser is about to send — the estimate must be
+    // internally consistent and non-zero.
+    const estimate = await client.estimate({
+      source: payer,
+      method: "release",
+      args: [nativeToScVal(escrowId, { type: "u64" }), new Address(releaser.publicKey()).toScVal()],
+    });
+    expect(estimate.minResourceFee).toBeGreaterThan(0n);
+    expect(estimate.resourceFee).toBeGreaterThanOrEqual(estimate.minResourceFee);
+    expect(estimate.total).toBe(estimate.resourceFee + estimate.inclusionFee);
+
+    // A plain payment is not an escrow call: the guard must refuse it, while
+    // the fee-bump helper still wraps it for an explicitly willing sponsor.
+    const payment = new TransactionBuilder(new Account(payer.publicKey(), "1"), {
+      fee: BASE_FEE,
+      networkPassphrase: "Test SDF Network ; September 2015",
+    })
+      .addOperation(
+        Operation.payment({ destination: payee.publicKey(), asset: Asset.native(), amount: "1" }),
+      )
+      .setTimeout(30)
+      .build();
+    payment.sign(payer);
+
+    const guard = client.guardSponsorship(payment.toXDR());
+    expect(guard.ok).toBe(false);
+    expect(guard.reasons[0]).toContain("is not a contract invocation");
+
+    const bumped = client.feeBump(payment.toXDR(), sponsor, { maxFee: 1_000n });
+    expect(bumped.fee).toBeLessThanOrEqual(1_000n);
+    expect(bumped.innerTxHash).toBe(payment.hash().toString("hex"));
   });
 
   it("allows a fresh stranger to refund after a short timeout", async () => {

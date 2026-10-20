@@ -76,7 +76,19 @@ await client.refund({ escrowId, caller });   // { txHash } — releaser when thr
 await client.refundWithApprovals({ escrowId, approvers });  // { txHash } — M-of-N refund
 await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
 const stop = client.subscribe(handler, { cursor, pollIntervalMs }); // serial polling; await handler for back-pressure
+await client.estimate({ source, method, args }); // { resourceFee, inclusionFee, total, minResourceFee } — simulation only, 20% resource buffer
+client.guardSponsorship(signedXdr);          // { ok, reasons, invokedContracts } — every op + contract auth entry must target this escrow
+client.feeBump(signedXdr, sponsor, { maxFee, baseFee? }); // { xdr, fee, innerTxHash } — throws MaxFeeExceededError, never overshoots the cap
 ```
+`estimate` never signs or submits; it simulates against the client's RPC
+and reports stroops. `guardSponsorship` is the pre-sponsorship check for
+transactions that come from someone else: it rejects foreign contract
+invocations, non-invocation operations, contract-address auth entries
+pointing elsewhere, and already-bumped envelopes, while allowing the
+account auth entries (payer/releaser) a legitimate escrow call carries.
+`feeBump` charges `baseFee × (inner operations + 1)` and validates the
+cap before building the envelope, so a fee spike fails loudly instead of
+silently costing more than the sponsor agreed to.
 Event results are a discriminated union: known lifecycle events expose
 their event type and escrow id; unrecognized topics are returned as
 `type: "unknown"` with decoded topic values and payload. Persist the
