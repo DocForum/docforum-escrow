@@ -20,7 +20,7 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
-    IntoVal, String, Vec,
+    IntoVal, Map, String, Vec,
 };
 
 /// Largest allowed releaser set for one escrow. Ten covers every
@@ -32,6 +32,21 @@ pub const MAX_RELEASERS: u32 = 10;
 
 /// Maximum `condition_ref` length in bytes (threat model T10, Phase E5).
 pub const MAX_CONDITION_REF_LEN: u32 = 64;
+
+/// Conservative upper bound for a single atomic batch; see ADR 0008.
+pub const MAX_BATCH_SIZE: u32 = 5;
+
+/// One escrow to create in an atomic batch. All entries share the payer.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowParams {
+    pub payee: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub condition_ref: String,
+    pub releaser: Address,
+    pub refund_after: Option<u64>,
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -115,6 +130,13 @@ pub enum Error {
     DuplicateApprover = 16,
     /// The same address appeared twice in the releaser set at creation.
     DuplicateReleaser = 17,
+    InvalidBatchSize = 30,
+    InvalidBatchItem0 = 31,
+    InvalidBatchItem1 = 32,
+    InvalidBatchItem2 = 33,
+    InvalidBatchItem3 = 34,
+    InvalidBatchItem4 = 35,
+    BatchAmountOverflow = 36,
 }
 
 #[contract]
@@ -163,6 +185,7 @@ impl EscrowContract {
             1,
             refund_after,
             notify_payee,
+            false,
         )
     }
 
@@ -196,7 +219,64 @@ impl EscrowContract {
             threshold,
             refund_after,
             notify_payee,
+            false,
         )
+    }
+
+    /// Atomically creates up to five escrows for one payer. Any failed item
+    /// reverts the whole invocation, including transfers and storage writes.
+    pub fn create_escrows(
+        env: Env,
+        payer: Address,
+        items: Vec<EscrowParams>,
+    ) -> Result<Vec<u64>, Error> {
+        if items.is_empty() || items.len() > MAX_BATCH_SIZE {
+            return Err(Error::InvalidBatchSize);
+        }
+        payer.require_auth();
+
+        // Check combined funding before any transfer. Per-item validation is
+        // also performed by create_escrow_inner below, before its transfer.
+        let now = env.ledger().timestamp();
+        let mut totals: Map<Address, i128> = Map::new(&env);
+        for (index, item) in items.iter().enumerate() {
+            if item.amount <= 0 || item.refund_after.map_or(false, |deadline| deadline <= now) {
+                return Err(Self::batch_item_error(index as u32));
+            }
+            let total = totals
+                .get(item.token.clone())
+                .unwrap_or(0_i128)
+                .checked_add(item.amount)
+                .ok_or(Error::BatchAmountOverflow)?;
+            totals.set(item.token, total);
+        }
+
+        let mut ids = Vec::new(&env);
+        for item in items.iter() {
+            let mut releasers = Vec::new(&env);
+            releasers.push_back(item.releaser);
+            let id = Self::create_escrow_inner(
+                &env,
+                payer.clone(),
+                item.payee,
+                item.token,
+                item.amount,
+                item.condition_ref,
+                releasers,
+                1,
+                item.refund_after,
+                false,
+                true,
+            )
+            .map_err(|error| match error {
+                Error::InvalidAmount | Error::InvalidRefundAfter => {
+                    Self::batch_item_error(ids.len())
+                }
+                other => other,
+            })?;
+            ids.push_back(id);
+        }
+        Ok(ids)
     }
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
@@ -345,6 +425,7 @@ impl EscrowContract {
         threshold: u32,
         refund_after: Option<u64>,
         notify_payee: bool,
+        payer_already_authorized: bool,
     ) -> Result<u64, Error> {
         let allowed_tokens: Vec<Address> = env
             .storage()
@@ -370,7 +451,9 @@ impl EscrowContract {
         }
         Self::check_releaser_set(env, &releasers, threshold)?;
 
-        payer.require_auth();
+        if !payer_already_authorized {
+            payer.require_auth();
+        }
         if notify_payee {
             payee.require_auth();
         }
@@ -527,6 +610,16 @@ impl EscrowContract {
         let id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
         env.storage().instance().set(&DataKey::NextId, &(id + 1));
         id
+    }
+
+    fn batch_item_error(index: u32) -> Error {
+        match index {
+            0 => Error::InvalidBatchItem0,
+            1 => Error::InvalidBatchItem1,
+            2 => Error::InvalidBatchItem2,
+            3 => Error::InvalidBatchItem3,
+            _ => Error::InvalidBatchItem4,
+        }
     }
 
     fn transfer_in_exact(

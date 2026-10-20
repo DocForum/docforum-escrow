@@ -173,6 +173,12 @@
   deployment predates this constructor; a new testnet deployment and
   verification are required before claiming the live contract is
   protected. Closes issue #36.
+- [x] Atomic batch creation (issue #28): `create_escrows` accepts 1–5
+  escrow parameter records for one payer, checks combined token funding for
+  overflow, and uses the same validation and exact-delivery checks as
+  individual creation. A failure reverts all transfers and storage writes.
+  Regression tests cover mixed tokens, sequential ids, invalid-item
+  rollback, and batch-size bounds. Not yet redeployed to testnet.
 - [x] Optional release callback (issue #53): both single-releaser and
   quorum creation require payee authorization when `notify_payee` is true;
   release calls `on_escrow_released` after transfer and rolls back atomically

@@ -20,6 +20,7 @@ release_with_approvals(escrow_id, approvers) -> result   // IMPLEMENTED (Phase E
 refund(escrow_id, caller) -> result    // IMPLEMENTED (Phase E2 + E4) — a releaser when threshold is 1; anyone too, once refund_after has passed, and then still only back to payer
 refund_with_approvals(escrow_id, approvers) -> result    // IMPLEMENTED (Phase E5, issue #119) — same approval rules as release_with_approvals
 top_up(escrow_id, payer, amount) -> result // IMPLEMENTED (issue #26) — original payer only, funded state only; emits `top_up`
+create_escrows(payer, items) -> escrow_ids // IMPLEMENTED (issue #28) — atomic batch of 1–5 escrows
 ```
 
 No new contract-level role came in with the M-of-N work: `releasers` is
