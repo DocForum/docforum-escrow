@@ -1,6 +1,6 @@
 {
   "name": "@docforum/escrow-sdk",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "TypeScript client for the docforum-escrow Soroban contract.",
   "type": "module",
   "main": "dist/index.js",
@@ -17,13 +17,22 @@
     "build": "tsc",
     "test": "vitest run",
     "test:integration": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "test:fixtures": "vitest run tests/events.test.ts",
+    "test:offline": "vitest run tests/events.test.ts tests/quorum-validation.test.ts tests/solvency.test.ts",
+    "typecheck": "tsc --noEmit",
+    "test:runtime": "node tests/runtime-smoke.mjs",
+    "test:browser": "node tests/browser-smoke.mjs"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^16.0.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "typescript": "^5.6.2",
+    "vite": "^8.3.4",
     "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

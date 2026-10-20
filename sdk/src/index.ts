@@ -79,10 +79,17 @@ export interface Escrow {
   amount: bigint;
   conditionRef: string;
   /**
-   * The address permitted to call `release`/`refund` (docs/adr/0002) —
-   * unless `refundAfter` has passed, in which case anyone may refund.
+   * The addresses permitted to settle this escrow (docs/adr/0002 for the
+   * per-escrow releaser, docs/adr/0007 for M-of-N sets) — unless
+   * `refundAfter` has passed, in which case anyone may refund. A plain
+   * single-releaser escrow has exactly one entry here.
    */
-  releaser: string;
+  releasers: string[];
+  /**
+   * How many distinct addresses from `releasers` must authorize one
+   * settlement. `1` means any single releaser can settle.
+   */
+  threshold: number;
   /**
    * Optional deadline in unix seconds after which **anyone** may refund —
    * always back to `payer` (docs/adr/0004). `undefined` means no timeout:
@@ -95,6 +102,26 @@ export interface Escrow {
 
 const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
 const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+
+/**
+ * Maximum allowed length of `conditionRef` in bytes — must match the
+ * contract's bound (currently 64 bytes, see contracts/escrow/src/lib.rs
+ * and docs/threat-model.md T10). Validated client-side so callers fail
+ * fast instead of paying network fees for a rejected transaction.
+ *
+ * Keep in sync with the contract: if the contract bound changes, update
+ * this constant and bump the SDK's semver (hard rule 3).
+ */
+export const MAX_CONDITION_REF_LENGTH = 64;
+
+/**
+ * Maximum number of addresses in one escrow's releaser set — must match the
+ * contract's `MAX_RELEASERS` (currently 10, see docs/adr/0007). Validated
+ * client-side so callers fail fast instead of paying network fees for a
+ * rejected transaction. Keep in sync with the contract; a change is an SDK
+ * semver event (hard rule 3).
+ */
+export const MAX_RELEASERS = 10;
 
 export interface EscrowClientConfig {
   /** The deployed docforum-escrow contract's address (`C…`). */
@@ -130,8 +157,58 @@ export interface CreateEscrowParams {
 
 export interface ReleaseOrRefundParams {
   escrowId: bigint;
-  /** Must be the escrow's `releaser` (set at creation) — see docs/adr/0002. */
+  /**
+   * Must be one of the escrow's `releasers` (set at creation) — see
+   * docs/adr/0002. Only valid when the escrow's threshold is `1`; a
+   * multi-signature escrow settles via `releaseWithApprovals` /
+   * `refundWithApprovals`.
+   */
   caller: Keypair;
+}
+
+/** Creation parameters for an M-of-N releaser escrow (docs/adr/0007). */
+export interface CreateQuorumEscrowParams {
+  /** Signs and pays for this call; funds are pulled from this account. */
+  payer: Keypair;
+  payee: string;
+  token: string;
+  amount: bigint;
+  conditionRef: string;
+  /**
+   * The addresses that settle this escrow. Between 1 and `MAX_RELEASERS`
+   * distinct addresses, stored immutably at creation — there is no setter
+   * and no admin.
+   */
+  releasers: string[];
+  /** How many of `releasers` must approve a settlement (at least 1). */
+  threshold: number;
+  /** See `CreateEscrowParams.refundAfter`. */
+  refundAfter?: bigint;
+}
+
+/** An M-of-N settlement: each keypair signs the contract auth entry. */
+export interface SettlementApprovalsParams {
+  escrowId: bigint;
+  /**
+   * The releasers approving this settlement. The first keypair also pays the
+   * transaction fee; each of them signs the contract authorization entry, so
+   * the list must not repeat a keypair. Without at least `threshold`
+   * distinct approvers the contract rejects the call with `ThresholdNotMet`.
+   */
+  approvers: Keypair[];
+}
+
+/** The relayer pays the transaction fee; the releaser signs only contract auth. */
+export interface RelayedAuthorizationParams {
+  escrowId: bigint;
+  releaser: Keypair;
+  relayer: Keypair;
+}
+
+/** Serialized, simulated transaction containing a short-lived signed auth entry. */
+export interface RelayedAuthorization {
+  transaction: string;
+  expiresAtLedger: number;
 }
 
 /**
@@ -163,6 +240,11 @@ export class EscrowClient {
 
   /** Locks `amount` of `token` from `payer`, held for `payee`. Returns the new escrow's id and the funding transaction's hash. */
   async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
+    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+      throw new Error(
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+      );
+    }
     const client = this.contractClient(params.payer);
     const tx = await client.create_escrow({
       payer: params.payer.publicKey(),
@@ -186,10 +268,58 @@ export class EscrowClient {
   }
 
   /**
-   * Read-only: everything stored about `escrowId` — including
-   * `releaser` and `refundAfter`, which payees should check before
-   * relying on a `Funded` escrow (docs/adr/0004, threat model T8).
-   * Throws if `escrowId` doesn't exist.
+   * Locks `amount` on behalf of an M-of-N releaser set (docs/adr/0007): the
+   * escrow settles only with `threshold` distinct approvals from
+   * `releasers`. Same validation and returned shape as `createEscrow`.
+   */
+  async createQuorumEscrow(
+    params: CreateQuorumEscrowParams
+  ): Promise<{ escrowId: bigint; txHash: string }> {
+    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+      throw new Error(
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+      );
+    }
+    if (params.releasers.length === 0) {
+      throw new Error("releasers must contain at least one address");
+    }
+    if (params.releasers.length > MAX_RELEASERS) {
+      throw new Error(
+        `releasers must contain at most ${MAX_RELEASERS} addresses, got ${params.releasers.length}`
+      );
+    }
+    if (new Set(params.releasers).size !== params.releasers.length) {
+      throw new Error("releasers must not contain duplicate addresses");
+    }
+    if (
+      !Number.isInteger(params.threshold) ||
+      params.threshold < 1 ||
+      params.threshold > params.releasers.length
+    ) {
+      throw new Error(
+        `threshold must be an integer between 1 and ${params.releasers.length}, got ${params.threshold}`
+      );
+    }
+    const client = this.contractClient(params.payer);
+    const tx = await client.create_escrow_with_releasers({
+      payer: params.payer.publicKey(),
+      payee: params.payee,
+      token: params.token,
+      amount: params.amount,
+      condition_ref: params.conditionRef,
+      releasers: params.releasers,
+      threshold: params.threshold,
+      refund_after: params.refundAfter,
+    });
+    const sent = await tx.signAndSend();
+    return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Read-only: everything stored about `escrowId` — including the
+   * `releasers` set, its `threshold` and `refundAfter`, which payees should
+   * check before relying on a `Funded` escrow (docs/adr/0004, threat model
+   * T8). Throws if `escrowId` doesn't exist.
    */
   async getEscrow(escrowId: bigint): Promise<Escrow> {
     const client = this.contractClient();
@@ -201,7 +331,8 @@ export class EscrowClient {
       token: data.token,
       amount: data.amount,
       conditionRef: data.condition_ref,
-      releaser: data.releaser,
+      releasers: data.releasers,
+      threshold: data.threshold,
       // The generated client decodes a contract `None` as `null`; the
       // public surface uses `undefined` for "no deadline" (consistent
       // with `CreateEscrowParams.refundAfter` being absent).
@@ -228,6 +359,51 @@ export class EscrowClient {
   async refund(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
     const client = this.contractClient(params.caller);
     const tx = await client.refund({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Releases an M-of-N escrow to its payee with at least `threshold`
+   * distinct releaser approvals (docs/adr/0007). Each supplied keypair signs
+   * the contract auth entry for this exact call; the first also pays the fee.
+   * Returns the transaction's hash.
+   */
+  async releaseWithApprovals(params: SettlementApprovalsParams): Promise<{ txHash: string }> {
+    return this.settleWithApprovals("release", params);
+  }
+
+  /**
+   * Refunds an M-of-N escrow back to its payer with at least `threshold`
+   * distinct releaser approvals (docs/adr/0007). The `refundAfter` timeout
+   * path (`refund`) stays open to anyone and needs no approvals. Returns the
+   * transaction's hash.
+   */
+  async refundWithApprovals(params: SettlementApprovalsParams): Promise<{ txHash: string }> {
+    return this.settleWithApprovals("refund", params);
+  }
+
+  private async settleWithApprovals(
+    settlement: "release" | "refund",
+    params: SettlementApprovalsParams
+  ): Promise<{ txHash: string }> {
+    if (params.approvers.length === 0) {
+      throw new Error("approvers must contain at least one releaser keypair");
+    }
+    const [invoker, ...additionalSigners] = params.approvers;
+    const approverAddresses = params.approvers.map((approver) => approver.publicKey());
+    if (new Set(approverAddresses).size !== approverAddresses.length) {
+      throw new Error("approvers must not repeat a releaser keypair");
+    }
+
+    const client = this.contractClient(invoker);
+    const tx = settlement === "release"
+      ? await client.release_with_approvals({ escrow_id: params.escrowId, approvers: approverAddresses })
+      : await client.refund_with_approvals({ escrow_id: params.escrowId, approvers: approverAddresses });
+    for (const signer of additionalSigners) {
+      await tx.signAuthEntries({ signAuthEntry: signer });
+    }
     const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };

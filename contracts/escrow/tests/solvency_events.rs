@@ -4,7 +4,7 @@ use docforum_escrow::{
 use soroban_sdk::{
     testutils::{Address as _, Events as _},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, Event, String,
+    Address, Env, Event, String, Vec,
 };
 
 #[test]
@@ -20,7 +20,7 @@ fn lifecycle_events_include_token_and_amount_for_reconciliation() {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
     let id = client.create_escrow(
         &payer,
