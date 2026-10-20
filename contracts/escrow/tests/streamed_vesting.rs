@@ -1,10 +1,8 @@
-use docforum_escrow::{
-    Error, EscrowContract, EscrowContractClient, EscrowStatus, VestingSchedule,
-};
+use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus, VestingSchedule};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String,
+    Address, Env, String, Vec,
 };
 
 struct Fixture<'a> {
@@ -30,7 +28,7 @@ fn fund_stream(env: &Env, amount: i128, schedule: VestingSchedule) -> Fixture<'_
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
     let client = EscrowContractClient::new(env, &contract_id);
     let escrow_id = client.create_streamed_escrow(
         &payer,
@@ -79,7 +77,10 @@ fn integer_vesting_rounds_down_and_withdrawals_never_exceed_total() {
     assert_eq!(f.client.withdraw(&f.escrow_id, &f.payee), 4);
     assert_eq!(f.token.balance(&f.payee), 7);
     assert_eq!(f.client.get_vesting(&f.escrow_id).withdrawn_amount, 7);
-    assert_eq!(f.client.try_withdraw(&f.escrow_id, &f.payee), Err(Ok(Error::NothingToWithdraw)));
+    assert_eq!(
+        f.client.try_withdraw(&f.escrow_id, &f.payee),
+        Err(Ok(Error::NothingToWithdraw))
+    );
 }
 
 #[test]
@@ -162,7 +163,7 @@ fn invalid_stream_schedules_are_rejected_before_funding() {
     let token = TokenClient::new(&env, &token_id);
     let payer = Address::generate(&env);
     asset.mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let invalid = client.try_create_streamed_escrow(
@@ -189,4 +190,11 @@ fn invalid_stream_schedules_are_rejected_before_funding() {
     assert_eq!(invalid, Err(Ok(Error::InvalidVestingSchedule)));
     assert_eq!(invalid_cliff, Err(Ok(Error::InvalidVestingSchedule)));
     assert_eq!(token.balance(&payer), 1_000);
+}
+
+#[test]
+fn fixed_total_streams_reject_top_ups() {
+    let env = Env::default();
+    let f = fund_stream(&env, 100, schedule(100, 200, None));
+    assert!(f.client.try_top_up(&f.escrow_id, &f.payer, &10).is_err());
 }

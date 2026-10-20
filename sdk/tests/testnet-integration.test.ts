@@ -55,6 +55,73 @@ describe("EscrowClient against live testnet", () => {
     expect(await client.getStatus(escrowId)).toBe("Released");
   });
 
+  it("lets a separate relayer submit releaser-authorized release and refund", async () => {
+    const [payer, payee, releaser, relayer] = await Promise.all([
+      fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(),
+    ]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const releaseEscrow = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-relayed-release",
+      releaser: releaser.publicKey(),
+    });
+    const releaseAuth = await client.authorizeRelease({
+      escrowId: releaseEscrow.escrowId,
+      releaser,
+      relayer,
+    });
+    expect(releaseAuth.expiresAtLedger).toBeGreaterThan(0);
+    await client.submitRelayed("release", releaseAuth, relayer);
+    expect(await client.getStatus(releaseEscrow.escrowId)).toBe("Released");
+
+    const refundEscrow = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-relayed-refund",
+      releaser: releaser.publicKey(),
+    });
+    const refundAuth = await client.authorizeRefund({
+      escrowId: refundEscrow.escrowId,
+      releaser,
+      relayer,
+    });
+    await client.submitRelayed("refund", refundAuth, relayer);
+    expect(await client.getStatus(refundEscrow.escrowId)).toBe("Refunded");
+  });
+
+  it("settles a 2-of-3 quorum escrow with two approvers", async () => {
+    const [payer, payee, first, second, third] = await Promise.all([
+      fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(),
+    ]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const releasers = [first.publicKey(), second.publicKey(), third.publicKey()];
+
+    const { escrowId } = await client.createQuorumEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-quorum",
+      releasers,
+      threshold: 2,
+    });
+    const escrow = await client.getEscrow(escrowId);
+    expect(escrow.threshold).toBe(2);
+    expect(escrow.releasers).toEqual(releasers);
+
+    // One member cannot settle alone; two can.
+    await expect(
+      client.release({ escrowId, caller: first }),
+    ).rejects.toThrow();
+    await client.releaseWithApprovals({ escrowId, approvers: [first, third] });
+    expect(await client.getStatus(escrowId)).toBe("Released");
+  });
+
   it("creates, funds, and refunds an escrow end-to-end", async () => {
     const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
     const client = new EscrowClient({ contractId: CONTRACT_ID });
@@ -111,7 +178,8 @@ describe("EscrowClient against live testnet", () => {
     const escrow = await client.getEscrow(escrowId);
     expect(escrow.status).toBe("Funded");
     expect(escrow.refundAfter).toBe(refundAfter);
-    expect(escrow.releaser).toBe(releaser.publicKey());
+    expect(escrow.releasers).toEqual([releaser.publicKey()]);
+    expect(escrow.threshold).toBe(1);
 
     // A deadline that has already passed must be rejected at creation
     // (Error::InvalidRefundAfter) — it would let anyone refund the escrow
