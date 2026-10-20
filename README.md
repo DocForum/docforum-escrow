@@ -227,6 +227,47 @@ const { escrowId } = await client.createQuorumEscrow({
 await client.releaseWithApprovals({ escrowId, approvers: [a, c] });
 ```
 
+### Fee estimation and fee-bump sponsorship
+
+Sponsors can price a call before paying for it, and wrap a user-signed
+transaction in a fee-bump with a hard cap. `estimate` simulates against
+the configured RPC — nothing is signed or sent — and returns the resource
+fee (with a 20% buffer over the simulated minimum, rounded up), the
+inclusion fee, and their total, all in stroops:
+
+```ts
+import { Address, nativeToScVal } from "@stellar/stellar-sdk";
+
+const estimate = await client.estimate({
+  source: payer,
+  method: "release",
+  args: [nativeToScVal(escrowId, { type: "u64" }), new Address(releaser).toScVal()],
+});
+if (estimate.total > budget) throw new Error("too expensive to sponsor");
+```
+
+`guardSponsorship` decides whether a transaction is safe to sponsor: it
+inspects **every** operation and every contract-address auth entry, and
+rejects anything that is not an invocation of the escrow contract (a
+foreign contract id, a smuggled payment, a double fee-bump). Account
+auth entries — the payer's and releaser's signatures — are expected and
+allowed:
+
+```ts
+const guard = client.guardSponsorship(signedXdr);
+if (!guard.ok) throw new Error(guard.reasons.join("; "));
+// or: client.assertSponsorable(signedXdr) — throws SponsorshipGuardError
+```
+
+`feeBump` wraps the signed envelope for the sponsor. Its fee is
+`baseFee × (inner operations + 1)` (the inner fee is refunded), and it
+throws `MaxFeeExceededError` before building anything if that would
+exceed `maxFee` — the cap is never silently overshot:
+
+```ts
+const { xdr, fee } = client.feeBump(signedXdr, sponsor, { maxFee: 10_000n });
+```
+
 ## Documentation
 
 | Doc | Purpose |
