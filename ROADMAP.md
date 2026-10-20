@@ -291,6 +291,12 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   repo's.
 
 ## Changelog
+
+> New entries go in `changelog.d/`, one file per PR — see
+> `changelog.d/README.md`. Maintainers fold them in here with
+> `node scripts/fold-changelog.mjs`. Please don't append to this section
+> directly.
+
 - 2026-10-19 — Issue #70 (Phase E6): added `estimate`, `feeBump`,
   `guardSponsorship` and `assertSponsorable` to the SDK. Estimation runs
   through the client's RPC and reports the resource fee with a buffered
