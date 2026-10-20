@@ -129,6 +129,7 @@ impl PayeeHook {
                     &releaser,
                     &None,
                     &false,
+                    &None,
                 );
             }
             _ => {}
@@ -172,6 +173,7 @@ fn fixture(env: &Env) -> Fixture<'_> {
         &releaser,
         &None,
         &true,
+        &None,
     );
 
     Fixture {
@@ -222,6 +224,7 @@ fn quorum_release_invokes_opted_in_contract_payee() {
         &2,
         &None,
         &true,
+        &None,
     );
 
     escrow.release_with_approvals(&id, &soroban_sdk::vec![&env, first, second]);
