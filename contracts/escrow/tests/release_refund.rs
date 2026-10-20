@@ -48,6 +48,7 @@ fn fund_escrow(env: &Env, amount: i128) -> Fixture<'_> {
         &releaser,
         &None,
         &false,
+        &None,
     );
 
     Fixture {
