@@ -46,6 +46,18 @@ Two reasons, stated plainly rather than blended together:
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
 | `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
 | `settle_many(caller, ops: Vec<(escrow_id, Release|Refund)>) -> Vec<SettleResult>` | ✅ Implemented | Batch release/refund: applies each op with the same per-op auth and state checks as the single-op functions, returning a per-op result so callers know exactly which escrows settled. Best-effort, not atomic — see [ADR 0005](docs/adr/0005-batch-settlement-best-effort.md). Bounded by `MAX_BATCH_SIZE`. |
+| `__constructor(allowed_tokens)` | ✅ Implemented | Stores the immutable deploy-time token allowlist; an empty list allows all tokens. |
+| `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to) -> escrow_id` | ✅ Implemented locally (callback not deployed) | Pulls funds from `payer`, stores a bounded `condition_ref`, and stores the single `releaser` as a one-address set with threshold 1. Optional `refund_to` (default: `payer`) fixes where every refund goes, set once under the funder's signature; it may not be the contract itself ([ADR 0009](docs/adr/0009-sponsored-funding-refund-to.md)). Requires payer auth; when `notify_payee` is true, also requires payee auth and calls `on_escrow_released` on release. |
+| `create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id` | ✅ Implemented locally | Optional payee acceptance gate. When enabled, the payee must call `accept(escrow_id, payee)` before a releaser can release; refunds remain available. |
+| `accept(escrow_id, payee)` | ✅ Implemented locally | Payee-authorized, one-time acceptance for a funded escrow configured with the acceptance gate. |
+| `create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id` | ✅ Implemented | Same, but settles by M-of-N: 1–10 distinct `releasers` (`MAX_RELEASERS`), `1 <= threshold <= releasers.len()`. Callback opt-in has the same payee-authorization requirement. See [ADR 0007](docs/adr/0007-in-contract-m-of-n-releaser-quorum.md). |
+| `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
+| `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releasers`, `threshold`, `refund_after` and `refund_to`, so payees can check the deal before relying on it. |
+| `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser` when the threshold is 1; moves funds to `payee`. Never gated by `refund_after`. |
+| `release_with_approvals(escrow_id, approvers) -> Result<()>` | ✅ Implemented | M-of-N release: at least `threshold` distinct releasers, each authorizing this exact invocation. Approvals are not stored, so nothing can be replayed. Only while `Funded`. |
+| `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to the escrow's `refund_to` (the `payer` unless set otherwise at creation). The `releaser` may always call it (threshold 1); once `refund_after` has passed, anyone may — still only to `refund_to` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
+| `refund_with_approvals(escrow_id, approvers) -> Result<()>` | ✅ Implemented | M-of-N refund with the same approval rules; the timeout path above needs no approvals. |
+| `top_up(escrow_id, payer, amount) -> Result<()>` | ✅ Implemented | Adds funds to a `Funded` escrow; original payer only. Emits a `top_up` event. |
 
 ```
 EscrowStatus = Funded | Released | Refunded
@@ -60,11 +72,32 @@ T2): instead of locking funds permanently, a deadline lets anyone return
 them to the payer. See [ADR 0004](docs/adr/0004-timeout-refund-path.md)
 for the decision and what it means for payees.
 
+ feat/issue-29-phase-e5-batch-release-and-refund-for-fast
 Batch settlement exists for threat model T1 (leaked releaser key): the only
 response is to race the attacker and settle every open escrow correctly first, and one
 transaction per escrow makes that race slow. `settle_many` lets a releaser settle many
 escrows per transaction. See [`docs/threat-model.md`](docs/threat-model.md) for the
 updated T1 response guidance.
+
+`refund_to` is optional and exists for sponsored funding: a sponsor,
+employer or grant programme (the `payer`) funds an escrow but refunds
+should go to someone else — or, by default, back to the sponsor. It is
+set once at creation under the funder's own signature, applies to every
+refund path (releaser and timeout), and can never be changed or chosen at
+payout, so the "destinations are fixed at creation" invariant (I1) holds.
+Omit it and behaviour is exactly as before. Make sure the destination
+can hold the token: if the transfer to it fails, so does the refund. See
+[ADR 0009](docs/adr/0009-sponsored-funding-refund-to.md).
+
+Single-releaser escrows are unchanged by the M-of-N option: `create_escrow`
+stores the one address with `threshold = 1`, `release`/`refund` behave exactly
+as before, and the approval entry points simply accept that one address too.
+No new admin, owner, pause or upgrade role exists — `releasers` is escrow data
+chosen by the payer, not authority over the contract (see
+[ADR 0006](docs/adr/0006-openzeppelin-stellar-library-evaluation.md) for why
+OpenZeppelin's pause/upgradeable/access modules are deliberately **not**
+adopted).
+ main
 
 **Design rule, enforced deliberately:** the contract decides **who** may
 call `release`/`refund`, never **why**. `condition_ref` is an opaque
