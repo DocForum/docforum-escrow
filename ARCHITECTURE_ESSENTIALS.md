@@ -12,6 +12,8 @@
 ```
 __constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee) -> escrow_id   // Phase E5 callback implemented locally; not deployed
+create_escrow_with_acceptance(..., requires_acceptance) -> escrow_id   // optional payee acceptance gate
+accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release
 create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, 1..=10 releasers, 1 <= threshold <= len
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
@@ -74,7 +76,19 @@ await client.refund({ escrowId, caller });   // { txHash } — releaser when thr
 await client.refundWithApprovals({ escrowId, approvers });  // { txHash } — M-of-N refund
 await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
 const stop = client.subscribe(handler, { cursor, pollIntervalMs }); // serial polling; await handler for back-pressure
+await client.estimate({ source, method, args }); // { resourceFee, inclusionFee, total, minResourceFee } — simulation only, 20% resource buffer
+client.guardSponsorship(signedXdr);          // { ok, reasons, invokedContracts } — every op + contract auth entry must target this escrow
+client.feeBump(signedXdr, sponsor, { maxFee, baseFee? }); // { xdr, fee, innerTxHash } — throws MaxFeeExceededError, never overshoots the cap
 ```
+`estimate` never signs or submits; it simulates against the client's RPC
+and reports stroops. `guardSponsorship` is the pre-sponsorship check for
+transactions that come from someone else: it rejects foreign contract
+invocations, non-invocation operations, contract-address auth entries
+pointing elsewhere, and already-bumped envelopes, while allowing the
+account auth entries (payer/releaser) a legitimate escrow call carries.
+`feeBump` charges `baseFee × (inner operations + 1)` and validates the
+cap before building the envelope, so a fee spike fails loudly instead of
+silently costing more than the sponsor agreed to.
 Event results are a discriminated union: known lifecycle events expose
 their event type and escrow id; unrecognized topics are returned as
 `type: "unknown"` with decoded topic values and payload. Persist the
