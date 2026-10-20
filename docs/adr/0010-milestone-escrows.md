@@ -1,4 +1,4 @@
-# ADR 0005: fixed milestone schedules
+# ADR 0010: fixed milestone schedules
 
 **Status:** Accepted for issue #21
 **Date:** 2026-10-16

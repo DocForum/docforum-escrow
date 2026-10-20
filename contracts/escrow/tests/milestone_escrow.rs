@@ -28,7 +28,7 @@ fn setup<'a>(env: &'a Env, milestones: &[i128]) -> Fixture<'a> {
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
     let client = EscrowContractClient::new(env, &contract_id);
     let mut schedule = Vec::new(env);
     let mut amount = 0_i128;
@@ -126,7 +126,7 @@ fn rejects_invalid_schedule_without_locking_funds() {
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
     let mut schedule = Vec::new(&env);
     schedule.push_back(400_i128);
