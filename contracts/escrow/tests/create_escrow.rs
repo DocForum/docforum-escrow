@@ -161,5 +161,8 @@ fn create_escrow_rejects_condition_ref_that_is_too_long() {
         &None,
     );
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), Ok(docforum_escrow::Error::ConditionRefTooLong));
+    assert_eq!(
+        result.unwrap_err(),
+        Ok(docforum_escrow::Error::ConditionRefTooLong)
+    );
 }

@@ -1,8 +1,9 @@
 use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
-    testutils::Address as _,
+    symbol_short,
+    testutils::{Address as _, Events as _},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String, Vec,
+    vec, Address, Env, IntoVal, String, Vec,
 };
 
 struct Fixture<'a> {
@@ -60,6 +61,34 @@ fn top_up_adds_funds_to_the_same_funded_escrow() {
     assert_eq!(f.token.balance(&f.contract_id), 500);
     f.client.release(&f.id, &f.releaser);
     assert_eq!(f.token.balance(&f.payee), 500);
+}
+
+/// `top_up` is the only lifecycle event this contract emits today (contract
+/// lifecycle events are issue #9). Per issue #120 this test's committed
+/// snapshot is the one that shows an event diff when the event changes —
+/// note there is deliberately no contract call after `top_up`: the test SDK
+/// clears the event buffer at the start of every top-level invocation, so a
+/// trailing read/assert-call would empty the snapshot's `events` array.
+#[test]
+fn top_up_emits_an_event() {
+    let env = Env::default();
+    let f = setup(&env);
+
+    f.client.top_up(&f.id, &f.payer, &200);
+
+    // Only this contract's events: the token's own `transfer` event is
+    // emitted by a different contract in the same invocation.
+    assert_eq!(
+        env.events().all().filter_by_contract(&f.contract_id),
+        vec![
+            &env,
+            (
+                f.contract_id.clone(),
+                (symbol_short!("top_up"), f.id).into_val(&env),
+                (200i128, 500i128).into_val(&env),
+            ),
+        ]
+    );
 }
 
 #[test]

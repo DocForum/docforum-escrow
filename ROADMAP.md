@@ -4,7 +4,7 @@
 > item below.
 
 **Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (bound condition_ref length) started — see below; not yet redeployed to testnet.**
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (contract features) now includes the OZ-library evaluation (ADR 0006, no library adopted) and the optional in-contract M-of-N releaser quorum (ADR 0007, SDK 0.5.0) — implemented, tested and pending a testnet redeploy. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm. Phase E7 (verification/release engineering) started: committed Soroban test snapshots with a CI drift check (issue #120) and a CI check that generated SDK bindings match the contract WASM (issue #121).**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -138,6 +138,32 @@
 - [ ] Redeploy to testnet with the new error code and verify live.
   (Breaking contract change — needs a new deployment + tarball per ADR 0003.)
 ## Phase E5 — Contract features
+- [x] **OpenZeppelin Stellar library evaluation** (issue #118) —
+  `docs/adr/0006`: all six candidate modules checked against ADR 0001/0002
+  and the "no hidden admin" rule. Pausable, Upgradeable and the
+  access/role modules are **rejected** (each adds a contract-level role,
+  and a pause switch would let its holder block every release and timeout
+  refund); smart-account/multisig-account modules stay out of scope; no
+  stable OZ release supports this contract's `soroban-sdk` major (0.7.2
+  requires `^26.1.0`, this contract pins 27.0.6). **Adopted:** the audited
+  checks-effects-interactions ordering (T4) implemented directly in
+  `settle()` — status written before the outbound transfer, with a
+  rollback test (`tests/malicious_token.rs::failed_payout_leaves_the_escrow_funded`).
+  Library pinning/update policy and the wasm/instruction-cost comparison
+  recorded in the ADR. **Not yet on testnet.**
+- [x] **In-contract M-of-N releaser quorum** (issue #119) —
+  `docs/adr/0007`: optional `create_escrow_with_releasers(releasers,
+  threshold)` (1–10 addresses, threshold 1..=len, no duplicates) plus
+  `release_with_approvals`/`refund_with_approvals`. Approvals are collected
+  **in one call** (each approver authorizes that exact invocation) rather
+  than accumulated, so there is no approval state to clear and nothing to
+  replay; duplicates are rejected and never count twice. `EscrowData` now
+  stores `releasers` + `threshold` (single-releaser escrows are stored as
+  1-of-1, entry points unchanged); `release`/`refund` on a quorum escrow
+  return `ThresholdNotMet`. Timeout refunds stay open to anyone. New
+  append-only errors 13–17. 19 tests in `tests/quorum.rs`; single-releaser
+  suites unchanged and green. Breaking read shape → SDK 0.5.0, bindings
+  regenerated. **Not yet on testnet** — the live deployment predates it.
 - [x] Immutable deploy-time token allowlist (issue #36):
   `__constructor(allowed_tokens)` stores approved addresses;
   `create_escrow` rejects unlisted tokens with append-only error code 7.
@@ -164,6 +190,29 @@
   the release workflow) — documented in `CONTRIBUTING.md`; not yet done,
   so `sdk-v0.3.0` is not yet published to npm.
 
+## Phase E7 — Verification, testing & release engineering
+- [x] **Commit Soroban test snapshots, review event/storage diffs in PRs**
+  (issue #120) — `test_snapshots/` is no longer git-ignored; every
+  `cargo test` writes one snapshot per test (events, auth, ledger/storage)
+  and CI fails if the committed files change without being committed. The
+  snapshots were reviewed once on the initial commit. Documented
+  event-capture caveat: the SDK clears the event buffer at the start of
+  every top-level invocation, so a snapshot only shows the events of a
+  test's *last* contract call — `tests/top_up.rs::top_up_emits_an_event`
+  deliberately ends on the emitting call so the mechanism is visible in a
+  diff. Determinism verified by running the suite twice against the
+  committed files (no diff).
+- [x] **CI check that generated SDK bindings match the contract WASM**
+  (issue #121) — `scripts/check-generated-bindings.sh` plus the `sdk-bindings`
+  CI job: builds the WASM, regenerates with the Stellar CLI version pinned in
+  `scripts/stellar-cli-version` (28.1.0, release tarball checksum pinned
+  too), and fails with regeneration instructions if
+  `sdk/src/generated/contract-client.ts` differs. Detects both a stale
+  binding after a contract change and a hand edit; CI never commits the
+  regeneration. Instructions in `sdk/src/generated/README.md`; the
+  previously stale committed bindings (missing `top_up`, errors 6–8) were
+  regenerated here.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -171,6 +220,36 @@
   repo's.
 
 ## Changelog
+- 2026-10-20 — Phase E5 + E7 batch (issues #118, #119, #120, #121).
+  **#118:** ADR 0006 evaluates OpenZeppelin's Stellar contracts library;
+  pause/upgradeable/access are rejected (contract-level roles, and a pause
+  switch would gate releases and timeout refunds), no stable release
+  supports `soroban-sdk` 27, so no crate is adopted — the audited
+  checks-effects-interactions ordering is applied directly instead
+  (`settle()` writes status before transferring; rollback test added).
+  Dependency pinning/update policy + measured wasm/CPU comparison in the
+  ADR (wasm 24,516 → 29,338 bytes; settlement paths +1.3–1.6%).
+  **#119:** ADR 0007 adds an optional in-contract M-of-N releaser set:
+  `create_escrow_with_releasers`, `release_with_approvals`,
+  `refund_with_approvals`; one-call approvals (no stored state, nothing to
+  replay), duplicates rejected, `MAX_RELEASERS = 10`, errors 13–17;
+  `EscrowData` now carries `releasers` + `threshold` (single-releaser
+  escrows store 1-of-1 and keep using `release`/`refund`). 19 new tests;
+  57 contract tests green. SDK 0.4.0 → **0.5.0** (breaking read shape), with
+  `createQuorumEscrow`/`releaseWithApprovals`/`refundWithApprovals`,
+  offline validation tests, and regenerated bindings. **Not yet on testnet.**
+  **#120:** committed `test_snapshots/` for every test (57 files) and a CI
+  drift check; documented how to update them intentionally and the
+  last-invocation-only event-capture caveat.
+  **#121:** pinned the Stellar CLI (`scripts/stellar-cli-version`, 28.1.0 +
+  tarball checksum), added `scripts/check-generated-bindings.sh` and the
+  `sdk-bindings` CI job; regenerating against the current WASM revealed the
+  committed bindings were stale (missing `top_up`, `create_*` docs and
+  errors 6–8) — now fixed. CI's offline SDK step also runs the new quorum
+  validation tests (`npm run test:offline`). Note on numbering: Phase E6
+  above references `docs/adr/0005` (npm publishing), but that file is not in
+  this tree — 0006 and 0007 are used by this batch to avoid overwriting it if
+  it lands later.
 - 2026-10-17 — Phase E5 started: bounded `condition_ref` to 64 bytes at
   creation (new error `ConditionRefTooLong = 7`), added contract test,
   added SDK client-side validation (`MAX_CONDITION_REF_LENGTH`), updated

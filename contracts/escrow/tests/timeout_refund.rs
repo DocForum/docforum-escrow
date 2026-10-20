@@ -349,7 +349,11 @@ fn get_escrow_exposes_the_stored_parties_and_deadline() {
     assert_eq!(data.payer, f.payer);
     assert_eq!(data.payee, f.payee);
     assert_eq!(data.amount, 300);
-    assert_eq!(data.releaser, f.releaser);
+    // A single-releaser escrow is stored as a one-address set with a
+    // threshold of 1 (docs/adr/0007) — same authority, same behaviour.
+    assert_eq!(data.releasers.len(), 1);
+    assert_eq!(data.releasers.get(0).unwrap(), f.releaser);
+    assert_eq!(data.threshold, 1);
     assert_eq!(data.refund_after, Some(DEADLINE));
     assert_eq!(data.status, EscrowStatus::Funded);
 }
