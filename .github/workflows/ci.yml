@@ -126,6 +126,8 @@ jobs:
       # Never the live testnet suite (see the note at the end of this file).
       - run: npm run test:offline
 
+      - run: npm run test:unit
+
       - run: npm run test:runtime
 
   sdk-bun:

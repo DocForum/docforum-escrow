@@ -89,8 +89,10 @@ export class FakeEscrowClient {
       token: params.token,
       amount: params.amount,
       conditionRef: params.conditionRef,
-      releaser: params.releaser,
+      releasers: [params.releaser],
+      threshold: 1,
       refundAfter: params.refundAfter,
+      notifyPayee: params.notifyPayee ?? false,
       status: "Funded",
     });
     return { escrowId, txHash: `fake-tx-${++this.nextTx}` };
@@ -111,7 +113,7 @@ export class FakeEscrowClient {
     const record = this.getRecord(params.escrowId);
     this.maybeFail("release", record);
     this.requireFunded(record);
-    if (signerAddress(params.caller) !== record.releaser) {
+    if (record.threshold !== 1 || !record.releasers.includes(signerAddress(params.caller))) {
       throw new FakeEscrowError("Unauthorized");
     }
     record.status = "Released";
@@ -124,7 +126,7 @@ export class FakeEscrowClient {
     this.requireFunded(record);
     const caller = signerAddress(params.caller);
     const timeoutPassed = record.refundAfter !== undefined && this.clock() >= record.refundAfter;
-    if (caller !== record.releaser && !timeoutPassed) {
+    if (!record.releasers.includes(caller) && !timeoutPassed) {
       throw new FakeEscrowError("Unauthorized");
     }
     record.status = "Refunded";

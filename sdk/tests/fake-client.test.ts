@@ -45,8 +45,10 @@ describe("FakeEscrowClient contract behavior", () => {
       token: "CTOKEN",
       amount: 500n,
       conditionRef: "test-record",
-      releaser: releaser.publicKey(),
+      releasers: [releaser.publicKey()],
+      threshold: 1,
       refundAfter: clock.now() + 120n,
+      notifyPayee: false,
       status: "Funded",
     });
   });
