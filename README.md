@@ -57,6 +57,7 @@ deployment, so choosing an empty list deliberately disables the protection.
 | `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it (threshold 1); once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
 | `refund_with_approvals(escrow_id, approvers) -> Result<()>` | ✅ Implemented | M-of-N refund with the same approval rules; the timeout path above needs no approvals. |
 | `top_up(escrow_id, payer, amount) -> Result<()>` | ✅ Implemented | Adds funds to a `Funded` escrow; original payer only. Emits a `top_up` event. |
+| `rotate_releaser(escrow_id, caller, new_releaser) -> Result<()>` | ✅ Implemented | On a single-releaser funded escrow, the current releaser and payer jointly set a new releaser. Contract and payee destinations are rejected. See [ADR 0009](docs/adr/0009-two-party-releaser-rotation.md). |
 
 ```
 EscrowStatus = Funded | Released | Refunded

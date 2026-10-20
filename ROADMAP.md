@@ -141,6 +141,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 - [ ] Redeploy to testnet with the new error code and verify live.
   (Breaking contract change — needs a new deployment + tarball per ADR 0003.)
 ## Phase E5 — Contract features
+- [x] Two-party releaser rotation (issue #23): on a single-releaser funded escrow, the current releaser and payer authorize; the contract and payee cannot be selected. See ADR 0009.
 - [x] **OpenZeppelin Stellar library evaluation** (issue #118) —
   `docs/adr/0006`: all six candidate modules checked against ADR 0001/0002
   and the "no hidden admin" rule. Pausable, Upgradeable and the
@@ -254,6 +255,9 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   repo's.
 
 ## Changelog
+
+- 2026-10-16 — Added two-party releaser rotation for funded single-releaser escrows (issue #23): the current releaser and payer authorize, contract and payee replacement addresses are rejected, and a rotation event records the change. See ADR 0009.
+
 - 2026-10-19 — Issue #70 (Phase E6): added `estimate`, `feeBump`,
   `guardSponsorship` and `assertSponsorable` to the SDK. Estimation runs
   through the client's RPC and reports the resource fee with a buffered

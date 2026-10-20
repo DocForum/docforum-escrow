@@ -93,7 +93,8 @@ export const Errors = {
   17: {message:"DuplicateReleaser"},
   18: {message:"AcceptanceRequired"},
   19: {message:"AcceptanceNotConfigured"},
-  20: {message:"AlreadyAccepted"}
+  20: {message:"AlreadyAccepted"},
+  21: {message:"InvalidReleaser"}
 }
 
 
