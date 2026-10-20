@@ -48,6 +48,7 @@ fn fund_escrow(env: &Env, amount: i128) -> Fixture<'_> {
         &String::from_str(env, "opaque-condition-ref"),
         &releaser,
         &None,
+        &false,
     );
 
     Fixture {
