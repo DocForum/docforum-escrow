@@ -33,7 +33,7 @@ in this document still describes the same design.*
 |---|---|---|
 | I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination. |
 | I2 | Only the escrow's releasers can move funds out — `threshold` distinct ones when the escrow was created M-of-N (ADR 0007) — or, once `refund_after` has passed, anyone at all, and then still only back to `payer`. | `require_auth()` per caller/approver + membership in the stored `releasers` set + the threshold check (`check_single_caller`, `check_approvals`), relaxed solely by the deadline check in `refund`. Duplicate approvers are rejected. |
-| I3 | Each escrow pays out at most once. | `status == Funded` check before transfer, status written after — shared by release and both refund paths. |
+| I3 | Each escrow pays out at most once. | `status == Funded` check and terminal status write before transfer/callback; failures roll back atomically. |
 | I4 | An escrow only exists, or grows, if the declared funds were actually transferred in. | `payer.require_auth()` + shared exact-balance-delta verification on create/top-up before storage is updated. |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
 
@@ -177,6 +177,23 @@ value. **Reviewers should challenge these ratings.**
   to every path a SEP-41 token could use to reach this contract,
   including through an intermediate third contract.
 
+### T11 — Malicious or failing release callback · **Medium (payee opt-in)**
+- A payee contract that authorizes `create_escrow` while
+  `notify_payee` is true opts in to the callback. The payer cannot opt a
+  payee in without its authorization. The payee can still make its callback
+  expensive, return an error, or attempt to re-enter `release`, `refund`, or
+  `create_escrow`.
+- Callback errors fail `release` atomically (`CallbackFailed`); token movement
+  and the `Released` state do not persist. The releaser can still refund, and
+  anyone can refund after `refund_after`. Refund never invokes the payee.
+- Soroban rejects re-entry while the escrow is already on the call stack.
+  Tests in `tests/release_callback.rs` attempt all three state-changing
+  entry points. A transaction budget exhaustion also fails release; the hook
+  is synchronous and must stay bounded. The escrow makes one callback with
+  fixed arguments and does not retry or loop.
+- The payee must authorize creation when `notify_payee` is true. Only use it
+  for a contract address implementing `on_escrow_released(u64, i128)`; a
+  consenting address without the method cannot complete release. See ADR 0005.
 ### T5 — Malicious or non-standard `token` · **Medium**
 `token` is any address the payer supplies. The contract trusts it to
 behave like SEP-41.
@@ -297,6 +314,19 @@ behave like SEP-41.
   ("opaque-condition-ref", "sdk-integration-test-release"). Breaking
   for integrators passing longer refs — checked `docforum-core`'s usage
   pattern (opaque record id) and it stays well within the bound.
+
+### T11 — Malicious or failing release callback · **Medium (payee opt-in)**
+- The payer cannot opt a payee into callbacks without its authorization:
+  when `notify_payee` is true, both single-releaser and quorum creation call
+  `payee.require_auth()`. The payee contract can still consume transaction
+  budget, fail, or attempt to re-enter `release`, `refund`, or `create_escrow`.
+- Callback errors fail `release` atomically (`CallbackFailed`); token movement
+  and the `Released` state do not persist. The releaser can still refund, and
+  anyone can refund after `refund_after`. Refund never invokes the payee.
+- Soroban rejects re-entry while the escrow is on the call stack. Tests in
+  `tests/release_callback.rs` cover release/refund/create attempts; the same
+  settlement helper handles single and quorum releases. The callback is one
+  synchronous call with fixed arguments and no retries or loops. See ADR 0005.
 
 ## 4. SDK-specific notes (`sdk/src/index.ts`)
 

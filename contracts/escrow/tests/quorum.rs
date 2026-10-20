@@ -67,6 +67,7 @@ fn quorum_escrow(
         &releasers,
         &threshold,
         &refund_after,
+        &false,
     );
 
     Fixture {
@@ -119,6 +120,7 @@ fn create_rejects_an_empty_releaser_set() {
         &Vec::<Address>::new(&env),
         &1,
         &None,
+        &false,
     );
 
     assert_eq!(result, Err(Ok(Error::InvalidThreshold)));
@@ -141,6 +143,7 @@ fn create_rejects_zero_threshold_and_threshold_above_set_size() {
             &releasers,
             &threshold,
             &None,
+            &false,
         );
         assert_eq!(result, Err(Ok(Error::InvalidThreshold)));
     }
@@ -165,6 +168,7 @@ fn create_rejects_duplicate_releasers() {
         &releasers,
         &2,
         &None,
+        &false,
     );
 
     assert_eq!(result, Err(Ok(Error::DuplicateReleaser)));
@@ -186,6 +190,7 @@ fn create_bounds_the_releaser_set_size() {
         &too_many,
         &1,
         &None,
+        &false,
     );
     assert_eq!(result, Err(Ok(Error::TooManyReleasers)));
 
@@ -200,6 +205,7 @@ fn create_bounds_the_releaser_set_size() {
         &at_limit,
         &1,
         &None,
+        &false,
     );
     assert!(created.is_ok());
 }
@@ -220,6 +226,7 @@ fn rejected_quorum_creation_locks_nothing() {
             &releaser_set(&env, 2),
             &3,
             &None,
+            &false,
         )
         .is_err());
 
@@ -471,6 +478,7 @@ fn single_releaser_escrow_behaves_as_a_one_of_one_quorum() {
         &String::from_str(&env, "single-a"),
         &releaser,
         &None,
+        &false,
     );
     let data = client.get_escrow(&first);
     assert_eq!(data.threshold, 1);
@@ -490,6 +498,7 @@ fn single_releaser_escrow_behaves_as_a_one_of_one_quorum() {
         &String::from_str(&env, "single-b"),
         &releaser,
         &None,
+        &false,
     );
     let mut approvers = Vec::new(&env);
     approvers.push_back(releaser.clone());

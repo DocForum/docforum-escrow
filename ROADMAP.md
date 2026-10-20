@@ -175,6 +175,11 @@
   deployment predates this constructor; a new testnet deployment and
   verification are required before claiming the live contract is
   protected. Closes issue #36.
+- [x] Optional release callback (issue #53): both single-releaser and
+  quorum creation require payee authorization when `notify_payee` is true;
+  release calls `on_escrow_released` after transfer and rolls back atomically
+  on failure. Re-entry tests cover release/refund/create attempts. ADR 0005
+  and threat-model T11 document the decision. Not deployed to testnet.
 ## Phase E6 — SDK & integrator tooling
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
   triggered by an `sdk-v*` tag: builds, typechecks, tests, runs
@@ -224,6 +229,9 @@
   repo's.
 
 ## Changelog
+- 2026-10-19 — Required payee authorization when `notify_payee` is enabled,
+  and extended the callback to quorum escrows after #203 introduced M-of-N
+  releasers. Updated ADR 0005, T11, API docs and generated bindings.
 - 2026-10-20 — Phase E5 + E7 batch (issues #118, #119, #120, #121).
   **#118:** ADR 0006 evaluates OpenZeppelin's Stellar contracts library;
   pause/upgradeable/access are rejected (contract-level roles, and a pause
@@ -259,6 +267,12 @@
   added SDK client-side validation (`MAX_CONDITION_REF_LENGTH`), updated
   T10, README and ARCHITECTURE_ESSENTIALS.md. Not yet redeployed to
   testnet. Closes issue #57.
+- 2026-10-18 — Fixed PR #183's contract CI after merging newer `main`:
+  restored the `IntoVal` import, assigned `CallbackFailed` error code 8
+  after `DisallowedToken` code 7, supplied the callback opt-in and
+   allowlist constructor arguments in affected tests, and regenerated the
+   SDK binding from the merged contract spec. `cargo test` and the WASM
+   release build pass locally.
 - 2026-10-16 — Implemented the immutable deploy-time token allowlist for
   issue #36. Contract tests/docs updated; awaiting a new testnet deployment
   before claiming the protection is live.

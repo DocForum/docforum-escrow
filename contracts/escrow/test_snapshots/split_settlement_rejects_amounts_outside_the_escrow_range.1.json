@@ -75,7 +75,10 @@
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
                 },
-                "void"
+                "void",
+                {
+                  "bool": false
+                }
               ]
             }
           },
@@ -175,7 +178,10 @@
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAXI7N"
                 },
-                "void"
+                "void",
+                {
+                  "bool": false
+                }
               ]
             }
           },
@@ -275,7 +281,10 @@
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABDWC6"
                 },
-                "void"
+                "void",
+                {
+                  "bool": false
+                }
               ]
             }
           },
@@ -517,6 +526,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "notify_payee"
+                    },
+                    "val": {
+                      "bool": false
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "payee"
                     },
                     "val": {
@@ -711,6 +728,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "notify_payee"
+                    },
+                    "val": {
+                      "bool": false
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "payee"
                     },
                     "val": {
@@ -901,6 +926,14 @@
                     },
                     "val": {
                       "string": "split-test"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "notify_payee"
+                    },
+                    "val": {
+                      "bool": false
                     }
                   },
                   {

@@ -75,7 +75,10 @@
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
                 },
-                "void"
+                "void",
+                {
+                  "bool": false
+                }
               ]
             }
           },
@@ -155,7 +158,10 @@
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
                 },
-                "void"
+                "void",
+                {
+                  "bool": false
+                }
               ]
             }
           },
@@ -401,6 +407,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "notify_payee"
+                    },
+                    "val": {
+                      "bool": false
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "payee"
                     },
                     "val": {
@@ -503,6 +517,14 @@
                     },
                     "val": {
                       "string": "single-b"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "notify_payee"
+                    },
+                    "val": {
+                      "bool": false
                     }
                   },
                   {

@@ -34,6 +34,7 @@ fn setup(env: &Env) -> Fixture<'_> {
         &String::from_str(env, "split-test"),
         &releaser,
         &None,
+        &false,
     );
     Fixture { client, token, payer, payee, releaser, id }
 }
