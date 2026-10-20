@@ -73,6 +73,10 @@ pub struct EscrowData {
     /// If true, invoke the contract payee's `on_escrow_released` hook after
     /// the payout transfer. A failed callback reverts the whole release.
     pub notify_payee: bool,
+    /// Whether release requires the payee's explicit acceptance.
+    pub requires_acceptance: bool,
+    /// Ledger timestamp at which the payee accepted, if any.
+    pub accepted_at: Option<u64>,
 }
 
 #[contracttype]
@@ -133,6 +137,9 @@ pub enum Error {
     DuplicateApprover = 16,
     /// The same address appeared twice in the releaser set at creation.
     DuplicateReleaser = 17,
+    AcceptanceRequired = 18,
+    AcceptanceNotConfigured = 19,
+    AlreadyAccepted = 20,
 }
 
 #[contract]
@@ -181,7 +188,68 @@ impl EscrowContract {
             1,
             refund_after,
             notify_payee,
+            false,
         )
+    }
+
+    /// Creates an escrow with an opt-in payee acceptance gate. Existing
+    /// integrations can keep using `create_escrow`, which defaults this off.
+    pub fn create_escrow_with_acceptance(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        requires_acceptance: bool,
+    ) -> Result<u64, Error> {
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        Self::create_escrow_inner(
+            &env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            1,
+            refund_after,
+            false,
+            requires_acceptance,
+        )
+    }
+
+    /// Records the payee's acceptance for an opted-in funded escrow.
+    pub fn accept(env: Env, escrow_id: u64, payee: Address) -> Result<(), Error> {
+        payee.require_auth();
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+        if data.payee != payee {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        if !data.requires_acceptance {
+            return Err(Error::AcceptanceNotConfigured);
+        }
+        if data.accepted_at.is_some() {
+            return Err(Error::AlreadyAccepted);
+        }
+        let accepted_at = env.ledger().timestamp();
+        data.accepted_at = Some(accepted_at);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        env.events()
+            .publish((symbol_short!("accepted"), escrow_id), (payee, accepted_at));
+        Ok(())
     }
 
     /// Same as `create_escrow`, but the escrow is settled by M-of-N
@@ -214,6 +282,7 @@ impl EscrowContract {
             threshold,
             refund_after,
             notify_payee,
+            false,
         )
     }
 
@@ -364,6 +433,7 @@ impl EscrowContract {
         threshold: u32,
         refund_after: Option<u64>,
         notify_payee: bool,
+        requires_acceptance: bool,
     ) -> Result<u64, Error> {
         let allowed_tokens: Vec<Address> = env
             .storage()
@@ -408,6 +478,8 @@ impl EscrowContract {
             threshold,
             refund_after,
             notify_payee,
+            requires_acceptance,
+            accepted_at: None,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Self::add_liability(env, &data.token, amount)?;
@@ -498,6 +570,12 @@ impl EscrowContract {
             EscrowStatus::Released => data.payee.clone(),
             _ => data.payer.clone(),
         };
+        if settled == EscrowStatus::Released
+            && data.requires_acceptance
+            && data.accepted_at.is_none()
+        {
+            return Err(Error::AcceptanceRequired);
+        }
         data.status = settled;
         env.storage()
             .persistent()
