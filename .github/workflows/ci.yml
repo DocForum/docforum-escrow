@@ -55,6 +55,36 @@ jobs:
       - name: Confirm wasm artifact exists
         run: test -f target/wasm32v1-none/release/docforum_escrow.wasm
 
+  # Issue #133: the token conformance suite runs the whole escrow lifecycle
+  # against every supported token implementation — the native SAC, an
+  # issued-asset SAC and a custom SEP-41 token. The `contract` job above
+  # already runs it as part of `cargo test`; this job exists so a token
+  # regression fails a check that names the suite, and so the matrix is
+  # visible in the CI UI. See docs/token-conformance.md.
+  token-conformance:
+    name: Token conformance (native SAC, issued SAC, custom SEP-41)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/escrow
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+
+      - name: cargo test --test token_conformance
+        run: cargo test --test token_conformance
+
   # Issue #121: the committed generated client must be exactly what the pinned
   # Stellar CLI generates from the current contract WASM. Catches both a
   # contract change without regeneration and a hand edit to the generated file.
