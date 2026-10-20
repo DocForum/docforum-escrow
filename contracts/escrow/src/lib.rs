@@ -115,6 +115,8 @@ pub enum Error {
     DuplicateApprover = 16,
     /// The same address appeared twice in the releaser set at creation.
     DuplicateReleaser = 17,
+    /// The shared token pool cannot cover this escrow's payout.
+    PoolInsufficient = 21,
 }
 
 #[contract]
@@ -478,13 +480,17 @@ impl EscrowContract {
             EscrowStatus::Released => data.payee.clone(),
             _ => data.payer.clone(),
         };
+        let token_client = token::Client::new(env, &data.token);
+        let contract_address = env.current_contract_address();
+        if token_client.balance(&contract_address) < data.amount {
+            return Err(Error::PoolInsufficient);
+        }
         data.status = settled;
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), data);
 
-        let token_client = token::Client::new(env, &data.token);
-        token_client.transfer(&env.current_contract_address(), &destination, &data.amount);
+        token_client.transfer(&contract_address, &destination, &data.amount);
         if notify_payee {
             let args = (escrow_id, data.amount).into_val(env);
             let callback = env.try_invoke_contract::<(), soroban_sdk::Error>(
