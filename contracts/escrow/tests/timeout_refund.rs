@@ -62,7 +62,15 @@ fn fund_escrow(env: &Env, refund_after: Option<u64>) -> Fixture<'_> {
         &refund_after,
     );
 
-    Fixture { client, token, contract_id, payer, payee, releaser, escrow_id }
+    Fixture {
+        client,
+        token,
+        contract_id,
+        payer,
+        payee,
+        releaser,
+        escrow_id,
+    }
 }
 
 // --- no refund_after: behaviour identical to before the timeout existed ---
@@ -114,12 +122,22 @@ fn create_escrow_rejects_deadline_already_passed_or_now() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let now = client.try_create_escrow(
-        &payer, &payee, &token_id, &300,
-        &String::from_str(&env, "ref-now"), &releaser, &Some(CREATED_AT),
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(&env, "ref-now"),
+        &releaser,
+        &Some(CREATED_AT),
     );
     let past = client.try_create_escrow(
-        &payer, &payee, &token_id, &300,
-        &String::from_str(&env, "ref-past"), &releaser, &Some(CREATED_AT - 1),
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(&env, "ref-past"),
+        &releaser,
+        &Some(CREATED_AT - 1),
     );
 
     assert!(now.is_err());

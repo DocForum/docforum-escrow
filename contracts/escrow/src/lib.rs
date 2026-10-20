@@ -14,7 +14,9 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, String,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -176,17 +178,16 @@ impl EscrowContract {
         }
 
         let token_client = token::Client::new(&env, &data.token);
-        let transfer = token_client.try_transfer(
-            &env.current_contract_address(),
-            &data.payee,
-            &data.amount,
-        );
+        let transfer =
+            token_client.try_transfer(&env.current_contract_address(), &data.payee, &data.amount);
         if !matches!(transfer, Ok(Ok(()))) {
             return Err(Error::Undeliverable);
         }
 
         data.status = EscrowStatus::Released;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
     }
 
@@ -224,7 +225,9 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
 
         data.status = EscrowStatus::Refunded;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
     }
 

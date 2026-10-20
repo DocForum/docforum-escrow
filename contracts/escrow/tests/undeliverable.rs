@@ -1,7 +1,7 @@
 use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short,
-    testutils::Address as _,
+    testutils::{Address as _, IssuerFlags},
     token::{StellarAssetClient, TokenClient},
     Address, Env, String,
 };
@@ -13,6 +13,7 @@ fn unauthorized_sac_payee_leaves_escrow_funded_and_can_be_retried() {
 
     let admin = Address::generate(&env);
     let token_id = env.register_stellar_asset_contract_v2(admin);
+    token_id.issuer().set_flag(IssuerFlags::RevocableFlag);
     let token = TokenClient::new(&env, &token_id.address());
     let asset = StellarAssetClient::new(&env, &token_id.address());
     let payer = Address::generate(&env);
