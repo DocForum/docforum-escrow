@@ -281,6 +281,7 @@ fn failed_payout_leaves_the_escrow_funded() {
         &String::from_str(&env, "opaque-condition-ref"),
         &releaser,
         &None,
+        &false,
     );
 
     token.arm();

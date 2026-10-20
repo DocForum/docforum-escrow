@@ -5,9 +5,9 @@
 
 use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
-    testutils::Address as _,
+    testutils::{Address as _, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String, Vec,
+    Address, Env, IntoVal, String, Vec,
 };
 
 fn setup<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
@@ -171,4 +171,58 @@ fn create_escrow_rejects_condition_ref_that_is_too_long() {
         result.unwrap_err(),
         Ok(docforum_escrow::Error::ConditionRefTooLong)
     );
+}
+
+#[test]
+fn callback_opt_in_requires_payee_authorization() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (token_id, token, asset) = setup(&env);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    asset.mint(&payer, &1_000);
+
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let condition_ref = String::from_str(&env, "payee-opt-in-auth");
+    let invoke = MockAuthInvoke {
+        contract: &contract_id,
+        fn_name: "create_escrow",
+        args: (
+            payer.clone(),
+            payee.clone(),
+            token_id.clone(),
+            300i128,
+            condition_ref.clone(),
+            releaser.clone(),
+            None::<u64>,
+            true,
+        )
+            .into_val(&env),
+        sub_invokes: &[],
+    };
+
+    // The payer authorizes creation, but the opted-in payee does not.
+    env.mock_auths(&[MockAuth {
+        address: &payer,
+        invoke: &invoke,
+    }]);
+    assert!(client
+        .try_create_escrow(
+            &payer,
+            &payee,
+            &token_id,
+            &300,
+            &condition_ref,
+            &releaser,
+            &None,
+            &true,
+        )
+        .is_err());
+    assert_eq!(token.balance(&payer), 1_000);
+    assert!(matches!(
+        client.try_get_status(&0),
+        Err(Ok(docforum_escrow::Error::NotFound))
+    ));
 }

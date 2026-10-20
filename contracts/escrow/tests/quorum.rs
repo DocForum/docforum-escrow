@@ -478,6 +478,7 @@ fn single_releaser_escrow_behaves_as_a_one_of_one_quorum() {
         &String::from_str(&env, "single-a"),
         &releaser,
         &None,
+        &false,
     );
     let data = client.get_escrow(&first);
     assert_eq!(data.threshold, 1);
@@ -497,6 +498,7 @@ fn single_releaser_escrow_behaves_as_a_one_of_one_quorum() {
         &String::from_str(&env, "single-b"),
         &releaser,
         &None,
+        &false,
     );
     let mut approvers = Vec::new(&env);
     approvers.push_back(releaser.clone());
