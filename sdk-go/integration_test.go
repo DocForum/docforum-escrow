@@ -172,6 +172,72 @@ func TestIntegrationRefundLifecycle(t *testing.T) {
 	}
 }
 
+func TestIntegrationTopUpAndApprovals(t *testing.T) {
+	client := integrationClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	signer, err := escrow.NewKeypairSigner(os.Getenv("STELLAR_SECRET_KEY"), os.Getenv("STELLAR_NETWORK_PASSPHRASE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payee := keypair.MustRandom().Address()
+
+	created, err := client.CreateEscrowWithReleasers(ctx, escrow.CreateEscrowWithReleasersParams{
+		Payer:        signer.Address(),
+		Payee:        payee,
+		Token:        os.Getenv("ESCROW_TOKEN_ID"),
+		Amount:       big.NewInt(10_000_000),
+		ConditionRef: fmt.Sprintf("go-sdk-approvals-%d", time.Now().UnixNano()),
+		Releasers:    []string{signer.Address()},
+		Threshold:    1,
+	})
+	if err != nil {
+		t.Fatalf("create escrow with releasers: %v", err)
+	}
+
+	if _, err := client.TopUp(ctx, created.EscrowID, big.NewInt(5_000_000)); err != nil {
+		t.Fatalf("top up: %v", err)
+	}
+	stored, err := client.GetEscrow(ctx, created.EscrowID)
+	if err != nil {
+		t.Fatalf("get escrow after top up: %v", err)
+	}
+	if want := big.NewInt(15_000_000); stored.Amount.Cmp(want) != 0 {
+		t.Fatalf("amount after top up = %s, want %s", stored.Amount, want)
+	}
+
+	if _, err := client.ReleaseWithApprovals(ctx, created.EscrowID, []escrow.Signer{signer}); err != nil {
+		t.Fatalf("release with approvals: %v", err)
+	}
+	if status, err := client.GetStatus(ctx, created.EscrowID); err != nil {
+		t.Fatalf("get status after release with approvals: %v", err)
+	} else if status != escrow.EscrowStatusReleased {
+		t.Fatalf("status after release with approvals = %s, want Released", status)
+	}
+
+	refundable, err := client.CreateEscrowWithReleasers(ctx, escrow.CreateEscrowWithReleasersParams{
+		Payer:        signer.Address(),
+		Payee:        keypair.MustRandom().Address(),
+		Token:        os.Getenv("ESCROW_TOKEN_ID"),
+		Amount:       big.NewInt(10_000_000),
+		ConditionRef: fmt.Sprintf("go-sdk-refund-approvals-%d", time.Now().UnixNano()),
+		Releasers:    []string{signer.Address()},
+		Threshold:    1,
+	})
+	if err != nil {
+		t.Fatalf("create refundable escrow: %v", err)
+	}
+	if _, err := client.RefundWithApprovals(ctx, refundable.EscrowID, []escrow.Signer{signer}); err != nil {
+		t.Fatalf("refund with approvals: %v", err)
+	}
+	if status, err := client.GetStatus(ctx, refundable.EscrowID); err != nil {
+		t.Fatalf("get status after refund with approvals: %v", err)
+	} else if status != escrow.EscrowStatusRefunded {
+		t.Fatalf("status after refund with approvals = %s, want Refunded", status)
+	}
+}
+
 func TestIntegrationUnknownEscrowIsNotFound(t *testing.T) {
 	client := integrationClient(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

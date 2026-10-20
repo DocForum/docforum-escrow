@@ -246,6 +246,7 @@ unless `ESCROW_INTEGRATION=1`. It covers:
 
 - create → `get_status` → `get_escrow` → `release`
 - create → `refund`
+- create → `top_up` → `release_with_approvals` / `refund_with_approvals`
 - unknown id → `ErrNotFound` (contract code 1)
 
 Run against testnet or a local quickstart network:
@@ -290,8 +291,9 @@ The integration job is intentionally additive: it is the environment-dependent
 job. If quickstart's service-container startup, friendbot funding, or contract
 deployment is unavailable in a given runner image, the unit job remains the
 authoritative offline gate and the integration job's log identifies which setup
-step failed. It has not been claimed as passing here — this repository's local
-environment has no Docker daemon or Rust toolchain.
+step failed. The full flow (quickstart + WASM build + deploy + integration
+tests) has been run locally against Stellar CLI v28.1.0; CI runner behavior can
+still differ, so treat the integration job's log as the source of truth there.
 
 ## Versioning
 

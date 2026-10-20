@@ -264,7 +264,7 @@ func (c *Client) CreateEscrow(ctx context.Context, params CreateEscrowParams) (C
 	if payer != signer.Address() {
 		return CreateEscrowResult{}, fmt.Errorf("%w: Payer must match the configured signer %q", ErrUnsupportedAuthorization, signer.Address())
 	}
-	args, err := createEscrowArgs(payer, params.Payee, params.Token, params.Amount, params.ConditionRef, []string{params.Releaser}, 1, params.RefundAfter, params.NotifyPayee)
+	args, err := createEscrowArgs(payer, params.Payee, params.Token, params.Amount, params.ConditionRef, []string{params.Releaser}, 1, params.RefundAfter, params.NotifyPayee, false)
 	if err != nil {
 		return CreateEscrowResult{}, err
 	}
@@ -285,14 +285,18 @@ func (c *Client) CreateEscrowWithReleasers(ctx context.Context, params CreateEsc
 	if payer != signer.Address() {
 		return CreateEscrowResult{}, fmt.Errorf("%w: Payer must match the configured signer %q", ErrUnsupportedAuthorization, signer.Address())
 	}
-	args, err := createEscrowArgs(payer, params.Payee, params.Token, params.Amount, params.ConditionRef, params.Releasers, params.Threshold, params.RefundAfter, params.NotifyPayee)
+	args, err := createEscrowArgs(payer, params.Payee, params.Token, params.Amount, params.ConditionRef, params.Releasers, params.Threshold, params.RefundAfter, params.NotifyPayee, true)
 	if err != nil {
 		return CreateEscrowResult{}, err
 	}
 	return c.executeCreate(ctx, "create_escrow_with_releasers", args)
 }
 
-func createEscrowArgs(payer, payee, token string, amount *big.Int, conditionRef string, releasers []string, threshold uint32, refundAfter *uint64, notifyPayee bool) ([]xdr.ScVal, error) {
+// createEscrowArgs builds the arguments for either create_escrow
+// (useReleaserVec=false, which takes a single releaser) or
+// create_escrow_with_releasers (true, which always takes a vec + threshold,
+// even for a one-releaser escrow).
+func createEscrowArgs(payer, payee, token string, amount *big.Int, conditionRef string, releasers []string, threshold uint32, refundAfter *uint64, notifyPayee bool, useReleaserVec bool) ([]xdr.ScVal, error) {
 	if payee == "" {
 		return nil, fmt.Errorf("%w: Payee is required", ErrInvalidArgument)
 	}
@@ -356,10 +360,10 @@ func createEscrowArgs(payer, payee, token string, amount *big.Int, conditionRef 
 		amountVal,
 		scvString(conditionRef),
 	}
-	if len(releasers) == 1 {
-		args = append(args, releaserVals[0])
-	} else {
+	if useReleaserVec {
 		args = append(args, scvVec(releaserVals), scvU32(threshold))
+	} else {
+		args = append(args, releaserVals[0])
 	}
 	args = append(args, scvOptionU64(refundAfter), scvBool(notifyPayee))
 	return args, nil
