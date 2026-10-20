@@ -7,8 +7,18 @@
 // (payer/payee/amount, not e.g. "patient"). Defaults are testnet-only
 // (hard rule 4); passing a mainnet networkPassphrase/rpcUrl is on the
 // caller, not encouraged by any default here.
-import { Keypair, scValToNative, xdr } from "@stellar/stellar-sdk";
-import { Server as RpcServer, type Api } from "@stellar/stellar-sdk/rpc";
+import {
+  Address,
+  BASE_FEE,
+  FeeBumpTransaction,
+  Keypair,
+  Operation,
+  Transaction,
+  TransactionBuilder,
+  scValToNative,
+  xdr,
+} from "@stellar/stellar-sdk";
+import { Api, Server as RpcServer } from "@stellar/stellar-sdk/rpc";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
 
 export { Keypair };
@@ -78,10 +88,17 @@ export interface Escrow {
   amount: bigint;
   conditionRef: string;
   /**
-   * The address permitted to call `release`/`refund` (docs/adr/0002) —
-   * unless `refundAfter` has passed, in which case anyone may refund.
+   * The addresses permitted to settle this escrow (docs/adr/0002 for the
+   * per-escrow releaser, docs/adr/0007 for M-of-N sets) — unless
+   * `refundAfter` has passed, in which case anyone may refund. A plain
+   * single-releaser escrow has exactly one entry here.
    */
-  releaser: string;
+  releasers: string[];
+  /**
+   * How many distinct addresses from `releasers` must authorize one
+   * settlement. `1` means any single releaser can settle.
+   */
+  threshold: number;
   /**
    * Optional deadline in unix seconds after which **anyone** may refund —
    * always back to `payer` (docs/adr/0004). `undefined` means no timeout:
@@ -89,11 +106,33 @@ export interface Escrow {
    * relying on a `Funded` escrow (threat model T8).
    */
   refundAfter?: bigint;
+  /** Whether to call the contract payee's on_escrow_released hook. Defaults to false. */
+  notifyPayee: boolean;
   status: EscrowStatus;
 }
 
 const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
 const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+
+/**
+ * Maximum allowed length of `conditionRef` in bytes — must match the
+ * contract's bound (currently 64 bytes, see contracts/escrow/src/lib.rs
+ * and docs/threat-model.md T10). Validated client-side so callers fail
+ * fast instead of paying network fees for a rejected transaction.
+ *
+ * Keep in sync with the contract: if the contract bound changes, update
+ * this constant and bump the SDK's semver (hard rule 3).
+ */
+export const MAX_CONDITION_REF_LENGTH = 64;
+
+/**
+ * Maximum number of addresses in one escrow's releaser set — must match the
+ * contract's `MAX_RELEASERS` (currently 10, see docs/adr/0007). Validated
+ * client-side so callers fail fast instead of paying network fees for a
+ * rejected transaction. Keep in sync with the contract; a change is an SDK
+ * semver event (hard rule 3).
+ */
+export const MAX_RELEASERS = 10;
 
 export interface EscrowClientConfig {
   /** The deployed docforum-escrow contract's address (`C…`). */
@@ -125,12 +164,53 @@ export interface CreateEscrowParams {
    * releaser-only, exactly as in 0.2.x.
    */
   refundAfter?: bigint;
+  /** Opt a contract payee into on_escrow_released(escrowId, amount). Defaults to false. */
+  notifyPayee?: boolean;
 }
 
 export interface ReleaseOrRefundParams {
   escrowId: bigint;
-  /** Must be the escrow's `releaser` (set at creation) — see docs/adr/0002. */
+  /**
+   * Must be one of the escrow's `releasers` (set at creation) — see
+   * docs/adr/0002. Only valid when the escrow's threshold is `1`; a
+   * multi-signature escrow settles via `releaseWithApprovals` /
+   * `refundWithApprovals`.
+   */
   caller: Keypair;
+}
+
+/** Creation parameters for an M-of-N releaser escrow (docs/adr/0007). */
+export interface CreateQuorumEscrowParams {
+  /** Signs and pays for this call; funds are pulled from this account. */
+  payer: Keypair;
+  payee: string;
+  token: string;
+  amount: bigint;
+  conditionRef: string;
+  /**
+   * The addresses that settle this escrow. Between 1 and `MAX_RELEASERS`
+   * distinct addresses, stored immutably at creation — there is no setter
+   * and no admin.
+   */
+  releasers: string[];
+  /** How many of `releasers` must approve a settlement (at least 1). */
+  threshold: number;
+  /** See `CreateEscrowParams.refundAfter`. */
+  refundAfter?: bigint;
+  /** Opt a contract payee into `on_escrow_released`; requires payee authorization. */
+  notifyPayee?: boolean;
+}
+
+/** An M-of-N settlement: each keypair signs the contract auth entry. */
+export interface SettlementApprovalsParams {
+  escrowId: bigint;
+  /**
+   * The releasers approving this settlement. The first keypair also pays the
+   * transaction fee; each of them signs the contract authorization entry, so
+   * the list must not repeat a keypair. Without at least `threshold`
+   * distinct approvers the contract rejects the call with `ThresholdNotMet`.
+   */
+  approvers: Keypair[];
 }
 
 /** The relayer pays the transaction fee; the releaser signs only contract auth. */
@@ -144,6 +224,114 @@ export interface RelayedAuthorizationParams {
 export interface RelayedAuthorization {
   transaction: string;
   expiresAtLedger: number;
+}
+
+// ---------------------------------------------------------------------------
+// Fee estimation + sponsorship (issue #70)
+// ---------------------------------------------------------------------------
+
+/** A single contract invocation to estimate the fee of. */
+export interface EstimateCallParams {
+  /** Contract to invoke. Defaults to the client's configured `contractId`. */
+  contractId?: string;
+  /** Contract function name, e.g. `"create_escrow"`. */
+  method: string;
+  /** Already-encoded contract arguments (`xdr.ScVal[]`). */
+  args?: xdr.ScVal[];
+  /** Account that would sign and pay for the call. */
+  source: Keypair;
+}
+
+/** Components of a simulated contract call's fee, in stroops. */
+export interface FeeEstimate {
+  /** Resource fee charged for CPU/memory/ledger entries, buffered for drift. */
+  resourceFee: bigint;
+  /** Inclusion fee: base fee × number of operations. */
+  inclusionFee: bigint;
+  /** `resourceFee + inclusionFee` — what the call is expected to cost. */
+  total: bigint;
+  /** The unbuffered resource fee the simulation reported. */
+  minResourceFee: bigint;
+}
+
+export interface FeeBumpOptions {
+  /**
+   * Hard cap, in stroops, on the fee-bump transaction's fee. If the fee the
+   * bump requires would exceed it, `feeBump` throws `MaxFeeExceededError`
+   * instead of silently exceeding the cap.
+   */
+  maxFee: bigint;
+  /** Base fee per operation for the wrapper, in stroops. Default: the network base fee (100). */
+  baseFee?: bigint;
+}
+
+export interface FeeBumpResult {
+  /** Signed fee-bump envelope, base64 XDR. */
+  xdr: string;
+  /** Fee the fee-bump transaction will charge, in stroops. */
+  fee: bigint;
+  /** Hash of the inner (sponsored) transaction — the one that actually executes. */
+  innerTxHash: string;
+}
+
+/** Outcome of the sponsorship guard. */
+export interface GuardResult {
+  /** True only when every operation and contract-address auth entry targets the escrow contract. */
+  ok: boolean;
+  /** Human-readable rejection reasons, empty when `ok`. */
+  reasons: string[];
+  /** Every contract id the transaction invokes. */
+  invokedContracts: string[];
+}
+
+/** Thrown when the sponsorship guard rejects a transaction. */
+export class SponsorshipGuardError extends Error {
+  readonly reasons: string[];
+  constructor(reasons: string[]) {
+    super(`Sponsorship guard rejected transaction: ${reasons.join("; ")}`);
+    this.name = "SponsorshipGuardError";
+    this.reasons = reasons;
+  }
+}
+
+/** Thrown when a fee-bump would exceed the caller's `maxFee`. */
+export class MaxFeeExceededError extends Error {
+  readonly requestedFee: bigint;
+  readonly maxFee: bigint;
+  constructor(requestedFee: bigint, maxFee: bigint) {
+    super(`Fee-bump requires ${requestedFee} stroops, above the maxFee cap of ${maxFee}`);
+    this.name = "MaxFeeExceededError";
+    this.requestedFee = requestedFee;
+    this.maxFee = maxFee;
+  }
+}
+
+/** Default headroom added to the simulated resource fee: 20% (2000 bps). */
+export const DEFAULT_RESOURCE_FEE_BUFFER_BPS = 2_000;
+
+/**
+ * Pure fee arithmetic, split out so it can be unit-tested without an RPC.
+ * The buffer is applied to the resource fee only (inclusion fee is already
+ * deterministic) and rounds up, so an estimate is never a strop short.
+ */
+export function computeFeeEstimate(input: {
+  minResourceFee: bigint;
+  inclusionFee: bigint;
+  bufferBps?: number;
+}): FeeEstimate {
+  const { minResourceFee, inclusionFee } = input;
+  const bufferBps = input.bufferBps ?? DEFAULT_RESOURCE_FEE_BUFFER_BPS;
+  if (minResourceFee < 0n) throw new RangeError("minResourceFee must not be negative.");
+  if (inclusionFee < 0n) throw new RangeError("inclusionFee must not be negative.");
+  if (!Number.isInteger(bufferBps) || bufferBps < 0) throw new RangeError("bufferBps must be a non-negative integer.");
+  const resourceFee = (minResourceFee * BigInt(10_000 + bufferBps) + 9_999n) / 10_000n;
+  return { resourceFee, inclusionFee, total: resourceFee + inclusionFee, minResourceFee };
+}
+
+/** Decode a contract address out of an `xdr.ScAddress`, or `undefined` for account addresses. */
+function contractAddressOf(scAddress: xdr.ScAddress): string | undefined {
+  if (scAddress.switch().name !== "scAddressTypeContract") return undefined;
+  return Address.fromScAddress(scAddress).toString();
 }
 
 /**
@@ -175,6 +363,11 @@ export class EscrowClient {
 
   /** Locks `amount` of `token` from `payer`, held for `payee`. Returns the new escrow's id and the funding transaction's hash. */
   async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
+    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+      throw new Error(
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+      );
+    }
     const client = this.contractClient(params.payer);
     const tx = await client.create_escrow({
       payer: params.payer.publicKey(),
@@ -184,6 +377,7 @@ export class EscrowClient {
       condition_ref: params.conditionRef,
       releaser: params.releaser,
       refund_after: params.refundAfter,
+      notify_payee: params.notifyPayee ?? false,
     });
     const sent = await tx.signAndSend();
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
@@ -198,10 +392,59 @@ export class EscrowClient {
   }
 
   /**
-   * Read-only: everything stored about `escrowId` — including
-   * `releaser` and `refundAfter`, which payees should check before
-   * relying on a `Funded` escrow (docs/adr/0004, threat model T8).
-   * Throws if `escrowId` doesn't exist.
+   * Locks `amount` on behalf of an M-of-N releaser set (docs/adr/0007): the
+   * escrow settles only with `threshold` distinct approvals from
+   * `releasers`. Same validation and returned shape as `createEscrow`.
+   */
+  async createQuorumEscrow(
+    params: CreateQuorumEscrowParams
+  ): Promise<{ escrowId: bigint; txHash: string }> {
+    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+      throw new Error(
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+      );
+    }
+    if (params.releasers.length === 0) {
+      throw new Error("releasers must contain at least one address");
+    }
+    if (params.releasers.length > MAX_RELEASERS) {
+      throw new Error(
+        `releasers must contain at most ${MAX_RELEASERS} addresses, got ${params.releasers.length}`
+      );
+    }
+    if (new Set(params.releasers).size !== params.releasers.length) {
+      throw new Error("releasers must not contain duplicate addresses");
+    }
+    if (
+      !Number.isInteger(params.threshold) ||
+      params.threshold < 1 ||
+      params.threshold > params.releasers.length
+    ) {
+      throw new Error(
+        `threshold must be an integer between 1 and ${params.releasers.length}, got ${params.threshold}`
+      );
+    }
+    const client = this.contractClient(params.payer);
+    const tx = await client.create_escrow_with_releasers({
+      payer: params.payer.publicKey(),
+      payee: params.payee,
+      token: params.token,
+      amount: params.amount,
+      condition_ref: params.conditionRef,
+      releasers: params.releasers,
+      threshold: params.threshold,
+      refund_after: params.refundAfter,
+      notify_payee: params.notifyPayee ?? false,
+    });
+    const sent = await tx.signAndSend();
+    return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Read-only: everything stored about `escrowId` — including the
+   * `releasers` set, its `threshold` and `refundAfter`, which payees should
+   * check before relying on a `Funded` escrow (docs/adr/0004, threat model
+   * T8). Throws if `escrowId` doesn't exist.
    */
   async getEscrow(escrowId: bigint): Promise<Escrow> {
     const client = this.contractClient();
@@ -213,11 +456,13 @@ export class EscrowClient {
       token: data.token,
       amount: data.amount,
       conditionRef: data.condition_ref,
-      releaser: data.releaser,
+      releasers: data.releasers,
+      threshold: data.threshold,
       // The generated client decodes a contract `None` as `null`; the
       // public surface uses `undefined` for "no deadline" (consistent
       // with `CreateEscrowParams.refundAfter` being absent).
       refundAfter: data.refund_after ?? undefined,
+      notifyPayee: data.notify_payee,
       status: data.status.tag,
     };
   }
@@ -240,6 +485,190 @@ export class EscrowClient {
   async refund(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
     const client = this.contractClient(params.caller);
     const tx = await client.refund({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Estimates what a contract call will cost, in stroops, by simulating it
+   * against the configured RPC. Nothing is signed or submitted.
+   *
+   * The resource fee carries a 20% buffer over the simulated minimum (rounded
+   * up), because simulation can be a strop or two short of the real charge;
+   * `minResourceFee` exposes the raw figure for callers that want their own
+   * margin. Sponsors should treat `total` as the expected cost, not a promise
+   * — fee-bump it with `maxFee` set to the most they are willing to pay.
+   */
+  async estimate(call: EstimateCallParams): Promise<FeeEstimate> {
+    const contractId = call.contractId ?? this.contractId;
+    const account = await this.rpc.getAccount(call.source.publicKey());
+    const transaction = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        Operation.invokeContractFunction({
+          contract: contractId,
+          function: call.method,
+          args: call.args ?? [],
+        }),
+      )
+      .setTimeout(30)
+      .build();
+
+    const simulation = await this.rpc.simulateTransaction(transaction);
+    if (Api.isSimulationError(simulation)) {
+      throw new Error(`Simulation failed for ${call.method}: ${simulation.error}`);
+    }
+    return computeFeeEstimate({
+      minResourceFee: BigInt(simulation.minResourceFee),
+      inclusionFee: BigInt(BASE_FEE) * BigInt(transaction.operations.length),
+    });
+  }
+
+  /**
+   * Wraps an already-signed transaction in a fee-bump paid by `sponsorSigner`.
+   *
+   * The wrapper's fee is `baseFee × (inner operations + 1)`, charged by the
+   * fee-bump envelope; the cap is checked before anything is built, so a spike
+   * either fits `maxFee` or throws `MaxFeeExceededError` — it is never silently
+   * exceeded. Run `guardSponsorship` first when the inner transaction comes
+   * from someone else.
+   */
+  feeBump(signedXdr: string, sponsorSigner: Keypair, options: FeeBumpOptions): FeeBumpResult {
+    const inner = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+    if (!(inner instanceof Transaction)) {
+      throw new TypeError("feeBump expects a regular signed transaction, not an already fee-bumped envelope.");
+    }
+    const baseFee = options.baseFee ?? BigInt(BASE_FEE);
+    if (baseFee < 1n) throw new RangeError("baseFee must be at least 1 strop.");
+    const maxFee = BigInt(options.maxFee);
+    if (maxFee < 0n) throw new RangeError("maxFee must not be negative.");
+
+    // A fee-bump envelope carries one operation (the wrapped inner tx), so it
+    // costs baseFee × (inner ops + 1). The inner fee itself is refunded.
+    const fee = baseFee * BigInt(inner.operations.length + 1);
+    if (fee > maxFee) throw new MaxFeeExceededError(fee, maxFee);
+
+    const bump = TransactionBuilder.buildFeeBumpTransaction(
+      sponsorSigner,
+      baseFee.toString(),
+      inner,
+      this.networkPassphrase,
+    );
+    bump.sign(sponsorSigner);
+    return { xdr: bump.toXDR(), fee, innerTxHash: inner.hash().toString("hex") };
+  }
+
+  /**
+   * Verifies that a transaction only touches this escrow contract before a
+   * sponsor pays for it. Every operation is inspected, and so is every
+   * contract-address auth entry — an invocation can otherwise smuggle in a
+   * transfer authorized against another contract. Account-address auth entries
+   * (the payer/releaser signatures) are expected and allowed.
+   */
+  guardSponsorship(signedXdr: string): GuardResult {
+    const reasons: string[] = [];
+    const invokedContracts = new Set<string>();
+
+    let inner: Transaction | FeeBumpTransaction;
+    try {
+      inner = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+    } catch (error) {
+      return {
+        ok: false,
+        reasons: [`could not decode transaction envelope: ${error instanceof Error ? error.message : String(error)}`],
+        invokedContracts: [],
+      };
+    }
+    // A fee-bump envelope is not sponsorable again; unwrap it so the inner
+    // transaction is what gets judged (its hash is what executes).
+    const transaction = inner instanceof FeeBumpTransaction ? inner.innerTransaction : inner;
+    if (inner instanceof FeeBumpTransaction) {
+      reasons.push("envelope is already a fee-bump transaction");
+    }
+
+    for (const operation of transaction.operations) {
+      if (operation.type !== "invokeHostFunction") {
+        reasons.push(`operation type "${operation.type}" is not a contract invocation`);
+        continue;
+      }
+      const fn = operation.func;
+      if (fn.switch().name !== "hostFunctionTypeInvokeContract") {
+        reasons.push(`host function "${fn.switch().name}" is not a contract invocation`);
+        continue;
+      }
+      const contractId = contractAddressOf(fn.invokeContract().contractAddress());
+      if (!contractId) {
+        reasons.push("contract invocation has no contract address");
+        continue;
+      }
+      invokedContracts.add(contractId);
+      if (contractId !== this.contractId) {
+        reasons.push(`operation invokes foreign contract ${contractId}`);
+      }
+
+      for (const entry of operation.auth ?? []) {
+        const credentials = entry.credentials();
+        if (credentials.switch().name !== "sorobanCredentialsAddress") continue;
+        const authContract = contractAddressOf(credentials.address().address());
+        if (authContract && authContract !== this.contractId) {
+          reasons.push(`auth entry targets foreign contract ${authContract}`);
+        }
+      }
+    }
+
+    if (transaction.operations.length === 0) reasons.push("transaction has no operations");
+    return { ok: reasons.length === 0, reasons, invokedContracts: [...invokedContracts] };
+  }
+
+  /** Throws `SponsorshipGuardError` when `guardSponsorship` would reject. */
+  assertSponsorable(signedXdr: string): void {
+    const result = this.guardSponsorship(signedXdr);
+    if (!result.ok) throw new SponsorshipGuardError(result.reasons);
+  }
+
+  /**
+   * Releases an M-of-N escrow to its payee with at least `threshold`
+   * distinct releaser approvals (docs/adr/0007). Each supplied keypair signs
+   * the contract auth entry for this exact call; the first also pays the fee.
+   * Returns the transaction's hash.
+   */
+  async releaseWithApprovals(params: SettlementApprovalsParams): Promise<{ txHash: string }> {
+    return this.settleWithApprovals("release", params);
+  }
+
+  /**
+   * Refunds an M-of-N escrow back to its payer with at least `threshold`
+   * distinct releaser approvals (docs/adr/0007). The `refundAfter` timeout
+   * path (`refund`) stays open to anyone and needs no approvals. Returns the
+   * transaction's hash.
+   */
+  async refundWithApprovals(params: SettlementApprovalsParams): Promise<{ txHash: string }> {
+    return this.settleWithApprovals("refund", params);
+  }
+
+  private async settleWithApprovals(
+    settlement: "release" | "refund",
+    params: SettlementApprovalsParams
+  ): Promise<{ txHash: string }> {
+    if (params.approvers.length === 0) {
+      throw new Error("approvers must contain at least one releaser keypair");
+    }
+    const [invoker, ...additionalSigners] = params.approvers;
+    const approverAddresses = params.approvers.map((approver) => approver.publicKey());
+    if (new Set(approverAddresses).size !== approverAddresses.length) {
+      throw new Error("approvers must not repeat a releaser keypair");
+    }
+
+    const client = this.contractClient(invoker);
+    const tx = settlement === "release"
+      ? await client.release_with_approvals({ escrow_id: params.escrowId, approvers: approverAddresses })
+      : await client.refund_with_approvals({ escrow_id: params.escrowId, approvers: approverAddresses });
+    for (const signer of additionalSigners) {
+      await tx.signAuthEntries({ signAuthEntry: signer });
+    }
     const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };

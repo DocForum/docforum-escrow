@@ -6,8 +6,12 @@ export interface IndexedEscrow {
   token: string;
   amount: string;
   conditionRef: string;
-  releaser: string;
+  releasers: string[];
+  threshold: string;
   refundAfter: string | null;
+  notifyPayee: boolean;
+  requiresAcceptance: boolean;
+  acceptedAt: string | null;
   status: "Funded" | "Released" | "Refunded";
   updatedLedger: string;
 }
@@ -27,7 +31,7 @@ export interface EscrowIndexerClientConfig {
 
 const QUERY = `query ListEscrows($first: Int!, $after: Cursor) {
   escrows(first: $first, after: $after) {
-    nodes { id escrowId payer payee token amount conditionRef releaser refundAfter status updatedLedger }
+    nodes { id escrowId payer payee token amount conditionRef releasers threshold refundAfter notifyPayee requiresAcceptance acceptedAt status updatedLedger }
     pageInfo { endCursor hasNextPage }
   }
 }`;

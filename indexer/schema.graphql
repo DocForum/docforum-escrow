@@ -6,8 +6,12 @@ type Escrow @entity {
   token: String!
   amount: BigInt!
   conditionRef: String!
-  releaser: String!
+  releasers: [String!]!
+  threshold: BigInt!
   refundAfter: BigInt
+  notifyPayee: Boolean!
+  requiresAcceptance: Boolean!
+  acceptedAt: BigInt
   status: String!
   updatedLedger: BigInt!
 }

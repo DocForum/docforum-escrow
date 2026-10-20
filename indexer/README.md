@@ -38,3 +38,5 @@ Do not point this project at mainnet before the repository's security review.
 state transition with its transaction hash and ledger. The indexer replays
 events from the configured start ledger, so set that ledger no later than
 the contract deployment.
+
+Lifecycle snapshots include the complete current escrow record, including the releaser set, quorum threshold, callback/acceptance flags and acceptance timestamp.

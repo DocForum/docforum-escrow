@@ -13,9 +13,9 @@ export async function handleEscrowEvent(event: SorobanEvent): Promise<void> {
   if (namespace !== "ESCROW" || typeof action !== "string" || !ACTIONS.has(action)) return;
 
   const raw = scValToNative(event.value);
-  if (!Array.isArray(raw) || raw.length !== 8) return;
-  const [payer, payee, token, rawAmount, conditionRef, releaser, rawRefundAfter, status] = raw;
-  if (typeof conditionRef !== "string" || typeof status !== "string") return;
+  if (!Array.isArray(raw) || raw.length !== 12) return;
+  const [payer, payee, token, rawAmount, conditionRef, rawReleasers, rawThreshold, rawRefundAfter, notifyPayee, requiresAcceptance, rawAcceptedAt, status] = raw;
+  if (typeof conditionRef !== "string" || typeof status !== "string" || typeof notifyPayee !== "boolean" || typeof requiresAcceptance !== "boolean" || !Array.isArray(rawReleasers)) return;
 
   const escrowId = BigInt(String(rawId));
   const amount = BigInt(String(rawAmount));
@@ -26,8 +26,12 @@ export async function handleEscrowEvent(event: SorobanEvent): Promise<void> {
   record.token = String(token);
   record.amount = amount;
   record.conditionRef = conditionRef;
-  record.releaser = String(releaser);
+  record.releasers = rawReleasers.map(String);
+  record.threshold = BigInt(String(rawThreshold));
   record.refundAfter = rawRefundAfter == null ? undefined : BigInt(String(rawRefundAfter));
+  record.notifyPayee = notifyPayee;
+  record.requiresAcceptance = requiresAcceptance;
+  record.acceptedAt = rawAcceptedAt == null ? undefined : BigInt(String(rawAcceptedAt));
   record.status = status;
   record.updatedLedger = BigInt(event.ledger);
   await record.save();
