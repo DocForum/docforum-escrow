@@ -41,6 +41,7 @@ fn create_escrow_locks_funds_and_reports_funded() {
         &releaser,
         &None,
         &false,
+        &None,
     );
 
     assert_eq!(escrow_id, 0);
@@ -80,6 +81,7 @@ fn create_escrow_assigns_sequential_ids() {
         &releaser,
         &None,
         &false,
+        &None,
     );
     let second = client.create_escrow(
         &payer,
@@ -90,6 +92,7 @@ fn create_escrow_assigns_sequential_ids() {
         &releaser,
         &None,
         &false,
+        &None,
     );
 
     assert_eq!(first, 0);
@@ -118,6 +121,7 @@ fn create_escrow_rejects_non_positive_amount() {
         &releaser,
         &None,
         &false,
+        &None,
     );
     assert!(result.is_err());
 }
@@ -159,6 +163,7 @@ fn create_escrow_rejects_condition_ref_that_is_too_long() {
         &releaser,
         &None,
         &false,
+        &None,
     );
     assert!(result.is_ok());
 
@@ -173,6 +178,7 @@ fn create_escrow_rejects_condition_ref_that_is_too_long() {
         &releaser,
         &None,
         &false,
+        &None,
     );
     assert!(result.is_err());
     assert_eq!(
@@ -226,6 +232,7 @@ fn callback_opt_in_requires_payee_authorization() {
             &releaser,
             &None,
             &true,
+            &None,
         )
         .is_err());
     assert_eq!(token.balance(&payer), 1_000);
