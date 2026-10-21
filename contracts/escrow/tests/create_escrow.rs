@@ -5,7 +5,7 @@
 
 use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
-    testutils::{Address as _, MockAuth, MockAuthInvoke},
+    testutils::{Address as _, Events as _, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
     Address, Env, IntoVal, String, Vec,
 };
@@ -41,9 +41,18 @@ fn create_escrow_locks_funds_and_reports_funded() {
         &releaser,
         &None,
         &false,
+        &None,
     );
 
     assert_eq!(escrow_id, 0);
+    assert_eq!(
+        env.events()
+            .all()
+            .filter_by_contract(&contract_id)
+            .events()
+            .len(),
+        1
+    );
     assert_eq!(token.balance(&payer), 700);
     assert_eq!(token.balance(&contract_id), 300);
     assert_eq!(client.get_status(&escrow_id), EscrowStatus::Funded);
@@ -72,6 +81,7 @@ fn create_escrow_assigns_sequential_ids() {
         &releaser,
         &None,
         &false,
+        &None,
     );
     let second = client.create_escrow(
         &payer,
@@ -82,6 +92,7 @@ fn create_escrow_assigns_sequential_ids() {
         &releaser,
         &None,
         &false,
+        &None,
     );
 
     assert_eq!(first, 0);
@@ -110,6 +121,7 @@ fn create_escrow_rejects_non_positive_amount() {
         &releaser,
         &None,
         &false,
+        &None,
     );
     assert!(result.is_err());
 }
@@ -151,6 +163,7 @@ fn create_escrow_rejects_condition_ref_that_is_too_long() {
         &releaser,
         &None,
         &false,
+        &None,
     );
     assert!(result.is_ok());
 
@@ -165,6 +178,7 @@ fn create_escrow_rejects_condition_ref_that_is_too_long() {
         &releaser,
         &None,
         &false,
+        &None,
     );
     assert!(result.is_err());
     assert_eq!(
@@ -218,6 +232,7 @@ fn callback_opt_in_requires_payee_authorization() {
             &releaser,
             &None,
             &true,
+            &None,
         )
         .is_err());
     assert_eq!(token.balance(&payer), 1_000);

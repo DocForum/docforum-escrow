@@ -1,6 +1,6 @@
 # ADR 0008: Opt-in payee acceptance
 
-**Status:** Accepted for issue #25  
+**Status:** Accepted for issue #25
 **Date:** 2026-10-16
 
 ## Decision
