@@ -5,11 +5,9 @@
 ![Stack](https://img.shields.io/badge/contract-Rust%20%2F%20Soroban-orange.svg)
 ![Network](https://img.shields.io/badge/network-testnet%20only-important.svg)
 
- feat/issue-29-phase-e5-batch-release-and-refund-for-fast
 **🔗 Live on testnet:** [`CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5`](https://stellar.expert/explorer/testnet/contract/CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5) — current deployment (Phase E5: adds `settle_many` for batch release/refund), verified with real calls, not just uploaded. History and details: [`docs/testnet-deployments.md`](docs/testnet-deployments.md).
 
 **🔗 Live on testnet:** [`CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR`](https://stellar.expert/explorer/testnet/contract/CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR) — current upstream main deployment, including sponsored refunds (`refund_to`), verified with real create, release, refund, timeout refund, and `BalanceMismatch` calls. History and transaction links: [`docs/testnet-deployments.md`](docs/testnet-deployments.md).
- main
 
 A [Soroban](https://developers.stellar.org/docs/build/smart-contracts) (Stellar) smart contract for conditional payment escrow — lock funds, and release them to the payee only when release is authorized, or return them to the payer on refund. Paired with a TypeScript client SDK, `@docforum/escrow-sdk`.
 
@@ -42,7 +40,6 @@ Two reasons, stated plainly rather than blended together:
 
 ## Contract surface
 
-feat/issue-29-phase-e5-batch-release-and-refund-for-fast
 | Function | Status | Description |
 |---|---|---|
 | `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id` | ✅ Implemented | Pulls `amount` of `token` from `payer` (requires `payer` auth), stores an opaque `condition_ref`, sets status `Funded`. Rejects non-positive amounts, and any `refund_after` that isn't strictly in the future. |
@@ -77,7 +74,6 @@ T2): instead of locking funds permanently, a deadline lets anyone return
 them to the payer. See [ADR 0004](docs/adr/0004-timeout-refund-path.md)
 for the decision and what it means for payees.
 
- feat/issue-29-phase-e5-batch-release-and-refund-for-fast
 Batch settlement exists for threat model T1 (leaked releaser key): the only
 response is to race the attacker and settle every open escrow correctly first, and one
 transaction per escrow makes that race slow. `settle_many` lets a releaser settle many
@@ -102,7 +98,6 @@ chosen by the payer, not authority over the contract (see
 [ADR 0006](docs/adr/0006-openzeppelin-stellar-library-evaluation.md) for why
 OpenZeppelin's pause/upgradeable/access modules are deliberately **not**
 adopted).
- main
 
 **Design rule, enforced deliberately:** the contract decides **who** may
 call `release`/`refund`, never **why**. `condition_ref` is an opaque
@@ -128,7 +123,6 @@ is a single edit. Update that list, not this summary.
 call `release`/`refund`, never **why**. `condition_ref` is an opaque
 string the contract stores but never interprets; all domain
 interpretation (what counts as "fulfilled", who's authorized to attest to
-main
 it) is the consuming application's job. See
 [ADR 0001](docs/adr/0001-generic-escrow-not-healthcare-specific.md).
 
@@ -172,10 +166,18 @@ contracts/escrow/
   tests/            Integration tests (soroban-sdk testutils) — required for any contract change
   Cargo.toml
 sdk/
-  src/index.ts      @docforum/escrow-sdk — TypeScript client (not yet implemented, see issue #4)
+  src/index.ts           @docforum/escrow-sdk — hand-written public surface
+  src/generated/         Machine-generated contract bindings — never hand-edit (issue #121)
+  src/signers/           SEP-43 signer types + optional Stellar Wallets Kit adapter
   package.json
-docs/adr/           Architecture decision records
-.github/            CI workflow, issue/PR templates
+packages/escrow-react/   @docforum/escrow-react — React Query hooks (no UI)
+sdk-go/                  Go client for the same contract (big.Int i128 amounts)
+examples/web-demo/       Vite + React demo wiring hooks, wallet and telemetry
+scripts/
+  check-generated-bindings.sh   CI/regeneration check for the generated bindings
+  stellar-cli-version           Pinned generator version (+ release checksum)
+docs/adr/                Architecture decision records
+.github/                 CI workflow, issue/PR templates
 ```
 
 ## Getting started
@@ -188,12 +190,10 @@ the repository root; it normalizes source paths and the build timestamp.
 git clone https://github.com/DocForum/docforum-escrow.git
 cd docforum-escrow/contracts/escrow
 
-feat/issue-29-phase-e5-batch-release-and-refund-for-fast
 # Run the test suite (36 tests, all passing today)
 
 # Run the test suite (also writes the
 # committed test_snapshots/ files — see CONTRIBUTING.md)
-main
 cargo test
 
 # Build the deployable contract
@@ -207,7 +207,6 @@ contract id, transaction links, and the exact `stellar` CLI commands to
 redeploy. **Mainnet is out of scope until the Phase E4 security review is
 complete — see [hard rule 4](ARCHITECTURE_ESSENTIALS.md#hard-rules).**
 
-feat/issue-29-phase-e5-batch-release-and-refund-for-fast
 The TypeScript SDK (`sdk/`) is still a placeholder — see
 [issue #4](https://github.com/DocForum/docforum-escrow/issues/4).
 
@@ -317,7 +316,72 @@ exceed `maxFee` — the cap is never silently overshot:
 ```ts
 const { xdr, fee } = client.feeBump(signedXdr, sponsor, { maxFee: 10_000n });
 ```
- main
+
+### Browser wallets (Stellar Wallets Kit)
+
+`WalletsKitSigner` adapts the selected Stellar Wallets Kit wallet to the SDK's
+SEP-43 `Signer`, so `createEscrow`/`release`/`refund` sign in the browser with
+the same calls used server-side. The adapter has **no runtime import** of the
+kit (it is an optional peer dependency), and lives on a subpath so server
+bundles never include wallet code:
+
+```ts
+import { WalletsKitSigner } from "@docforum/escrow-sdk/signers/wallets-kit";
+import { Networks, StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
+
+StellarWalletsKit.init({ modules, network: Networks.TESTNET });
+const signer = await WalletsKitSigner.connect({
+  kit: StellarWalletsKit,
+  networkPassphrase: Networks.TESTNET,
+});
+await client.release({ escrowId, caller: signer });
+```
+
+A wallet on another network throws `WalletNetworkMismatchError` before
+signing. A user rejecting the prompt is returned as SEP-43
+`{ signedTxXdr: "", error: { code: -4 } }` rather than a crash. Complete
+example: [`examples/web-demo/src/wallet.ts`](examples/web-demo/src/wallet.ts).
+
+### React hooks
+
+[`@docforum/escrow-react`](packages/escrow-react) provides `useEscrow(id)`,
+`useEscrowActions(signer)` and `useEscrowTimeline(escrow)` on top of TanStack
+Query. Polling stops at `Released`/`Refunded`; the timeline documents ledger
+time vs local time. Hooks only — no components or styling.
+
+```tsx
+<QueryClientProvider client={queryClient}>
+  <EscrowProvider client={escrowClient} clientKey={contractId}>
+    <EscrowView id={escrowId} />
+  </EscrowProvider>
+</QueryClientProvider>
+```
+
+### Telemetry
+
+`EscrowClient` accepts optional instrumentation (OpenTelemetry is an optional
+peer dependency, no-op when absent) with one span each for `simulate`, `sign`,
+`submit` and `confirm`, plus an `onEvent` hook for integrators who don't run
+OTel:
+
+```ts
+const client = new EscrowClient({
+  contractId,
+  instrumentation: { tracer: await otelTracer() },
+  onEvent: (event) => metrics.record(event.name, event.durationMs),
+});
+```
+
+Attributes are contract id, function, escrow id, transaction hash and retry
+count. Account addresses are **omitted by default** and only included with
+`includeAddresses: true`.
+
+### Go client
+
+[`sdk-go/`](sdk-go) mirrors the TypeScript surface (`CreateEscrow`,
+`GetStatus`, `GetEscrow`, `Release`, `Refund`) with context-aware methods,
+typed contract errors and `big.Int` i128 amounts. See
+[`sdk-go/README.md`](sdk-go/README.md).
 
 ## Documentation
 
@@ -332,7 +396,6 @@ const { xdr, fee } = client.feeBump(signedXdr, sponsor, { maxFee: 10_000n });
 
 ## Project status
 
-feat/issue-29-phase-e5-batch-release-and-refund-for-fast
 **Phase E5 (batch settlement): done.** `settle_many` is implemented, tested, and deployed live on testnet — not just locally tested. Phases E1 (contract skeleton), E2 (release/refund), E3 (TypeScript SDK), and any mainnet use (E4 security review, blocking) are tracked as open issues:
 
 **Phase E1 (contract skeleton): done.** `create_escrow` and `get_status`
@@ -347,7 +410,6 @@ both are implemented, tested, and deployed on testnet (see
 [`docs/testnet-deployments.md`](docs/testnet-deployments.md)). Phase E7 adds
 committed contract test snapshots (issue #120) and a CI check that the
 generated SDK bindings match the contract WASM (issue #121):
-main
 
 | Issue | Phase | Complexity |
 |---|---|---|
