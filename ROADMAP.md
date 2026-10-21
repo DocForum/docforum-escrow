@@ -149,6 +149,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 ## Phase E5 — Contract features
 
 - [x] Optional escrow-wide earliest release time (issue #43, ADR 0009); refund path remains independent.
+- [x] Fixed-total linear vesting streams with payee withdrawals and vested/unvested refund settlement (issue #44).
 
 - [x] **OpenZeppelin Stellar library evaluation** (issue #118) —
   `docs/adr/0006`: all six candidate modules checked against ADR 0001/0002

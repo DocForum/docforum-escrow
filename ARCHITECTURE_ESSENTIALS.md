@@ -220,3 +220,6 @@ quickstart deployment.
 ## Roadmap / status
 See `ROADMAP.md` in this repo. Live testnet deployment record:
 `docs/testnet-deployments.md`.
+
+
+Streamed escrows use a fixed total with linear vesting between configured timestamps. Withdrawals only pay the stored payee; refunds pay vested but unwithdrawn funds to the payee and return the unvested amount to the stored `refund_to` destination.

@@ -83,11 +83,33 @@ pub struct EscrowData {
     pub release_not_before: Option<u64>,
 }
 
+/// A stream vests linearly from `start` through `end`. A cliff delays
+/// availability until its timestamp, then makes all accrued vesting claimable.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VestingSchedule {
+    pub start: u64,
+    pub end: u64,
+    pub cliff: Option<u64>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VestingInfo {
+    pub schedule: VestingSchedule,
+    pub total_amount: i128,
+    pub vested_amount: i128,
+    pub withdrawn_amount: i128,
+    pub claimable_amount: i128,
+}
+
 #[contracttype]
 enum DataKey {
     Escrow(u64),
     NextId,
     AllowedTokens,
+    Vesting(u64),
+    Withdrawn(u64),
 }
 
 #[contracterror]
@@ -134,6 +156,11 @@ pub enum Error {
     AcceptanceRequired = 18,
     AcceptanceNotConfigured = 19,
     AlreadyAccepted = 20,
+    PoolInsufficient = 24,
+    NotStreamed = 25,
+    InvalidVestingSchedule = 26,
+    NothingToWithdraw = 27,
+    StreamTopUpUnsupported = 28,
     /// `refund_to` was the escrow contract's own address — funds sent
     /// there on refund could never be moved again (docs/adr/0009).
     InvalidRefundTo = 21,
@@ -334,6 +361,46 @@ impl EscrowContract {
         )
     }
 
+    /// Creates a funded single-releaser escrow with a fixed-total linear vesting schedule.
+    pub fn create_streamed_escrow(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        schedule: VestingSchedule,
+    ) -> Result<u64, Error> {
+        if schedule.start >= schedule.end
+            || schedule
+                .cliff
+                .is_some_and(|cliff| cliff < schedule.start || cliff > schedule.end)
+        {
+            return Err(Error::InvalidVestingSchedule);
+        }
+        let id = Self::create_escrow(
+            env.clone(),
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releaser,
+            refund_after,
+            false,
+            None,
+        )?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Vesting(id), &schedule);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Withdrawn(id), &0_i128);
+        Ok(id)
+    }
+
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
     pub fn get_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, Error> {
         let data: EscrowData = env
@@ -357,6 +424,70 @@ impl EscrowContract {
             .ok_or(Error::NotFound)
     }
 
+    /// Returns current vested, withdrawn, and claimable amounts for a stream.
+    pub fn get_vesting(env: Env, escrow_id: u64) -> Result<VestingInfo, Error> {
+        let data = Self::load(&env, escrow_id)?;
+        let schedule: VestingSchedule = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Vesting(escrow_id))
+            .ok_or(Error::NotStreamed)?;
+        let withdrawn: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Withdrawn(escrow_id))
+            .unwrap_or(0);
+        let vested = Self::vested_amount(data.amount, &schedule, env.ledger().timestamp());
+        let claimable = if data.status == EscrowStatus::Funded {
+            vested.saturating_sub(withdrawn)
+        } else {
+            0
+        };
+        Ok(VestingInfo {
+            schedule,
+            total_amount: data.amount,
+            vested_amount: vested,
+            withdrawn_amount: withdrawn,
+            claimable_amount: claimable,
+        })
+    }
+
+    /// Transfers the payee's vested but unwithdrawn stream amount.
+    pub fn withdraw(env: Env, escrow_id: u64, payee: Address) -> Result<i128, Error> {
+        payee.require_auth();
+        let data = Self::load(&env, escrow_id)?;
+        Self::check_funded(&data)?;
+        if payee != data.payee {
+            return Err(Error::Unauthorized);
+        }
+        let schedule: VestingSchedule = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Vesting(escrow_id))
+            .ok_or(Error::NotStreamed)?;
+        let withdrawn: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Withdrawn(escrow_id))
+            .unwrap_or(0);
+        let claimable = Self::vested_amount(data.amount, &schedule, env.ledger().timestamp())
+            .saturating_sub(withdrawn);
+        if claimable <= 0 {
+            return Err(Error::NothingToWithdraw);
+        }
+        let token_client = token::Client::new(&env, &data.token);
+        let contract_address = env.current_contract_address();
+        if token_client.balance(&contract_address) < claimable {
+            return Err(Error::PoolInsufficient);
+        }
+        let updated = withdrawn.checked_add(claimable).ok_or(Error::Overflow)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Withdrawn(escrow_id), &updated);
+        token_client.transfer(&contract_address, &payee, &claimable);
+        Ok(claimable)
+    }
+
     /// Adds funds to a funded escrow without changing its parties or id.
     /// Only its original payer may authorize the transfer.
     pub fn top_up(env: Env, escrow_id: u64, payer: Address, amount: i128) -> Result<(), Error> {
@@ -374,6 +505,9 @@ impl EscrowContract {
         }
         if data.status != EscrowStatus::Funded {
             return Err(Error::NotFunded);
+        }
+        if env.storage().persistent().has(&DataKey::Vesting(escrow_id)) {
+            return Err(Error::StreamTopUpUnsupported);
         }
         let updated_amount = data.amount.checked_add(amount).ok_or(Error::Overflow)?;
         Self::transfer_in_exact(&env, &data.token, &payer, amount)?;
@@ -634,15 +768,37 @@ impl EscrowContract {
         if settled == EscrowStatus::Released
             && data
                 .release_not_before
-                .is_some_and(|release_time| env.ledger().timestamp() < release_time)
+                .is_some_and(|t| env.ledger().timestamp() < t)
         {
             return Err(Error::ReleaseTooEarly);
         }
-        let notify_payee = data.notify_payee && settled == EscrowStatus::Released;
-        let destination = match settled {
-            EscrowStatus::Released => data.payee.clone(),
-            _ => data.refund_to.clone(),
+        let schedule: Option<VestingSchedule> =
+            env.storage().persistent().get(&DataKey::Vesting(escrow_id));
+        let withdrawn: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Withdrawn(escrow_id))
+            .unwrap_or(0);
+        let (payee_amount, refund_amount) = match (&settled, &schedule) {
+            (EscrowStatus::Released, Some(_)) => (data.amount.saturating_sub(withdrawn), 0),
+            (EscrowStatus::Refunded, Some(schedule)) => {
+                let vested = Self::vested_amount(data.amount, schedule, env.ledger().timestamp());
+                (
+                    vested.saturating_sub(withdrawn),
+                    data.amount.saturating_sub(vested),
+                )
+            }
+            (EscrowStatus::Released, None) => (data.amount, 0),
+            (EscrowStatus::Refunded, None) => (0, data.amount),
+            (EscrowStatus::Funded, _) => return Err(Error::NotFunded),
         };
+        let notify_payee = data.notify_payee && settled == EscrowStatus::Released;
+        let contract_address = env.current_contract_address();
+        let refund_destination = data.refund_to.clone();
+        let token_client = token::Client::new(env, &data.token);
+        if token_client.balance(&contract_address) < payee_amount + refund_amount {
+            return Err(Error::PoolInsufficient);
+        }
         if settled == EscrowStatus::Released
             && data.requires_acceptance
             && data.accepted_at.is_none()
@@ -653,19 +809,31 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), data);
-
-        let token_client = token::Client::new(env, &data.token);
-        token_client.transfer(&env.current_contract_address(), &destination, &data.amount);
+        if schedule.is_some() {
+            let closed_amount = if data.status == EscrowStatus::Released {
+                data.amount
+            } else {
+                data.amount - refund_amount
+            };
+            env.storage()
+                .persistent()
+                .set(&DataKey::Withdrawn(escrow_id), &closed_amount);
+        }
+        if payee_amount > 0 {
+            token_client.transfer(&contract_address, &data.payee, &payee_amount);
+        }
+        if refund_amount > 0 {
+            token_client.transfer(&contract_address, &refund_destination, &refund_amount);
+        }
         if notify_payee {
-            let args = (escrow_id, data.amount).into_val(env);
+            let args = (escrow_id, payee_amount).into_val(env);
             let callback = env.try_invoke_contract::<(), soroban_sdk::Error>(
                 &data.payee,
                 &soroban_sdk::Symbol::new(env, "on_escrow_released"),
                 args,
             );
-            match callback {
-                Ok(Ok(())) => {}
-                _ => return Err(Error::CallbackFailed),
+            if !matches!(callback, Ok(Ok(()))) {
+                return Err(Error::CallbackFailed);
             }
         }
         let action = match &data.status {
@@ -748,5 +916,19 @@ impl EscrowContract {
             return Err(Error::BalanceMismatch);
         }
         Ok(())
+    }
+
+    fn vested_amount(total: i128, schedule: &VestingSchedule, now: u64) -> i128 {
+        if now < schedule.start || schedule.cliff.is_some_and(|cliff| now < cliff) {
+            return 0;
+        }
+        if now >= schedule.end {
+            return total;
+        }
+        let duration = (schedule.end - schedule.start) as i128;
+        let elapsed = (now - schedule.start) as i128;
+        let whole = total / duration;
+        let remainder = (total % duration) as u128;
+        whole * elapsed + (remainder * elapsed as u128 / duration as u128) as i128
     }
 }
