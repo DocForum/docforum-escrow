@@ -36,6 +36,36 @@ rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue
 solvency(token) -> (balance, liabilities) // IMPLEMENTED (Phase E5, issue #39) — read-only; liabilities = sum of `amount` over Funded escrows in `token`, kept in persistent `Liability(token)` (TTL re-extended on every write) and updated in the same invocation as every create/top_up/contribute (+) and release/refund/cancel/claim_refund (−); not deployed on testnet yet
 ```
 
+## Events
+
+The contract emits lifecycle events on every successful `create_escrow*`,
+`release*`, and `refund*` call (issue #9, addresses threat-model T7).
+Error paths emit nothing — an event is a signal that a state change
+actually committed.
+
+Lifecycle events share the same full-state snapshot shape used by the
+indexer:
+
+```
+Topic:   ("ESCROW", action, escrow_id)
+           action  ∈ { "created", "released", "refunded", "cancelled" }
+           escrow_id : u64
+
+Payload: (payer, payee, token, amount, condition_ref, releasers, threshold,
+          refund_after, notify_payee, requires_acceptance, accepted_at,
+          status, (fee_recipient, fee_bps))
+```
+
+The status value is the matching `Funded`, `Released`, `Refunded`, or
+`Cancelled` symbol. The fee fields are nested because Soroban event tuples
+support at most 13 values. `condition_ref` remains opaque: callers must not
+put sensitive data in it (threat model T9).
+
+Other emitted events (not lifecycle):
+- `top_up`   — topic `("top_up", escrow_id)`,   payload `(added, new_total)`
+- `rotate`   — topic `("rotate", escrow_id)`,   payload `(old_releaser, new_releaser)`
+- `accepted` — topic `("accepted", escrow_id)`, payload `(payee, accepted_at)`
+
 No new contract-level role came in with the M-of-N work: `releasers` is
 escrow data chosen by the payer at creation and immutable afterwards.There is still no admin, no owner, no pause and no upgrade path — OpenZeppelin's
 pausable/upgradeable/access modules were evaluated and rejected in
