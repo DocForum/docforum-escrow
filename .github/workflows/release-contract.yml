@@ -1,0 +1,40 @@
+name: Release contract WASM
+
+on:
+  push:
+    tags:
+      - "contract-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish reproducible testnet contract artifact
+    runs-on: ubuntu-latest
+    container: rust:1.96.0-bookworm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install WASM target
+        run: rustup target add wasm32v1-none
+
+      - name: Confirm the build is reproducible across checkout paths
+        run: bash scripts/check-wasm-reproducibility.sh
+
+      - name: Build contract WASM
+        run: bash scripts/build-wasm.sh
+
+      - name: Create SHA-256 file
+        run: |
+          set -eu
+          wasm=contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm
+          sha256sum "$wasm" | awk '{ print $1 "  docforum_escrow.wasm" }' > docforum_escrow.wasm.sha256
+
+      - name: Publish WASM and SHA-256 as release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm
+            docforum_escrow.wasm.sha256
+          generate_release_notes: true
