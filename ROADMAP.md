@@ -115,8 +115,13 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   Soroban rejects re-entry as an unrecoverable context error ("Contract
   re-entry is not allowed"), aborting the whole invocation — fail-closed.
   Post-creation clawback remains possible by design and is documented in
-  T5 as accepted residual risk. **Not yet on testnet** — the current
-  deployment predates it. Closes issue #12.
+  T5 as accepted residual risk. Deployed and verified with a real
+  fee-on-transfer rejection on testnet; see `docs/testnet-deployments.md`.
+  Closes issue #12.
+- [x] Redeploy current upstream `main` to testnet with live create, release,
+  refund, timeout-refund, and `BalanceMismatch` verification (issue #109).
+  The current contract ID and transaction links are in
+  `docs/testnet-deployments.md`; prior deployment records remain as history.
 - [ ] Rest of the `docs/threat-model.md` §6 pre-mainnet checklist, scoped
   into issues: [#8](https://github.com/DocForum/docforum-escrow/issues/8) write status before transfer + reject
   contract-self addresses (Trivial), [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium),
@@ -171,9 +176,13 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   and update `README.md` + `ARCHITECTURE_ESSENTIALS.md` to surface the
   new contract/SDK surface. Contract tests added in
   `contracts/escrow/tests/create_escrow.rs` (hard rule 2).
-- [ ] Redeploy to testnet with the new error code and verify live.
-  (Breaking contract change — needs a new deployment + tarball per ADR 0003.)
+- [x] Redeployed to testnet with `ConditionRefTooLong` on 2026-10-20;
+  lifecycle and `BalanceMismatch` verification are recorded in
+  `docs/testnet-deployments.md`.
 ## Phase E5 — Contract features
+
+- [x] Optional escrow-wide earliest release time (issue #43, ADR 0009); refund path remains independent.
+
 - [x] **OpenZeppelin Stellar library evaluation** (issue #118) —
   `docs/adr/0006`: all six candidate modules checked against ADR 0001/0002
   and the "no hidden admin" rule. Pausable, Upgradeable and the
@@ -220,25 +229,24 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   T2, T8, new T11 and §6). **Breaking change:** `create_escrow` gains a
   parameter and `EscrowData` a field; `@docforum/escrow-sdk` 0.5.0 →
   0.6.0 (bindings regenerated, never hand-edited; adds `refundTo` on
-  `createEscrow` and `getEscrow`). **Not done:** testnet redeployment (the
-  live contract predates this, so the SDK integration tests still target
-  the old deployment) and publishing the `sdk-v0.6.0` release tarball per
-  ADR 0003.
+  `createEscrow` and `getEscrow`). The current contract was deployed on
+  testnet 2026-10-20 and the SDK tests target it. Publishing the
+  `sdk-v0.6.0` release tarball per ADR 0003 remains pending.
 - [x] Immutable deploy-time token allowlist (issue #36):
   `__constructor(allowed_tokens)` stores approved addresses;
   `create_escrow` rejects unlisted tokens with append-only error code 7.
   An empty list preserves allow-all behavior. Tests cover listed,
   unlisted, and empty-list cases. Threat model, deployment guidance, and
-  contract API docs updated. **Not yet on testnet** — the current
-  deployment predates this constructor; a new testnet deployment and
-  verification are required before claiming the live contract is
-  protected. Closes issue #36.
+  contract API docs updated. Deployed and verified with the immutable
+  testnet allowlist on 2026-10-20. Closes issue #36.
 - [x] Optional release callback (issue #53): both single-releaser and
   quorum creation require payee authorization when `notify_payee` is true;
   release calls `on_escrow_released` after transfer and rolls back atomically
   on failure. Re-entry tests cover release/refund/create attempts. ADR 0005
-  and threat-model T11 document the decision. Not deployed to testnet.
+  and threat-model T11 document the decision. Deployed on testnet
+  2026-10-20.
 ## Phase E6 — SDK & integrator tooling
+- [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
   triggered by an `sdk-v*` tag: builds, typechecks, tests, runs
   `npm publish --provenance`, and attaches the tarball to the GitHub
@@ -272,6 +280,16 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   additive SDK surface, `0.4.0 → 0.5.0`. Closes issue #70.
 
 ## Phase E7 — Verification, testing & release engineering
+- [x] **Reproducible WASM builds and deployment verification (issue #91)** ?
+  Rust 1.96.0 and Stellar CLI 28.1.0 are pinned; the pinned
+  `rust:1.96.0-bookworm` container compares release WASM hashes from two
+  checkout paths after remapping repository paths. `contract-v*` releases
+  publish the WASM and SHA-256 checksum. `scripts/verify-deployment` fetches
+  deployed WASM from testnet and compares it with a local build; README
+  documents third-party verification. No `stellar contract optimize` step is
+  used. The current testnet deployment predates this source, so the verifier
+  reports the expected hash mismatch. Contract tests/build and the two-path
+  comparison passed locally.
 - [x] **PR malware scan** — `.github/workflows/pr-malware-scan.yml` + `.github/scripts/pr-malware-scan.cjs`, on every PR push. Flags editor/devcontainer autorun tasks, npm install hooks, typosquatted packages and Actions, non-registry dependency sources, payloads disguised as fonts/images, base64/whitespace obfuscation, exfiltration endpoints, reverse shells and miners. HIGH findings fail the `Malware scan` check, label the PR `security-review` and @mention the author; one comment per PR, updated in place. Reads the PR as data only (never checks out or runs it). Added 2026-10-20 after a VS Code autorun payload (escrow #163) and a typosquatted action (escrow #176). Manual backfill (Actions → PR malware scan → Run workflow, `prs: all`) scans PRs opened before the scanner and records a `Malware scan` commit status, which satisfies the required check.
 - [x] **Nightly testnet escrow lifecycle soak** (issue #108) —
   `.github/workflows/nightly-testnet-soak.yml` runs the SDK live integration
@@ -311,6 +329,12 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   repo's.
 
 ## Changelog
+
+> New entries go in `changelog.d/`, one file per PR — see
+> `changelog.d/README.md`. Maintainers fold them in here with
+> `node scripts/fold-changelog.mjs`. Please don't append to this section
+> directly.
+
 - 2026-10-19 — Issue #70 (Phase E6): added `estimate`, `feeBump`,
   `guardSponsorship` and `assertSponsorable` to the SDK. Estimation runs
   through the client's RPC and reports the resource fee with a buffered

@@ -5,7 +5,11 @@
 ![Stack](https://img.shields.io/badge/contract-Rust%20%2F%20Soroban-orange.svg)
 ![Network](https://img.shields.io/badge/network-testnet%20only-important.svg)
 
+ feat/issue-29-phase-e5-batch-release-and-refund-for-fast
 **🔗 Live on testnet:** [`CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5`](https://stellar.expert/explorer/testnet/contract/CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5) — current deployment (Phase E5: adds `settle_many` for batch release/refund), verified with real calls, not just uploaded. History and details: [`docs/testnet-deployments.md`](docs/testnet-deployments.md).
+
+**🔗 Live on testnet:** [`CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR`](https://stellar.expert/explorer/testnet/contract/CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR) — current upstream main deployment, including sponsored refunds (`refund_to`), verified with real create, release, refund, timeout refund, and `BalanceMismatch` calls. History and transaction links: [`docs/testnet-deployments.md`](docs/testnet-deployments.md).
+ main
 
 A [Soroban](https://developers.stellar.org/docs/build/smart-contracts) (Stellar) smart contract for conditional payment escrow — lock funds, and release them to the payee only when release is authorized, or return them to the payer on refund. Paired with a TypeScript client SDK, `@docforum/escrow-sdk`.
 
@@ -38,6 +42,7 @@ Two reasons, stated plainly rather than blended together:
 
 ## Contract surface
 
+feat/issue-29-phase-e5-batch-release-and-refund-for-fast
 | Function | Status | Description |
 |---|---|---|
 | `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id` | ✅ Implemented | Pulls `amount` of `token` from `payer` (requires `payer` auth), stores an opaque `condition_ref`, sets status `Funded`. Rejects non-positive amounts, and any `refund_after` that isn't strictly in the future. |
@@ -103,6 +108,27 @@ adopted).
 call `release`/`refund`, never **why**. `condition_ref` is an opaque
 string the contract stores but never interprets — all domain
 interpretation (what counts as "fulfilled," who's authorized to attest to
+
+One generic escrow contract. A payer locks a token amount for a payee, and
+the payout is settled by release (to the stored payee) or refund (to the
+stored `refund_to`, which is the payer unless set otherwise at creation).
+Creation options: a single releaser or an M-of-N releaser quorum, an
+optional payee-acceptance gate, an optional `refund_after` timeout that
+lets anyone trigger the refund, an optional `refund_to`, and an optional
+release callback to a contract payee. Funded escrows can be topped up by
+the original payer, and `get_status`/`get_escrow` are read-only. A token
+allowlist is fixed at deploy time.
+
+**The full function list, signatures and rules are in
+[`ARCHITECTURE_ESSENTIALS.md` → Contract surface](ARCHITECTURE_ESSENTIALS.md#contract-surface).**
+It's kept in that one place so that adding or changing a contract function
+is a single edit. Update that list, not this summary.
+
+**Design rule, enforced deliberately:** the contract decides **who** may
+call `release`/`refund`, never **why**. `condition_ref` is an opaque
+string the contract stores but never interprets; all domain
+interpretation (what counts as "fulfilled", who's authorized to attest to
+main
 it) is the consuming application's job. See
 [ADR 0001](docs/adr/0001-generic-escrow-not-healthcare-specific.md).
 
@@ -154,13 +180,20 @@ docs/adr/           Architecture decision records
 
 ## Getting started
 
-Requires a Rust toolchain with the `wasm32v1-none` target.
+Requires the pinned Rust toolchain in [`rust-toolchain.toml`](rust-toolchain.toml), which includes `wasm32v1-none`.
+For a hash-comparable release build, run `bash scripts/build-wasm.sh` from
+the repository root; it normalizes source paths and the build timestamp.
 
 ```bash
 git clone https://github.com/DocForum/docforum-escrow.git
 cd docforum-escrow/contracts/escrow
 
+feat/issue-29-phase-e5-batch-release-and-refund-for-fast
 # Run the test suite (36 tests, all passing today)
+
+# Run the test suite (also writes the
+# committed test_snapshots/ files — see CONTRIBUTING.md)
+main
 cargo test
 
 # Build the deployable contract
@@ -174,8 +207,117 @@ contract id, transaction links, and the exact `stellar` CLI commands to
 redeploy. **Mainnet is out of scope until the Phase E4 security review is
 complete — see [hard rule 4](ARCHITECTURE_ESSENTIALS.md#hard-rules).**
 
+feat/issue-29-phase-e5-batch-release-and-refund-for-fast
 The TypeScript SDK (`sdk/`) is still a placeholder — see
 [issue #4](https://github.com/DocForum/docforum-escrow/issues/4).
+
+The SDK supports relayed release/refund calls. `authorizeRelease` and
+`authorizeRefund` simulate the invocation, ask the releaser to sign only
+its short-lived contract authorization entry, and return a serialized
+transaction. `submitRelayed` restores that transaction and lets a separate
+relayer sign the envelope and pay its fee. The auth entry is bound to the
+simulated invocation and expires after ten ledgers:
+
+```ts
+const authorization = await client.authorizeRelease({ escrowId, releaser, relayer });
+const { txHash } = await client.submitRelayed("release", authorization, relayer);
+```
+
+Keep the serialized authorization private until submission and do not
+retry it after its expiration ledger.
+
+## Verify this deployment
+
+Contract WASM releases attach `docforum_escrow.wasm` and its
+`docforum_escrow.wasm.sha256` checksum to each `contract-v*` GitHub
+release. Download both files and verify the artifact with
+`sha256sum -c docforum_escrow.wasm.sha256`.
+
+To compare a fresh source build with a deployed contract, use Linux or
+macOS with Rust 1.96.0, Docker, and Stellar CLI 28.1.0. The CLI archive
+version and Linux x86-64 SHA-256 are recorded in
+[`scripts/stellar-cli-version`](scripts/stellar-cli-version). For the
+Linux x86-64 release archive, verify its checksum before extracting it:
+
+```bash
+curl -fsSLO https://github.com/stellar/stellar-cli/releases/download/v28.1.0/stellar-cli-28.1.0-x86_64-unknown-linux-gnu.tar.gz
+echo 'c1680deee94301d33ada7a17f98411e642a4248c727afbd2e43050d345746462  stellar-cli-28.1.0-x86_64-unknown-linux-gnu.tar.gz' | sha256sum -c -
+```
+
+On other systems, install Stellar CLI 28.1.0 using its official
+instructions and check `stellar --version` before continuing.
+
+From the repository root, run the verifier with the contract ID. It builds
+the current source and fetches deployed WASM from testnet:
+
+```bash
+bash scripts/verify-deployment CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR
+```
+
+Matching SHA-256 values mean the deployed bytes equal this source build.
+A mismatch is a verification failure; confirm the contract ID, source
+revision, toolchain, and build inputs match the deployment. The recorded
+testnet deployment predates later contract changes, so its hash is
+expected to differ from newer source. To confirm that different checkout
+paths produce identical bytes, run
+`bash scripts/check-wasm-reproducibility.sh`; CI runs the comparison in
+the pinned `rust:1.96.0-bookworm` container. No `stellar contract optimize`
+step is used.
+
+An escrow created with `createQuorumEscrow` settles with M-of-N approvals;
+each supplied keypair signs only the contract auth entry for that one call, and
+the first pays the fee:
+
+```ts
+const { escrowId } = await client.createQuorumEscrow({
+  payer, payee, token, amount, conditionRef,
+  releasers: [a, b, c],
+  threshold: 2,
+});
+await client.releaseWithApprovals({ escrowId, approvers: [a, c] });
+```
+
+### Fee estimation and fee-bump sponsorship
+
+Sponsors can price a call before paying for it, and wrap a user-signed
+transaction in a fee-bump with a hard cap. `estimate` simulates against
+the configured RPC — nothing is signed or sent — and returns the resource
+fee (with a 20% buffer over the simulated minimum, rounded up), the
+inclusion fee, and their total, all in stroops:
+
+```ts
+import { Address, nativeToScVal } from "@stellar/stellar-sdk";
+
+const estimate = await client.estimate({
+  source: payer,
+  method: "release",
+  args: [nativeToScVal(escrowId, { type: "u64" }), new Address(releaser).toScVal()],
+});
+if (estimate.total > budget) throw new Error("too expensive to sponsor");
+```
+
+`guardSponsorship` decides whether a transaction is safe to sponsor: it
+inspects **every** operation and every contract-address auth entry, and
+rejects anything that is not an invocation of the escrow contract (a
+foreign contract id, a smuggled payment, a double fee-bump). Account
+auth entries — the payer's and releaser's signatures — are expected and
+allowed:
+
+```ts
+const guard = client.guardSponsorship(signedXdr);
+if (!guard.ok) throw new Error(guard.reasons.join("; "));
+// or: client.assertSponsorable(signedXdr) — throws SponsorshipGuardError
+```
+
+`feeBump` wraps the signed envelope for the sponsor. Its fee is
+`baseFee × (inner operations + 1)` (the inner fee is refunded), and it
+throws `MaxFeeExceededError` before building anything if that would
+exceed `maxFee` — the cap is never silently overshot:
+
+```ts
+const { xdr, fee } = client.feeBump(signedXdr, sponsor, { maxFee: 10_000n });
+```
+ main
 
 ## Documentation
 
@@ -190,7 +332,22 @@ The TypeScript SDK (`sdk/`) is still a placeholder — see
 
 ## Project status
 
+feat/issue-29-phase-e5-batch-release-and-refund-for-fast
 **Phase E5 (batch settlement): done.** `settle_many` is implemented, tested, and deployed live on testnet — not just locally tested. Phases E1 (contract skeleton), E2 (release/refund), E3 (TypeScript SDK), and any mainnet use (E4 security review, blocking) are tracked as open issues:
+
+**Phase E1 (contract skeleton): done.** `create_escrow` and `get_status`
+are implemented, tested, and deployed live on testnet — not just locally
+tested. Phases E2 (release/refund), E3 (TypeScript SDK), and E4 (security
+review, blocking for any mainnet use) are tracked as open issues. Phase E5
+now also includes an optional in-contract M-of-N releaser quorum
+([ADR 0007](docs/adr/0007-in-contract-m-of-n-releaser-quorum.md)) and a
+documented decision **not** to adopt OpenZeppelin's pause/upgradeable/access
+modules ([ADR 0006](docs/adr/0006-openzeppelin-stellar-library-evaluation.md));
+both are implemented, tested, and deployed on testnet (see
+[`docs/testnet-deployments.md`](docs/testnet-deployments.md)). Phase E7 adds
+committed contract test snapshots (issue #120) and a CI check that the
+generated SDK bindings match the contract WASM (issue #121):
+main
 
 | Issue | Phase | Complexity |
 |---|---|---|
