@@ -353,6 +353,10 @@ func createEscrowWithReleaseTimeArgs(payer, payee, token string, amount *big.Int
 	if err != nil {
 		return nil, err
 	}
+	refundToVal, err := scvOptionAddress(refundTo)
+	if err != nil {
+		return nil, err
+	}
 
 	args := []xdr.ScVal{
 		payerVal,
@@ -363,7 +367,7 @@ func createEscrowWithReleaseTimeArgs(payer, payee, token string, amount *big.Int
 		releaserVal,
 		scvOptionU64(refundAfter),
 		scvBool(notifyPayee),
-		scvOptionString(refundTo),
+		refundToVal,
 		scvOptionU64(releaseNotBefore),
 	}
 	return args, nil
@@ -430,6 +434,10 @@ func createEscrowArgs(payer, payee, token string, amount *big.Int, conditionRef 
 		}
 		releaserVals = append(releaserVals, value)
 	}
+	refundToVal, err := scvOptionAddress(refundTo)
+	if err != nil {
+		return nil, err
+	}
 	args := []xdr.ScVal{
 		payerVal,
 		payeeVal,
@@ -442,7 +450,7 @@ func createEscrowArgs(payer, payee, token string, amount *big.Int, conditionRef 
 	} else {
 		args = append(args, releaserVals[0])
 	}
-	args = append(args, scvOptionU64(refundAfter), scvBool(notifyPayee), scvOptionString(refundTo))
+	args = append(args, scvOptionU64(refundAfter), scvBool(notifyPayee), refundToVal)
 	return args, nil
 }
 

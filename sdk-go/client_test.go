@@ -107,8 +107,9 @@ func TestCreateEscrowArgsSingleReleaser(t *testing.T) {
 	releaser := keypair.MustRandom().Address()
 	amount := big.NewInt(12_345_678)
 	deadline := uint64(1_900_000_000)
+	refundTo := keypair.MustRandom().Address()
 
-	args, err := createEscrowArgs(payer, payee, testContractID, amount, "ref-1", []string{releaser}, 1, &deadline, nil, true, false)
+	args, err := createEscrowArgs(payer, payee, testContractID, amount, "ref-1", []string{releaser}, 1, &deadline, &refundTo, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +132,7 @@ func TestCreateEscrowArgsSingleReleaser(t *testing.T) {
 	if decoded, err := decodeBool(args[7]); err != nil || !decoded {
 		t.Fatalf("notify payee = %v, %v", decoded, err)
 	}
-	if decoded, err := decodeOptionString(args[8]); err != nil || decoded != nil {
+	if decoded, err := decodeOptionAddress(args[8]); err != nil || decoded == nil || *decoded != refundTo {
 		t.Fatalf("refund to = %v, %v", decoded, err)
 	}
 }
@@ -160,7 +161,7 @@ func TestCreateEscrowArgsQuorum(t *testing.T) {
 	if decoded, err := decodeBool(args[8]); err != nil || decoded {
 		t.Fatalf("notify payee = %v, want false", decoded)
 	}
-	if decoded, err := decodeOptionString(args[9]); err != nil || decoded != nil {
+	if decoded, err := decodeOptionAddress(args[9]); err != nil || decoded != nil {
 		t.Fatalf("refund to = %v, %v", decoded, err)
 	}
 }

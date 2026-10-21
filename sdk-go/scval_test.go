@@ -174,6 +174,7 @@ func TestDecodeEscrowData(t *testing.T) {
 	releaserB := keypair.MustRandom().Address()
 	refundAfter := uint64(1_912_000_000)
 	acceptedAt := uint64(1_911_000_000)
+	refundTo := payer
 	amount := new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 100), big.NewInt(12345))
 
 	want := Escrow{
@@ -185,6 +186,7 @@ func TestDecodeEscrowData(t *testing.T) {
 		Releasers:          []string{releaserA, releaserB},
 		Threshold:          2,
 		RefundAfter:        &refundAfter,
+		RefundTo:           &refundTo,
 		NotifyPayee:        true,
 		Status:             EscrowStatusFunded,
 		RequiresAcceptance: true,
@@ -226,6 +228,33 @@ func TestDecodeEscrowDataWithoutOptionalFields(t *testing.T) {
 	}
 	if got.Status != EscrowStatusReleased || got.Amount.Cmp(big.NewInt(7)) != 0 {
 		t.Fatalf("unexpected escrow: %#v", got)
+	}
+}
+
+func TestDecodeEscrowDataRefundToIsAddress(t *testing.T) {
+	// The contract stores refund_to as an Address, not a string. Build the map
+	// by hand so the decoder is exercised against the contract's encoding
+	// rather than the SDK's own inverse helper.
+	refundTo := keypair.MustRandom().Address()
+	encoded := scvMap([]xdr.ScMapEntry{
+		{Key: scvSymbol("payer"), Val: mustAddress(t, keypair.MustRandom().Address())},
+		{Key: scvSymbol("payee"), Val: mustAddress(t, keypair.MustRandom().Address())},
+		{Key: scvSymbol("token"), Val: mustAddress(t, testContractID)},
+		{Key: scvSymbol("amount"), Val: mustI128(t, big.NewInt(1))},
+		{Key: scvSymbol("condition_ref"), Val: scvString("ref")},
+		{Key: scvSymbol("status"), Val: scvStatus(EscrowStatusFunded)},
+		{Key: scvSymbol("releasers"), Val: scvVec([]xdr.ScVal{mustAddress(t, keypair.MustRandom().Address())})},
+		{Key: scvSymbol("threshold"), Val: scvU32(1)},
+		{Key: scvSymbol("refund_after"), Val: scvVoid()},
+		{Key: scvSymbol("refund_to"), Val: mustAddress(t, refundTo)},
+		{Key: scvSymbol("notify_payee"), Val: scvBool(false)},
+	})
+	got, err := decodeEscrow(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RefundTo == nil || *got.RefundTo != refundTo {
+		t.Fatalf("refund_to = %v, want %q", got.RefundTo, refundTo)
 	}
 }
 

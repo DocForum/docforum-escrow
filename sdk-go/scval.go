@@ -123,6 +123,13 @@ func scvOptionString(v *string) xdr.ScVal {
 	return scvString(*v)
 }
 
+func scvOptionAddress(v *string) (xdr.ScVal, error) {
+	if v == nil {
+		return scvVoid(), nil
+	}
+	return scvAddress(*v)
+}
+
 // parseScAddress converts a G... account address or C... contract address into
 // an ScAddress.
 func parseScAddress(address string) (xdr.ScAddress, error) {
@@ -205,6 +212,19 @@ func decodeOptionString(v xdr.ScVal) (*string, error) {
 		return nil, nil
 	}
 	decoded, err := decodeString(v)
+	if err != nil {
+		return nil, err
+	}
+	return &decoded, nil
+}
+
+// decodeOptionAddress decodes an Optional<Address> field. The contract stores
+// address-backed options as ScvVoid when absent and ScvAddress otherwise.
+func decodeOptionAddress(v xdr.ScVal) (*string, error) {
+	if v.Type == xdr.ScValTypeScvVoid {
+		return nil, nil
+	}
+	decoded, err := decodeAddress(v)
 	if err != nil {
 		return nil, err
 	}
@@ -358,9 +378,10 @@ func decodeEscrow(v xdr.ScVal) (Escrow, error) {
 	if err := decodeField("refund_after", &result.RefundAfter); err != nil {
 		return Escrow{}, err
 	}
-	// refund_to was added after the original EscrowData layout. Decode when present.
+	// refund_to was added after the original EscrowData layout. The contract
+	// stores it as an Address, so decode it as an address-backed option.
 	if field, ok := fields["refund_to"]; ok {
-		decoded, err := decodeOptionString(field)
+		decoded, err := decodeOptionAddress(field)
 		if err != nil {
 			return Escrow{}, err
 		}
@@ -443,6 +464,10 @@ func escrowDataScVal(e Escrow) (xdr.ScVal, error) {
 	if err != nil {
 		return xdr.ScVal{}, err
 	}
+	refundTo, err := scvOptionAddress(e.RefundTo)
+	if err != nil {
+		return xdr.ScVal{}, err
+	}
 	return scvMap([]xdr.ScMapEntry{
 		{Key: scvSymbol("payer"), Val: payer},
 		{Key: scvSymbol("payee"), Val: payee},
@@ -453,7 +478,7 @@ func escrowDataScVal(e Escrow) (xdr.ScVal, error) {
 		{Key: scvSymbol("releasers"), Val: scvVec(releasers)},
 		{Key: scvSymbol("threshold"), Val: scvU32(e.Threshold)},
 		{Key: scvSymbol("refund_after"), Val: scvOptionU64(e.RefundAfter)},
-		{Key: scvSymbol("refund_to"), Val: scvOptionString(e.RefundTo)},
+		{Key: scvSymbol("refund_to"), Val: refundTo},
 		{Key: scvSymbol("release_not_before"), Val: scvOptionU64(e.ReleaseNotBefore)},
 		{Key: scvSymbol("notify_payee"), Val: scvBool(e.NotifyPayee)},
 		{Key: scvSymbol("requires_acceptance"), Val: scvBool(e.RequiresAcceptance)},
