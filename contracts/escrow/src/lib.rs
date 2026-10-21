@@ -548,6 +548,7 @@ impl EscrowContract {
             release_not_before,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        Self::publish_state(env, symbol_short!("created"), id, &data);
         Ok(id)
     }
 
@@ -667,7 +668,40 @@ impl EscrowContract {
                 _ => return Err(Error::CallbackFailed),
             }
         }
+        let action = match &data.status {
+            EscrowStatus::Funded => symbol_short!("created"),
+            EscrowStatus::Released => symbol_short!("released"),
+            EscrowStatus::Refunded => symbol_short!("refunded"),
+        };
+        Self::publish_state(env, action, escrow_id, data);
         Ok(())
+    }
+
+    /// Emits a complete state snapshot for indexers, with releaser sets
+    /// preserved for M-of-N escrows.
+    fn publish_state(env: &Env, action: soroban_sdk::Symbol, id: u64, data: &EscrowData) {
+        let status = match &data.status {
+            EscrowStatus::Funded => symbol_short!("Funded"),
+            EscrowStatus::Released => symbol_short!("Released"),
+            EscrowStatus::Refunded => symbol_short!("Refunded"),
+        };
+        env.events().publish(
+            (symbol_short!("ESCROW"), action, id),
+            (
+                data.payer.clone(),
+                data.payee.clone(),
+                data.token.clone(),
+                data.amount,
+                data.condition_ref.clone(),
+                data.releasers.clone(),
+                data.threshold,
+                data.refund_after,
+                data.notify_payee,
+                data.requires_acceptance,
+                data.accepted_at,
+                status,
+            ),
+        );
     }
 
     fn load(env: &Env, escrow_id: u64) -> Result<EscrowData, Error> {
