@@ -149,6 +149,22 @@
   the release workflow) — documented in `CONTRIBUTING.md`; not yet done,
   so `sdk-v0.3.0` is not yet published to npm.
 
+## Phase E7 - Verification and release engineering
+- [x] Issue #91: pin Rust 1.96.0 and Stellar CLI 28.1.0; use the pinned
+  `rust:1.96.0-bookworm` container to compare release WASM hashes from two
+  different checkout paths. Builds remap repository paths and do not run
+  `stellar contract optimize`. `contract-v*` releases publish the WASM
+  and SHA-256 checksum. `scripts/verify-deployment` fetches deployed WASM
+  from testnet and compares it with a local build; README documents
+  third-party verification. The current testnet deployment predates the
+  current source, so a hash mismatch is expected and was observed by the
+  verifier. CI remains to be verified.
+
+**Phase E7 status:** issue #91 implementation is complete. Contract tests,
+release build, two-path reproducibility, and testnet fetch pass locally;
+CI has not run yet. The verifier reports the expected mismatch against
+current source.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -156,6 +172,12 @@
   repo's.
 
 ## Changelog
+- 2026-10-21 - Issue #91 (Phase E7): pinned Rust and Stellar CLI
+  versions; added remapped WASM builds and a two-checkout-path CI check in
+  a pinned Rust container; added `contract-v*` WASM and SHA-256 release
+  assets, a testnet-only deployment verifier, and third-party verification
+  instructions. Contract tests/build and two-path comparison pass locally;
+  live testnet fetch returns the recorded older hash as expected. CI pending.
 - 2026-10-16 — Implemented the immutable deploy-time token allowlist for
   issue #36. Contract tests/docs updated; awaiting a new testnet deployment
   before claiming the protection is live.
