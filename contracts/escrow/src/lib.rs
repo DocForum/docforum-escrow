@@ -595,7 +595,15 @@ impl EscrowContract {
             release_not_before,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        Self::publish_state(env, symbol_short!("created"), id, &data);
+        Self::emit_lifecycle(
+            env,
+            symbol_short!("created"),
+            id,
+            &data.payer,
+            &data.payee,
+            &data.token,
+            data.amount,
+        );
         Ok(id)
     }
 
@@ -715,39 +723,50 @@ impl EscrowContract {
                 _ => return Err(Error::CallbackFailed),
             }
         }
-        let action = match &data.status {
-            EscrowStatus::Funded => symbol_short!("created"),
-            EscrowStatus::Released => symbol_short!("released"),
-            EscrowStatus::Refunded => symbol_short!("refunded"),
+        // Emit after the transfer + optional callback so that a failed
+        // callback or payout never produces a misleading lifecycle event.
+        let (action, event_destination) = match &data.status {
+            EscrowStatus::Released => (symbol_short!("released"), &data.payee),
+            EscrowStatus::Refunded => (symbol_short!("refunded"), &data.refund_to),
+            // Funded is only possible if settle() is called with that status,
+            // which never happens; guard it for exhaustiveness.
+            EscrowStatus::Funded => return Ok(()),
         };
-        Self::publish_state(env, action, escrow_id, data);
+        Self::emit_lifecycle(
+            env,
+            action,
+            escrow_id,
+            &data.payer,
+            event_destination,
+            &data.token,
+            data.amount,
+        );
         Ok(())
     }
 
-    /// Emits a complete state snapshot for indexers, with releaser sets
-    /// preserved for M-of-N escrows.
-    fn publish_state(env: &Env, action: soroban_sdk::Symbol, id: u64, data: &EscrowData) {
-        let status = match &data.status {
-            EscrowStatus::Funded => symbol_short!("Funded"),
-            EscrowStatus::Released => symbol_short!("Released"),
-            EscrowStatus::Refunded => symbol_short!("Refunded"),
-        };
+    /// Emits a minimal lifecycle event for indexers and monitors.
+    ///
+    /// Topic: `("ESCROW", action, escrow_id)` where action is one of
+    /// `"created"`, `"released"`, or `"refunded"`.
+    ///
+    /// Payload: `(payer, destination, token, amount)` where destination
+    /// is `payee` on create/release and `refund_to` on refund.
+    ///
+    /// `condition_ref` is intentionally **not** included (threat model T9:
+    /// condition_ref is opaque and must never appear in events). Releasers,
+    /// threshold, and flags are omitted to keep the shape minimal and stable.
+    fn emit_lifecycle(
+        env: &Env,
+        action: soroban_sdk::Symbol,
+        escrow_id: u64,
+        payer: &Address,
+        destination: &Address,
+        token: &Address,
+        amount: i128,
+    ) {
         env.events().publish(
-            (symbol_short!("ESCROW"), action, id),
-            (
-                data.payer.clone(),
-                data.payee.clone(),
-                data.token.clone(),
-                data.amount,
-                data.condition_ref.clone(),
-                data.releasers.clone(),
-                data.threshold,
-                data.refund_after,
-                data.notify_payee,
-                data.requires_acceptance,
-                data.accepted_at,
-                status,
-            ),
+            (symbol_short!("ESCROW"), action, escrow_id),
+            (payer.clone(), destination.clone(), token.clone(), amount),
         );
     }
 
