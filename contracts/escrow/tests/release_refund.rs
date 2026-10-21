@@ -49,6 +49,7 @@ fn fund_escrow(env: &Env, amount: i128) -> Fixture<'_> {
         &releaser,
         &None,
         &false,
+        &None,
     );
 
     Fixture {
@@ -72,6 +73,14 @@ fn release_transfers_funds_to_payee_and_marks_released() {
 
     f.client.release(&f.escrow_id, &f.releaser);
 
+    assert_eq!(
+        env.events()
+            .all()
+            .filter_by_contract(&f.contract_id)
+            .events()
+            .len(),
+        1
+    );
     assert_eq!(f.token.balance(&f.payee), 300);
     assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Released);
 }
@@ -113,6 +122,14 @@ fn refund_transfers_funds_back_to_payer_and_marks_refunded() {
 
     f.client.refund(&f.escrow_id, &f.releaser);
 
+    assert_eq!(
+        env.events()
+            .all()
+            .filter_by_contract(&f.contract_id)
+            .events()
+            .len(),
+        1
+    );
     assert_eq!(f.token.balance(&f.payer), 1_000); // full 1,000 minted, 300 returned
     assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Refunded);
 }
