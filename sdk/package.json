@@ -6,8 +6,12 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "bin"
   ],
+  "bin": {
+    "docforum-solvency": "./bin/solvency.js"
+  },
   "scripts": {
     "prepare": "npm run build",
     "build": "tsc",
@@ -15,7 +19,7 @@
     "test:integration": "vitest run",
     "test:fixtures": "vitest run tests/events.test.ts",
     "test:unit": "vitest run tests/fees.test.ts",
-    "test:offline": "vitest run tests/events.test.ts tests/quorum-validation.test.ts",
+    "test:offline": "vitest run tests/events.test.ts tests/quorum-validation.test.ts tests/solvency.test.ts",
     "typecheck": "tsc --noEmit",
     "test:runtime": "node tests/runtime-smoke.mjs",
     "test:browser": "node tests/browser-smoke.mjs"

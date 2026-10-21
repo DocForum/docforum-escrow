@@ -21,6 +21,9 @@ import {
 import { Api, Server as RpcServer } from "@stellar/stellar-sdk/rpc";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
 
+export { checkSolvency, reconcileSolvencyEvents } from "./solvency.js";
+export type { CheckSolvencyOptions, SolvencyEvent, SolvencyReport, TokenSolvency } from "./solvency.js";
+
 export { Keypair };
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";

@@ -22,8 +22,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
-    IntoVal, String, Vec,
+    contract, contracterror, contractevent, contractimpl, contracttype, symbol_short, token,
+    Address, Env, IntoVal, String, Vec,
 };
 
 /// Largest allowed releaser set for one escrow. Ten covers every
@@ -79,6 +79,50 @@ pub struct EscrowData {
     /// payout, so invariant I1 holds; defaults to `payer` when omitted at
     /// creation — see docs/adr/0009.
     pub refund_to: Address,
+}
+
+// Lifecycle events carry the token and amount needed by read-only solvency
+// checkers. Keep the payload aligned with the SDK event decoder.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowCreated {
+    #[topic]
+    pub escrow_id: u64,
+    #[topic]
+    pub payer: Address,
+    #[topic]
+    pub payee: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub condition_ref: String,
+    pub releaser: Address,
+    pub refund_after: Option<u64>,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowReleased {
+    #[topic]
+    pub escrow_id: u64,
+    #[topic]
+    pub payer: Address,
+    #[topic]
+    pub payee: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowRefunded {
+    #[topic]
+    pub escrow_id: u64,
+    #[topic]
+    pub payer: Address,
+    #[topic]
+    pub payee: Address,
+    pub token: Address,
+    pub amount: i128,
 }
 
 #[contracttype]
@@ -496,6 +540,17 @@ impl EscrowContract {
             refund_to,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        EscrowCreated {
+            escrow_id: id,
+            payer: data.payer.clone(),
+            payee: data.payee.clone(),
+            token: data.token.clone(),
+            amount: data.amount,
+            condition_ref: data.condition_ref.clone(),
+            releaser: data.releasers.first().ok_or(Error::InvalidThreshold)?,
+            refund_after: data.refund_after,
+        }
+        .publish(env);
         Ok(id)
     }
 
@@ -607,6 +662,25 @@ impl EscrowContract {
                 Ok(Ok(())) => {}
                 _ => return Err(Error::CallbackFailed),
             }
+        }
+        match &data.status {
+            EscrowStatus::Released => EscrowReleased {
+                escrow_id,
+                payer: data.payer.clone(),
+                payee: data.payee.clone(),
+                token: data.token.clone(),
+                amount: data.amount,
+            }
+            .publish(env),
+            EscrowStatus::Refunded => EscrowRefunded {
+                escrow_id,
+                payer: data.payer.clone(),
+                payee: data.payee.clone(),
+                token: data.token.clone(),
+                amount: data.amount,
+            }
+            .publish(env),
+            EscrowStatus::Funded => return Err(Error::NotFunded),
         }
         Ok(())
     }

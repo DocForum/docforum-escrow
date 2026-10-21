@@ -87,7 +87,7 @@ The contract decides **who** may call `release`/`refund`, never **why**:
 
 ## TypeScript SDK surface (`sdk/`)
 ```ts
-import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
+import { EscrowClient, Keypair, checkSolvency } from "@docforum/escrow-sdk";
 
 const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
 const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter, notifyPayee: true, refundTo });
