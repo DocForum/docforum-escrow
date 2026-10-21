@@ -2,7 +2,7 @@ import { scValToNative } from "@stellar/stellar-sdk";
 import type { SorobanEvent } from "@subql/types-stellar";
 import { Escrow, EscrowEvent } from "../types";
 
-const ACTIONS = new Set(["created", "released", "refunded"]);
+const ACTIONS = new Set(["created", "released", "refunded", "cancelled"]);
 
 /** Index known lifecycle snapshots; unrelated/future events are ignored. */
 export async function handleEscrowEvent(event: SorobanEvent): Promise<void> {
