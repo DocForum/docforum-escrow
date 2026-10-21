@@ -312,6 +312,12 @@
                   },
                   {
                     "key": {
+                      "symbol": "release_not_before"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "releasers"
                     },
                     "val": {

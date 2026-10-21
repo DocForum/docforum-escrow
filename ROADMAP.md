@@ -147,6 +147,9 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   lifecycle and `BalanceMismatch` verification are recorded in
   `docs/testnet-deployments.md`.
 ## Phase E5 — Contract features
+
+- [x] Optional escrow-wide earliest release time (issue #43, ADR 0009); refund path remains independent.
+
 - [x] **OpenZeppelin Stellar library evaluation** (issue #118) —
   `docs/adr/0006`: all six candidate modules checked against ADR 0001/0002
   and the "no hidden admin" rule. Pausable, Upgradeable and the
@@ -218,6 +221,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   and threat-model T11 document the decision. Deployed on testnet
   2026-10-20.
 ## Phase E6 — SDK & integrator tooling
+- [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
   triggered by an `sdk-v*` tag: builds, typechecks, tests, runs
   `npm publish --provenance`, and attaches the tarball to the GitHub
