@@ -85,6 +85,8 @@ pub struct EscrowData {
     /// payout, so invariant I1 holds; defaults to `payer` when omitted at
     /// creation — see docs/adr/0009.
     pub refund_to: Address,
+    /// Earliest ledger timestamp at which release is allowed.
+    pub release_not_before: Option<u64>,
 }
 
 #[contracttype]
@@ -141,6 +143,10 @@ pub enum Error {
     /// `refund_to` was the escrow contract's own address — funds sent
     /// there on refund could never be moved again (docs/adr/0009).
     InvalidRefundTo = 21,
+    /// The configured release time is in the past or after the refund time.
+    InvalidReleaseNotBefore = 22,
+    /// Release was attempted before the configured time.
+    ReleaseTooEarly = 23,
 }
 
 #[contract]
@@ -203,6 +209,41 @@ impl EscrowContract {
             notify_payee,
             false,
             refund_to,
+            None,
+        )
+    }
+
+    /// Creates a single-releaser escrow with an optional earliest release time.
+    /// Release is allowed at the configured timestamp.
+    pub fn create_escrow_release_time(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        notify_payee: bool,
+        refund_to: Option<Address>,
+        release_not_before: Option<u64>,
+    ) -> Result<u64, Error> {
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        Self::create_escrow_inner(
+            &env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            1,
+            refund_after,
+            notify_payee,
+            false,
+            refund_to,
+            release_not_before,
         )
     }
 
@@ -235,6 +276,7 @@ impl EscrowContract {
             false,
             requires_acceptance,
             refund_to,
+            None,
         )
     }
 
@@ -301,6 +343,7 @@ impl EscrowContract {
             notify_payee,
             false,
             refund_to,
+            None,
         )
     }
 
@@ -456,6 +499,7 @@ impl EscrowContract {
         notify_payee: bool,
         requires_acceptance: bool,
         refund_to: Option<Address>,
+        release_not_before: Option<u64>,
     ) -> Result<u64, Error> {
         let allowed_tokens: Vec<Address> = env
             .storage()
@@ -471,6 +515,13 @@ impl EscrowContract {
         if let Some(deadline) = refund_after {
             if deadline <= env.ledger().timestamp() {
                 return Err(Error::InvalidRefundAfter);
+            }
+        }
+        if let Some(release_time) = release_not_before {
+            if release_time < env.ledger().timestamp()
+                || refund_after.is_some_and(|refund_time| release_time > refund_time)
+            {
+                return Err(Error::InvalidReleaseNotBefore);
             }
         }
         // Bound condition_ref to keep per-escrow storage and event costs
@@ -507,6 +558,7 @@ impl EscrowContract {
             requires_acceptance,
             accepted_at: None,
             refund_to,
+            release_not_before,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Ok(id)
@@ -591,6 +643,13 @@ impl EscrowContract {
         data: &mut EscrowData,
         settled: EscrowStatus,
     ) -> Result<(), Error> {
+        if settled == EscrowStatus::Released
+            && data
+                .release_not_before
+                .is_some_and(|release_time| env.ledger().timestamp() < release_time)
+        {
+            return Err(Error::ReleaseTooEarly);
+        }
         let notify_payee = data.notify_payee && settled == EscrowStatus::Released;
         let destination = match settled {
             EscrowStatus::Released => data.payee.clone(),
