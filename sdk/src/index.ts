@@ -19,9 +19,29 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { Api, Server as RpcServer } from "@stellar/stellar-sdk/rpc";
+import type { AssembledTransaction, SentTransaction } from "@stellar/stellar-sdk/contract";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
+import {
+  beginPhase,
+  isInstrumentationEnabled,
+  tracePhase,
+  type EscrowSpanAttributes,
+  type InstrumentationOptions,
+} from "./instrumentation.js";
+import { signerAddress, type EscrowSigner } from "./signers/types.js";
 
 export { Keypair };
+export { signerAddress, type EscrowSigner } from "./signers/types.js";
+export {
+  otelTracer,
+  spanName,
+  type EscrowInstrumentationEvent,
+  type EscrowSpan,
+  type EscrowSpanAttributes,
+  type EscrowSpanName,
+  type EscrowTracer,
+  type InstrumentationOptions,
+} from "./instrumentation.js";
 export { EscrowIndexerClient } from "./indexer-client.js";
 export type { EscrowIndexerClientConfig, EscrowPage, IndexedEscrow } from "./indexer-client.js";
 
@@ -184,6 +204,9 @@ export const MAX_CONDITION_REF_LENGTH = 64;
  */
 export const MAX_RELEASERS = 10;
 
+/** Shared placeholder used on the uninstrumented path (no per-call allocation). */
+const EMPTY_SPAN_ATTRIBUTES = {} as EscrowSpanAttributes;
+
 export interface EscrowClientConfig {
   /** The deployed docforum-escrow contract's address (`C…`). */
   contractId: string;
@@ -191,6 +214,13 @@ export interface EscrowClientConfig {
   rpcUrl?: string;
   /** Default: Stellar testnet passphrase. */
   networkPassphrase?: string;
+  /**
+   * Optional OpenTelemetry / event-hook instrumentation (issue #129). With no
+   * tracer and no `onEvent` callback, calls take the uninstrumented path.
+   */
+  instrumentation?: InstrumentationOptions;
+  /** Shorthand for `instrumentation.onEvent`. */
+  onEvent?: InstrumentationOptions["onEvent"];
   /** Use the restore signer to authorize calls that automatically restore archived entries. */
   archivalBehavior?: ArchivedEntryBehavior;
   restoreSigner?: Keypair;
@@ -198,7 +228,7 @@ export interface EscrowClientConfig {
 
 export interface CreateEscrowParams {
   /** Signs and pays for this call; funds are pulled from this account. */
-  payer: Keypair;
+  payer: EscrowSigner;
   payee: string;
   token: string;
   amount: bigint;
@@ -240,13 +270,13 @@ export interface ReleaseOrRefundParams {
    * multi-signature escrow settles via `releaseWithApprovals` /
    * `refundWithApprovals`.
    */
-  caller: Keypair;
+  caller: EscrowSigner;
 }
 
 /** Creation parameters for an M-of-N releaser escrow (docs/adr/0007). */
 export interface CreateQuorumEscrowParams {
   /** Signs and pays for this call; funds are pulled from this account. */
-  payer: Keypair;
+  payer: EscrowSigner;
   payee: string;
   token: string;
   amount: bigint;
@@ -276,7 +306,7 @@ export interface SettlementApprovalsParams {
    * the list must not repeat a keypair. Without at least `threshold`
    * distinct approvers the contract rejects the call with `ThresholdNotMet`.
    */
-  approvers: Keypair[];
+  approvers: EscrowSigner[];
 }
 
 /** The relayer pays the transaction fee; the releaser signs only contract auth. */
@@ -305,7 +335,7 @@ export interface EstimateCallParams {
   /** Already-encoded contract arguments (`xdr.ScVal[]`). */
   args?: xdr.ScVal[];
   /** Account that would sign and pay for the call. */
-  source: Keypair;
+  source: EscrowSigner;
 }
 
 /** Components of a simulated contract call's fee, in stroops. */
@@ -410,6 +440,7 @@ export class EscrowClient {
   private readonly rpcUrl: string;
   private readonly networkPassphrase: string;
   private readonly rpc: RpcServer;
+  private readonly instrumentation?: InstrumentationOptions;
   private readonly archivalBehavior: ArchivedEntryBehavior;
   private readonly restoreSigner?: Keypair;
 
@@ -418,18 +449,103 @@ export class EscrowClient {
     this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
     this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSTHRASE;
     this.rpc = new RpcServer(this.rpcUrl);
+    this.instrumentation = config.onEvent
+      ? { ...config.instrumentation, onEvent: config.onEvent }
+      : config.instrumentation;
     this.archivalBehavior = config.archivalBehavior ?? "error";
     this.restoreSigner = config.restoreSigner;
   }
 
-  private contractClient(signer?: Keypair): EscrowContractClient {
+  private contractClient(signer?: EscrowSigner): EscrowContractClient {
     const effectiveSigner = signer ?? (this.archivalBehavior === "auto" ? this.restoreSigner : undefined);
     return new EscrowContractClient({
       contractId: this.contractId,
       rpcUrl: this.rpcUrl,
       networkPassphrase: this.networkPassphrase,
-      ...(effectiveSigner ? { publicKey: effectiveSigner.publicKey(), signTransaction: effectiveSigner } : {}),
+      ...(effectiveSigner
+        ? { publicKey: signerAddress(effectiveSigner), signTransaction: effectiveSigner }
+        : {}),
     });
+  }
+
+  /** Non-secret attributes shared by every span of one contract call. */
+  private spanAttributes(method: string, escrowId?: bigint, address?: string): EscrowSpanAttributes {
+    const attributes: EscrowSpanAttributes = {
+      "contract.id": this.contractId,
+      "contract.function": method,
+    };
+    if (escrowId !== undefined) attributes["escrow.id"] = escrowId.toString();
+    if (address && this.instrumentation?.includeAddresses) attributes["account.address"] = address;
+    return attributes;
+  }
+
+  /** `spanAttributes` only when instrumentation is on; otherwise no allocation. */
+  private spanAttributesIfEnabled(method: string, escrowId?: bigint, address?: string): EscrowSpanAttributes {
+    return isInstrumentationEnabled(this.instrumentation)
+      ? this.spanAttributes(method, escrowId, address)
+      : EMPTY_SPAN_ATTRIBUTES;
+  }
+
+  /**
+   * Simulate, sign, submit and confirm one write call, recording one span per
+   * phase. With instrumentation disabled it skips every span allocation and
+   * takes the shortest path (`send()`, which polls to completion).
+   */
+  private async invoke<T>(
+    method: string,
+    escrowId: bigint | undefined,
+    build: () => Promise<AssembledTransaction<T>>,
+    hooks: { beforeSign?: (tx: AssembledTransaction<T>) => Promise<void>; address?: string } = {},
+  ): Promise<SentTransaction<T>> {
+    const attributes = this.spanAttributesIfEnabled(method, escrowId, hooks.address);
+    const tx = await tracePhase(this.instrumentation, "simulate", attributes, build);
+    if (tx.isReadCall) {
+      throw new Error(`${method} was simulated as a read call; no transaction was sent.`);
+    }
+    await tracePhase(this.instrumentation, "sign", attributes, async () => {
+      if (hooks.beforeSign) await hooks.beforeSign(tx);
+      await tx.sign();
+    });
+
+    if (!this.instrumentation?.tracer && !this.instrumentation?.onEvent) {
+      return tx.send();
+    }
+
+    const submitSpan = beginPhase(this.instrumentation, "submit", attributes);
+    const confirmSpan = beginPhase(this.instrumentation, "confirm", attributes);
+    let submitted = false;
+    try {
+      // `send()` submits and polls to a terminal state. `onSubmitted` marks
+      // the submit/confirm boundary so the two phases are timed separately.
+      const sent = await tx.send({
+        onSubmitted: (response?: Api.SendTransactionResponse) => {
+          submitted = true;
+          if (response?.hash) {
+            submitSpan.attributes["tx.hash"] = response.hash;
+            confirmSpan.attributes["tx.hash"] = response.hash;
+          }
+          submitSpan.end();
+          confirmSpan.start();
+        },
+      });
+      if (!submitted) {
+        submitSpan.end();
+        confirmSpan.start();
+      }
+      const hash = sent.sendTransactionResponse?.hash;
+      if (hash) {
+        submitSpan.attributes["tx.hash"] = hash;
+        confirmSpan.attributes["tx.hash"] = hash;
+      }
+      const attempts = sent.getTransactionResponseAll?.length ?? 0;
+      if (attempts > 0) confirmSpan.attributes["retry.count"] = Math.max(0, attempts - 1);
+      confirmSpan.end();
+      return sent;
+    } catch (error) {
+      if (!submitted) submitSpan.end(error);
+      confirmSpan.end(error);
+      throw error;
+    }
   }
 
   /** Locks `amount` of `token` from `payer`, held for `payee`. Returns the new escrow's id and the funding transaction's hash. */
@@ -441,7 +557,7 @@ export class EscrowClient {
     }
     const client = this.contractClient(params.payer);
     const createParams = {
-      payer: params.payer.publicKey(),
+      payer: signerAddress(params.payer),
       payee: params.payee,
       token: params.token,
       amount: params.amount,
@@ -451,20 +567,28 @@ export class EscrowClient {
       notify_payee: params.notifyPayee ?? false,
       refund_to: params.refundTo,
     };
-    const tx = params.releaseNotBefore === undefined
-      ? await client.create_escrow(createParams)
-      : await client.create_escrow_release_time({
-          ...createParams,
-          release_not_before: params.releaseNotBefore,
-        });
-    const sent = await tx.signAndSend();
+    const sent = await this.invoke(
+      "create_escrow",
+      undefined,
+      () => params.releaseNotBefore === undefined
+        ? client.create_escrow(createParams)
+        : client.create_escrow_release_time({
+            ...createParams,
+            release_not_before: params.releaseNotBefore,
+          }),
+      { address: signerAddress(params.payer) },
+    );
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
   }
 
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
   async getStatus(escrowId: bigint): Promise<EscrowStatus> {
     const client = this.contractClient();
-    const tx = await client.get_status({ escrow_id: escrowId });
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("get_status", escrowId),
+      () => client.get_status({ escrow_id: escrowId }),    );
     const status: GeneratedEscrowStatus = tx.result.unwrap();
     return status.tag;
   }
@@ -503,19 +627,24 @@ export class EscrowClient {
       );
     }
     const client = this.contractClient(params.payer);
-    const tx = await client.create_escrow_with_releasers({
-      payer: params.payer.publicKey(),
-      payee: params.payee,
-      token: params.token,
-      amount: params.amount,
-      condition_ref: params.conditionRef,
-      releasers: params.releasers,
-      threshold: params.threshold,
-      refund_after: params.refundAfter,
-      notify_payee: params.notifyPayee ?? false,
-      refund_to: params.refundTo,
-    });
-    const sent = await tx.signAndSend();
+    const sent = await this.invoke(
+      "create_escrow_with_releasers",
+      undefined,
+      () =>
+        client.create_escrow_with_releasers({
+          payer: signerAddress(params.payer),
+          payee: params.payee,
+          token: params.token,
+          amount: params.amount,
+          condition_ref: params.conditionRef,
+          releasers: params.releasers,
+          threshold: params.threshold,
+          refund_after: params.refundAfter,
+          notify_payee: params.notifyPayee ?? false,
+          refund_to: params.refundTo,
+        }),
+      { address: signerAddress(params.payer) },
+    );
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
   }
 
@@ -527,7 +656,12 @@ export class EscrowClient {
    */
   async getEscrow(escrowId: bigint): Promise<Escrow> {
     const client = this.contractClient();
-    const tx = await client.get_escrow({ escrow_id: escrowId });
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("get_escrow", escrowId),
+      () => client.get_escrow({ escrow_id: escrowId }),
+    );
     const data = tx.result.unwrap();
     return {
       payer: data.payer,
@@ -551,8 +685,12 @@ export class EscrowClient {
   /** Moves the escrow's funds to its payee. Throws if `caller` isn't the escrow's `releaser`, or the escrow isn't `Funded`. Returns the transaction's hash. */
   async release(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
     const client = this.contractClient(params.caller);
-    const tx = await client.release({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
-    const sent = await tx.signAndSend();
+    const sent = await this.invoke(
+      "release",
+      params.escrowId,
+      () => client.release({ escrow_id: params.escrowId, caller: signerAddress(params.caller) }),
+      { address: signerAddress(params.caller) },
+    );
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
   }
@@ -566,8 +704,12 @@ export class EscrowClient {
    */
   async refund(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
     const client = this.contractClient(params.caller);
-    const tx = await client.refund({ escrow_id: params.escrowId, caller: params.caller.publicKey() });
-    const sent = await tx.signAndSend();
+    const sent = await this.invoke(
+      "refund",
+      params.escrowId,
+      () => client.refund({ escrow_id: params.escrowId, caller: signerAddress(params.caller) }),
+      { address: signerAddress(params.caller) },
+    );
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
   }
@@ -611,7 +753,7 @@ export class EscrowClient {
    */
   async estimate(call: EstimateCallParams): Promise<FeeEstimate> {
     const contractId = call.contractId ?? this.contractId;
-    const account = await this.rpc.getAccount(call.source.publicKey());
+    const account = await this.rpc.getAccount(signerAddress(call.source));
     const transaction = new TransactionBuilder(account, {
       fee: BASE_FEE,
       networkPassphrase: this.networkPassphrase,
@@ -626,7 +768,15 @@ export class EscrowClient {
       .setTimeout(30)
       .build();
 
-    const simulation = await this.rpc.simulateTransaction(transaction);
+    const estimateAttributes = isInstrumentationEnabled(this.instrumentation)
+      ? { "contract.id": contractId, "contract.function": call.method }
+      : EMPTY_SPAN_ATTRIBUTES;
+    const simulation = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      estimateAttributes,
+      () => this.rpc.simulateTransaction(transaction),
+    );
     if (Api.isSimulationError(simulation)) {
       throw new Error(`Simulation failed for ${call.method}: ${simulation.error}`);
     }
@@ -766,19 +916,30 @@ export class EscrowClient {
       throw new Error("approvers must contain at least one releaser keypair");
     }
     const [invoker, ...additionalSigners] = params.approvers;
-    const approverAddresses = params.approvers.map((approver) => approver.publicKey());
+    const approverAddresses = params.approvers.map(signerAddress);
     if (new Set(approverAddresses).size !== approverAddresses.length) {
       throw new Error("approvers must not repeat a releaser keypair");
     }
 
     const client = this.contractClient(invoker);
-    const tx = settlement === "release"
-      ? await client.release_with_approvals({ escrow_id: params.escrowId, approvers: approverAddresses })
-      : await client.refund_with_approvals({ escrow_id: params.escrowId, approvers: approverAddresses });
-    for (const signer of additionalSigners) {
-      await tx.signAuthEntries({ signAuthEntry: signer });
-    }
-    const sent = await tx.signAndSend();
+    const sent = await this.invoke(
+      settlement === "release" ? "release_with_approvals" : "refund_with_approvals",
+      params.escrowId,
+      () =>
+        settlement === "release"
+          ? client.release_with_approvals({ escrow_id: params.escrowId, approvers: approverAddresses })
+          : client.refund_with_approvals({ escrow_id: params.escrowId, approvers: approverAddresses }),
+      {
+        address: signerAddress(invoker),
+        beforeSign: async (tx) => {
+          // Every non-invoker approver signs the contract auth entry. This is
+          // part of the "sign" phase, so one span covers all signatures.
+          for (const signer of additionalSigners) {
+            await tx.signAuthEntries({ signAuthEntry: signer });
+          }
+        },
+      },
+    );
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
   }

@@ -94,7 +94,11 @@ sdk/
   src/amounts.ts         Token-aware amount parsing and formatting (parseAmount, formatAmount, getTokenInfo)
   src/generated/         Machine-generated contract bindings — never hand-edit (issue #121)
   tests/                 Unit and property tests for the SDK (including format(parse(x)) == normalise(x))
+  src/signers/           SEP-43 signer types + optional Stellar Wallets Kit adapter
   package.json
+packages/escrow-react/   @docforum/escrow-react — React Query hooks (no UI)
+sdk-go/                  Go client for the same contract (big.Int i128 amounts)
+examples/web-demo/       Vite + React demo wiring hooks, wallet and telemetry
 scripts/
   check-generated-bindings.sh   CI/regeneration check for the generated bindings
   stellar-cli-version           Pinned generator version (+ release checksum)
@@ -262,6 +266,72 @@ exceed `maxFee` — the cap is never silently overshot:
 ```ts
 const { xdr, fee } = client.feeBump(signedXdr, sponsor, { maxFee: 10_000n });
 ```
+
+### Browser wallets (Stellar Wallets Kit)
+
+`WalletsKitSigner` adapts the selected Stellar Wallets Kit wallet to the SDK's
+SEP-43 `Signer`, so `createEscrow`/`release`/`refund` sign in the browser with
+the same calls used server-side. The adapter has **no runtime import** of the
+kit (it is an optional peer dependency), and lives on a subpath so server
+bundles never include wallet code:
+
+```ts
+import { WalletsKitSigner } from "@docforum/escrow-sdk/signers/wallets-kit";
+import { Networks, StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
+
+StellarWalletsKit.init({ modules, network: Networks.TESTNET });
+const signer = await WalletsKitSigner.connect({
+  kit: StellarWalletsKit,
+  networkPassphrase: Networks.TESTNET,
+});
+await client.release({ escrowId, caller: signer });
+```
+
+A wallet on another network throws `WalletNetworkMismatchError` before
+signing. A user rejecting the prompt is returned as SEP-43
+`{ signedTxXdr: "", error: { code: -4 } }` rather than a crash. Complete
+example: [`examples/web-demo/src/wallet.ts`](examples/web-demo/src/wallet.ts).
+
+### React hooks
+
+[`@docforum/escrow-react`](packages/escrow-react) provides `useEscrow(id)`,
+`useEscrowActions(signer)` and `useEscrowTimeline(escrow)` on top of TanStack
+Query. Polling stops at `Released`/`Refunded`; the timeline documents ledger
+time vs local time. Hooks only — no components or styling.
+
+```tsx
+<QueryClientProvider client={queryClient}>
+  <EscrowProvider client={escrowClient} clientKey={contractId}>
+    <EscrowView id={escrowId} />
+  </EscrowProvider>
+</QueryClientProvider>
+```
+
+### Telemetry
+
+`EscrowClient` accepts optional instrumentation (OpenTelemetry is an optional
+peer dependency, no-op when absent) with one span each for `simulate`, `sign`,
+`submit` and `confirm`, plus an `onEvent` hook for integrators who don't run
+OTel:
+
+```ts
+const client = new EscrowClient({
+  contractId,
+  instrumentation: { tracer: await otelTracer() },
+  onEvent: (event) => metrics.record(event.name, event.durationMs),
+});
+```
+
+Attributes are contract id, function, escrow id, transaction hash and retry
+count. Account addresses are **omitted by default** and only included with
+`includeAddresses: true`.
+
+### Go client
+
+[`sdk-go/`](sdk-go) mirrors the TypeScript surface (`CreateEscrow`,
+`GetStatus`, `GetEscrow`, `Release`, `Refund`) with context-aware methods,
+typed contract errors and `big.Int` i128 amounts. See
+[`sdk-go/README.md`](sdk-go/README.md).
 
 ## Documentation
 
