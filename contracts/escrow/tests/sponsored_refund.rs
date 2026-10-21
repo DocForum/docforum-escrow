@@ -68,7 +68,16 @@ fn fund<'a>(env: &'a Env, distinct_refund_to: bool, refund_after: Option<u64>) -
         &arg,
     );
 
-    Fixture { client, token, contract_id, payer, payee, releaser, refund_to, escrow_id }
+    Fixture {
+        client,
+        token,
+        contract_id,
+        payer,
+        payee,
+        releaser,
+        refund_to,
+        escrow_id,
+    }
 }
 
 // --- each refund path with a distinct refund_to ---------------------------
@@ -372,8 +381,7 @@ fn the_beneficiary_refund_to_never_has_to_sign() {
 
     // `auths()` reflects the authorisations used by the last invocation
     // (create_escrow): the funder's, and never the refund destination's.
-    let signers: std::vec::Vec<Address> =
-        env.auths().into_iter().map(|(addr, _)| addr).collect();
+    let signers: std::vec::Vec<Address> = env.auths().into_iter().map(|(addr, _)| addr).collect();
     assert!(signers.contains(&f.payer));
     assert!(!signers.contains(&f.refund_to));
 }
