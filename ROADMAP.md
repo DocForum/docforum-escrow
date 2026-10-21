@@ -248,6 +248,16 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   additive SDK surface, `0.4.0 → 0.5.0`. Closes issue #70.
 
 ## Phase E7 — Verification, testing & release engineering
+- [x] **Reproducible WASM builds and deployment verification (issue #91)** ?
+  Rust 1.96.0 and Stellar CLI 28.1.0 are pinned; the pinned
+  `rust:1.96.0-bookworm` container compares release WASM hashes from two
+  checkout paths after remapping repository paths. `contract-v*` releases
+  publish the WASM and SHA-256 checksum. `scripts/verify-deployment` fetches
+  deployed WASM from testnet and compares it with a local build; README
+  documents third-party verification. No `stellar contract optimize` step is
+  used. The current testnet deployment predates this source, so the verifier
+  reports the expected hash mismatch. Contract tests/build and the two-path
+  comparison passed locally.
 - [x] **PR malware scan** — `.github/workflows/pr-malware-scan.yml` + `.github/scripts/pr-malware-scan.cjs`, on every PR push. Flags editor/devcontainer autorun tasks, npm install hooks, typosquatted packages and Actions, non-registry dependency sources, payloads disguised as fonts/images, base64/whitespace obfuscation, exfiltration endpoints, reverse shells and miners. HIGH findings fail the `Malware scan` check, label the PR `security-review` and @mention the author; one comment per PR, updated in place. Reads the PR as data only (never checks out or runs it). Added 2026-10-20 after a VS Code autorun payload (escrow #163) and a typosquatted action (escrow #176). Manual backfill (Actions → PR malware scan → Run workflow, `prs: all`) scans PRs opened before the scanner and records a `Malware scan` commit status, which satisfies the required check.
 - [x] **Nightly testnet escrow lifecycle soak** (issue #108) —
   `.github/workflows/nightly-testnet-soak.yml` runs the SDK live integration
