@@ -30,6 +30,8 @@ fn lifecycle_events_include_token_and_amount_for_reconciliation() {
         &String::from_str(&env, "fixture-escrow"),
         &releaser,
         &None,
+        &false,
+        &None,
     );
     let created = EscrowCreated {
         escrow_id: id,
@@ -66,6 +68,8 @@ fn lifecycle_events_include_token_and_amount_for_reconciliation() {
         &200,
         &String::from_str(&env, "fixture-refund"),
         &releaser,
+        &None,
+        &false,
         &None,
     );
     client.refund(&refund_id, &releaser);

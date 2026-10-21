@@ -75,6 +75,10 @@
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
                 },
+                "void",
+                {
+                  "bool": false
+                },
                 "void"
               ]
             }
@@ -152,6 +156,10 @@
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                },
+                "void",
+                {
+                  "bool": false
                 },
                 "void"
               ]
@@ -378,6 +386,12 @@
                 "map": [
                   {
                     "key": {
+                      "symbol": "accepted_at"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "amount"
                     },
                     "val": {
@@ -390,6 +404,14 @@
                     },
                     "val": {
                       "string": "fixture-escrow"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "notify_payee"
+                    },
+                    "val": {
+                      "bool": false
                     }
                   },
                   {
@@ -416,6 +438,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "refund_to"
+                    },
+                    "val": {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "releasers"
                     },
                     "val": {
@@ -424,6 +454,14 @@
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
                         }
                       ]
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "requires_acceptance"
+                    },
+                    "val": {
+                      "bool": false
                     }
                   },
                   {
@@ -484,6 +522,12 @@
                 "map": [
                   {
                     "key": {
+                      "symbol": "accepted_at"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "amount"
                     },
                     "val": {
@@ -496,6 +540,14 @@
                     },
                     "val": {
                       "string": "fixture-refund"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "notify_payee"
+                    },
+                    "val": {
+                      "bool": false
                     }
                   },
                   {
@@ -522,6 +574,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "refund_to"
+                    },
+                    "val": {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "releasers"
                     },
                     "val": {
@@ -530,6 +590,14 @@
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
                         }
                       ]
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "requires_acceptance"
+                    },
+                    "val": {
+                      "bool": false
                     }
                   },
                   {
