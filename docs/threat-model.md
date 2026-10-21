@@ -307,6 +307,13 @@ behave like SEP-41.
   locked under the stored `releaser`'s control." It does **not** mean
   "the funds are committed to me." A payee should check who the
   `releaser` is before relying on an escrow.
+- **With the acceptance gate (issue #25, `docs/adr/0008`) the payer can
+  still cancel until the payee accepts (issue #27, `docs/adr/0010`):** on an
+  escrow with `requires_acceptance`, `Funded` plus `accepted_at == None`
+  means the payer may take the funds back to `refund_to` at any moment;
+  `accept` and `cancel` race and the first to land wins. Payees must call
+  `accept` before relying on such an escrow. After acceptance `cancel` is
+  closed for good. Escrows without the gate have no cancel.
 - **With an M-of-N releaser set (issue #119, `docs/adr/0007`), what a payee
   must check changes:** fewer than `threshold` colluding releasers cannot
   settle early, but `threshold` colluding releasers can — read `releasers`
