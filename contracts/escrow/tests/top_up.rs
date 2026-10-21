@@ -38,6 +38,7 @@ fn setup(env: &Env) -> Fixture<'_> {
         &releaser,
         &None,
         &false,
+        &None,
     );
     Fixture {
         client,

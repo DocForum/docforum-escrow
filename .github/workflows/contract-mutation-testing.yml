@@ -1,0 +1,44 @@
+name: Contract mutation testing
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutations:
+    name: Soroban contract mutants
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: contracts/escrow
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo build products
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts/escrow -> target
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants@27.1.0
+
+      - name: Run mutation tests
+        run: cargo mutants --in-place --output mutants.out
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-mutants-report
+          path: contracts/escrow/mutants.out
+          if-no-files-found: ignore
