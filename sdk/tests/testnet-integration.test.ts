@@ -120,8 +120,8 @@ describe("EscrowClient against live testnet", () => {
     expect(await client.getStatus(refundEscrow.escrowId)).toBe("Refunded");
   });
 
-  // The documented live testnet deployment predates the quorum contract
-  // entry points. Enable after a quorum-capable deployment is recorded.
+  // This extra quorum case is opt-in to limit Friendbot funding during
+  // ordinary integration runs; the current contract supports quorum.
   it.skipIf(process.env.TESTNET_QUORUM_SUPPORTED !== "true")("settles a 2-of-3 quorum escrow with two approvers", async () => {
     const [payer, payee, first, second, third] = await Promise.all([
       fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(),
