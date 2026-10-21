@@ -6,6 +6,23 @@ on:
   pull_request:
 
 jobs:
+  static-analysis:
+    name: Rust static analysis and dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: rustfmt, clippy
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --manifest-path contracts/escrow/Cargo.toml --all-targets -- -D warnings
+      - uses: taiki-e/install-action@cargo-deny
+      - run: cargo deny check
+      - uses: taiki-e/install-action@cargo-audit
+      - run: cargo audit
+
   contract:
     name: Soroban contract (test + wasm build)
     runs-on: ubuntu-latest
