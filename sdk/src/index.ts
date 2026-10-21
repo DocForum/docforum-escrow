@@ -42,8 +42,33 @@ export {
   type EscrowTracer,
   type InstrumentationOptions,
 } from "./instrumentation.js";
+export { EscrowIndexerClient } from "./indexer-client.js";
+export type { EscrowIndexerClientConfig, EscrowPage, IndexedEscrow } from "./indexer-client.js";
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";
+
+export type ArchivedEntryBehavior = "auto" | "error";
+
+/** Typed error for contract calls that cannot restore archived ledger entries. */
+export class ArchivedEntryError extends Error {
+  readonly method: string;
+  override readonly cause?: unknown;
+  constructor(method: string, behavior: ArchivedEntryBehavior, cause?: unknown) {
+    super(behavior === "auto"
+      ? `Contract state needed by ${method} is archived and automatic restoration failed. Ensure the configured signer can pay the restoration fee.`
+      : `Contract state needed by ${method} is archived. Set archivalBehavior to "auto" and provide a restore signer to restore it.`);
+    this.name = "ArchivedEntryError";
+    this.method = method;
+    this.cause = cause;
+  }
+}
+
+export function isArchivedEntryFailure(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { name?: unknown; message?: unknown };
+  return candidate.name === "ExpiredState" ||
+    (typeof candidate.message === "string" && /expired state|archived (?:contract )?state|automatic restoration attempt limit reached/i.test(candidate.message));
+}
 
 export type EscrowEventType = "created" | "released" | "refunded";
 interface EscrowEventBase {
@@ -124,6 +149,8 @@ export interface Escrow {
    * relying on a `Funded` escrow (threat model T8).
    */
   refundAfter?: bigint;
+  /** Earliest ledger timestamp at which release is allowed. Omit for immediate release. */
+  releaseNotBefore?: bigint;
   /** Whether to call the contract payee's on_escrow_released hook. Defaults to false. */
   notifyPayee: boolean;
   /**
@@ -176,6 +203,9 @@ export interface EscrowClientConfig {
   instrumentation?: InstrumentationOptions;
   /** Shorthand for `instrumentation.onEvent`. */
   onEvent?: InstrumentationOptions["onEvent"];
+  /** Use the restore signer to authorize calls that automatically restore archived entries. */
+  archivalBehavior?: ArchivedEntryBehavior;
+  restoreSigner?: Keypair;
 }
 
 export interface CreateEscrowParams {
@@ -210,6 +240,8 @@ export interface CreateEscrowParams {
    * (rejected with `InvalidRefundTo`, error 21).
    */
   refundTo?: string;
+  /** Earliest ledger timestamp at which release is allowed; omit for immediate release. */
+  releaseNotBefore?: bigint;
 }
 
 export interface ReleaseOrRefundParams {
@@ -391,6 +423,8 @@ export class EscrowClient {
   private readonly networkPassphrase: string;
   private readonly rpc: RpcServer;
   private readonly instrumentation?: InstrumentationOptions;
+  private readonly archivalBehavior: ArchivedEntryBehavior;
+  private readonly restoreSigner?: Keypair;
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
@@ -400,15 +434,18 @@ export class EscrowClient {
     this.instrumentation = config.onEvent
       ? { ...config.instrumentation, onEvent: config.onEvent }
       : config.instrumentation;
+    this.archivalBehavior = config.archivalBehavior ?? "error";
+    this.restoreSigner = config.restoreSigner;
   }
 
   private contractClient(signer?: EscrowSigner): EscrowContractClient {
+    const effectiveSigner = signer ?? (this.archivalBehavior === "auto" ? this.restoreSigner : undefined);
     return new EscrowContractClient({
       contractId: this.contractId,
       rpcUrl: this.rpcUrl,
       networkPassphrase: this.networkPassphrase,
-      ...(signer
-        ? { publicKey: signerAddress(signer), signTransaction: signer }
+      ...(effectiveSigner
+        ? { publicKey: signerAddress(effectiveSigner), signTransaction: effectiveSigner }
         : {}),
     });
   }
@@ -501,21 +538,26 @@ export class EscrowClient {
       );
     }
     const client = this.contractClient(params.payer);
+    const createParams = {
+      payer: signerAddress(params.payer),
+      payee: params.payee,
+      token: params.token,
+      amount: params.amount,
+      condition_ref: params.conditionRef,
+      releaser: params.releaser,
+      refund_after: params.refundAfter,
+      notify_payee: params.notifyPayee ?? false,
+      refund_to: params.refundTo,
+    };
     const sent = await this.invoke(
       "create_escrow",
       undefined,
-      () =>
-        client.create_escrow({
-          payer: signerAddress(params.payer),
-          payee: params.payee,
-          token: params.token,
-          amount: params.amount,
-          condition_ref: params.conditionRef,
-          releaser: params.releaser,
-          refund_after: params.refundAfter,
-          notify_payee: params.notifyPayee ?? false,
-          refund_to: params.refundTo,
-        }),
+      () => params.releaseNotBefore === undefined
+        ? client.create_escrow(createParams)
+        : client.create_escrow_release_time({
+            ...createParams,
+            release_not_before: params.releaseNotBefore,
+          }),
       { address: signerAddress(params.payer) },
     );
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
@@ -617,6 +659,7 @@ export class EscrowClient {
       refundAfter: data.refund_after ?? undefined,
       notifyPayee: data.notify_payee,
       refundTo: data.refund_to,
+      releaseNotBefore: data.release_not_before ?? undefined,
       status: data.status.tag,
     };
   }

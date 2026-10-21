@@ -55,10 +55,16 @@ jobs:
       - name: Confirm wasm artifact exists
         run: test -f target/wasm32v1-none/release/docforum_escrow.wasm
 
-  # Issue #121: the committed generated client must be exactly what the pinned
-  # Stellar CLI generates from the current contract WASM. Catches both a
-  # contract change without regeneration and a hand edit to the generated file.
-  # It never commits: the job fails and tells the contributor to regenerate.
+      - name: Test custom releaser account
+        run: cargo test --manifest-path ../releaser-account/Cargo.toml
+
+      - name: Build custom releaser account (wasm)
+        run: cargo build --manifest-path ../releaser-account/Cargo.toml --target wasm32v1-none --release
+
+      - name: Confirm custom account wasm exists
+        run: test -f ../releaser-account/target/wasm32v1-none/release/docforum_releaser_account.wasm
+
+  # Issue #121: the committed generated client must match the pinned CLI output.
   sdk-bindings:
     name: SDK bindings match contract WASM
     runs-on: ubuntu-latest
