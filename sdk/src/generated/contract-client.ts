@@ -128,13 +128,28 @@ accepted_at: Option<u64>;
  */
 notify_payee: boolean;
   payee: string;
-  payer: string;
+  /**
+ * The funder: authorises and pays for the escrow at creation. Also
+ * the refund destination unless `refund_to` says otherwise.
+ */
+payer: string;
   /**
  * Optional deadline (unix seconds) after which `refund` opens to
- * anyone — still only back to `payer`. `None` means no timeout,
+ * anyone — still only to `refund_to`. `None` means no timeout,
  * behaviour identical to before this field existed — see docs/adr/0004.
  */
 refund_after: Option<u64>;
+  /**
+ * Where **every** refund path (releaser, timeout) sends the funds.
+ * Fixed at creation under the funder's auth and never chosen at
+ * payout, so invariant I1 holds; defaults to `payer` when omitted at
+ * creation — see docs/adr/0009.
+ */
+refund_to: string;
+  /**
+ * Earliest ledger timestamp at which release is allowed.
+ */
+release_not_before: Option<u64>;
   /**
  * Addresses permitted to settle this escrow — see docs/adr/0002 for the
  * per-escrow releaser, and docs/adr/0007 for M-of-N sets. A plain
@@ -197,7 +212,9 @@ export interface Client {
 
   /**
    * Construct and simulate a refund transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Returns the escrowed `amount` to `payer`. Same state rule as
+   * Returns the escrowed `amount` to the escrow's `refund_to` (the
+   * `payer` unless a different destination was fixed at creation —
+   * docs/adr/0006). Same state rule as
    * `release` (only while `Funded`), but two callers are authorised:
    * 
    * - the escrow's releaser (docs/adr/0002), always; or
@@ -205,10 +222,11 @@ export interface Client {
    * refund path for a lost/unsignable releaser key (docs/adr/0004).
    * 
    * The destination never changes: timeout or not, funds only ever go
-   * back to the stored `payer`. With no `refund_after` set, behaviour
-   * is identical to before the timeout existed — releaser only. On an
-   * M-of-N escrow the releaser path needs a threshold of 1; otherwise use
-   * `refund_with_approvals` (the timeout path stays open to anyone).
+   * to the stored `refund_to`, which no caller can influence. With no
+   * `refund_after` set, behaviour is identical to before the timeout
+   * existed — releaser only. On an M-of-N escrow the releaser path needs
+   * a threshold of 1; otherwise use `refund_with_approvals` (the timeout
+   * path stays open to anyone).
    */
   refund: ({escrow_id, caller}: {escrow_id: u64, caller: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
 
@@ -255,9 +273,10 @@ export interface Client {
    * Construct and simulate a get_escrow transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Read-only accessor for everything stored about `escrow_id` — payer,
    * payee, token, amount, `condition_ref`, status, the releaser set with
-   * its threshold, and `refund_after`. Exists so payees and integrators
-   * can check who can settle and when before relying on a `Funded`
-   * escrow (docs/adr/0004, threat model T8). Errors on an unknown id.
+   * its threshold, `refund_after` and `refund_to`. Exists so payees and
+   * integrators can check who can settle, when, and where a refund goes
+   * before relying on a `Funded` escrow (docs/adr/0004, threat model T8).
+   * Errors on an unknown id.
    */
   get_escrow: ({escrow_id}: {escrow_id: u64}, options?: MethodOptions) => Promise<AssembledTransaction<Result<EscrowData>>>
 
@@ -285,10 +304,14 @@ export interface Client {
    * `notify_payee` opts an implementing contract payee into
    * `on_escrow_released(escrow_id, amount)` (docs/adr/0005). The payer
    * must authorize creation, and the payee must also authorize if
-   * `notify_payee` is true. For M-of-N releasers use
+   * `notify_payee` is true. `refund_to` is the optional refund
+   * destination for a sponsored escrow where the funder (`payer`) is
+   * not who should get the money back (docs/adr/0009): `None` means
+   * `payer`; it may not be this contract's own address, and the
+   * `payer`'s auth on this call covers it. For M-of-N releasers use
    * `create_escrow_with_releasers`.
    */
-  create_escrow: ({payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee}: {payer: string, payee: string, token: string, amount: i128, condition_ref: string, releaser: string, refund_after: Option<u64>, notify_payee: boolean}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u64>>>
+  create_escrow: ({payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to}: {payer: string, payee: string, token: string, amount: i128, condition_ref: string, releaser: string, refund_after: Option<u64>, notify_payee: boolean, refund_to: Option<string>}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u64>>>
 
   /**
    * Construct and simulate a raise_dispute transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
@@ -325,7 +348,7 @@ export interface Client {
 
   /**
    * Construct and simulate a refund_with_approvals transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Returns the escrowed `amount` to `payer` on behalf of an M-of-N
+   * Returns the escrowed `amount` to `refund_to` on behalf of an M-of-N
    * releaser set (docs/adr/0007). Same approval rules as
    * `release_with_approvals`. The timeout refund path in `refund` stays
    * available as well: once `refund_after` passes, anyone can return the
@@ -354,6 +377,13 @@ export interface Client {
   create_escrow_with_arbiter: ({payer, payee, token, amount, condition_ref, releaser, refund_after, arbiter, notify_payee}: {payer: string, payee: string, token: string, amount: i128, condition_ref: string, releaser: string, refund_after: Option<u64>, arbiter: string, notify_payee: boolean}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u64>>>
 
   /**
+   * Construct and simulate a create_escrow_release_time transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Creates a single-releaser escrow with an optional earliest release time.
+   * Release is allowed at the configured timestamp.
+   */
+  create_escrow_release_time: ({payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to, release_not_before}: {payer: string, payee: string, token: string, amount: i128, condition_ref: string, releaser: string, refund_after: Option<u64>, notify_payee: boolean, refund_to: Option<string>, release_not_before: Option<u64>}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u64>>>
+
+  /**
    * Construct and simulate a create_escrow_with_releasers transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Same as `create_escrow`, but the escrow is settled by M-of-N
    * releasers instead of one address (docs/adr/0007): `threshold`
@@ -363,14 +393,14 @@ export interface Client {
    * 10 releasers, duplicate addresses, and a threshold of 0 or one
    * larger than the set.
    */
-  create_escrow_with_releasers: ({payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee}: {payer: string, payee: string, token: string, amount: i128, condition_ref: string, releasers: Array<string>, threshold: u32, refund_after: Option<u64>, notify_payee: boolean}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u64>>>
+  create_escrow_with_releasers: ({payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to}: {payer: string, payee: string, token: string, amount: i128, condition_ref: string, releasers: Array<string>, threshold: u32, refund_after: Option<u64>, notify_payee: boolean, refund_to: Option<string>}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u64>>>
 
   /**
    * Construct and simulate a create_escrow_with_acceptance transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Creates an escrow with an opt-in payee acceptance gate. Existing
    * integrations can keep using `create_escrow`, which defaults this off.
    */
-  create_escrow_with_acceptance: ({payer, payee, token, amount, condition_ref, releaser, refund_after, requires_acceptance}: {payer: string, payee: string, token: string, amount: i128, condition_ref: string, releaser: string, refund_after: Option<u64>, requires_acceptance: boolean}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u64>>>
+  create_escrow_with_acceptance: ({payer, payee, token, amount, condition_ref, releaser, refund_after, requires_acceptance, refund_to}: {payer: string, payee: string, token: string, amount: i128, condition_ref: string, releaser: string, refund_after: Option<u64>, requires_acceptance: boolean, refund_to: Option<string>}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u64>>>
 
 }
 export class Client extends ContractClient {
@@ -401,10 +431,10 @@ export class Client extends ContractClient {
         "AAAAAAAAAvZQYXlzIGJvdGggc2lkZXMgb2YgYSBgRGlzcHV0ZWRgIGVzY3JvdyBhY2NvcmRpbmcgdG8gdGhlIHNwbGl0IHRoZQphcmJpdGVyIHJlY29yZGVkIHdpdGggYHJlc29sdmVfZGlzcHV0ZWAgKFBoYXNlIEU2LCBkb2NzL2Fkci8wMDA5KS4KCkRlbGliZXJhdGVseSBwZXJtaXNzaW9ubGVzczogdGhlIHNwbGl0IGlzIGFscmVhZHkgZml4ZWQgYW5kIHdhcwphdXRob3Jpc2VkIGJ5IHRoZSBhcmJpdGVyLCBzbyBzZXR0bGluZyBpdCBpcyBhIGRldGVybWluaXN0aWMgdHJhbnNmZXIKdGhhdCBjYW5ub3QgYmUgcmVkaXJlY3RlZC4gTGV0dGluZyBhbnlvbmUgc3VibWl0IGl0IG1lYW5zIGEKZGlzYXBwZWFyZWQgYXJiaXRlciAob3IgYSBwYXllci9wYXllZSB3aG8gc3RvcHMgcGF5aW5nIGZlZXMpIGNhbm5vdApzdHJhbmQgdGhlIGZ1bmRzLiBGYWlscyBgTm90UmVzb2x2ZWRgIGJlZm9yZSBhIHNwbGl0IGV4aXN0cyBhbmQKYE5vdERpc3B1dGVkYCBvbiBhIHNldHRsZWQgb3Igbm9uLWRpc3B1dGVkIGVzY3Jvdy4KClRoZSBlc2Nyb3cgaXMgbWFya2VkIGBSZWxlYXNlZGAgYmVmb3JlIHRoZSB0cmFuc2ZlcnMKKGNoZWNrcy1lZmZlY3RzLWludGVyYWN0aW9ucywgZG9jcy9hZHIvMDAwNikgYW5kIGEgZmFpbGluZyB0cmFuc2Zlcgpyb2xscyB0aGUgd2hvbGUgaW52b2NhdGlvbiBiYWNrLiBUaGUgcGF5ZWUgYWNjZXB0YW5jZSBnYXRlIGlzIG5vdAphcHBsaWVkIGhlcmU6IGFuIGFyYml0ZXIncyByZXNvbHV0aW9uIGlzIHRoZSBhdXRob3Jpc2F0aW9uLgAAAAAABnNldHRsZQAAAAAAAQAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAEAAAPpAAAAAgAAAAM=",
         "AAAAAAAAAHVBZGRzIGZ1bmRzIHRvIGEgZnVuZGVkIGVzY3JvdyB3aXRob3V0IGNoYW5naW5nIGl0cyBwYXJ0aWVzIG9yIGlkLgpPbmx5IGl0cyBvcmlnaW5hbCBwYXllciBtYXkgYXV0aG9yaXplIHRoZSB0cmFuc2Zlci4AAAAAAAAGdG9wX3VwAAAAAAADAAAAAAAAAAllc2Nyb3dfaWQAAAAAAAAGAAAAAAAAAAVwYXllcgAAAAAAABMAAAAAAAAABmFtb3VudAAAAAAACwAAAAEAAAPpAAAAAgAAAAM=",
         "AAAAAAAAAcxNb3ZlcyB0aGUgZXNjcm93ZWQgYGFtb3VudGAgdG8gYHBheWVlYC4gT25seSB0aGUgZXNjcm93J3MgcmVsZWFzZXIKbWF5IGNhbGwgdGhpcyDigJQgdGhlIGNvbnRyYWN0IGVuZm9yY2VzIFdITywgbmV2ZXIgV0hZIChBRFIgMDAwMSkuIE9uCmFuIE0tb2YtTiBlc2Nyb3cgdGhpcyBzaW5nbGUtY2FsbGVyIHBhdGggaXMgb25seSBhbGxvd2VkIHdoZW4gdGhlCnRocmVzaG9sZCBpcyAxOyBvdGhlcndpc2UgdXNlIGByZWxlYXNlX3dpdGhfYXBwcm92YWxzYC4KCkRlbGliZXJhdGVseSAqKm5vdCoqIGdhdGVkIGJ5IGByZWZ1bmRfYWZ0ZXJgIChkb2NzL2Fkci8wMDA0KTogYWZ0ZXIKdGhlIGRlYWRsaW5lIHRoZSByZWxlYXNlciBjYW4gc3RpbGwgcmVsZWFzZSwgcmFjaW5nIGFueSB0aW1lb3V0CnJlZnVuZCDigJQgd2hvZXZlciBsYW5kcyBmaXJzdCB3aW5zIGFuZCB0aGUgb3RoZXIgZmFpbHMgYE5vdEZ1bmRlZGAuAAAAB3JlbGVhc2UAAAAAAgAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAAAAAAGY2FsbGVyAAAAAAATAAAAAQAAA+kAAAACAAAAAw==",
-        "AAAAAAAAAU9SZWFkLW9ubHkgYWNjZXNzb3IgZm9yIGV2ZXJ5dGhpbmcgc3RvcmVkIGFib3V0IGBlc2Nyb3dfaWRgIOKAlCBwYXllciwKcGF5ZWUsIHRva2VuLCBhbW91bnQsIGBjb25kaXRpb25fcmVmYCwgc3RhdHVzLCB0aGUgcmVsZWFzZXIgc2V0IHdpdGgKaXRzIHRocmVzaG9sZCwgYW5kIGByZWZ1bmRfYWZ0ZXJgLiBFeGlzdHMgc28gcGF5ZWVzIGFuZCBpbnRlZ3JhdG9ycwpjYW4gY2hlY2sgd2hvIGNhbiBzZXR0bGUgYW5kIHdoZW4gYmVmb3JlIHJlbHlpbmcgb24gYSBgRnVuZGVkYAplc2Nyb3cgKGRvY3MvYWRyLzAwMDQsIHRocmVhdCBtb2RlbCBUOCkuIEVycm9ycyBvbiBhbiB1bmtub3duIGlkLgAAAAAKZ2V0X2VzY3JvdwAAAAAAAQAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAEAAAPpAAAH0AAAAApFc2Nyb3dEYXRhAAAAAAAD",
+        "AAAAAAAAAXFSZWFkLW9ubHkgYWNjZXNzb3IgZm9yIGV2ZXJ5dGhpbmcgc3RvcmVkIGFib3V0IGBlc2Nyb3dfaWRgIOKAlCBwYXllciwKcGF5ZWUsIHRva2VuLCBhbW91bnQsIGBjb25kaXRpb25fcmVmYCwgc3RhdHVzLCB0aGUgcmVsZWFzZXIgc2V0IHdpdGgKaXRzIHRocmVzaG9sZCwgYHJlZnVuZF9hZnRlcmAgYW5kIGByZWZ1bmRfdG9gLiBFeGlzdHMgc28gcGF5ZWVzIGFuZAppbnRlZ3JhdG9ycyBjYW4gY2hlY2sgd2hvIGNhbiBzZXR0bGUsIHdoZW4sIGFuZCB3aGVyZSBhIHJlZnVuZCBnb2VzCmJlZm9yZSByZWx5aW5nIG9uIGEgYEZ1bmRlZGAgZXNjcm93IChkb2NzL2Fkci8wMDA0LCB0aHJlYXQgbW9kZWwgVDgpLgpFcnJvcnMgb24gYW4gdW5rbm93biBpZC4AAAAAAAAKZ2V0X2VzY3JvdwAAAAAAAQAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAEAAAPpAAAH0AAAAApFc2Nyb3dEYXRhAAAAAAAD",
         "AAAAAAAAADxSZWFkLW9ubHkgc3RhdHVzIHF1ZXJ5LiBFcnJvcnMgaWYgYGVzY3Jvd19pZGAgZG9lc24ndCBleGlzdC4AAAAKZ2V0X3N0YXR1cwAAAAAAAQAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAEAAAPpAAAH0AAAAAxFc2Nyb3dTdGF0dXMAAAAD",
         "AAAAAAAAAOtSZWFkLW9ubHk6IHRoZSBlc2Nyb3cncyBhcmJpdGVyIGFuZCByZWNvcmRlZCBzcGxpdCwgaWYgYW55LiBFcnJvcnMgaWYKYGVzY3Jvd19pZGAgZG9lc24ndCBleGlzdC4gRXNjcm93cyBjcmVhdGVkIGJlZm9yZSBQaGFzZSBFNiAoYW5kIHRob3NlCmNyZWF0ZWQgd2l0aG91dCBgY3JlYXRlX2VzY3Jvd193aXRoX2FyYml0ZXJgKSByZXBvcnQgYGFyYml0ZXI6IE5vbmVgCmFuZCBjYW4gbmV2ZXIgYmUgcmVzb2x2ZWQuAAAAAAtnZXRfZGlzcHV0ZQAAAAABAAAAAAAAAAllc2Nyb3dfaWQAAAAAAAAGAAAAAQAAA+kAAAfQAAAADERpc3B1dGVTdGF0ZQAAAAM=",
-        "AAAAAAAAAHtTZXRzIHRoZSBpbW11dGFibGUgdG9rZW4gYWxsb3dsaXN0IGF0IGRlcGxveW1lbnQuIEFuIGVtcHR5IGxpc3QKcHJlc2VydmVzIHRoZSBsZWdhY3kgYmVoYXZpb3IgYW5kIGFsbG93cyBhbnkgdG9rZW4gYWRkcmVzcy4AAAAADV9fY29uc3RydWN0b3IAAAAAAAABAAAAAAAAAA5hbGxvd2VkX3Rva2VucwAAAAAD6gAAABMAAAAA",
+        "AAAAAAAAAHtTZXRzIHRoZSBpbW11dGFibGUgdG9rZW4gYWxsb3dsaXN0IGF0IGRlcGxveW1lbnQuIEFuIGVtcHR5IGxpc3QKcHJlc2VydmVzIHRoZSBsZWdhY3kgYmVoYXZpb3VyIGFuZCBhbGxvd3MgYW55IHRva2VuIGFkZHJlc3MuAAAAAA1fX2NvbnN0cnVjdG9yAAAAAAAAAQAAAAAAAAAOYWxsb3dlZF90b2tlbnMAAAAAA+oAAAATAAAAAA==",
         "AAAAAAAAAghMb2NrcyBgYW1vdW50YCBvZiBgdG9rZW5gIHB1bGxlZCBmcm9tIGBwYXllcmAsIGhlbGQgZm9yIGBwYXllZWAsCmRvY3MvdGhyZWF0LW1vZGVsLm1kIFQxMCBhbmQgUk9BRE1BUC5tZCBQaGFzZSBFNSkuIGByZWxlYXNlcmAgaXMgdGhlCmFkZHJlc3MgcGVybWl0dGVkIHRvIGNhbGwgYHJlbGVhc2VgL2ByZWZ1bmRgIG9uIHRoaXMgZXNjcm93Cihkb2NzL2Fkci8wMDAyKS4gYHJlZnVuZF9hZnRlcmAgaXMgb3B0aW9uYWwgKGRvY3MvYWRyLzAwMDQpLgpgbm90aWZ5X3BheWVlYCBvcHRzIGFuIGltcGxlbWVudGluZyBjb250cmFjdCBwYXllZSBpbnRvCmBvbl9lc2Nyb3dfcmVsZWFzZWQoZXNjcm93X2lkLCBhbW91bnQpYCAoZG9jcy9hZHIvMDAwNSkuIFRoZSBwYXllcgptdXN0IGF1dGhvcml6ZSBjcmVhdGlvbiwgYW5kIHRoZSBwYXllZSBtdXN0IGFsc28gYXV0aG9yaXplIGlmCmBub3RpZnlfcGF5ZWVgIGlzIHRydWUuIEZvciBNLW9mLU4gcmVsZWFzZXJzIHVzZQpgY3JlYXRlX2VzY3Jvd193aXRoX3JlbGVhc2Vyc2AuAAAADWNyZWF0ZV9lc2Nyb3cAAAAAAAAIAAAAAAAAAAVwYXllcgAAAAAAABMAAAAAAAAABXBheWVlAAAAAAAAEwAAAAAAAAAFdG9rZW4AAAAAAAATAAAAAAAAAAZhbW91bnQAAAAAAAsAAAAAAAAADWNvbmRpdGlvbl9yZWYAAAAAAAAQAAAAAAAAAAhyZWxlYXNlcgAAABMAAAAAAAAADHJlZnVuZF9hZnRlcgAAA+gAAAAGAAAAAAAAAAxub3RpZnlfcGF5ZWUAAAABAAAAAQAAA+kAAAAGAAAAAw==",
         "AAAAAAAAAg1PcGVucyBhIGRpc3B1dGUgb24gYSBgRnVuZGVkYCBlc2Nyb3cgKFBoYXNlIEU2LCBkb2NzL2Fkci8wMDA5KS4KCmBwYXllcmAsIGBwYXllZWAgYW5kIGFueSBhZGRyZXNzIGluIHRoZSBlc2Nyb3cncyByZWxlYXNlciBzZXQgbWF5IGNhbGwKdGhpcyDigJQgZXZlcnlvbmUgd2l0aCBhIHN0YWtlIGluIHRoZSBvdXRjb21lLiBUaGUgZXNjcm93IG1vdmVzIHRvCmBEaXNwdXRlZGAsIHdoaWNoIHJlamVjdHMgYHJlbGVhc2VgL2ByZWZ1bmRgIChhbmQgdGhlIGFwcHJvdmFsCnZhcmlhbnRzKSB1bnRpbCB0aGUgYXJiaXRlcidzIHNwbGl0IGlzIHNldHRsZWQsIHNvIHRoZSBmdW5kcyBjYW5ub3QKbW92ZSBvdXQgZnJvbSB1bmRlciBhbiBpbi1mbGlnaHQgYWRqdWRpY2F0aW9uLgoKUmFpc2luZyBhIGRpc3B1dGUgbmV2ZXIgdHJhbnNmZXJzIGFueXRoaW5nLCBzbyBpdCBpcyBzYWZlIHRvIGFsbG93CmV2ZXJ5IHBhcnR5IHRvIHRyaWdnZXIgaXQ7IHRoZSBhcmJpdGVyLCBub3QgdGhlIGNhbGxlciwgZGVjaWRlcyB0aGUKb3V0Y29tZS4AAAAAAAANcmFpc2VfZGlzcHV0ZQAAAAAAAAIAAAAAAAAACWVzY3Jvd19pZAAAAAAAAAYAAAAAAAAABmNhbGxlcgAAAAAAEwAAAAEAAAPpAAAAAgAAAAM=",
         "AAAAAAAAAm9SZWNvcmRzIHRoZSBhcmJpdGVyJ3MgcmVzb2x1dGlvbiBmb3IgYSBgRGlzcHV0ZWRgIGVzY3JvdyBhcyBiYXNpcwpwb2ludHMgb2YgdGhlIGVzY3Jvd2VkIGBhbW91bnRgOiBgcGF5ZXJfYnBzYCBiYWNrIHRvIGBwYXllcmAsCmBwYXllZV9icHNgIHRvIGBwYXllZWAgKFBoYXNlIEU2LCBkb2NzL2Fkci8wMDA5KS4KCk9ubHkgdGhlIGVzY3JvdydzIHN0b3JlZCBhcmJpdGVyIG1heSBjYWxsIHRoaXMsIG9ubHkgd2hpbGUgdGhlIGVzY3JvdwppcyBgRGlzcHV0ZWRgLCBhbmQgb25seSBvbmNlIOKAlCBhIHJlY29yZGVkIHNwbGl0IGlzIGZpbmFsLCBzbyBhIHNlY29uZApjYWxsIGZhaWxzIGBBbHJlYWR5UmVzb2x2ZWRgIGluc3RlYWQgb2Ygc2lsZW50bHkgcmV3cml0aW5nIHRoZSBwYXlvdXQuCmBwYXllcl9icHMgKyBwYXllZV9icHNgIG11c3QgZXF1YWwgMTBfMDAwICgxMDAlKTsgYSBgMGAvYDEwXzAwMGAgc3BsaXQKaXMgYSBmdWxsIHJlZnVuZC9yZWxlYXNlIGFuZCBpcyBhbGxvd2VkLgoKVGhpcyBjYWxsIG9ubHkgcmVjb3JkcyB0aGUgc3BsaXQ7IGBzZXR0bGVgIGlzIHdoYXQgbW92ZXMgdGhlIGZ1bmRzLCBzbwphIHJlc29sdmVyIGNhbiBiZSBpbnNwZWN0ZWQgYmVmb3JlIGl0IHBheXMgb3V0LgAAAAAPcmVzb2x2ZV9kaXNwdXRlAAAAAAQAAAAAAAAACWVzY3Jvd19pZAAAAAAAAAYAAAAAAAAABmNhbGxlcgAAAAAAEwAAAAAAAAAJcGF5ZXJfYnBzAAAAAAAABAAAAAAAAAAJcGF5ZWVfYnBzAAAAAAAABAAAAAEAAAPpAAAAAgAAAAM=",
@@ -431,6 +461,7 @@ export class Client extends ContractClient {
         refund_with_approvals: this.txFromJSON<Result<void>>,
         release_with_approvals: this.txFromJSON<Result<void>>,
         create_escrow_with_arbiter: this.txFromJSON<Result<u64>>,
+        create_escrow_release_time: this.txFromJSON<Result<u64>>,
         create_escrow_with_releasers: this.txFromJSON<Result<u64>>,
         create_escrow_with_acceptance: this.txFromJSON<Result<u64>>
   }
