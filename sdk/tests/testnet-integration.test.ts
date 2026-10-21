@@ -28,10 +28,10 @@ import {
 } from "@stellar/stellar-sdk";
 import { EscrowClient, FactoryClient, predictInstanceAddress } from "../src/index.js";
 
-// Live testnet deployment of the Phase E4 contract (adds `refund_after`
-// timeout refund + `get_escrow`) — see docs/testnet-deployments.md.
+// Current upstream-main testnet deployment, including BalanceMismatch
+// and opt-in payee acceptance — see docs/testnet-deployments.md.
 // Public contract addresses, not secrets.
-const CONTRACT_ID = "CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5";
+const CONTRACT_ID = "CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR";
 const NATIVE_XLM_SAC = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 // Live testnet deployment of the Phase E5 escrow factory contract — see
 // docs/testnet-deployments.md. Public contract address, not a secret.
@@ -123,8 +123,8 @@ describe("EscrowClient against live testnet", () => {
     expect(await client.getStatus(refundEscrow.escrowId)).toBe("Refunded");
   });
 
-  // The documented live testnet deployment predates the quorum contract
-  // entry points. Enable after a quorum-capable deployment is recorded.
+  // This extra quorum case is opt-in to limit Friendbot funding during
+  // ordinary integration runs; the current contract supports quorum.
   it.skipIf(process.env.TESTNET_QUORUM_SUPPORTED !== "true")("settles a 2-of-3 quorum escrow with two approvers", async () => {
     const [payer, payee, first, second, third] = await Promise.all([
       fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(),

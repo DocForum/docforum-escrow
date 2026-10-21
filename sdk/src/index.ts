@@ -23,8 +23,33 @@ import { Api, Server as RpcServer } from "@stellar/stellar-sdk/rpc";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
 
 export { Keypair };
+export { EscrowIndexerClient } from "./indexer-client.js";
+export type { EscrowIndexerClientConfig, EscrowPage, IndexedEscrow } from "./indexer-client.js";
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";
+
+export type ArchivedEntryBehavior = "auto" | "error";
+
+/** Typed error for contract calls that cannot restore archived ledger entries. */
+export class ArchivedEntryError extends Error {
+  readonly method: string;
+  override readonly cause?: unknown;
+  constructor(method: string, behavior: ArchivedEntryBehavior, cause?: unknown) {
+    super(behavior === "auto"
+      ? `Contract state needed by ${method} is archived and automatic restoration failed. Ensure the configured signer can pay the restoration fee.`
+      : `Contract state needed by ${method} is archived. Set archivalBehavior to "auto" and provide a restore signer to restore it.`);
+    this.name = "ArchivedEntryError";
+    this.method = method;
+    this.cause = cause;
+  }
+}
+
+export function isArchivedEntryFailure(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { name?: unknown; message?: unknown };
+  return candidate.name === "ExpiredState" ||
+    (typeof candidate.message === "string" && /expired state|archived (?:contract )?state|automatic restoration attempt limit reached/i.test(candidate.message));
+}
 
 export type EscrowEventType = "created" | "released" | "refunded";
 interface EscrowEventBase {
@@ -105,8 +130,17 @@ export interface Escrow {
    * relying on a `Funded` escrow (threat model T8).
    */
   refundAfter?: bigint;
+  /** Earliest ledger timestamp at which release is allowed. Omit for immediate release. */
+  releaseNotBefore?: bigint;
   /** Whether to call the contract payee's on_escrow_released hook. Defaults to false. */
   notifyPayee: boolean;
+  /**
+   * Where every refund (releaser or timeout) sends the funds. Fixed at
+   * creation; equals `payer` unless a sponsored escrow set a different
+   * destination (docs/adr/0009). Payees can read it to see who a
+   * reversal would pay.
+   */
+  refundTo: string;
   status: EscrowStatus;
 }
 
@@ -141,6 +175,9 @@ export interface EscrowClientConfig {
   rpcUrl?: string;
   /** Default: Stellar testnet passphrase. */
   networkPassphrase?: string;
+  /** Use the restore signer to authorize calls that automatically restore archived entries. */
+  archivalBehavior?: ArchivedEntryBehavior;
+  restoreSigner?: Keypair;
 }
 
 export interface CreateEscrowParams {
@@ -166,6 +203,17 @@ export interface CreateEscrowParams {
   refundAfter?: bigint;
   /** Opt a contract payee into on_escrow_released(escrowId, amount). Defaults to false. */
   notifyPayee?: boolean;
+  /**
+   * Optional refund destination distinct from `payer` (the funder), for
+   * sponsored escrows (docs/adr/0009). All refund paths — releaser and
+   * timeout — pay this address, never the funder. Set once here under the
+   * funder's signature and immutable afterwards. Omit to refund the
+   * `payer`, exactly as in 0.3.x. Must not be the contract's own address
+   * (rejected with `InvalidRefundTo`, error 21).
+   */
+  refundTo?: string;
+  /** Earliest ledger timestamp at which release is allowed; omit for immediate release. */
+  releaseNotBefore?: bigint;
 }
 
 export interface ReleaseOrRefundParams {
@@ -199,6 +247,8 @@ export interface CreateQuorumEscrowParams {
   refundAfter?: bigint;
   /** Opt a contract payee into `on_escrow_released`; requires payee authorization. */
   notifyPayee?: boolean;
+  /** Optional refund destination distinct from `payer` (docs/adr/0009); defaults to `payer`. */
+  refundTo?: string;
 }
 
 /** An M-of-N settlement: each keypair signs the contract auth entry. */
@@ -344,12 +394,16 @@ export class EscrowClient {
   private readonly rpcUrl: string;
   private readonly networkPassphrase: string;
   private readonly rpc: RpcServer;
+  private readonly archivalBehavior: ArchivedEntryBehavior;
+  private readonly restoreSigner?: Keypair;
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
     this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
     this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
     this.rpc = new RpcServer(this.rpcUrl);
+    this.archivalBehavior = config.archivalBehavior ?? "error";
+    this.restoreSigner = config.restoreSigner;
   }
 
   /**
@@ -371,11 +425,12 @@ export class EscrowClient {
   }
 
   private contractClient(signer?: Keypair): EscrowContractClient {
+    const effectiveSigner = signer ?? (this.archivalBehavior === "auto" ? this.restoreSigner : undefined);
     return new EscrowContractClient({
       contractId: this.contractId,
       rpcUrl: this.rpcUrl,
       networkPassphrase: this.networkPassphrase,
-      ...(signer ? { publicKey: signer.publicKey(), signTransaction: signer } : {}),
+      ...(effectiveSigner ? { publicKey: effectiveSigner.publicKey(), signTransaction: effectiveSigner } : {}),
     });
   }
 
@@ -387,7 +442,7 @@ export class EscrowClient {
       );
     }
     const client = this.contractClient(params.payer);
-    const tx = await client.create_escrow({
+    const createParams = {
       payer: params.payer.publicKey(),
       payee: params.payee,
       token: params.token,
@@ -396,7 +451,14 @@ export class EscrowClient {
       releaser: params.releaser,
       refund_after: params.refundAfter,
       notify_payee: params.notifyPayee ?? false,
-    });
+      refund_to: params.refundTo,
+    };
+    const tx = params.releaseNotBefore === undefined
+      ? await client.create_escrow(createParams)
+      : await client.create_escrow_release_time({
+          ...createParams,
+          release_not_before: params.releaseNotBefore,
+        });
     const sent = await tx.signAndSend();
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
   }
@@ -453,6 +515,7 @@ export class EscrowClient {
       threshold: params.threshold,
       refund_after: params.refundAfter,
       notify_payee: params.notifyPayee ?? false,
+      refund_to: params.refundTo,
     });
     const sent = await tx.signAndSend();
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
@@ -481,6 +544,8 @@ export class EscrowClient {
       // with `CreateEscrowParams.refundAfter` being absent).
       refundAfter: data.refund_after ?? undefined,
       notifyPayee: data.notify_payee,
+      refundTo: data.refund_to,
+      releaseNotBefore: data.release_not_before ?? undefined,
       status: data.status.tag,
     };
   }
@@ -495,7 +560,8 @@ export class EscrowClient {
   }
 
   /**
-   * Returns the escrow's funds to its payer. Normally `caller` must be
+   * Returns the escrow's funds to its `refundTo` (the payer unless a
+   * sponsored escrow set another destination, docs/adr/0009). Normally `caller` must be
    * the escrow's `releaser`; once `refundAfter` has passed, anyone may
    * call it — still only back to the payer (docs/adr/0004). Returns the
    * transaction's hash.
