@@ -513,3 +513,8 @@ Most useful to the project, in order:
 Leave findings as comments on the PR that adds this file, or on issue #6.
 A review only counts toward E4 if the reviewer is not the implementer
 (see issue #6).
+
+
+## T6 archive/restore regression coverage
+
+Escrow identifiers are monotonic and are never derived from the number of live entries. The restoration test plan therefore verifies that restoring an archived `NextId` cannot overwrite a live escrow; a new create must receive an identifier greater than every previously issued identifier. Settlement tests also re-check the `Funded` guard after restoration before release or refund.
