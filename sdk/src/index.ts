@@ -414,7 +414,16 @@ export class EscrowClient {
     });
   }
 
-  /** Locks `amount` of `token` from `payer`, held for `payee`. Returns the new escrow's id and the funding transaction's hash. */
+  /**
+   * Locks `amount` of `token` from `payer`, held for `payee`. Returns the new
+   * escrow's id and the funding transaction's hash.
+   *
+   * `conditionRef` is stored on-chain and is public forever, together with
+   * `payer`, `payee` and `amount` (docs/threat-model.md T9). Never put
+   * private, personal or sensitive data in it — pass an opaque, meaningless
+   * id such as a UUID or an internal record id. The contract never interprets
+   * it.
+   */
   async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
     if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
       throw new Error(
