@@ -45,26 +45,7 @@ export {
 export { EscrowIndexerClient } from "./indexer-client.js";
 export type { EscrowIndexerClientConfig, EscrowPage, IndexedEscrow } from "./indexer-client.js";
 
-export type EscrowStatus = "Funded" | "Released" | "Refunded";
-export type EscrowDependencyStatus = Exclude<EscrowStatus, "Funded">;
-
-function dependencyStatusToGenerated(status: EscrowDependencyStatus): GeneratedEscrowStatus {
-  return { tag: status, values: undefined };
-}
-
-function validateDependency(dependency: EscrowDependency): void {
-  if (dependency.escrowId < 0n) {
-    throw new RangeError("dependsOn.escrowId must not be negative.");
-  }
-  if (dependency.requiredStatus !== "Released" && dependency.requiredStatus !== "Refunded") {
-    throw new RangeError("dependsOn.requiredStatus must be Released or Refunded.");
-  }
-}
-
-export interface EscrowDependency {
-  escrowId: bigint;
-  requiredStatus: EscrowDependencyStatus;
-}
+export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Cancelled";
 
 export type ArchivedEntryBehavior = "auto" | "error";
 
@@ -89,7 +70,7 @@ export function isArchivedEntryFailure(error: unknown): boolean {
     (typeof candidate.message === "string" && /expired state|archived (?:contract )?state|automatic restoration attempt limit reached/i.test(candidate.message));
 }
 
-export type EscrowEventType = "created" | "released" | "refunded";
+export type EscrowEventType = "created" | "released" | "refunded" | "cancelled";
 interface EscrowEventBase {
   ledger: number;
   cursor: string;
@@ -263,10 +244,10 @@ export interface CreateEscrowParams {
   releaseNotBefore?: bigint;
 }
 
-/** Creation parameters for a single-releaser escrow with a release dependency. */
-export interface CreateDependentEscrowParams
-  extends Omit<CreateEscrowParams, "releaseNotBefore"> {
-  dependsOn: EscrowDependency;
+export interface CancelParams {
+  escrowId: bigint;
+  /** The escrow's payer; signs the cancellation. */
+  payer: Keypair;
 }
 
 export interface ReleaseOrRefundParams {
@@ -805,6 +786,21 @@ export class EscrowClient {
   }
 
   /**
+   * Payer-side withdrawal before the payee accepts (docs/adr/0010): returns
+   * the escrow's funds to its `refundTo` and marks it `Cancelled`. Only the
+   * escrow's payer may call it, only while it is `Funded`, was created with
+   * the acceptance gate, and the payee has not accepted. Returns the
+   * transaction's hash.
+   */
+  async cancel(params: CancelParams): Promise<{ txHash: string }> {
+    const client = this.contractClient(params.payer);
+    const tx = await client.cancel({ escrow_id: params.escrowId, payer: params.payer.publicKey() });
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
    * Returns the escrow's funds to its `refundTo` (the payer unless a
    * sponsored escrow set another destination, docs/adr/0009). Normally `caller` must be
    * the escrow's `releaser`; once `refundAfter` has passed, anyone may
@@ -1050,7 +1046,7 @@ export class EscrowClient {
     for (const raw of response.events) {
       if (raw.type !== "contract" || raw.contractId?.toString() !== this.contractId) continue;
       const nativeTopics = raw.topic.map(safeScValToNative);
-      const eventName = nativeTopics.find((v) => v === "created" || v === "released" || v === "refunded") as EscrowEventType | undefined;
+      const eventName = nativeTopics.find((v) => v === "created" || v === "released" || v === "refunded" || v === "cancelled") as EscrowEventType | undefined;
       const unknownName = nativeTopics.find((v) => typeof v === "string") as string | undefined;
       const type = eventName;
       if (type && allowed && !allowed.has(type)) continue;

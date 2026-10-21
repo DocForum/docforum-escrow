@@ -17,11 +17,10 @@ create_escrow_with_dependency(..., depends_on: EscrowDependency) -> escrow_id   
 create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id   // optional payee acceptance gate; deployed on testnet
 create_acceptance_dependency(..., depends_on) -> escrow_id   // Acceptance gate plus local dependency
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
+cancel(escrow_id, payer) -> ()   // payer-authorized, only while Funded + requires_acceptance + not yet accepted; funds to refund_to, status Cancelled (ADR 0010); not deployed yet
 create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, deployed on testnet
-create_releasers_dependency(..., depends_on) -> escrow_id   // M-of-N creation with local release dependency
-get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
-get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after, refund_to, release_not_before — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
-get_dependency(escrow_id) -> Option<EscrowDependency> // separate storage; leaves existing EscrowData layout unchanged
+get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded | Cancelled — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
+get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after, refund_to — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
 release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser, threshold must be 1, only while Funded
 release_with_approvals(escrow_id, approvers) -> result   // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — >= threshold distinct releasers, each authorizing this invocation
 refund(escrow_id, caller) -> result    // IMPLEMENTED (Phase E2 + E4) — a releaser when threshold is 1; anyone too, once refund_after has passed, and then still only to the stored `refund_to` (= payer unless set at creation, ADR 0009)

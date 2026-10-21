@@ -16,6 +16,8 @@ StellarWalletsKit.init({
  * `useEscrowActions`.
  */
 export async function connectWallet(walletId?: string): Promise<WalletsKitSigner> {
+  // The demo is testnet-only; WalletsKitSigner rejects a mismatched passphrase.
+
   if (walletId) StellarWalletsKit.setWallet(walletId);
   return WalletsKitSigner.connect({
     kit: StellarWalletsKit,
