@@ -152,6 +152,8 @@ pub enum Error {
     AcceptanceRequired = 18,
     AcceptanceNotConfigured = 19,
     AlreadyAccepted = 20,
+    /// The new releaser cannot be the escrow contract or payee.
+    InvalidReleaser = 24,
     /// `refund_to` was the escrow contract's own address — funds sent
     /// there on refund could never be moved again (docs/adr/0009).
     InvalidRefundTo = 21,
@@ -373,6 +375,51 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::NotFound)
+    }
+
+    /// Rotates a funded escrow's releaser. Both the current releaser and
+    /// payer must authorize the change; the payer's consent prevents a
+    /// compromised releaser from silently appointing an attacker. The
+    /// replacement cannot be the contract itself or the payee.
+    pub fn rotate_releaser(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        new_releaser: Address,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+
+        if data.threshold != 1 {
+            return Err(Error::ThresholdNotMet);
+        }
+        let previous_releaser = data.releasers.get(0).ok_or(Error::InvalidReleaser)?;
+        if caller != previous_releaser {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        if new_releaser == env.current_contract_address() || new_releaser == data.payee {
+            return Err(Error::InvalidReleaser);
+        }
+
+        data.payer.require_auth();
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(new_releaser.clone());
+        data.releasers = releasers;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        env.events().publish(
+            (symbol_short!("rotate"), escrow_id),
+            (previous_releaser, new_releaser),
+        );
+        Ok(())
     }
 
     /// Adds funds to a funded escrow without changing its parties or id.

@@ -23,6 +23,7 @@ refund(escrow_id, caller) -> result    // IMPLEMENTED (Phase E2 + E4) — a rele
 refund_with_approvals(escrow_id, approvers) -> result    // IMPLEMENTED (Phase E5, issue #119) — same approval rules as release_with_approvals
 settle_many(caller, ops) -> results     // IMPLEMENTED (Phase E5) — best-effort batch of release/refund ops; auth is per-op, not per-batch; one failed op does not abort the rest
 top_up(escrow_id, payer, amount) -> result // IMPLEMENTED (issue #26) — original payer only, funded state only; emits `top_up`
+rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue #23) — single-releaser escrow only; current releaser and payer authorize; funded only
 ```
 The contract surface is now six functions. `settle_many` takes a
 `Vec<(escrow_id, SettleOp)>` where `SettleOp = Release | Refund`, and
