@@ -126,6 +126,10 @@ jobs:
 
       - run: npm run build
 
+<<<<<<< HEAD
+      - name: Verify CJS, ESM, and browser package entrypoints
+        run: npm run smoke
+=======
       # Offline only: events fixture decoding plus quorum input validation.
       # Never the live testnet suite (see the note at the end of this file).
       - run: npm run test:offline
@@ -188,6 +192,7 @@ jobs:
         working-directory: sdk
       - run: npm run test:browser
         working-directory: sdk
+>>>>>>> upstream/main
 
       # Deliberately NOT run here: `npm run test:integration`
       # (tests/testnet-integration.test.ts) depends on live testnet and

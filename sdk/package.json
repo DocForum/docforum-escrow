@@ -3,14 +3,14 @@
   "version": "0.6.0",
   "description": "TypeScript client for the docforum-escrow Soroban contract.",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/cjs/index.js",
+  "types": "dist/esm/index.d.ts",
   "files": [
     "dist"
   ],
   "scripts": {
     "prepare": "npm run build",
-    "build": "tsc",
+    "build": "npm run build:esm && npm run build:cjs",
     "test": "vitest run",
     "test:integration": "vitest run",
     "test:fixtures": "vitest run tests/events.test.ts",
@@ -18,7 +18,13 @@
     "test:offline": "vitest run tests/events.test.ts tests/quorum-validation.test.ts",
     "typecheck": "tsc --noEmit",
     "test:runtime": "node tests/runtime-smoke.mjs",
-    "test:browser": "node tests/browser-smoke.mjs"
+    "test:browser": "node tests/browser-smoke.mjs",
+    "build:esm": "tsc -p tsconfig.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json && node -e \"require('node:fs').writeFileSync('dist/cjs/package.json', '{\\\"type\\\":\\\"commonjs\\\"}\\n')\"",
+    "smoke:cjs": "node smoke/cjs.cjs",
+    "smoke:esm": "node smoke/esm.mjs",
+    "smoke:browser": "vite build --config smoke/browser/vite.config.mjs",
+    "smoke": "npm run smoke:cjs && npm run smoke:esm && npm run smoke:browser"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^16.0.1"
@@ -31,5 +37,18 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "module": "dist/esm/index.js",
+  "browser": "dist/esm/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/esm/index.d.ts",
+      "browser": "./dist/esm/index.js",
+      "import": "./dist/esm/index.js",
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    }
   }
 }
