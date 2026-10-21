@@ -91,11 +91,11 @@ import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
 
 const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
 const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter, notifyPayee: true, refundTo });
-await client.createQuorumEscrow({ payer, payee, token, amount, conditionRef, releasers, threshold, refundAfter, notifyPayee: true }); // M-of-N, ADR 0007
+await client.createQuorumEscrow({ payer, payee, token, amount, conditionRef, releasers, threshold, refundAfter, notifyPayee: true, refundTo }); // M-of-N, ADR 0007
 await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
-await client.getEscrow(escrowId);            // full stored record — incl. releasers + threshold + refundAfter, so a payee can check the deal (docs/adr/0004/0007, threat model T8)
-await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must be a releaser and threshold must be 1
-await client.releaseWithApprovals({ escrowId, approvers }); // { txHash } — one Keypair per approver (>= threshold, distinct)
+await client.getEscrow(escrowId);            // full stored record — incl. releasers + threshold + refundAfter, refundTo, so a payee can check the deal (docs/adr/0004/0007/0009, threat model T8)
+await client.release({ escrowId, caller });  // { txHash } — caller: Keypair or SEP-43 Signer, must be a releaser and threshold must be 1
+await client.releaseWithApprovals({ escrowId, approvers }); // { txHash } — one Keypair/Signer per approver (>= threshold, distinct)
 await client.refund({ escrowId, caller });   // { txHash } — releaser when threshold is 1; anyone after refundAfter has passed
 await client.refundWithApprovals({ escrowId, approvers });  // { txHash } — M-of-N refund
 await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
@@ -104,7 +104,8 @@ await client.estimate({ source, method, args }); // { resourceFee, inclusionFee,
 client.guardSponsorship(signedXdr);          // { ok, reasons, invokedContracts } — every op + contract auth entry must target this escrow
 client.feeBump(signedXdr, sponsor, { maxFee, baseFee? }); // { xdr, fee, innerTxHash } — throws MaxFeeExceededError, never overshoots the cap
 ```
-`refundTo` on `createEscrow` is optional too (default: the payer) and
+
+`refundTo` on `createEscrow` and `createQuorumEscrow` is optional too (default: the payer) and
 `getEscrow` returns it as `refundTo`.
 
 `estimate` never signs or submits; it simulates against the client's RPC
@@ -150,6 +151,58 @@ contract enforces *who* can call release/refund, not *why* — keep it that
 way. Baking healthcare-specific logic into the contract is exactly the
 scope creep this repo exists to avoid (see README "why this repo exists,
 honestly").
+
+### Signer interface and browser wallets (issue #127)
+
+`EscrowClient` methods accept either a local `Keypair` or a SEP-43 `Signer`
+(`address` + `signTransaction`), so the same `createEscrow`/`release`/`refund`
+surface works in Node and in a browser wallet. `sdk/src/signers/wallets-kit.ts`
+ships `WalletsKitSigner`, which adapts Stellar Wallets Kit to that interface:
+
+- It is exported on the `@docforum/escrow-sdk/signers/wallets-kit` subpath and
+  has **no runtime import** of `@creit.tech/stellar-wallets-kit` (optional peer
+  dependency, injected kit). Server imports of the package root therefore never
+  pull wallet code; `sideEffects: false` keeps it tree-shakeable.
+- A wallet on the wrong network throws `WalletNetworkMismatchError` **before**
+  signing.
+- A user rejection is a normal SEP-43 outcome (`error.code === -4`), not an
+  unhandled throw.
+- 12 offline tests in `sdk/tests/signers.test.ts` with a fake kit.
+
+### React hooks (issue #126)
+
+`packages/escrow-react` (`@docforum/escrow-react`) is framework glue only: no
+UI components or styling. It depends on TanStack Query v5 as a peer and
+requires `EscrowProvider` (client) inside the app's `QueryClientProvider`.
+
+- `useEscrow(id)` polls `getEscrow` and stops at terminal statuses
+  (`Released`/`Refunded`).
+- `useEscrowActions(signer)` wraps creation/settlement, invalidates the
+  matching query, and returns user rejection as `{ status: "rejected" }`.
+- `useEscrowTimeline(escrow)` counts down to `refundAfter`. Documented caveat:
+  `refund_after` is a ledger timestamp, so a local countdown is advisory;
+  pass `ledgerTimeOffsetMs` to align it. The contract, not the countdown,
+  authorizes a timeout refund.
+
+### Telemetry (issue #129)
+
+`EscrowClientConfig.instrumentation` / `onEvent` add optional tracing for the
+`simulate`, `sign`, `submit` and `confirm` phases. `@opentelemetry/api` is an
+optional peer dependency; with no tracer and no `onEvent` the helpers return
+before reading a clock or allocating a span. Attributes are contract id,
+function, escrow id, transaction hash and retry count. Account addresses are
+never included unless `includeAddresses: true` (threat model T9). Tests in
+`sdk/tests/instrumentation.test.ts` assert every phase is produced and the
+disabled path does no timing work.
+
+### Go client (issue #128)
+
+`sdk-go/` is a separate Go module (`github.com/DocForum/docforum-escrow/sdk-go`)
+with `CreateEscrow`, `GetStatus`, `GetEscrow`, `Release` and `Refund`, typed
+errors matching the contract's codes, and `big.Int` for i128 amounts. It is an
+additive client — the contract and TypeScript SDK are unchanged by it. Offline
+unit tests run in CI; integration tests are opt-in and run against a local
+quickstart deployment.
 
 ## Hard rules
 1. **No PHI, ever, anywhere in this repo.** Not in tests, not in example
