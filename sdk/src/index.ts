@@ -44,7 +44,7 @@ export interface DeploymentRecord {
 export type DeploymentsByNetwork = Record<string, Record<string, DeploymentRecord>>;
 
 /** All known deployment records, as read from `deployments.json`. */
-export const knownDeployments: DeploymentsByNetwork = deployments as DeploymentsByNetwork;
+export const knownDeployments: DeploymentsByNetwork = deployments as unknown as DeploymentsByNetwork;
 
 /**
  * Returns the known contract id for `contractName` on `network` (default:
