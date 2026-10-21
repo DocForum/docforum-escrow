@@ -267,27 +267,35 @@ behave like SEP-41.
   - Document that payees must check the escrow's `token`, not just its
     status.
 
-### T6 — Storage TTL / state archival · **Medium (operational)**
-- The contract never calls `extend_ttl`. Escrow entries (persistent
-  storage) and `NextId` (instance storage) will reach end of TTL and be
-  **archived** if nothing extends them.
-- Archived entries are not deleted, so funds are not lost. But
-  `get_status`/`release`/`refund` on an archived entry need a restore
-  first. The SDK defaults to surfacing `ArchivedEntryError`; consumers
-  can opt into `archivalBehavior: "auto"` to use the Stellar SDK's
-  restore preamble handling. A state-changing call's `payer` or `caller`
-  pays the restore transaction. Read-only calls need a configured
-  `restoreSigner`, which signs and pays for that transaction. The SDK
-  allows one restore transaction per call and fails with a typed error
-  if the retry still needs archived state.
-- **Reviewer, please verify:** that an archived-then-restored `NextId`
-  can't cause an escrow id to be reused, overwriting a live escrow. The
-  author believes restore brings back the last written value, so ids
-  stay unique, but this is the kind of thing an independent check should
-  confirm.
-- **Mitigation:** extend the escrow entry's TTL in `create_escrow` (and
-  the instance TTL on each call), sized to the longest expected escrow
-  duration.
+### T6 — Storage TTL / state archival · **Medium (operational) — mitigated (issue #10)**
+- **Addressed:** The contract now extends entry TTL automatically:
+  - **Instance storage (`NextId`, code, `AllowedTokens`)**: Extended on every
+    public contract entry point (`INSTANCE_TTL_THRESHOLD` = 120,960 ledgers / ~7 days,
+    `INSTANCE_EXTEND_TO` = 518,400 ledgers / ~30 days). Active contracts never archive.
+  - **Escrow entries (`EscrowData`)**: Extended at creation (`create_escrow*`) to
+    at least 180 days (`ESCROW_EXTEND_TO` = 3,110,400 ledgers; threshold = 518,400
+    ledgers / ~30 days), dynamically scaled up to `refund_after` + 30-day grace
+    period if larger (capped at network max ~365 days / 6,312,000 ledgers).
+  - **Active writes**: `top_up`, `rotate_releaser`, and `accept` extend the entry
+    back to the target duration.
+  - **Settlement paths (`release`/`refund`)**: Maintain a post-settlement audit
+    retention window (`SETTLED_ESCROW_TTL_THRESHOLD` = 7 days, `SETTLED_ESCROW_EXTEND_TO` =
+    30 days) to allow post-settlement inspection by indexers and receipts without
+    wasting rent extending settled dead state for 6 months.
+- **Reviewer verification confirmed (NextId non-reuse):** Restoring an archived
+  instance brings back the last-written `NextId` (which strictly increments upon each
+  creation). `NextId` is monotonically increasing and never resets or rolls back.
+  Because $N_{next} > K$ for any previously created escrow $K$, a restored `NextId`
+  cannot reuse an escrow id or overwrite an existing (live or archived) escrow.
+  Verified by test `next_id_cannot_be_reused_or_overwrite_live_escrow_across_archival`
+  in `contracts/escrow/tests/ttl.rs`.
+- **Edge case (Escrows staying Funded longer than max network TTL):** If an escrow
+  stays Funded without activity past the network maximum TTL (~1 year), Soroban
+  archives the entry. Under Soroban protocol 23+, the entry is automatically restored
+  upon next access/settlement, funds remain safe in the contract token balance, and
+  settlement succeeds without fund loss. Pinned in `tests/ttl.rs`.
+- **Prior state:** The contract previously never called `extend_ttl`, causing
+  unextended entries to archive after Soroban's minimum initial TTL (~1.8 days).
 
 ### T7 — No events emitted · **Low**
 - The contract publishes no events of its own. The only on-chain trace
@@ -441,7 +449,7 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
       updated — issue #28, `docs/adr/0006`, `tests/sponsored_refund.rs`.
       Also rejects the contract itself as `refund_to` (T11). Not yet
       deployed to testnet.
-- [ ] ⚙ TTL extension for escrow entries and instance (T6)
+- [x] ⚙ TTL extension for escrow entries and instance (T6) — issue #10; `contracts/escrow/tests/ttl.rs`
 - [ ] ⚙ Emit create/release/refund events (T7)
 - [x] Tests with a malicious mock token: lying transfer, short
       delivery, re-entry attempt (T4, T5) — issue #12,
