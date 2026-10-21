@@ -47,6 +47,7 @@ fn setup<'a>(env: &Env, release_at: Option<u64>, refund_at: Option<u64>) -> Fixt
         &releaser,
         &refund_at,
         &false,
+        &None,
         &release_at,
     );
 
@@ -118,6 +119,7 @@ fn creation_rejects_release_time_in_the_past_or_after_refund_deadline() {
         &releaser,
         &Some(REFUND_AT),
         &false,
+        &None,
         &Some(CREATED_AT - 1),
     );
     let after_refund = client.try_create_escrow_release_time(
@@ -129,6 +131,7 @@ fn creation_rejects_release_time_in_the_past_or_after_refund_deadline() {
         &releaser,
         &Some(REFUND_AT),
         &false,
+        &None,
         &Some(REFUND_AT + 1),
     );
 

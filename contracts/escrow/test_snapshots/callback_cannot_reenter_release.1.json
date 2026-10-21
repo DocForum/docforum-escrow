@@ -79,7 +79,8 @@
                 "void",
                 {
                   "bool": true
-                }
+                },
+                "void"
               ]
             }
           },
@@ -136,7 +137,8 @@
                 "void",
                 {
                   "bool": true
-                }
+                },
+                "void"
               ]
             }
           },
@@ -376,6 +378,12 @@
                 "map": [
                   {
                     "key": {
+                      "symbol": "accepted_at"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "amount"
                     },
                     "val": {
@@ -422,6 +430,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "refund_to"
+                    },
+                    "val": {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "release_not_before"
                     },
                     "val": "void"
@@ -436,6 +452,14 @@
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
                         }
                       ]
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "requires_acceptance"
+                    },
+                    "val": {
+                      "bool": false
                     }
                   },
                   {
