@@ -264,7 +264,7 @@ func (c *Client) CreateEscrow(ctx context.Context, params CreateEscrowParams) (C
 	if payer != signer.Address() {
 		return CreateEscrowResult{}, fmt.Errorf("%w: Payer must match the configured signer %q", ErrUnsupportedAuthorization, signer.Address())
 	}
-	args, err := createEscrowArgs(payer, params.Payee, params.Token, params.Amount, params.ConditionRef, []string{params.Releaser}, 1, params.RefundAfter, params.RefundTo, params.ReleaseNotBefore, params.NotifyPayee, false)
+	args, err := createEscrowArgs(payer, params.Payee, params.Token, params.Amount, params.ConditionRef, []string{params.Releaser}, 1, params.RefundAfter, params.RefundTo, params.NotifyPayee, false)
 	if err != nil {
 		return CreateEscrowResult{}, err
 	}
@@ -285,18 +285,95 @@ func (c *Client) CreateEscrowWithReleasers(ctx context.Context, params CreateEsc
 	if payer != signer.Address() {
 		return CreateEscrowResult{}, fmt.Errorf("%w: Payer must match the configured signer %q", ErrUnsupportedAuthorization, signer.Address())
 	}
-	args, err := createEscrowArgs(payer, params.Payee, params.Token, params.Amount, params.ConditionRef, params.Releasers, params.Threshold, params.RefundAfter, params.RefundTo, nil, params.NotifyPayee, true)
+	args, err := createEscrowArgs(payer, params.Payee, params.Token, params.Amount, params.ConditionRef, params.Releasers, params.Threshold, params.RefundAfter, params.RefundTo, params.NotifyPayee, true)
 	if err != nil {
 		return CreateEscrowResult{}, err
 	}
 	return c.executeCreate(ctx, "create_escrow_with_releasers", args)
 }
 
+// CreateEscrowWithReleaseTime creates a single-releaser escrow with a
+// time-locked release (create_escrow_release_time). The release cannot
+// occur before the specified ledger timestamp.
+func (c *Client) CreateEscrowWithReleaseTime(ctx context.Context, params CreateEscrowWithReleaseTimeParams) (CreateEscrowResult, error) {
+	signer, err := c.requireSigner()
+	if err != nil {
+		return CreateEscrowResult{}, err
+	}
+	payer := params.Payer
+	if payer == "" {
+		payer = signer.Address()
+	}
+	if payer != signer.Address() {
+		return CreateEscrowResult{}, fmt.Errorf("%w: Payer must match the configured signer %q", ErrUnsupportedAuthorization, signer.Address())
+	}
+	args, err := createEscrowWithReleaseTimeArgs(payer, params.Payee, params.Token, params.Amount, params.ConditionRef, params.Releaser, params.RefundAfter, params.RefundTo, params.ReleaseNotBefore, params.NotifyPayee)
+	if err != nil {
+		return CreateEscrowResult{}, err
+	}
+	return c.executeCreate(ctx, "create_escrow_release_time", args)
+}
+
+// createEscrowWithReleaseTimeArgs builds the arguments for
+// create_escrow_release_time (which includes release_not_before).
+func createEscrowWithReleaseTimeArgs(payer, payee, token string, amount *big.Int, conditionRef string, releaser string, refundAfter *uint64, refundTo *string, releaseNotBefore *uint64, notifyPayee bool) ([]xdr.ScVal, error) {
+	if payee == "" {
+		return nil, fmt.Errorf("%w: Payee is required", ErrInvalidArgument)
+	}
+	if token == "" {
+		return nil, fmt.Errorf("%w: Token is required", ErrInvalidArgument)
+	}
+	if amount == nil || amount.Sign() <= 0 {
+		return nil, fmt.Errorf("%w: amount must be positive", ErrInvalidArgument)
+	}
+	if amount.Cmp(maxI128) > 0 {
+		return nil, fmt.Errorf("%w: amount exceeds the i128 maximum", ErrInvalidArgument)
+	}
+	if len([]byte(conditionRef)) > maxConditionRefLength {
+		return nil, fmt.Errorf("%w: ConditionRef is %d bytes, maximum is %d", ErrInvalidArgument, len([]byte(conditionRef)), maxConditionRefLength)
+	}
+
+	payerVal, err := scvAddress(payer)
+	if err != nil {
+		return nil, err
+	}
+	payeeVal, err := scvAddress(payee)
+	if err != nil {
+		return nil, err
+	}
+	tokenVal, err := scvAddress(token)
+	if err != nil {
+		return nil, err
+	}
+	amountVal, err := scvI128(amount)
+	if err != nil {
+		return nil, err
+	}
+	releaserVal, err := scvAddress(releaser)
+	if err != nil {
+		return nil, err
+	}
+
+	args := []xdr.ScVal{
+		payerVal,
+		payeeVal,
+		tokenVal,
+		amountVal,
+		scvString(conditionRef),
+		releaserVal,
+		scvOptionU64(refundAfter),
+		scvOptionString(refundTo),
+		scvOptionU64(releaseNotBefore),
+		scvBool(notifyPayee),
+	}
+	return args, nil
+}
+
 // createEscrowArgs builds the arguments for either create_escrow
 // (useReleaserVec=false, which takes a single releaser) or
 // create_escrow_with_releasers (true, which always takes a vec + threshold,
 // even for a one-releaser escrow).
-func createEscrowArgs(payer, payee, token string, amount *big.Int, conditionRef string, releasers []string, threshold uint32, refundAfter *uint64, refundTo *string, releaseNotBefore *uint64, notifyPayee bool, useReleaserVec bool) ([]xdr.ScVal, error) {
+func createEscrowArgs(payer, payee, token string, amount *big.Int, conditionRef string, releasers []string, threshold uint32, refundAfter *uint64, refundTo *string, notifyPayee bool, useReleaserVec bool) ([]xdr.ScVal, error) {
 	if payee == "" {
 		return nil, fmt.Errorf("%w: Payee is required", ErrInvalidArgument)
 	}
@@ -365,7 +442,7 @@ func createEscrowArgs(payer, payee, token string, amount *big.Int, conditionRef 
 	} else {
 		args = append(args, releaserVals[0])
 	}
-	args = append(args, scvOptionU64(refundAfter), scvOptionString(refundTo), scvOptionU64(releaseNotBefore), scvBool(notifyPayee))
+	args = append(args, scvOptionU64(refundAfter), scvOptionString(refundTo), scvBool(notifyPayee))
 	return args, nil
 }
 

@@ -53,8 +53,8 @@ type Escrow struct {
 	// ReleaseNotBefore is an optional ledger timestamp before which release is
 	// not allowed. nil means no time lock.
 	ReleaseNotBefore *uint64
-	NotifyPayee bool
-	Status      EscrowStatus
+	NotifyPayee      bool
+	Status           EscrowStatus
 	// RequiresAcceptance and AcceptedAt are present in EscrowData in current
 	// contract versions. They are exposed so callers can decode the full
 	// record; older deployments simply leave them zero/nil.
@@ -109,4 +109,19 @@ type CreateEscrowWithReleasersParams struct {
 	// RefundTo is an optional refund destination distinct from the payer.
 	// If set, all refunds (releaser and timeout) go to this address.
 	RefundTo *string
+}
+
+// CreateEscrowWithReleaseTimeParams are the arguments for creating an escrow
+// with a time-locked release (create_escrow_release_time).
+type CreateEscrowWithReleaseTimeParams struct {
+	Payer            string
+	Payee            string
+	Token            string
+	Amount           *big.Int
+	ConditionRef     string
+	Releaser         string
+	RefundAfter      *uint64
+	NotifyPayee      bool
+	RefundTo         *string
+	ReleaseNotBefore *uint64
 }
