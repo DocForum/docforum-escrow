@@ -454,6 +454,12 @@
                   },
                   {
                     "key": {
+                      "symbol": "release_not_before"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "releasers"
                     },
                     "val": {
@@ -587,6 +593,12 @@
                     "val": {
                       "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "release_not_before"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {
