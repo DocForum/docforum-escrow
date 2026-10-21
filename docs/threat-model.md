@@ -25,14 +25,19 @@ from T2's candidate list was decided in `docs/adr/0004` and implemented
 reflect that. The scope commit above predates the change; everything else
 in this document still describes the same design.*
 
+*Updated 2026-10-16 for issue #28 (Phase E5): optional `refund_to`, a
+refund destination that may differ from the funder (`payer`), decided in
+`docs/adr/0006`. Touches §1 (I1, I2), §2 (actors), T1, T2, T8, a new T11
+and §6.*
+
 ---
 
 ## 1. What the contract is supposed to guarantee
 
 | # | Invariant | Enforced by |
 |---|---|---|
-| I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination. |
-| I2 | Only the escrow's releasers can move funds out — `threshold` distinct ones when the escrow was created M-of-N (ADR 0007); release additionally requires payee acceptance when configured — or, once `refund_after` has passed, anyone at all, and then still only back to `payer`. | `require_auth()` per caller/approver + membership in the stored `releasers` set + the threshold check (`check_single_caller`, `check_approvals`), relaxed solely by the deadline check in `refund`. Duplicate approvers are rejected. |
+| I1 | Funds only leave an escrow to that escrow's `payee` (on release) or the escrow's stored `refund_to` (on refund; equals `payer` unless a different one was set at creation). No other destination exists. | Both destinations are written once in `create_escrow` under the funder's auth and read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination, and `refund_to` (issue #28, ADR 0009) is a second stored-at-creation destination, not a payout-time choice: nothing sets it after creation. |
+| I2 | Only the escrow's releasers can move funds out — `threshold` distinct ones when the escrow was created M-of-N (ADR 0007); release additionally requires payee acceptance when configured — or, once `refund_after` has passed, anyone at all, and then still only to the stored `refund_to`. | `require_auth()` per caller/approver + membership in the stored `releasers` set + the threshold check (`check_single_caller`, `check_approvals`), relaxed solely by the deadline check in `refund`. Duplicate approvers are rejected. |
 | I3 | Each escrow pays out at most once. | `status == Funded` check and terminal status write before transfer/callback; failures roll back atomically. |
 | I4 | An escrow only exists, or grows, if the declared funds were actually transferred in. | `payer.require_auth()` + shared exact-balance-delta verification on create/top-up before storage is updated. |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
@@ -52,25 +57,42 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 
 | Actor | Can do | Trusted for |
 |---|---|---|
-| `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser` | Nothing after creation. Has no on-chain power to cancel. |
+| `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser`, and optionally a distinct `refund_to` — all under its single creation signature | Nothing after creation. Has no on-chain power to cancel. |
 | `payee` | Receive funds; optionally accept an escrow before release | Without the opt-in acceptance gate, has no on-chain power to object to release or refund. |
 | `releaser` (one address, or an M-of-N `releasers` set, ADR 0007) | `release` or `refund` its escrows, once — a quorum escrow needs `threshold` distinct releasers on one call | Choosing the correct outcome. This is the main trust assumption; a quorum splits it across the set. |
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |
-| Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds back to that escrow's `payer` | Nothing. |
+| Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds to that escrow's stored `refund_to` | Nothing. |
 
 There is **no admin, no upgrade function, and no pause.** The deployed
 WASM is immutable. Nobody, including the deployer, can change an
-escrow's data or move funds outside `release`/`refund`.
+escrow's data or move funds outside `release`/`refund`. This is a chosen
+security property, not an unimplemented recovery mechanism: see
+[`docs/adr/0005`](adr/0005-immutable-contract-and-redeploy-migrations.md)
+for the redeployment and old-escrow settlement procedure.
 
 ## 3. Threats
 
 Severity is the author's estimate for a mainnet deployment with real
 value. **Reviewers should challenge these ratings.**
 
+### T11 — Multiple contract deployments · **Medium (operational)**
+- **What can go wrong:** after a redeployment, an integrator may query or
+  operate only the newest contract ID and lose track of still-funded
+  escrows held by an older deployment.
+- **Impact:** old escrow records may be overlooked or remain unsettled;
+  the new contract cannot migrate or recover them.
+- **Mitigation:** retain the old contract ID, reconcile escrow records by
+  deployment, and settle old escrows under their existing rules before
+  retiring the old ID from writes. See ADR 0005. No upgrade key or
+  migration hook is introduced to address this operational risk.
+
 ### T1 — `releaser` key leaked or stolen · **High**
 - **What an attacker can do:** call `release` or `refund` on every
   still-`Funded` escrow whose `releaser` is that key, picking either
   outcome. Funds still only go to the stored `payee`/`payer` (I1).
+- **`refund_to` does not widen this:** a stolen `releaser` can still only
+  trigger a refund to the `refund_to` fixed at creation, never to an
+  address of the attacker's choosing.
 - **Actual loss:** if the attacker also controls a `payee` address (for
   example a payee who colludes, or who got a fraudulent payee address
   recorded by the consumer), they can release that payee's escrows early
@@ -80,10 +102,16 @@ value. **Reviewers should challenge these ratings.**
   its ADR 0004) uses **one** `PLATFORM_RELEASER_SECRET` as the releaser of
   every escrow it creates. So today one leaked key affects every open
   escrow. The scoping benefit is available, but nobody uses it.
-- **Recovery:** none on-chain. You can't rotate a `releaser` on an
-  existing escrow (no setter exists). The only response is to race the
-  attacker: use the same key to settle every open escrow correctly first.
+- **Recovery:** a funded escrow can rotate its releaser when both the
+  current releaser and payer authorize the change (issue #23, ADR 0009).
+  Possession of the releaser key alone is insufficient to appoint an
+  attacker. Rotation cannot undo a settlement that already landed, and
+  it is unavailable if the payer cannot authorize. The timeout refund
+  path remains the fallback for escrows whose releaser is unavailable.
 - **Mitigations to consider:**
+  - [x] Allow the current releaser and payer to rotate the releaser on a
+    funded escrow (issue #23, ADR 0009); the payer's consent prevents
+    compromised releaser key alone from redirecting future control.
   - Make the `releaser` a Stellar multisig account (e.g. 2-of-3 signers).
     This works with no contract change, because `require_auth` on an
     account address checks that account's own signer thresholds.
@@ -245,9 +273,13 @@ behave like SEP-41.
   **archived** if nothing extends them.
 - Archived entries are not deleted, so funds are not lost. But
   `get_status`/`release`/`refund` on an archived entry need a restore
-  first. Depending on protocol version and client tooling, this either
-  happens automatically during simulation or needs an explicit restore
-  operation. Either way, someone has to pay for it.
+  first. The SDK defaults to surfacing `ArchivedEntryError`; consumers
+  can opt into `archivalBehavior: "auto"` to use the Stellar SDK's
+  restore preamble handling. A state-changing call's `payer` or `caller`
+  pays the restore transaction. Read-only calls need a configured
+  `restoreSigner`, which signs and pays for that transaction. The SDK
+  allows one restore transaction per call and fails with a typed error
+  if the retry still needs archived state.
 - **Reviewer, please verify:** that an archived-then-restored `NextId`
   can't cause an escrow id to be reused, overwriting a live escrow. The
   author believes restore brings back the last written value, so ids
@@ -290,6 +322,14 @@ behave like SEP-41.
   the payer, never a third party, and the releaser can still release
   after the deadline — so the realistic exposure is payment being delayed
   and then reversed, not redirected.
+- **With a distinct `refund_to` (issue #28, `docs/adr/0006`), "reversed"
+  means paid to `refund_to`, which may not be the payer.** The payee
+  should read `refund_to` via `get_escrow` / `client.getEscrow()` along
+  with `releaser` and `refund_after`. Note the funder may legitimately
+  set `refund_to` equal to the payee (making a "refund" equivalent to a
+  release) or to any third party; the destination is fixed at creation
+  and visible, so this is a disclosed property of the deal, not a hidden
+  one.
 
 ### T9 — `condition_ref` is public · **Low (privacy)**
 - Everything in `EscrowData` is publicly readable on-chain forever,
@@ -327,6 +367,24 @@ behave like SEP-41.
   `tests/release_callback.rs` cover release/refund/create attempts; the same
   settlement helper handles single and quorum releases. The callback is one
   synchronous call with fixed arguments and no retries or loops. See ADR 0005.
+
+### T11 — `refund_to` unable to receive, or set wrongly · **Low–Medium (funder error), document it**
+- **Immutable by design (I1):** the funder signs `refund_to` at creation
+  and there is no setter and no payout-time fallback. A typo'd or
+  uncontrolled address means refunds go there.
+- **Cannot receive:** if the token's `transfer` to `refund_to` fails (for
+  a Stellar asset, typically a missing trustline), every refund path
+  fails and the escrow stays `Funded`; `release` is unaffected, so the
+  funds are recoverable only by releasing to the payee. This is the same
+  property `payee` has today. Funders should check the destination can
+  hold the token before creating the escrow. The default (`payer`) is the
+  funder, who can.
+- **Contract itself:** rejected at creation (`InvalidRefundTo`), since
+  funds sent to the contract address could never be moved out again.
+  This is the `refund_to` half of the open "reject contract-self"
+  mitigation under T2; `payee` and `releaser` are still not checked.
+- **Residual risk:** none that I1 doesn't already cover — no one but the
+  funder chooses the address, and only at creation.
 
 ## 4. SDK-specific notes (`sdk/src/index.ts`)
 
@@ -379,6 +437,10 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
       live on testnet). The remaining T2 mitigations (contract-self as
       payee/releaser, key backup/multisig) are still open above.
 - [ ] ⚙ Balance-delta check on `create_escrow` (T5)
+- [x] ⚙ Optional `refund_to` distinct from the funder, I1 wording
+      updated — issue #28, `docs/adr/0006`, `tests/sponsored_refund.rs`.
+      Also rejects the contract itself as `refund_to` (T11). Not yet
+      deployed to testnet.
 - [ ] ⚙ TTL extension for escrow entries and instance (T6)
 - [ ] ⚙ Emit create/release/refund events (T7)
 - [x] Tests with a malicious mock token: lying transfer, short
