@@ -172,6 +172,16 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   append-only errors 13–17. 19 tests in `tests/quorum.rs`; single-releaser
   suites unchanged and green. Breaking read shape → SDK 0.5.0, bindings
   regenerated. **Not yet on testnet** — the live deployment predates it.
+- [x] **Payer cancel before the payee accepts** (issue #27) —
+  `docs/adr/0010`: `cancel(escrow_id, payer)`, allowed only while `Funded`,
+  on an escrow with `requires_acceptance`, and before the payee's
+  `accept`. Reuses #149's `requires_acceptance`/`accepted_at` and `settle()`
+  (checks-effects-interactions), so funds go to the stored `refund_to`
+  (#158) and I1 is unchanged. New terminal `EscrowStatus::Cancelled`; no new
+  error codes. Tests: `tests/cancel.rs`, including both orderings of
+  accept vs cancel in one ledger, sponsored `refund_to`, and `top_up`
+  interaction. SDK `client.cancel(...)`; bindings regenerated; 0.6.0 →
+  0.7.0. **Not yet on testnet** — the live deployment predates it.
 - [x] Sponsored funding: a funder distinct from the refund recipient —
   issue #28. **ADR first:** `docs/adr/0009` answers the two questions the
   issue poses — a separate refund destination **is** compatible with
@@ -325,6 +335,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   previously stale committed bindings (missing `top_up`, errors 6–8) were
   regenerated here.
 - [x] **PR conflict notifier** — `.github/workflows/pr-conflict-notifier.yml` + `.github/scripts/pr-conflict-notifier.cjs`. On every push to `main` (and every 3h) it labels open PRs that conflict with `main` as `needs-rebase` and @mentions the author once per push with rebase steps; the label clears itself when the conflict is resolved. Runs from `main` only and never checks out PR code.
+- [x] **TLA+ escrow state-machine model** (issue #112) — `spec/Escrow.tla` + `spec/Escrow.cfg` model the actual escrow lifecycle, status transitions, timeout refund behavior, payee acceptance, and same-ledger race windows while explicitly omitting unsupported disputes/milestone logic. TLC verification passed against the committed model.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
