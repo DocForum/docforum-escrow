@@ -246,6 +246,33 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `sdk/tests/fees.test.ts` (wired into CI as `npm run test:unit`) plus a
   live-testnet estimate/fee-bump case in `testnet-integration.test.ts`;
   additive SDK surface, `0.4.0 → 0.5.0`. Closes issue #70.
+- [x] React hooks package (issue #126) — `packages/escrow-react`,
+  published name `@docforum/escrow-react`. TanStack Query v5 peer.
+  `useEscrow(id)` polls `getEscrow` and stops at `Released`/`Refunded`;
+  `useEscrowActions(signer)` invalidates the query after a settlement and
+  resolves wallet rejection as `{ status: "rejected" }`; `useEscrowTimeline`
+  counts down to `refundAfter` with a documented ledger-vs-local clock
+  caveat. Hooks only — no UI. 14 React Testing Library tests with a fake
+  client and a dedicated CI job. Demo in `examples/web-demo/`.
+- [x] Stellar Wallets Kit adapter (issue #127) —
+  `WalletsKitSigner` on the `@docforum/escrow-sdk/signers/wallets-kit`
+  subpath, implementing the SDK's SEP-43 `Signer` surface. The kit is an
+  optional peer dependency and is injected, so there is no runtime import and
+  server bundles stay wallet-free. Typed `WalletNetworkMismatchError` before
+  signing; user rejection returned as SEP-43 `-4` rather than thrown. 12
+  offline fake-kit tests.
+- [x] Go client SDK (issue #128) — `sdk-go/`, module
+  `github.com/DocForum/docforum-escrow/sdk-go`. `CreateEscrow`, `GetStatus`,
+  `GetEscrow`, `Release`, `Refund` (+ `TopUp` and approval paths), typed
+  contract errors, `big.Int` i128 amounts, offline unit tests and an opt-in
+  quickstart integration suite with its own CI workflow.
+- [x] OpenTelemetry instrumentation hooks (issue #129) — optional
+  `instrumentation`/`onEvent` on `EscrowClient`, spans for `simulate`,
+  `sign`, `submit` and `confirm`. No tracer/observer means no clock read and
+  no span allocation. Attributes carry contract id, function, escrow id,
+  transaction hash and retry count; addresses are opt-in only
+  (`includeAddresses: true`). 7 offline tests assert span production and the
+  disabled path.
 
 ## Phase E7 — Verification, testing & release engineering
 - [x] **Reproducible WASM builds and deployment verification (issue #91)** ?
