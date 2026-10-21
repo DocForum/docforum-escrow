@@ -116,6 +116,13 @@ func scvOptionU64(v *uint64) xdr.ScVal {
 	return scvU64(*v)
 }
 
+func scvOptionString(v *string) xdr.ScVal {
+	if v == nil {
+		return scvVoid()
+	}
+	return scvString(*v)
+}
+
 // parseScAddress converts a G... account address or C... contract address into
 // an ScAddress.
 func parseScAddress(address string) (xdr.ScAddress, error) {
@@ -187,6 +194,17 @@ func decodeOptionU64(v xdr.ScVal) (*uint64, error) {
 		return nil, nil
 	}
 	decoded, err := decodeU64(v)
+	if err != nil {
+		return nil, err
+	}
+	return &decoded, nil
+}
+
+func decodeOptionString(v xdr.ScVal) (*string, error) {
+	if v.Type == xdr.ScValTypeScvVoid {
+		return nil, nil
+	}
+	decoded, err := decodeString(v)
 	if err != nil {
 		return nil, err
 	}
@@ -340,6 +358,22 @@ func decodeEscrow(v xdr.ScVal) (Escrow, error) {
 	if err := decodeField("refund_after", &result.RefundAfter); err != nil {
 		return Escrow{}, err
 	}
+	// refund_to was added after the original EscrowData layout. Decode when present.
+	if field, ok := fields["refund_to"]; ok {
+		decoded, err := decodeOptionString(field)
+		if err != nil {
+			return Escrow{}, err
+		}
+		result.RefundTo = decoded
+	}
+	// release_not_before was added after the original EscrowData layout. Decode when present.
+	if field, ok := fields["release_not_before"]; ok {
+		decoded, err := decodeOptionU64(field)
+		if err != nil {
+			return Escrow{}, err
+		}
+		result.ReleaseNotBefore = decoded
+	}
 	if err := decodeField("notify_payee", &result.NotifyPayee); err != nil {
 		return Escrow{}, err
 	}
@@ -419,6 +453,8 @@ func escrowDataScVal(e Escrow) (xdr.ScVal, error) {
 		{Key: scvSymbol("releasers"), Val: scvVec(releasers)},
 		{Key: scvSymbol("threshold"), Val: scvU32(e.Threshold)},
 		{Key: scvSymbol("refund_after"), Val: scvOptionU64(e.RefundAfter)},
+		{Key: scvSymbol("refund_to"), Val: scvOptionString(e.RefundTo)},
+		{Key: scvSymbol("release_not_before"), Val: scvOptionU64(e.ReleaseNotBefore)},
 		{Key: scvSymbol("notify_payee"), Val: scvBool(e.NotifyPayee)},
 		{Key: scvSymbol("requires_acceptance"), Val: scvBool(e.RequiresAcceptance)},
 		{Key: scvSymbol("accepted_at"), Val: scvOptionU64(e.AcceptedAt)},

@@ -108,12 +108,12 @@ func TestCreateEscrowArgsSingleReleaser(t *testing.T) {
 	amount := big.NewInt(12_345_678)
 	deadline := uint64(1_900_000_000)
 
-	args, err := createEscrowArgs(payer, payee, testContractID, amount, "ref-1", []string{releaser}, 1, &deadline, true, false)
+	args, err := createEscrowArgs(payer, payee, testContractID, amount, "ref-1", []string{releaser}, 1, &deadline, nil, nil, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(args) != 8 {
-		t.Fatalf("arg count = %d, want 8", len(args))
+	if len(args) != 10 {
+		t.Fatalf("arg count = %d, want 10", len(args))
 	}
 	decodedAmount, err := decodeI128(args[3])
 	if err != nil || decodedAmount.Cmp(amount) != 0 {
@@ -128,7 +128,13 @@ func TestCreateEscrowArgsSingleReleaser(t *testing.T) {
 	if decoded, err := decodeOptionU64(args[6]); err != nil || decoded == nil || *decoded != deadline {
 		t.Fatalf("refund after = %v, %v", decoded, err)
 	}
-	if decoded, err := decodeBool(args[7]); err != nil || !decoded {
+	if decoded, err := decodeOptionString(args[7]); err != nil || decoded != nil {
+		t.Fatalf("refund to = %v, %v", decoded, err)
+	}
+	if decoded, err := decodeOptionU64(args[8]); err != nil || decoded != nil {
+		t.Fatalf("release not before = %v, %v", decoded, err)
+	}
+	if decoded, err := decodeBool(args[9]); err != nil || !decoded {
 		t.Fatalf("notify payee = %v, %v", decoded, err)
 	}
 }
@@ -137,12 +143,12 @@ func TestCreateEscrowArgsQuorum(t *testing.T) {
 	payer := keypair.MustRandom().Address()
 	payee := keypair.MustRandom().Address()
 	releasers := []string{keypair.MustRandom().Address(), keypair.MustRandom().Address()}
-	args, err := createEscrowArgs(payer, payee, testContractID, big.NewInt(1), "", releasers, 2, nil, false, true)
+	args, err := createEscrowArgs(payer, payee, testContractID, big.NewInt(1), "", releasers, 2, nil, nil, nil, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(args) != 9 {
-		t.Fatalf("arg count = %d, want 9", len(args))
+	if len(args) != 11 {
+		t.Fatalf("arg count = %d, want 11", len(args))
 	}
 	values, err := decodeVec(args[5])
 	if err != nil || len(values) != 2 {
@@ -151,6 +157,15 @@ func TestCreateEscrowArgsQuorum(t *testing.T) {
 	if threshold, err := decodeU32(args[6]); err != nil || threshold != 2 {
 		t.Fatalf("threshold = %d, %v", threshold, err)
 	}
+	if decoded, err := decodeOptionU64(args[7]); err != nil || decoded != nil {
+		t.Fatalf("refund after = %v, %v", decoded, err)
+	}
+	if decoded, err := decodeOptionString(args[8]); err != nil || decoded != nil {
+		t.Fatalf("refund to = %v, %v", decoded, err)
+	}
+	if decoded, err := decodeOptionU64(args[9]); err != nil || decoded != nil {
+		t.Fatalf("release not before = %v, %v", decoded, err)
+	}
 }
 
 func TestCreateEscrowArgShape(t *testing.T) {
@@ -158,23 +173,23 @@ func TestCreateEscrowArgShape(t *testing.T) {
 	payee := keypair.MustRandom().Address()
 	releaser := keypair.MustRandom().Address()
 
-	single, err := createEscrowArgs(payer, payee, testContractID, big.NewInt(1), "", []string{releaser}, 1, nil, false, false)
+	single, err := createEscrowArgs(payer, payee, testContractID, big.NewInt(1), "", []string{releaser}, 1, nil, nil, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(single) != 8 {
-		t.Fatalf("create_escrow args = %d, want 8", len(single))
+	if len(single) != 10 {
+		t.Fatalf("create_escrow args = %d, want 10", len(single))
 	}
 	if single[5].Type != xdr.ScValTypeScvAddress {
 		t.Fatalf("create_escrow releaser arg type = %s, want address", single[5].Type)
 	}
 
-	multi, err := createEscrowArgs(payer, payee, testContractID, big.NewInt(1), "", []string{releaser}, 1, nil, false, true)
+	multi, err := createEscrowArgs(payer, payee, testContractID, big.NewInt(1), "", []string{releaser}, 1, nil, nil, nil, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(multi) != 9 {
-		t.Fatalf("create_escrow_with_releasers args = %d, want 9", len(multi))
+	if len(multi) != 11 {
+		t.Fatalf("create_escrow_with_releasers args = %d, want 11", len(multi))
 	}
 	if multi[5].Type != xdr.ScValTypeScvVec || multi[6].Type != xdr.ScValTypeScvU32 {
 		t.Fatalf("with-releasers args have types %s/%s, want vec/u32", multi[5].Type, multi[6].Type)
@@ -211,7 +226,7 @@ func TestCreateEscrowArgsValidation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := createEscrowArgs(payer, test.payee, test.token, test.amount, test.condition, test.releasers, test.threshold, nil, false, false)
+			_, err := createEscrowArgs(payer, test.payee, test.token, test.amount, test.condition, test.releasers, test.threshold, nil, nil, nil, false, false)
 			if !errors.Is(err, ErrInvalidArgument) {
 				t.Fatalf("error = %v, want ErrInvalidArgument", err)
 			}
