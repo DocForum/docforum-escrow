@@ -78,7 +78,8 @@
                 "void",
                 {
                   "bool": false
-                }
+                },
+                "void"
               ]
             }
           },
@@ -266,7 +267,7 @@
               "val": {
                 "vec": [
                   {
-                    "symbol": "V3"
+                    "symbol": "V4"
                   },
                   {
                     "map": [
@@ -319,6 +320,20 @@
                       {
                         "key": {
                           "symbol": "refund_after"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "refund_to"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "release_not_before"
                         },
                         "val": "void"
                       },
