@@ -147,6 +147,12 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   lifecycle and `BalanceMismatch` verification are recorded in
   `docs/testnet-deployments.md`.
 ## Phase E5 — Contract features
+- [x] **Isolated escrow factory** (issue #49): pin the escrow WASM hash and
+  deploy one deterministic child per authorized integrator. Store an
+  integrator-to-instance registry, expose address prediction, and retain the
+  integrator on each child as informational metadata with no child
+  administration or upgrade path. Add workspace builds and isolation tests;
+  see ADR 0008.
 - [x] **OpenZeppelin Stellar library evaluation** (issue #118) —
   `docs/adr/0006`: all six candidate modules checked against ADR 0001/0002
   and the "no hidden admin" rule. Pausable, Upgradeable and the

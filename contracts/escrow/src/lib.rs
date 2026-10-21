@@ -86,6 +86,7 @@ enum DataKey {
     Escrow(u64),
     NextId,
     AllowedTokens,
+    Integrator,
 }
 
 #[contracterror]
@@ -144,10 +145,15 @@ pub struct EscrowContract;
 impl EscrowContract {
     /// Sets the immutable token allowlist at deployment. An empty list
     /// preserves the legacy behavior and allows any token address.
-    pub fn __constructor(env: Env, allowed_tokens: Vec<Address>) {
+    pub fn __constructor(env: Env, allowed_tokens: Vec<Address>, integrator: Option<Address>) {
         env.storage()
             .instance()
             .set(&DataKey::AllowedTokens, &allowed_tokens);
+        if let Some(integrator) = integrator {
+            env.storage()
+                .instance()
+                .set(&DataKey::Integrator, &integrator);
+        }
     }
 
     /// Locks `amount` of `token` pulled from `payer`, held for `payee`,

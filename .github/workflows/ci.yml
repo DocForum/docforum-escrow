@@ -26,11 +26,14 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            contracts/escrow/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+            contracts/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/Cargo.lock') }}
 
-      - name: cargo test
-        run: cargo test
+      - name: Build escrow WASM for factory integration tests
+        run: cargo build --manifest-path ../Cargo.toml -p docforum-escrow --target wasm32v1-none --release
+
+      - name: cargo test (contract workspace)
+        run: cargo test --manifest-path ../Cargo.toml --workspace
 
       # Issue #120: test snapshots are committed so events, storage and auth
       # changes show up as reviewable diffs. `cargo test` above rewrites them;
@@ -49,11 +52,13 @@ jobs:
           fi
           echo "Committed test snapshots match this run."
 
-      - name: cargo build --release (wasm)
-        run: cargo build --target wasm32v1-none --release
+      - name: Build factory WASM
+        run: cargo build --manifest-path ../Cargo.toml -p docforum-escrow-factory --target wasm32v1-none --release
 
-      - name: Confirm wasm artifact exists
-        run: test -f target/wasm32v1-none/release/docforum_escrow.wasm
+      - name: Confirm both wasm artifacts exist
+        run: |
+          test -f ../target/wasm32v1-none/release/docforum_escrow.wasm
+          test -f ../target/wasm32v1-none/release/docforum_escrow_factory.wasm
 
   # Issue #121: the committed generated client must be exactly what the pinned
   # Stellar CLI generates from the current contract WASM. Catches both a
@@ -76,8 +81,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            contracts/escrow/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+            contracts/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/Cargo.lock') }}
 
       - name: Install pinned Stellar CLI
         run: |

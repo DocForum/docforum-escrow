@@ -54,7 +54,7 @@ fn quorum_escrow(
     let payee = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env), None::<Address>));
     let client = EscrowContractClient::new(env, &contract_id);
 
     let releasers = releaser_set(env, count);
@@ -474,7 +474,7 @@ fn single_releaser_escrow_behaves_as_a_one_of_one_quorum() {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), None::<Address>));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let first = client.create_escrow(
@@ -522,7 +522,7 @@ fn empty_fixture<'a>(env: &'a Env) -> (EscrowContractClient<'a>, Address, Addres
     let asset = StellarAssetClient::new(env, &token_id);
     let payer = Address::generate(env);
     asset.mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env), None::<Address>));
     let client = EscrowContractClient::new(env, &contract_id);
     (client, token_id, payer)
 }
