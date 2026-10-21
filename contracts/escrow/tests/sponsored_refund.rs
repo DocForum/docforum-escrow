@@ -47,7 +47,7 @@ fn fund<'a>(env: &'a Env, distinct_refund_to: bool, refund_after: Option<u64>) -
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
     let client = EscrowContractClient::new(env, &contract_id);
 
     let (refund_to, arg) = if distinct_refund_to {
@@ -279,7 +279,7 @@ fn explicit_refund_to_equal_to_payer_behaves_like_the_default() {
     let payer = Address::generate(&env);
     StellarAssetClient::new(&env, &sac.address()).mint(&payer, &1_000);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_escrow(
@@ -309,7 +309,7 @@ fn create_escrow_rejects_the_contract_as_refund_to() {
     let token = TokenClient::new(&env, &sac.address());
     let payer = Address::generate(&env);
     StellarAssetClient::new(&env, &sac.address()).mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_create_escrow(
@@ -342,7 +342,7 @@ fn create_escrow_with_refund_to_requires_the_funders_auth() {
     let payer = Address::generate(&env);
     env.mock_all_auths();
     StellarAssetClient::new(&env, &sac.address()).mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Drop every mocked auth: nobody signed, so creation must fail even

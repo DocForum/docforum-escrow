@@ -173,6 +173,14 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   append-only errors 13–17. 19 tests in `tests/quorum.rs`; single-releaser
   suites unchanged and green. Breaking read shape → SDK 0.5.0, bindings
   regenerated. **Not yet on testnet** — the live deployment predates it.
+- [x] **Consented migration between deployments** (issue #117) — ADR 0010;
+  `export_to` requires payer authorization and the stored distinct releaser
+  threshold, while `import_from` requires a configured trusted source and
+  preserves destination token/releaser/condition bounds. Source escrows become
+  terminal `Migrated`; imports are replay-protected by `(source_contract,
+  source_id)`. Eight migration integration tests cover consent, rollback,
+  allowlists, duplicate imports, and id collisions. Generated bindings and the
+  SDK `Migrated` status type are updated. **Not yet on testnet.**
 - [x] Sponsored funding: a funder distinct from the refund recipient —
   issue #28. **ADR first:** `docs/adr/0009` answers the two questions the
   issue poses — a separate refund destination **is** compatible with
