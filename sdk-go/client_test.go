@@ -128,11 +128,11 @@ func TestCreateEscrowArgsSingleReleaser(t *testing.T) {
 	if decoded, err := decodeOptionU64(args[6]); err != nil || decoded == nil || *decoded != deadline {
 		t.Fatalf("refund after = %v, %v", decoded, err)
 	}
-	if decoded, err := decodeOptionString(args[7]); err != nil || decoded != nil {
-		t.Fatalf("refund to = %v, %v", decoded, err)
-	}
-	if decoded, err := decodeBool(args[8]); err != nil || !decoded {
+	if decoded, err := decodeBool(args[7]); err != nil || !decoded {
 		t.Fatalf("notify payee = %v, %v", decoded, err)
+	}
+	if decoded, err := decodeOptionString(args[8]); err != nil || decoded != nil {
+		t.Fatalf("refund to = %v, %v", decoded, err)
 	}
 }
 
@@ -157,7 +157,10 @@ func TestCreateEscrowArgsQuorum(t *testing.T) {
 	if decoded, err := decodeOptionU64(args[7]); err != nil || decoded != nil {
 		t.Fatalf("refund after = %v, %v", decoded, err)
 	}
-	if decoded, err := decodeOptionString(args[8]); err != nil || decoded != nil {
+	if decoded, err := decodeBool(args[8]); err != nil || decoded {
+		t.Fatalf("notify payee = %v, want false", decoded)
+	}
+	if decoded, err := decodeOptionString(args[9]); err != nil || decoded != nil {
 		t.Fatalf("refund to = %v, %v", decoded, err)
 	}
 }
