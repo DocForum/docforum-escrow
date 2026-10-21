@@ -5,7 +5,7 @@
 ![Stack](https://img.shields.io/badge/contract-Rust%20%2F%20Soroban-orange.svg)
 ![Network](https://img.shields.io/badge/network-testnet%20only-important.svg)
 
-**🔗 Live on testnet:** [`CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5`](https://stellar.expert/explorer/testnet/contract/CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5) — current deployment (Phase E4: adds the `refund_after` timeout refund), verified with real calls, not just uploaded. History and details: [`docs/testnet-deployments.md`](docs/testnet-deployments.md).
+**🔗 Live on testnet:** [`CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR`](https://stellar.expert/explorer/testnet/contract/CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR) — current upstream main deployment, including sponsored refunds (`refund_to`), verified with real create, release, refund, timeout refund, and `BalanceMismatch` calls. History and transaction links: [`docs/testnet-deployments.md`](docs/testnet-deployments.md).
 
 A [Soroban](https://developers.stellar.org/docs/build/smart-contracts) (Stellar) smart contract for conditional payment escrow — lock funds, and release them to the payee only when release is authorized, or return them to the payer on refund. Paired with a TypeScript client SDK, `@docforum/escrow-sdk`.
 
@@ -38,54 +38,26 @@ Two reasons, stated plainly rather than blended together:
 
 ## Contract surface
 
-The deploy-time `__constructor(allowed_tokens)` stores an immutable token
-allowlist. Pass the token addresses the deployment accepts; an empty list
-keeps the legacy open-token behavior. This policy cannot be changed after
-deployment, so choosing an empty list deliberately disables the protection.
+One generic escrow contract. A payer locks a token amount for a payee, and
+the payout is settled by release (to the stored payee) or refund (to the
+stored `refund_to`, which is the payer unless set otherwise at creation).
+Creation options: a single releaser or an M-of-N releaser quorum, an
+optional payee-acceptance gate, an optional `refund_after` timeout that
+lets anyone trigger the refund, an optional `refund_to`, and an optional
+release callback to a contract payee. Funded escrows can be topped up by
+the original payer, and `get_status`/`get_escrow` are read-only. A token
+allowlist is fixed at deploy time.
 
-| Function | Status | Description |
-|---|---|---|
-| `__constructor(allowed_tokens)` | ✅ Implemented | Stores the immutable deploy-time token allowlist; an empty list allows all tokens. |
-| `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee) -> escrow_id` | ✅ Implemented locally (callback not deployed) | Pulls funds from `payer`, stores a bounded `condition_ref`, and stores the single `releaser` as a one-address set with threshold 1. Requires payer auth; when `notify_payee` is true, also requires payee auth and calls `on_escrow_released` on release. |
-| `create_milestone_escrow(..., milestones) -> escrow_id` | ✅ Implemented locally | Stores up to 10 positive tranche amounts that sum to the funded amount. Release tranches by index; a partial refund returns only the unreleased balance. See [ADR 0010](docs/adr/0010-milestone-escrows.md). |
-| `create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee) -> escrow_id` | ✅ Implemented | Same, but settles by M-of-N: 1–10 distinct `releasers` (`MAX_RELEASERS`), `1 <= threshold <= releasers.len()`. Callback opt-in has the same payee-authorization requirement. See [ADR 0007](docs/adr/0007-in-contract-m-of-n-releaser-quorum.md). |
-| `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
-| `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releasers`, `threshold` and `refund_after`, so payees can check the deal before relying on it. |
-| `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser` when the threshold is 1; moves funds to `payee`. Never gated by `refund_after`. |
-| `release_with_approvals(escrow_id, approvers) -> Result<()>` | ✅ Implemented | M-of-N release: at least `threshold` distinct releasers, each authorizing this exact invocation. Approvals are not stored, so nothing can be replayed. Only while `Funded`. |
-| `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it (threshold 1); once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
-| `refund_with_approvals(escrow_id, approvers) -> Result<()>` | ✅ Implemented | M-of-N refund with the same approval rules; the timeout path above needs no approvals. |
-| `top_up(escrow_id, payer, amount) -> Result<()>` | ✅ Implemented | Adds funds to a `Funded` escrow; original payer only. Emits a `top_up` event. |
-
-```
-EscrowStatus = Funded | Released | Refunded
-```
-
-`refund_after` is optional: an escrow created without one behaves exactly
-as it did before the timeout existed — releaser-only refunds, forever.
-That's the answer to "what if the releaser's key is lost?" (threat model
-T2): instead of locking funds permanently, a deadline lets anyone return
-them to the payer. See [ADR 0004](docs/adr/0004-timeout-refund-path.md)
-for the decision and what it means for payees.
-
-Single-releaser escrows are unchanged by the M-of-N option: `create_escrow`
-stores the one address with `threshold = 1`, `release`/`refund` behave exactly
-as before, and the approval entry points simply accept that one address too.
-No new admin, owner, pause or upgrade role exists — `releasers` is escrow data
-chosen by the payer, not authority over the contract (see
-[ADR 0006](docs/adr/0006-openzeppelin-stellar-library-evaluation.md) for why
-OpenZeppelin's pause/upgradeable/access modules are deliberately **not**
-adopted).
+**The full function list, signatures and rules are in
+[`ARCHITECTURE_ESSENTIALS.md` → Contract surface](ARCHITECTURE_ESSENTIALS.md#contract-surface).**
+It's kept in that one place so that adding or changing a contract function
+is a single edit. Update that list, not this summary.
 
 **Design rule, enforced deliberately:** the contract decides **who** may
 call `release`/`refund`, never **why**. `condition_ref` is an opaque
-string the contract stores but never interprets — all domain
-interpretation (what counts as "fulfilled," who's authorized to attest to
-it) is the consuming application's job. The contract bounds `condition_ref`
-to 64 bytes at creation (error 7, `ConditionRefTooLong`) to keep storage
-and event costs predictable (threat model T10, Phase E5); the SDK
-validates the same bound client-side via `MAX_CONDITION_REF_LENGTH`.
-See
+string the contract stores but never interprets; all domain
+interpretation (what counts as "fulfilled", who's authorized to attest to
+it) is the consuming application's job. See
 [ADR 0001](docs/adr/0001-generic-escrow-not-healthcare-specific.md).
 
 ## How it's used
@@ -136,7 +108,7 @@ Requires a Rust toolchain with the `wasm32v1-none` target.
 git clone https://github.com/DocForum/docforum-escrow.git
 cd docforum-escrow/contracts/escrow
 
-# Run the test suite (57 tests, all passing today; also writes the
+# Run the test suite (also writes the
 # committed test_snapshots/ files — see CONTRIBUTING.md)
 cargo test
 
@@ -179,6 +151,47 @@ const { escrowId } = await client.createQuorumEscrow({
 await client.releaseWithApprovals({ escrowId, approvers: [a, c] });
 ```
 
+### Fee estimation and fee-bump sponsorship
+
+Sponsors can price a call before paying for it, and wrap a user-signed
+transaction in a fee-bump with a hard cap. `estimate` simulates against
+the configured RPC — nothing is signed or sent — and returns the resource
+fee (with a 20% buffer over the simulated minimum, rounded up), the
+inclusion fee, and their total, all in stroops:
+
+```ts
+import { Address, nativeToScVal } from "@stellar/stellar-sdk";
+
+const estimate = await client.estimate({
+  source: payer,
+  method: "release",
+  args: [nativeToScVal(escrowId, { type: "u64" }), new Address(releaser).toScVal()],
+});
+if (estimate.total > budget) throw new Error("too expensive to sponsor");
+```
+
+`guardSponsorship` decides whether a transaction is safe to sponsor: it
+inspects **every** operation and every contract-address auth entry, and
+rejects anything that is not an invocation of the escrow contract (a
+foreign contract id, a smuggled payment, a double fee-bump). Account
+auth entries — the payer's and releaser's signatures — are expected and
+allowed:
+
+```ts
+const guard = client.guardSponsorship(signedXdr);
+if (!guard.ok) throw new Error(guard.reasons.join("; "));
+// or: client.assertSponsorable(signedXdr) — throws SponsorshipGuardError
+```
+
+`feeBump` wraps the signed envelope for the sponsor. Its fee is
+`baseFee × (inner operations + 1)` (the inner fee is refunded), and it
+throws `MaxFeeExceededError` before building anything if that would
+exceed `maxFee` — the cap is never silently overshot:
+
+```ts
+const { xdr, fee } = client.feeBump(signedXdr, sponsor, { maxFee: 10_000n });
+```
+
 ## Documentation
 
 | Doc | Purpose |
@@ -198,7 +211,7 @@ now also includes an optional in-contract M-of-N releaser quorum
 ([ADR 0007](docs/adr/0007-in-contract-m-of-n-releaser-quorum.md)) and a
 documented decision **not** to adopt OpenZeppelin's pause/upgradeable/access
 modules ([ADR 0006](docs/adr/0006-openzeppelin-stellar-library-evaluation.md));
-both are implemented and tested but **not yet redeployed to testnet** (see
+both are implemented, tested, and deployed on testnet (see
 [`docs/testnet-deployments.md`](docs/testnet-deployments.md)). Phase E7 adds
 committed contract test snapshots (issue #120) and a CI check that the
 generated SDK bindings match the contract WASM (issue #121):
