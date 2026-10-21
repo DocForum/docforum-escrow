@@ -247,6 +247,26 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   regenerated here.
 - [x] **PR conflict notifier** — `.github/workflows/pr-conflict-notifier.yml` + `.github/scripts/pr-conflict-notifier.cjs`. On every push to `main` (and every 3h) it labels open PRs that conflict with `main` as `needs-rebase` and @mentions the author once per push with rebase steps; the label clears itself when the conflict is resolved. Runs from `main` only and never checks out PR code.
 
+- [x] **SDK integration suite runs against a local Stellar network on every PR**
+  (distinct from #14, the offline unit suites: this is a real network, just
+  local). `.github/workflows/ci.yml`'s `sdk-integration-local` job starts
+  `stellar/quickstart` with `--local --enable-soroban-rpc`, waits for
+  readiness by polling RPC `getHealth` and checking `getNetwork`'s passphrase
+  (no fixed sleep), deploys the native asset contract plus the freshly built
+  WASM, and runs `npm run test:integration:local`. The suite is parameterised
+  by `sdk/tests/integration-network.ts` (`ESCROW_TEST_NETWORK=local|testnet`),
+  and `npm run test:integration` still targets live testnet, so the nightly
+  soak is unchanged. Deadlines come from the ledger clock rather than
+  wall-clock time, so the same assertions hold on both networks, and the
+  quorum case now runs locally (it is skipped on the older testnet
+  deployment). The quickstart image is cached with `actions/cache`
+  (`docker save`/`load`). Running the suite locally surfaced two gaps, both
+  fixed here: `EscrowClient` needed an opt-in `allowHttp` for the local
+  plain-HTTP RPC, and the documented `authorizeRelease`/`authorizeRefund`/
+  `submitRelayed` methods had never actually been implemented. Local steps:
+  README, "Running the integration suite locally"; contributor notes in
+  `CONTRIBUTING.md`.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -254,6 +274,21 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   repo's.
 
 ## Changelog
+- 2026-10-21 — SDK integration tests now run against a local Stellar network on
+  every PR. New `sdk-integration-local` CI job starts
+  `stellar/quickstart --local --enable-soroban-rpc`, waits for readiness by
+  polling `getHealth`/`getNetwork` (no sleep), caches the image with
+  `actions/cache`, deploys the native asset contract and the freshly built
+  WASM, then runs `sdk/tests/integration.test.ts` via
+  `npm run test:integration:local`. The suite is parameterised by
+  `sdk/tests/integration-network.ts`; `npm run test:integration` still targets
+  live testnet. Deadlines are derived from the ledger clock instead of wall
+  time (deterministic on both networks) and the quorum case runs locally.
+  Implementing the local run surfaced two real gaps, both fixed: `EscrowClient`
+  gained an opt-in `allowHttp` for a local plain-HTTP RPC, and the
+  `authorizeRelease`/`authorizeRefund`/`submitRelayed` methods that the README
+  and integration suite already documented are now implemented (additive
+  surface, minor changeset). README and CONTRIBUTING document the local flow.
 - 2026-10-19 — Issue #70 (Phase E6): added `estimate`, `feeBump`,
   `guardSponsorship` and `assertSponsorable` to the SDK. Estimation runs
   through the client's RPC and reports the resource fee with a buffered

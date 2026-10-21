@@ -139,6 +139,13 @@ export interface EscrowClientConfig {
   rpcUrl?: string;
   /** Default: Stellar testnet passphrase. */
   networkPassphrase?: string;
+  /**
+   * Allow a plain-HTTP RPC endpoint. Default: false, so a public RPC can never
+   * be reached over an unencrypted connection by accident. Set this only for a
+   * local network, e.g. `stellar/quickstart` on `http://localhost:8000` (see
+   * the README's "Running the integration suite locally" section).
+   */
+  allowHttp?: boolean;
 }
 
 export interface CreateEscrowParams {
@@ -218,7 +225,12 @@ export interface RelayedAuthorizationParams {
   relayer: Keypair;
 }
 
-/** Serialized, simulated transaction containing a short-lived signed auth entry. */
+/**
+ * Serialized, simulated transaction containing a short-lived signed auth
+ * entry. Keep it private and do not retry it after `expiresAtLedger`: the
+ * entry is bound to that one invocation and stops being valid as ledgers
+ * advance.
+ */
 export interface RelayedAuthorization {
   transaction: string;
   expiresAtLedger: number;
@@ -308,6 +320,12 @@ export class MaxFeeExceededError extends Error {
 export const DEFAULT_RESOURCE_FEE_BUFFER_BPS = 2_000;
 
 /**
+ * Ledgers a relayed settlement authorization stays valid for, counted from
+ * the ledger that was current when it was signed.
+ */
+const RELAYED_AUTH_LEDGER_TTL = 10;
+
+/**
  * Pure fee arithmetic, split out so it can be unit-tested without an RPC.
  * The buffer is applied to the resource fee only (inclusion fee is already
  * deterministic) and rounds up, so an estimate is never a strop short.
@@ -341,13 +359,15 @@ export class EscrowClient {
   private readonly contractId: string;
   private readonly rpcUrl: string;
   private readonly networkPassphrase: string;
+  private readonly allowHttp: boolean;
   private readonly rpc: RpcServer;
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
     this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
     this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
-    this.rpc = new RpcServer(this.rpcUrl);
+    this.allowHttp = config.allowHttp ?? false;
+    this.rpc = new RpcServer(this.rpcUrl, { allowHttp: this.allowHttp });
   }
 
   private contractClient(signer?: Keypair): EscrowContractClient {
@@ -355,6 +375,7 @@ export class EscrowClient {
       contractId: this.contractId,
       rpcUrl: this.rpcUrl,
       networkPassphrase: this.networkPassphrase,
+      allowHttp: this.allowHttp,
       ...(signer ? { publicKey: signer.publicKey(), signTransaction: signer } : {}),
     });
   }
@@ -486,6 +507,87 @@ export class EscrowClient {
     const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Simulates a release with `relayer` as the source account and has
+   * `releaser` sign **only** its short-lived contract authorization entry, so
+   * a separate relayer can pay the fee and submit it later with
+   * `submitRelayed`. Nothing is submitted here.
+   *
+   * The authorization is bound to this exact invocation and expires after
+   * `expiresAtLedger` (ten ledgers). On an M-of-N escrow use
+   * `releaseWithApprovals` instead — this path settles a single-caller escrow.
+   */
+  async authorizeRelease(params: RelayedAuthorizationParams): Promise<RelayedAuthorization> {
+    return this.authorizeSettlement("release", params);
+  }
+
+  /** Refund counterpart of `authorizeRelease`; the timeout rule in `refund` still applies. */
+  async authorizeRefund(params: RelayedAuthorizationParams): Promise<RelayedAuthorization> {
+    return this.authorizeSettlement("refund", params);
+  }
+
+  private async authorizeSettlement(
+    method: "release" | "refund",
+    params: RelayedAuthorizationParams
+  ): Promise<RelayedAuthorization> {
+    const client = this.contractClient(params.relayer);
+    const args = { escrow_id: params.escrowId, caller: params.releaser.publicKey() };
+    const tx = method === "release" ? await client.release(args) : await client.refund(args);
+
+    // Expire the auth entry explicitly so callers get a usable hint back
+    // instead of having to guess the SDK's default.
+    const expiresAtLedger = (await this.rpc.getLatestLedger()).sequence + RELAYED_AUTH_LEDGER_TTL;
+    await tx.signAuthEntries({ expiration: expiresAtLedger, signAuthEntry: params.releaser });
+    return { transaction: tx.toXDR(), expiresAtLedger };
+  }
+
+  /**
+   * Submits an authorization produced by `authorizeRelease`/`authorizeRefund`:
+   * signs the envelope as `relayer` (who pays the fee) and waits for the
+   * transaction to settle. `method` only shapes error messages — the serialized
+   * transaction already encodes which contract function to call.
+   *
+   * Throws if the authorization has expired instead of submitting a transaction
+   * the network would reject; authorize the call again in that case.
+   */
+  async submitRelayed(
+    method: "release" | "refund",
+    authorization: RelayedAuthorization,
+    relayer: Keypair
+  ): Promise<{ txHash: string }> {
+    const latestLedger = (await this.rpc.getLatestLedger()).sequence;
+    if (latestLedger > authorization.expiresAtLedger) {
+      throw new Error(
+        `Relayed ${method} authorization expired at ledger ${authorization.expiresAtLedger} ` +
+          `(current ledger ${latestLedger}); authorize it again instead of retrying.`
+      );
+    }
+
+    const tx = TransactionBuilder.fromXDR(authorization.transaction, this.networkPassphrase);
+    if (tx instanceof FeeBumpTransaction) {
+      throw new Error(`Relayed ${method} authorization must be a plain transaction, not a fee-bump.`);
+    }
+    if (tx.source !== relayer.publicKey()) {
+      throw new Error(
+        `Relayer ${relayer.publicKey()} cannot submit this authorization: ` +
+          `its source account is ${tx.source}.`
+      );
+    }
+
+    tx.sign(relayer);
+    const sent = await this.rpc.sendTransaction(tx);
+    if (sent.status === "ERROR") {
+      throw new Error(
+        `Relayed ${method} was rejected: ${sent.errorResult?.toXDR("base64") ?? sent.status}`
+      );
+    }
+    const result = await this.rpc.pollTransaction(sent.hash, { attempts: 30 });
+    if (result.status !== "SUCCESS") {
+      throw new Error(`Relayed ${method} did not succeed: ${result.status}`);
+    }
+    return { txHash: sent.hash };
   }
 
   /**

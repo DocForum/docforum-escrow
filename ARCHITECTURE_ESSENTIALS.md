@@ -65,7 +65,7 @@ behaviour is exactly what it was before: releaser-only refunds, forever.
 ```ts
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
 
-const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
+const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase; `allowHttp: true` only for a local quickstart RPC
 const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter, notifyPayee: true });
 await client.createQuorumEscrow({ payer, payee, token, amount, conditionRef, releasers, threshold, refundAfter, notifyPayee: true }); // M-of-N, ADR 0007
 await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
@@ -74,6 +74,8 @@ await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, 
 await client.releaseWithApprovals({ escrowId, approvers }); // { txHash } — one Keypair per approver (>= threshold, distinct)
 await client.refund({ escrowId, caller });   // { txHash } — releaser when threshold is 1; anyone after refundAfter has passed
 await client.refundWithApprovals({ escrowId, approvers });  // { txHash } — M-of-N refund
+await client.authorizeRelease({ escrowId, releaser, relayer }); // { transaction, expiresAtLedger } — releaser signs only the contract auth entry
+await client.submitRelayed("release", authorization, relayer); // { txHash } — relayer signs the envelope, pays the fee, refuses an expired authorization
 await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
 const stop = client.subscribe(handler, { cursor, pollIntervalMs }); // serial polling; await handler for back-pressure
 await client.estimate({ source, method, args }); // { resourceFee, inclusionFee, total, minResourceFee } — simulation only, 20% resource buffer
@@ -135,7 +137,11 @@ honestly").
    semver strictly, since `docforum-core` pins a version rather than
    tracking latest.
 4. Testnet only until a security review has happened. Do not wire mainnet
-   contract addresses into the SDK's defaults.
+   contract addresses into the SDK's defaults. The throwaway local
+   `stellar/quickstart` network used by the SDK integration suite (see
+   `README.md`, "Running the integration suite locally") is a test network, not
+   a deployment target; it needs the explicit `allowHttp` opt-in, never a
+   default.
 
 ## Roadmap / status
 See `ROADMAP.md` in this repo. Live testnet deployment record:

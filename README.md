@@ -221,6 +221,56 @@ exceed `maxFee` — the cap is never silently overshot:
 const { xdr, fee } = client.feeBump(signedXdr, sponsor, { maxFee: 10_000n });
 ```
 
+### Running the integration suite locally
+
+CI runs the SDK's real-network suite on every PR against a local
+[`stellar/quickstart`](https://github.com/stellar/quickstart) network with
+Soroban RPC — a real network, just not a public one — so a regression in a
+network call fails the PR instead of waiting for the nightly testnet soak. The
+tests are parameterised by network (`sdk/tests/integration-network.ts`):
+`npm run test:integration` still targets live testnet, and
+`npm run test:integration:local` targets the network below.
+
+```bash
+# 1. Start a local network with Soroban RPC (new ledgers every ~5s).
+docker run --rm -d --name escrow-quickstart -p 8000:8000 \
+  stellar/quickstart:latest --local --enable-soroban-rpc
+
+export STELLAR_RPC_URL=http://localhost:8000/soroban/rpc
+export STELLAR_NETWORK_PASSPHRASE="Standalone Network ; February 2017"
+
+# 2. Build the contract and fund a deployer identity from quickstart's Friendbot.
+cd contracts/escrow
+cargo build --target wasm32v1-none --release
+stellar keys generate deployer --overwrite
+stellar keys fund deployer
+
+# 3. Deploy the native asset contract (a fresh local network has no SAC yet),
+#    then the escrow contract. An empty allowlist keeps open-token behaviour.
+stellar contract asset deploy --asset native --source-account deployer
+export ESCROW_LOCAL_CONTRACT_ID=$(stellar contract deploy \
+  --wasm target/wasm32v1-none/release/docforum_escrow.wasm \
+  --source-account deployer \
+  -- --allowed_tokens '[]')
+
+# 4. Run the same suite CI runs.
+cd ../../sdk
+npm ci
+npm run test:integration:local
+
+# 5. Tear down.
+docker rm -f escrow-quickstart
+```
+
+CI waits for readiness by polling the RPC (`getHealth`, then `getNetwork` for
+the expected passphrase) instead of sleeping, and caches the quickstart image
+with `docker save`/`load` so most PR runs only pay for the load. The suite
+derives deadlines such as `refundAfter` from the network's ledger clock rather
+than the runner's wall clock, so the same tests are deterministic on both
+networks. `EscrowClient` needs `allowHttp: true` for the local plain-HTTP RPC;
+`test:integration:local` sets `ESCROW_TEST_NETWORK=local` and the integration
+config sets that flag for you.
+
 ## Documentation
 
 | Doc | Purpose |
