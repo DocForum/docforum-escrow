@@ -11,10 +11,10 @@
 ## Contract surface
 ```
 __constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
-create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to) -> escrow_id   // Phase E5 callback + `refund_to` (ADR 0009) implemented locally; not deployed
-create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id   // optional payee acceptance gate
-accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release
-create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, 1..=10 releasers, 1 <= threshold <= len
+create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009); deployed on testnet
+create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id   // optional payee acceptance gate; deployed on testnet
+accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
+create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, deployed on testnet
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after, refund_to — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
 release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser, threshold must be 1, only while Funded
@@ -32,8 +32,9 @@ pausable/upgradeable/access modules were evaluated and rejected in
 The allowlist is fixed when the contract is deployed. `create_escrow`
 rejects any token outside a non-empty list with `DisallowedToken` (error
 code 8); an empty list preserves the prior open-token behavior. The
-current live deployment predates this constructor and must be redeployed
-before the allowlist protection is active.
+current testnet deployment includes the native XLM SAC and the
+BalanceMismatch test token in its immutable allowlist; see
+`docs/testnet-deployments.md`.
 
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to)`.
 `notify_payee` opts a contract payee into `on_escrow_released(escrow_id,
@@ -42,9 +43,10 @@ The quorum creation entry point has the same final callback flag. The SDK
 option defaults to false. Callback failure rolls release back atomically;
 see ADR 0005 for failure, gas, and stored-record compatibility.
 
-The Phase E4-era functions (`create_escrow`, `get_status`, `get_escrow`,
-`release`, `refund`) are proven live on testnet as of the Phase E4
-redeployment (`docs/testnet-deployments.md`, 2026-10-08 entry) — including
+The current contract surface (`create_escrow`, `get_status`, `get_escrow`,
+`release`, `refund`, payee acceptance, M-of-N quorum, callbacks, and
+sponsored refund destinations) is deployed on testnet as of 2026-10-20
+(`docs/testnet-deployments.md`, latest entry) — including
 a real timeout refund triggered by a non-releaser after its deadline, a
 real `release` after the deadline, and real rejections of a
 pre-deadline stranger refund (`Error(Contract, #3)`), a deadline already
