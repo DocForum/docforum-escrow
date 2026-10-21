@@ -45,7 +45,7 @@ export {
 export { EscrowIndexerClient } from "./indexer-client.js";
 export type { EscrowIndexerClientConfig, EscrowPage, IndexedEscrow } from "./indexer-client.js";
 
-export type EscrowStatus = "Funded" | "Released" | "Refunded";
+export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Cancelled";
 
 // Token-aware amount parsing/formatting (Phase E6). Re-exported here so
 // integrators import everything from the package root. See src/amounts.ts
@@ -88,7 +88,7 @@ export function isArchivedEntryFailure(error: unknown): boolean {
     (typeof candidate.message === "string" && /expired state|archived (?:contract )?state|automatic restoration attempt limit reached/i.test(candidate.message));
 }
 
-export type EscrowEventType = "created" | "released" | "refunded";
+export type EscrowEventType = "created" | "released" | "refunded" | "cancelled";
 interface EscrowEventBase {
   ledger: number;
   cursor: string;
@@ -260,6 +260,12 @@ export interface CreateEscrowParams {
   refundTo?: string;
   /** Earliest ledger timestamp at which release is allowed; omit for immediate release. */
   releaseNotBefore?: bigint;
+}
+
+export interface CancelParams {
+  escrowId: bigint;
+  /** The escrow's payer; signs the cancellation. */
+  payer: Keypair;
 }
 
 export interface ReleaseOrRefundParams {
@@ -696,6 +702,21 @@ export class EscrowClient {
   }
 
   /**
+   * Payer-side withdrawal before the payee accepts (docs/adr/0010): returns
+   * the escrow's funds to its `refundTo` and marks it `Cancelled`. Only the
+   * escrow's payer may call it, only while it is `Funded`, was created with
+   * the acceptance gate, and the payee has not accepted. Returns the
+   * transaction's hash.
+   */
+  async cancel(params: CancelParams): Promise<{ txHash: string }> {
+    const client = this.contractClient(params.payer);
+    const tx = await client.cancel({ escrow_id: params.escrowId, payer: params.payer.publicKey() });
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
    * Returns the escrow's funds to its `refundTo` (the payer unless a
    * sponsored escrow set another destination, docs/adr/0009). Normally `caller` must be
    * the escrow's `releaser`; once `refundAfter` has passed, anyone may
@@ -968,7 +989,7 @@ export class EscrowClient {
     for (const raw of response.events) {
       if (raw.type !== "contract" || raw.contractId?.toString() !== this.contractId) continue;
       const nativeTopics = raw.topic.map(safeScValToNative);
-      const eventName = nativeTopics.find((v) => v === "created" || v === "released" || v === "refunded") as EscrowEventType | undefined;
+      const eventName = nativeTopics.find((v) => v === "created" || v === "released" || v === "refunded" || v === "cancelled") as EscrowEventType | undefined;
       const unknownName = nativeTopics.find((v) => typeof v === "string") as string | undefined;
       const type = eventName;
       if (type && allowed && !allowed.has(type)) continue;

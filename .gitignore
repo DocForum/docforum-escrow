@@ -2,8 +2,11 @@ node_modules/
 dist/
 build/
 target/
+temp_auto_push.bat
 *.tgz
 .env
 .env.local
 *.log
 .DS_Store
+.gitignore
+branch_structure.json
