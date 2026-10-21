@@ -1,7 +1,7 @@
 # DocForum escrow event indexer
 
 This SubQuery project indexes the escrow contract's `created`, `released`,
-and `refunded` snapshots. SubQuery owns its cursor and canonical-chain rollback
+`refunded` and `cancelled` snapshots. SubQuery owns its cursor and canonical-chain rollback
 behavior; unknown event topics are ignored. No endpoint is deployed or
 hardcoded for consumers. Run your own indexer against Stellar testnet.
 
