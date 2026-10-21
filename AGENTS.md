@@ -15,4 +15,26 @@ the change belongs in `docforum-core` instead, not here.
 - Testnet only, per `ARCHITECTURE_ESSENTIALS.md` hard rule 4, until an
   explicit security-review milestone (ROADMAP.md Phase E4) is marked done.
 - Update `ROADMAP.md` on every contribution — org-wide rule, applies here
-  too.
+  too. Tick or update your own item's line, and put the changelog entry in
+  a new file under `changelog.d/` (see below).
+
+## Shared docs: keep your diff to your own lines
+
+Many PRs are open at the same time and most of them touch the same docs.
+Edits to shared lines are what put PRs into merge conflict with each other.
+
+- Add your own line or table row. Don't rewrite, reorder or re-wrap
+  paragraphs you don't need to change.
+- Changelog entries go in a new file under `changelog.d/`, never at the end
+  of `ROADMAP.md` (see `changelog.d/README.md`). Leave the status summary at
+  the top of `ROADMAP.md` and each phase's `**Status:**` line to maintainers.
+- Don't put running totals in docs ("57 tests", "Last updated: …"). CI and
+  git history already record them, and every PR would have to change them.
+- Commit docs as plain text and change only the lines you mean to. Never
+  commit a file as base64, or regenerate a whole doc to make a small change.
+- The contract surface is listed in one place: `ARCHITECTURE_ESSENTIALS.md`
+  → "Contract surface". `README.md` only summarizes it and links there, so
+  a new or changed contract function is one edit, not two.
+- `sdk/src/generated/contract-client.ts` is generated. If it conflicts after
+  a rebase, don't hand-merge it: take `main`'s version, then regenerate it
+  from your contract (`CONTRIBUTING.md` → Generated SDK bindings).
