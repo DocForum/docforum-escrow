@@ -113,10 +113,16 @@ value. **Reviewers should challenge these ratings.**
   its ADR 0004) uses **one** `PLATFORM_RELEASER_SECRET` as the releaser of
   every escrow it creates. So today one leaked key affects every open
   escrow. The scoping benefit is available, but nobody uses it.
-- **Recovery:** none on-chain. You can't rotate a `releaser` on an
-  existing escrow (no setter exists). The only response is to race the
-  attacker: use the same key to settle every open escrow correctly first.
+- **Recovery:** a funded escrow can rotate its releaser when both the
+  current releaser and payer authorize the change (issue #23, ADR 0009).
+  Possession of the releaser key alone is insufficient to appoint an
+  attacker. Rotation cannot undo a settlement that already landed, and
+  it is unavailable if the payer cannot authorize. The timeout refund
+  path remains the fallback for escrows whose releaser is unavailable.
 - **Mitigations to consider:**
+  - [x] Allow the current releaser and payer to rotate the releaser on a
+    funded escrow (issue #23, ADR 0009); the payer's consent prevents
+    compromised releaser key alone from redirecting future control.
   - Make the `releaser` a Stellar multisig account (e.g. 2-of-3 signers).
     This works with no contract change, because `require_auth` on an
     account address checks that account's own signer thresholds.
