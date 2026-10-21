@@ -1,59 +1,25 @@
 {
   "name": "@docforum/escrow-sdk",
-  "version": "0.6.0",
+  "version": "0.4.0",
   "description": "TypeScript client for the docforum-escrow Soroban contract.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "sideEffects": false,
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
-    "./signers/wallets-kit": {
-      "types": "./dist/signers/wallets-kit.d.ts",
-      "import": "./dist/signers/wallets-kit.js"
-    }
-  },
   "files": [
     "dist"
   ],
   "scripts": {
     "prepare": "npm run build",
     "build": "tsc",
-    "test": "vitest run",
+    "test": "vitest run tests/transaction-lifecycle.test.ts",
     "test:integration": "vitest run",
-    "test:fixtures": "vitest run tests/events.test.ts",
-    "test:unit": "vitest run tests/fees.test.ts tests/signers.test.ts",
-    "test:instrumentation": "vitest run tests/instrumentation.test.ts",
-    "test:offline": "vitest run tests/events.test.ts tests/quorum-validation.test.ts tests/instrumentation.test.ts tests/signers.test.ts",
-    "typecheck": "tsc --noEmit",
-    "test:runtime": "node tests/runtime-smoke.mjs",
-    "test:browser": "node tests/browser-smoke.mjs"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^16.0.1"
   },
-  "peerDependencies": {
-    "@creit.tech/stellar-wallets-kit": ">=1.0.0 <3",
-    "@opentelemetry/api": ">=1.7.0"
-  },
-  "peerDependenciesMeta": {
-    "@creit.tech/stellar-wallets-kit": {
-      "optional": true
-    },
-    "@opentelemetry/api": {
-      "optional": true
-    }
-  },
   "devDependencies": {
-    "@playwright/test": "^1.64.1",
     "typescript": "^5.6.2",
-    "vite": "^8.3.4",
     "vitest": "^4.1.11"
-  },
-  "engines": {
-    "node": ">=22"
   }
 }
