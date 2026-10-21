@@ -19,13 +19,35 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { Api, Server as RpcServer } from "@stellar/stellar-sdk/rpc";
-import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
+import {
+  Client as EscrowContractClient,
+  type EscrowStatus as GeneratedEscrowStatus,
+} from "./generated/contract-client.js";
 
 export { Keypair };
 export { EscrowIndexerClient } from "./indexer-client.js";
 export type { EscrowIndexerClientConfig, EscrowPage, IndexedEscrow } from "./indexer-client.js";
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";
+export type EscrowDependencyStatus = Exclude<EscrowStatus, "Funded">;
+
+function dependencyStatusToGenerated(status: EscrowDependencyStatus): GeneratedEscrowStatus {
+  return { tag: status, values: undefined };
+}
+
+function validateDependency(dependency: EscrowDependency): void {
+  if (dependency.escrowId < 0n) {
+    throw new RangeError("dependsOn.escrowId must not be negative.");
+  }
+  if (dependency.requiredStatus !== "Released" && dependency.requiredStatus !== "Refunded") {
+    throw new RangeError("dependsOn.requiredStatus must be Released or Refunded.");
+  }
+}
+
+export interface EscrowDependency {
+  escrowId: bigint;
+  requiredStatus: EscrowDependencyStatus;
+}
 
 export type ArchivedEntryBehavior = "auto" | "error";
 
@@ -214,6 +236,12 @@ export interface CreateEscrowParams {
   releaseNotBefore?: bigint;
 }
 
+/** Creation parameters for a single-releaser escrow with a release dependency. */
+export interface CreateDependentEscrowParams
+  extends Omit<CreateEscrowParams, "releaseNotBefore"> {
+  dependsOn: EscrowDependency;
+}
+
 export interface ReleaseOrRefundParams {
   escrowId: bigint;
   /**
@@ -247,6 +275,11 @@ export interface CreateQuorumEscrowParams {
   notifyPayee?: boolean;
   /** Optional refund destination distinct from `payer` (docs/adr/0009); defaults to `payer`. */
   refundTo?: string;
+}
+
+/** Creation parameters for a quorum escrow with a release dependency. */
+export interface CreateDependentQuorumEscrowParams extends CreateQuorumEscrowParams {
+  dependsOn: EscrowDependency;
 }
 
 /** An M-of-N settlement: each keypair signs the contract auth entry. */
@@ -443,12 +476,58 @@ export class EscrowClient {
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
   }
 
+  /** Creates a single-releaser escrow whose release waits for another local escrow's status. */
+  async createDependentEscrow(
+    params: CreateDependentEscrowParams
+  ): Promise<{ escrowId: bigint; txHash: string }> {
+    validateDependency(params.dependsOn);
+    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+      throw new Error(
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+      );
+    }
+    const client = this.contractClient(params.payer);
+    const tx = await client.create_escrow_with_dependency({
+      payer: params.payer.publicKey(),
+      payee: params.payee,
+      token: params.token,
+      amount: params.amount,
+      condition_ref: params.conditionRef,
+      releaser: params.releaser,
+      refund_after: params.refundAfter,
+      notify_payee: params.notifyPayee ?? false,
+      refund_to: params.refundTo,
+      depends_on: {
+        escrow_id: params.dependsOn.escrowId,
+        required_status: dependencyStatusToGenerated(params.dependsOn.requiredStatus),
+      },
+    });
+    const sent = await tx.signAndSend();
+    return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
   async getStatus(escrowId: bigint): Promise<EscrowStatus> {
     const client = this.contractClient();
     const tx = await client.get_status({ escrow_id: escrowId });
     const status: GeneratedEscrowStatus = tx.result.unwrap();
     return status.tag;
+  }
+
+  /** Read-only dependency query. Returns `undefined` when the escrow has no dependency. */
+  async getDependency(escrowId: bigint): Promise<EscrowDependency | undefined> {
+    const client = this.contractClient();
+    const tx = await client.get_dependency({ escrow_id: escrowId });
+    const dependency = tx.result.unwrap();
+    if (dependency == null) return undefined;
+    const requiredStatus = dependency.required_status.tag;
+    if (requiredStatus === "Funded") {
+      throw new Error("Contract returned an invalid non-terminal dependency status.");
+    }
+    return {
+      escrowId: dependency.escrow_id,
+      requiredStatus,
+    };
   }
 
   /**
@@ -496,6 +575,57 @@ export class EscrowClient {
       refund_after: params.refundAfter,
       notify_payee: params.notifyPayee ?? false,
       refund_to: params.refundTo,
+    });
+    const sent = await tx.signAndSend();
+    return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /** Creates an M-of-N escrow whose release waits for another local escrow's status. */
+  async createDependentQuorumEscrow(
+    params: CreateDependentQuorumEscrowParams
+  ): Promise<{ escrowId: bigint; txHash: string }> {
+    validateDependency(params.dependsOn);
+    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+      throw new Error(
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+      );
+    }
+    if (params.releasers.length === 0) {
+      throw new Error("releasers must contain at least one address");
+    }
+    if (params.releasers.length > MAX_RELEASERS) {
+      throw new Error(
+        `releasers must contain at most ${MAX_RELEASERS} addresses, got ${params.releasers.length}`
+      );
+    }
+    if (new Set(params.releasers).size !== params.releasers.length) {
+      throw new Error("releasers must not contain duplicate addresses");
+    }
+    if (
+      !Number.isInteger(params.threshold) ||
+      params.threshold < 1 ||
+      params.threshold > params.releasers.length
+    ) {
+      throw new Error(
+        `threshold must be an integer between 1 and ${params.releasers.length}, got ${params.threshold}`
+      );
+    }
+    const client = this.contractClient(params.payer);
+    const tx = await client.create_releasers_dependency({
+      payer: params.payer.publicKey(),
+      payee: params.payee,
+      token: params.token,
+      amount: params.amount,
+      condition_ref: params.conditionRef,
+      releasers: params.releasers,
+      threshold: params.threshold,
+      refund_after: params.refundAfter,
+      notify_payee: params.notifyPayee ?? false,
+      refund_to: params.refundTo,
+      depends_on: {
+        escrow_id: params.dependsOn.escrowId,
+        required_status: dependencyStatusToGenerated(params.dependsOn.requiredStatus),
+      },
     });
     const sent = await tx.signAndSend();
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };

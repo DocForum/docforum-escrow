@@ -12,11 +12,16 @@
 ```
 __constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009); deployed on testnet
+create_escrow_release_time(..., release_not_before) -> escrow_id   // Optional earliest release time; cannot be after refund_after
+create_escrow_with_dependency(..., depends_on: EscrowDependency) -> escrow_id   // Single-releaser; local dependency must reference existing lower id and require Released or Refunded
 create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id   // optional payee acceptance gate; deployed on testnet
+create_acceptance_dependency(..., depends_on) -> escrow_id   // Acceptance gate plus local dependency
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
 create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, deployed on testnet
+create_releasers_dependency(..., depends_on) -> escrow_id   // M-of-N creation with local release dependency
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
-get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after, refund_to — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
+get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after, refund_to, release_not_before — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
+get_dependency(escrow_id) -> Option<EscrowDependency> // separate storage; leaves existing EscrowData layout unchanged
 release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser, threshold must be 1, only while Funded
 release_with_approvals(escrow_id, approvers) -> result   // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — >= threshold distinct releasers, each authorizing this invocation
 refund(escrow_id, caller) -> result    // IMPLEMENTED (Phase E2 + E4) — a releaser when threshold is 1; anyone too, once refund_after has passed, and then still only to the stored `refund_to` (= payer unless set at creation, ADR 0009)
@@ -85,13 +90,29 @@ only while the escrow is `Funded`. The payee-acceptance gate
 The contract decides **who** may call `release`/`refund`, never **why**:
 `condition_ref` is opaque to it (`docs/adr/0001`).
 
+Dependent escrows (Phase E5, issue #114) store an optional
+`EscrowDependency { escrow_id, required_status }` under a separate
+persistent key, rather than changing the serialized `EscrowData` layout.
+Dependency-aware entry points are additive; existing creation signatures
+and no-dependency behavior remain unchanged. A dependency must point to an
+existing escrow in this contract deployment with a lower, monotonically
+assigned ID. Only terminal statuses (`Released` or `Refunded`) are valid
+requirements. Both single-releaser and quorum releases verify the current
+dependency status before settlement. Refund entry points do not inspect
+dependencies, so a refunded prerequisite cannot block a valid refund of its
+dependent escrow. Cross-contract and cross-deployment dependencies are out
+of scope.
+
 ## TypeScript SDK surface (`sdk/`)
 ```ts
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
 
 const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
 const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter, notifyPayee: true, refundTo });
+await client.createDependentEscrow({ payer, payee, token, amount, conditionRef, releaser, dependsOn: { escrowId: priorId, requiredStatus: "Released" } });
 await client.createQuorumEscrow({ payer, payee, token, amount, conditionRef, releasers, threshold, refundAfter, notifyPayee: true }); // M-of-N, ADR 0007
+await client.createDependentQuorumEscrow({ payer, payee, token, amount, conditionRef, releasers, threshold, dependsOn: { escrowId: priorId, requiredStatus: "Released" } });
+await client.getDependency(escrowId);          // { escrowId, requiredStatus } | undefined
 await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
 await client.getEscrow(escrowId);            // full stored record — incl. releasers + threshold + refundAfter, so a payee can check the deal (docs/adr/0004/0007, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must be a releaser and threshold must be 1
