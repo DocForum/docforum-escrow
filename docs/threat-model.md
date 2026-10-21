@@ -461,3 +461,6 @@ Most useful to the project, in order:
 Leave findings as comments on the PR that adds this file, or on issue #6.
 A review only counts toward E4 if the reviewer is not the implementer
 (see issue #6).
+
+
+For the key-compromise response and resumable settlement tooling, see [the releaser compromise runbook](runbooks/releaser-compromise.md).
