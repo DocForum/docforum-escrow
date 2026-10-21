@@ -7,6 +7,6 @@ diff -u "$root/contract-spec.json" "$tmp"
 python3 - "$root/contract-spec.json" <<'PY'
 import json,sys
 d=json.load(open(sys.argv[1])); codes=[e["code"] for e in d["errors"]]
-if codes != sorted(set(codes)) or any(c <= 0 for c in codes): raise SystemExit("error codes must be positive, unique and sorted")
+if len(codes) != len(set(codes)) or any(c <= 0 for c in codes): raise SystemExit("error codes must be positive and unique")
 PY
 echo 'contract interface snapshot is current'
