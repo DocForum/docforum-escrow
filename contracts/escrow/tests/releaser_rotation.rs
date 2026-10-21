@@ -35,6 +35,7 @@ fn funded_escrow(
         &releaser,
         &None,
         &false,
+        &None,
     );
     (client, token, payer, payee, releaser, id)
 }
