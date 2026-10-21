@@ -148,8 +148,12 @@ fn payee_can_voluntarily_refund_to_payer_and_emits_distinct_event() {
         payee: f.payee.clone(),
         amount: 300,
     };
-    let events = env.events().all().filter_by_contract(&f.contract_id);
-    assert_eq!(events, std::vec![expected.to_xdr(&env, &f.contract_id)]);
+    let contract_events = env.events().all().filter_by_contract(&f.contract_id);
+    let events = contract_events.events();
+    // The shared refund event records the escrow state transition; this event
+    // additionally records that the payee initiated the refund.
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[1], expected.to_xdr(&env, &f.contract_id));
     assert_eq!(f.token.balance(&f.payer), 1_000);
     assert_eq!(f.token.balance(&f.payee), 0);
     assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Refunded);
