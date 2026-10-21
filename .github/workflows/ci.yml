@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.96.0
         with:
           targets: wasm32v1-none
 
@@ -64,6 +64,19 @@ jobs:
       - name: Confirm custom account wasm exists
         run: test -f ../releaser-account/target/wasm32v1-none/release/docforum_releaser_account.wasm
 
+  reproducible-wasm:
+    name: Reproducible WASM across checkout paths
+    runs-on: ubuntu-latest
+    container: rust:1.96.0-bookworm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install WASM target
+        run: rustup target add wasm32v1-none
+
+      - name: Compare builds from two different checkout paths
+        run: bash scripts/check-wasm-reproducibility.sh
+
   # Issue #121: the committed generated client must match the pinned CLI output.
   sdk-bindings:
     name: SDK bindings match contract WASM
@@ -72,7 +85,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.96.0
         with:
           targets: wasm32v1-none
 
