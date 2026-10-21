@@ -22,6 +22,7 @@ application, not here.
 - [Why this repo exists](#why-this-repo-exists-honestly)
 - [Contract surface](#contract-surface)
 - [How it's used](#how-its-used)
+- [Trust model for integrators](#trust-model-for-integrators)
 - [Repo layout](#repo-layout)
 - [Getting started](#getting-started)
 - [Documentation](#documentation)
@@ -80,6 +81,42 @@ sequenceDiagram
 `docforum-core` imports `@docforum/escrow-sdk` as a **library dependency**
 — it never calls this contract as a running network service, and this
 repo never crosses back into `docforum-core`'s database or domain model.
+
+## Trust model for integrators
+
+The contract enforces **who** may settle an escrow, not **why** — so a
+status alone is not a promise about the deal. These properties are by
+design. Read them before treating a `Funded` escrow as safe; the full
+reasoning and threat ids are in [`docs/threat-model.md`](docs/threat-model.md).
+
+- **`Funded` means "locked under the releaser's control", not "committed
+  to the payee"** (threat model T8). The payer chooses the releaser, and
+  nothing stops `releaser == payer`, in which case the payer can refund
+  itself at any time. A payee should read `releasers`, `threshold`,
+  `refundAfter` and `refundTo` with `getEscrow` / `client.getEscrow()`
+  before relying on the escrow. A quorum still settles early if
+  `threshold` releasers collude, and after `refundAfter` has passed
+  anyone may refund, always to the stored `refundTo`.
+- **Check the escrow's token, not just its status** (threat model T5).
+  `Funded` only says funds were transferred in the escrow's stored
+  `token`; it says nothing about whether that token is sound. A malicious
+  or non-standard token can report a successful transfer without moving
+  funds, and a clawback-enabled issuer can remove funds from the shared
+  per-token balance after creation. Payees should verify `token` against
+  a list they trust before relying on the escrow.
+- **`condition_ref` is public on-chain forever** (threat model T9), as
+  are `payer`, `payee` and `amount`. The contract does not interpret
+  `condition_ref` and cannot redact it, so never put private, personal or
+  otherwise sensitive data in it. Pass an opaque, meaningless id such as
+  a UUID or an internal record id.
+- **`contractId` is caller-supplied and unchecked** (threat model §4). A
+  misconfigured or tampered id points the SDK at an arbitrary contract
+  with the same function names, and `createEscrow` would send the payer's
+  funds there. Pin `contractId` in your own config and check it against
+  the contract ID and WASM hash recorded in the latest entry of
+  [`docs/testnet-deployments.md`](docs/testnet-deployments.md) before
+  using it. Pin the network passphrase too, and never take either from
+  untrusted input.
 
 ## Repo layout
 

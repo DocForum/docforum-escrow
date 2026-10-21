@@ -127,6 +127,11 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   contract-self addresses (Trivial), [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium),
   [#10](https://github.com/DocForum/docforum-escrow/issues/10) storage TTL (Medium), [#15](https://github.com/DocForum/docforum-escrow/issues/15) integrator trust-model
   docs (Trivial).
+- [x] Integrator trust-model docs (issue #15): added a "Trust model for
+  integrators" section to `README.md` covering T8, T5, T9 and the
+  caller-supplied `contractId`, plus `condition_ref` privacy warnings on
+  `EscrowData`/`create_escrow` in the contract and `createEscrow` in the SDK.
+  Docs only — no behavior change.
 - [ ] Related, not in the checklist: [#13](https://github.com/DocForum/docforum-escrow/issues/13) `get_escrow`
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
