@@ -88,6 +88,8 @@ pub struct EscrowData {
     /// payout, so invariant I1 holds; defaults to `payer` when omitted at
     /// creation — see docs/adr/0009.
     pub refund_to: Address,
+    /// Earliest ledger timestamp at which release is allowed.
+    pub release_not_before: Option<u64>,
 }
 
 #[contracttype]
@@ -145,12 +147,10 @@ pub enum Error {
     /// `refund_to` was the escrow contract's own address — funds sent
     /// there on refund could never be moved again (docs/adr/0009).
     InvalidRefundTo = 21,
-    /// A dependency must point to an existing escrow with a lower id.
-    InvalidDependency = 22,
-    DependencyNotFound = 23,
-    DependencyUnsatisfied = 24,
-    /// Dependencies may require a terminal status, not `Funded`.
-    InvalidDependencyStatus = 25,
+    /// The configured release time is in the past or after the refund time.
+    InvalidReleaseNotBefore = 22,
+    /// Release was attempted before the configured time.
+    ReleaseTooEarly = 23,
 }
 
 #[contract]
@@ -210,10 +210,9 @@ impl EscrowContract {
         )
     }
 
-    /// Same as `create_escrow`, with an additional local escrow release
-    /// dependency. The dependency must reference an existing, lower-id
-    /// escrow and require `Released` or `Refunded`.
-    pub fn create_escrow_with_dependency(
+    /// Creates a single-releaser escrow with an optional earliest release time.
+    /// Release is allowed at the configured timestamp.
+    pub fn create_escrow_release_time(
         env: Env,
         payer: Address,
         payee: Address,
@@ -224,7 +223,7 @@ impl EscrowContract {
         refund_after: Option<u64>,
         notify_payee: bool,
         refund_to: Option<Address>,
-        depends_on: EscrowDependency,
+        release_not_before: Option<u64>,
     ) -> Result<u64, Error> {
         let mut releasers = Vec::new(&env);
         releasers.push_back(releaser);
@@ -241,7 +240,7 @@ impl EscrowContract {
             notify_payee,
             false,
             refund_to,
-            Some(depends_on),
+            release_not_before,
         )
     }
 
@@ -275,39 +274,6 @@ impl EscrowContract {
             requires_acceptance,
             refund_to,
             None,
-        )
-    }
-
-    /// Creates an acceptance-gated escrow with a local release dependency.
-    pub fn create_acceptance_dependency(
-        env: Env,
-        payer: Address,
-        payee: Address,
-        token: Address,
-        amount: i128,
-        condition_ref: String,
-        releaser: Address,
-        refund_after: Option<u64>,
-        requires_acceptance: bool,
-        refund_to: Option<Address>,
-        depends_on: EscrowDependency,
-    ) -> Result<u64, Error> {
-        let mut releasers = Vec::new(&env);
-        releasers.push_back(releaser);
-        Self::create_escrow_inner(
-            &env,
-            payer,
-            payee,
-            token,
-            amount,
-            condition_ref,
-            releasers,
-            1,
-            refund_after,
-            false,
-            requires_acceptance,
-            refund_to,
-            Some(depends_on),
         )
     }
 
@@ -375,38 +341,6 @@ impl EscrowContract {
             false,
             refund_to,
             None,
-        )
-    }
-
-    /// Creates an M-of-N escrow with a local release dependency.
-    pub fn create_releasers_dependency(
-        env: Env,
-        payer: Address,
-        payee: Address,
-        token: Address,
-        amount: i128,
-        condition_ref: String,
-        releasers: Vec<Address>,
-        threshold: u32,
-        refund_after: Option<u64>,
-        notify_payee: bool,
-        refund_to: Option<Address>,
-        depends_on: EscrowDependency,
-    ) -> Result<u64, Error> {
-        Self::create_escrow_inner(
-            &env,
-            payer,
-            payee,
-            token,
-            amount,
-            condition_ref,
-            releasers,
-            threshold,
-            refund_after,
-            notify_payee,
-            false,
-            refund_to,
-            Some(depends_on),
         )
     }
 
@@ -573,7 +507,7 @@ impl EscrowContract {
         notify_payee: bool,
         requires_acceptance: bool,
         refund_to: Option<Address>,
-        depends_on: Option<EscrowDependency>,
+        release_not_before: Option<u64>,
     ) -> Result<u64, Error> {
         let allowed_tokens: Vec<Address> = env
             .storage()
@@ -589,6 +523,13 @@ impl EscrowContract {
         if let Some(deadline) = refund_after {
             if deadline <= env.ledger().timestamp() {
                 return Err(Error::InvalidRefundAfter);
+            }
+        }
+        if let Some(release_time) = release_not_before {
+            if release_time < env.ledger().timestamp()
+                || refund_after.is_some_and(|refund_time| release_time > refund_time)
+            {
+                return Err(Error::InvalidReleaseNotBefore);
             }
         }
         // Bound condition_ref to keep per-escrow storage and event costs
@@ -639,6 +580,7 @@ impl EscrowContract {
             requires_acceptance,
             accepted_at: None,
             refund_to,
+            release_not_before,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         if let Some(dependency) = depends_on {
@@ -728,6 +670,13 @@ impl EscrowContract {
         data: &mut EscrowData,
         settled: EscrowStatus,
     ) -> Result<(), Error> {
+        if settled == EscrowStatus::Released
+            && data
+                .release_not_before
+                .is_some_and(|release_time| env.ledger().timestamp() < release_time)
+        {
+            return Err(Error::ReleaseTooEarly);
+        }
         let notify_payee = data.notify_payee && settled == EscrowStatus::Released;
         let destination = match settled {
             EscrowStatus::Released => data.payee.clone(),

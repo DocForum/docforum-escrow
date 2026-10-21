@@ -147,6 +147,9 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   lifecycle and `BalanceMismatch` verification are recorded in
   `docs/testnet-deployments.md`.
 ## Phase E5 — Contract features
+
+- [x] Optional escrow-wide earliest release time (issue #43, ADR 0009); refund path remains independent.
+
 - [x] **OpenZeppelin Stellar library evaluation** (issue #118) —
   `docs/adr/0006`: all six candidate modules checked against ADR 0001/0002
   and the "no hidden admin" rule. Pausable, Upgradeable and the
