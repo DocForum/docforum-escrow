@@ -16,7 +16,7 @@
 
 use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
-    testutils::Address as _,
+    testutils::{Address as _, Ledger as _},
     token::{StellarAssetClient, TokenClient},
     Address, Env, String, Vec,
 };
@@ -62,6 +62,8 @@ fn funded_escrow_with_arbiter(env: &Env, amount: i128) -> Fixture<'_> {
         &None,
         &arbiter,
         &false,
+        &None,
+        &None,
     );
 
     Fixture {
@@ -123,6 +125,7 @@ fn escrow_created_without_arbiter_has_no_arbiter() {
         &releaser,
         &None,
         &false,
+        &None,
     );
 
     let dispute = client.get_dispute(&id);
@@ -245,6 +248,7 @@ fn dispute_also_freezes_the_quorum_approval_paths() {
         &1,
         &None,
         &false,
+        &None,
     );
     client.raise_dispute(&id, &second);
 
@@ -365,6 +369,7 @@ fn an_escrow_without_an_arbiter_cannot_be_resolved() {
         &releaser,
         &None,
         &false,
+        &None,
     );
     client.raise_dispute(&id, &payer);
 
@@ -489,4 +494,97 @@ fn get_dispute_errors_for_an_unknown_escrow() {
     let result = f.client.try_get_dispute(&99);
 
     assert!(matches!(result, Err(Ok(Error::NotFound))));
+}
+
+// --- creation parity with plain escrows ------------------------------------
+//
+// `create_escrow_with_arbiter` accepts the same optional `refund_to` and
+// `release_not_before` as the non-arbiter entry points. Without these tests a
+// future signature change could silently drop a sponsored refund destination
+// or release schedule simply because the escrow has an arbiter.
+
+#[test]
+fn arbiter_escrow_keeps_the_sponsored_refund_destination() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let token_id = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
+    let token = TokenClient::new(&env, &token_id);
+    let asset = StellarAssetClient::new(&env, &token_id);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    let arbiter = Address::generate(&env);
+    let sponsor = Address::generate(&env);
+    asset.mint(&payer, &400);
+
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let id = client.create_escrow_with_arbiter(
+        &payer,
+        &payee,
+        &token_id,
+        &400,
+        &String::from_str(&env, "sponsored-arbiter"),
+        &releaser,
+        &None,
+        &arbiter,
+        &false,
+        &Some(sponsor.clone()),
+        &None,
+    );
+
+    assert_eq!(client.get_escrow(&id).refund_to, sponsor);
+    client.refund(&id, &releaser);
+    assert_eq!(token.balance(&sponsor), 400);
+    assert_eq!(token.balance(&payer), 0);
+    assert_eq!(token.balance(&contract_id), 0);
+}
+
+#[test]
+fn arbiter_escrow_can_set_a_release_time() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_000);
+
+    let token_id = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
+    let token = TokenClient::new(&env, &token_id);
+    let asset = StellarAssetClient::new(&env, &token_id);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    let arbiter = Address::generate(&env);
+    asset.mint(&payer, &300);
+
+    let release_at = 1_500;
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let id = client.create_escrow_with_arbiter(
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(&env, "scheduled-arbiter"),
+        &releaser,
+        &None,
+        &arbiter,
+        &false,
+        &None,
+        &Some(release_at),
+    );
+
+    assert_eq!(client.get_escrow(&id).release_not_before, Some(release_at));
+    assert_eq!(
+        client.try_release(&id, &releaser),
+        Err(Ok(Error::ReleaseTooEarly))
+    );
+
+    env.ledger().set_timestamp(release_at);
+    client.release(&id, &releaser);
+    assert_eq!(token.balance(&payee), 300);
+    assert_eq!(token.balance(&contract_id), 0);
 }

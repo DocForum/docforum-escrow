@@ -172,25 +172,29 @@ pub enum Error {
     AcceptanceRequired = 18,
     AcceptanceNotConfigured = 19,
     AlreadyAccepted = 20,
-    /// A settlement (`resolve_dispute`/`settle`) was attempted on an escrow
-    /// that is not currently `Disputed`.
-    NotDisputed = 21,
-    /// The basis points are out of range or don't sum to 10_000.
-    InvalidSplit = 22,
-    /// `resolve_dispute` was called on a dispute that already has a recorded
-    /// split. One resolution per dispute keeps the payout deterministic.
-    AlreadyResolved = 23,
-    /// `settle` was called before the arbiter recorded a split.
-    NotResolved = 24,
     /// The new releaser cannot be the escrow contract or payee.
-    InvalidReleaser = 28,
+    InvalidReleaser = 24,
     /// `refund_to` was the escrow contract's own address — funds sent
     /// there on refund could never be moved again (docs/adr/0009).
-    InvalidRefundTo = 25,
+    InvalidRefundTo = 21,
     /// The configured release time is in the past or after the refund time.
-    InvalidReleaseNotBefore = 26,
+    InvalidReleaseNotBefore = 22,
     /// Release was attempted before the configured time.
-    ReleaseTooEarly = 27,
+    ReleaseTooEarly = 23,
+    /// A settlement (`resolve_dispute`/`settle`) was attempted on an escrow
+    /// that is not currently `Disputed`.
+    ///
+    /// The Phase E6 codes are appended after the ones already on testnet:
+    /// published `Error` discriminants are part of the contract's ABI, so a
+    /// new phase must never renumber an existing one.
+    NotDisputed = 25,
+    /// The basis points are out of range or don't sum to 10_000.
+    InvalidSplit = 26,
+    /// `resolve_dispute` was called on a dispute that already has a recorded
+    /// split. One resolution per dispute keeps the payout deterministic.
+    AlreadyResolved = 27,
+    /// `settle` was called before the arbiter recorded a split.
+    NotResolved = 28,
 }
 
 #[contract]
@@ -278,6 +282,7 @@ impl EscrowContract {
             releasers,
             1,
             refund_after,
+            None,
             notify_payee,
             false,
             refund_to,
@@ -391,6 +396,11 @@ impl EscrowContract {
     /// adjudicate a dispute over this escrow (Phase E6, docs/adr/0009).
     /// Omitting this entry point (i.e. using `create_escrow`) keeps the
     /// pre-E6 behaviour: nobody can resolve a dispute on that escrow.
+    ///
+    /// `refund_to` and `release_not_before` mean exactly what they mean on
+    /// `create_escrow` / `create_escrow_release_time`; they are accepted here
+    /// too so that adding an arbiter never costs an escrow its sponsored
+    /// refund destination or release schedule.
     pub fn create_escrow_with_arbiter(
         env: Env,
         payer: Address,
@@ -402,6 +412,8 @@ impl EscrowContract {
         refund_after: Option<u64>,
         arbiter: Address,
         notify_payee: bool,
+        refund_to: Option<Address>,
+        release_not_before: Option<u64>,
     ) -> Result<u64, Error> {
         let mut releasers = Vec::new(&env);
         releasers.push_back(releaser);
@@ -418,8 +430,8 @@ impl EscrowContract {
             Some(arbiter),
             notify_payee,
             false,
-            None,
-            None,
+            refund_to,
+            release_not_before,
         )
     }
 
@@ -623,7 +635,7 @@ impl EscrowContract {
             return Err(Error::AlreadyAccepted);
         }
 
-        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Cancelled)
+        Self::finalize(&env, escrow_id, &mut data, EscrowStatus::Cancelled)
     }
 
     /// Returns the escrowed `amount` to `refund_to` on behalf of an M-of-N

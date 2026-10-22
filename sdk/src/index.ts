@@ -22,6 +22,7 @@ import { Api, Server as RpcServer } from "@stellar/stellar-sdk/rpc";
 import type { AssembledTransaction, Result, SentTransaction } from "@stellar/stellar-sdk/contract";
 import {
   Client as EscrowContractClient,
+  type DisputeState as GeneratedDisputeState,
   type EscrowData as GeneratedEscrowData,
   type EscrowStatus as GeneratedEscrowStatus,
 } from "./generated/contract-client.js";
@@ -50,7 +51,7 @@ export {
 export { EscrowIndexerClient } from "./indexer-client.js";
 export type { EscrowIndexerClientConfig, EscrowPage, IndexedEscrow } from "./indexer-client.js";
 
-export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Disputed";
+export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Disputed" | "Cancelled";
 
 export type ArchivedEntryBehavior = "auto" | "error";
 
@@ -75,7 +76,7 @@ export function isArchivedEntryFailure(error: unknown): boolean {
     (typeof candidate.message === "string" && /expired state|archived (?:contract )?state|automatic restoration attempt limit reached/i.test(candidate.message));
 }
 
-export type EscrowEventType = "created" | "released" | "refunded" | "disputed" | "resolved" | "settled";
+export type EscrowEventType = "created" | "released" | "refunded" | "disputed" | "resolved" | "settled" | "cancelled";
 interface EscrowEventBase {
   ledger: number;
   cursor: string;
@@ -646,6 +647,8 @@ export class EscrowClient {
             refund_after: params.refundAfter,
             arbiter: params.arbiter,
             notify_payee: params.notifyPayee ?? false,
+            refund_to: params.refundTo,
+            release_not_before: params.releaseNotBefore,
           }),
       { address: signerAddress(params.payer) },
     );
@@ -725,22 +728,41 @@ export class EscrowClient {
    * check before relying on a `Funded` escrow (docs/adr/0004, threat model
    * T8). Throws if `escrowId` doesn't exist.
    */
-  async getEscrow(escrowId: bigint): Promise<Escrow> {
-    const client = this.contractClient();
-    const [tx, disputeTx] = await Promise.all([
-      tracePhase(
-        this.instrumentation,
-        "simulate",
-        this.spanAttributesIfEnabled("get_escrow", escrowId),
-        () => client.get_escrow({ escrow_id: escrowId }),
-      ),
-      tracePhase(
+  /**
+   * Reads the optional dispute record for `escrowId`.
+   *
+   * Returns `undefined` when the contract does not expose `get_dispute`:
+   * dispute support is additive, so an SDK built against the current
+   * bindings must still read escrows from a deployment that predates
+   * Phase E6 (the live testnet deployment, for example). A malformed or
+   * failing read is treated the same way — no arbiter, no split — because
+   * a missing dispute record never changes who the escrow pays.
+   */
+  private async readDispute(
+    client: EscrowContractClient,
+    escrowId: bigint,
+  ): Promise<GeneratedDisputeState | undefined> {
+    try {
+      const tx = await tracePhase(
         this.instrumentation,
         "simulate",
         this.spanAttributesIfEnabled("get_dispute", escrowId),
         () => client.get_dispute({ escrow_id: escrowId }),
-      ),
-    ]);
+      );
+      return tx.result.unwrap();
+    } catch {
+      return undefined;
+    }
+  }
+
+  async getEscrow(escrowId: bigint): Promise<Escrow> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("get_escrow", escrowId),
+      () => client.get_escrow({ escrow_id: escrowId }),
+    );
     let data: GeneratedEscrowData;
     try {
       data = tx.result.unwrap();
@@ -759,7 +781,11 @@ export class EscrowClient {
       }
       throw error;
     }
-    const dispute = disputeTx.result.unwrap();
+    // Optional: a deployment that predates Phase E6 has no `get_dispute`
+    // entry point at all, and `getEscrow` must keep reading those escrows
+    // (the dispute surface is additive). Treat a failed dispute read as
+    // "this escrow has no arbiter and no recorded split".
+    const dispute = await this.readDispute(client, escrowId);
     return {
       payer: data.payer,
       payee: data.payee,
@@ -774,8 +800,8 @@ export class EscrowClient {
       refundAfter: data.refund_after ?? undefined,
       notifyPayee: data.notify_payee,
       // The generated client decodes a contract `None` as `null`.
-      arbiter: dispute.arbiter ?? undefined,
-      splitBps: dispute.resolved
+      arbiter: dispute?.arbiter ?? undefined,
+      splitBps: dispute?.resolved
         ? { payerBps: dispute.payer_bps, payeeBps: dispute.payee_bps }
         : undefined,
       refundTo: data.refund_to,
@@ -1198,7 +1224,8 @@ export class EscrowClient {
       const nativeTopics = raw.topic.map(safeScValToNative);
       const eventName = nativeTopics.find((v) =>
         v === "created" || v === "released" || v === "refunded" ||
-        v === "disputed" || v === "resolved" || v === "settled"
+        v === "disputed" || v === "resolved" || v === "settled" ||
+        v === "cancelled"
       ) as EscrowEventType | undefined;
       const unknownName = nativeTopics.find((v) => typeof v === "string") as string | undefined;
       const type = eventName;
@@ -1287,6 +1314,7 @@ export function availableActions(escrow: Escrow, address: string, now: bigint): 
       break;
     case "Released":
     case "Refunded":
+    case "Cancelled":
       break;
   }
 
