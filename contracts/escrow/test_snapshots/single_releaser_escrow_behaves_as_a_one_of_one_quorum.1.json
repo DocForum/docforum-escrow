@@ -415,6 +415,18 @@
                   },
                   {
                     "key": {
+                      "symbol": "milestones"
+                    },
+                    "val": {
+                      "vec": [
+                        {
+                          "i128": "300"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "notify_payee"
                     },
                     "val": {
@@ -453,9 +465,15 @@
                   },
                   {
                     "key": {
-                      "symbol": "release_not_before"
+                      "symbol": "released_milestones"
                     },
-                    "val": "void"
+                    "val": {
+                      "vec": [
+                        {
+                          "bool": true
+                        }
+                      ]
+                    }
                   },
                   {
                     "key": {
@@ -557,6 +575,18 @@
                   },
                   {
                     "key": {
+                      "symbol": "milestones"
+                    },
+                    "val": {
+                      "vec": [
+                        {
+                          "i128": "300"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "notify_payee"
                     },
                     "val": {
@@ -595,9 +625,15 @@
                   },
                   {
                     "key": {
-                      "symbol": "release_not_before"
+                      "symbol": "released_milestones"
                     },
-                    "val": "void"
+                    "val": {
+                      "vec": [
+                        {
+                          "bool": true
+                        }
+                      ]
+                    }
                   },
                   {
                     "key": {

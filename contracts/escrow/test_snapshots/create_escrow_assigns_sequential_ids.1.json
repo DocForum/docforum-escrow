@@ -324,6 +324,18 @@
                   },
                   {
                     "key": {
+                      "symbol": "milestones"
+                    },
+                    "val": {
+                      "vec": [
+                        {
+                          "i128": "100"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "notify_payee"
                     },
                     "val": {
@@ -362,9 +374,15 @@
                   },
                   {
                     "key": {
-                      "symbol": "release_not_before"
+                      "symbol": "released_milestones"
                     },
-                    "val": "void"
+                    "val": {
+                      "vec": [
+                        {
+                          "bool": false
+                        }
+                      ]
+                    }
                   },
                   {
                     "key": {
@@ -466,6 +484,18 @@
                   },
                   {
                     "key": {
+                      "symbol": "milestones"
+                    },
+                    "val": {
+                      "vec": [
+                        {
+                          "i128": "100"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "notify_payee"
                     },
                     "val": {
@@ -504,9 +534,15 @@
                   },
                   {
                     "key": {
-                      "symbol": "release_not_before"
+                      "symbol": "released_milestones"
                     },
-                    "val": "void"
+                    "val": {
+                      "vec": [
+                        {
+                          "bool": false
+                        }
+                      ]
+                    }
                   },
                   {
                     "key": {
@@ -859,69 +895,6 @@
             ],
             "data": {
               "i128": "100"
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-        "type_": "contract",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "ESCROW"
-              },
-              {
-                "symbol": "created"
-              },
-              {
-                "u64": "1"
-              }
-            ],
-            "data": {
-              "vec": [
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                },
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
-                },
-                {
-                  "address": "CBEPDNVYXQGWB5YUBXKJWYJA7OXTZW5LFLNO5JRRGE6Z6C5OSUZPCCEL"
-                },
-                {
-                  "i128": "100"
-                },
-                {
-                  "string": "ref-b"
-                },
-                {
-                  "vec": [
-                    {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
-                    }
-                  ]
-                },
-                {
-                  "u32": 1
-                },
-                "void",
-                {
-                  "bool": false
-                },
-                {
-                  "bool": false
-                },
-                "void",
-                {
-                  "symbol": "Funded"
-                }
-              ]
             }
           }
         }

@@ -41,6 +41,7 @@ and §6.*
 | I3 | Each escrow pays out at most once. | `status == Funded` check and terminal status write before transfer/callback; failures roll back atomically. |
 | I4 | An escrow only exists, or grows, if the declared funds were actually transferred in. | `payer.require_auth()` + shared exact-balance-delta verification on create/top-up before storage is updated. |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
+| I6 | Milestone payouts never exceed the funded amount; each tranche can be released once, and refunds return only the unreleased remainder. | Creation validates positive tranche amounts and an exact checked sum; release flags are stored before transfer and terminal statuses prevent further payouts. |
 
 I1 is the most important property in this design. A full compromise of the
 `releaser` key lets an attacker pick the **wrong outcome** (release when it

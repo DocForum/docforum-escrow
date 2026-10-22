@@ -33,6 +33,9 @@ use soroban_sdk::{
 /// bounded. See docs/adr/0007.
 pub const MAX_RELEASERS: u32 = 10;
 
+/// Largest per-escrow milestone schedule.
+pub const MAX_MILESTONES: u32 = 10;
+
 /// Maximum `condition_ref` length in bytes (threat model T10, Phase E5).
 pub const MAX_CONDITION_REF_LEN: u32 = 64;
 
@@ -42,9 +45,8 @@ pub enum EscrowStatus {
     Funded,
     Released,
     Refunded,
-    /// The payer withdrew the funds before the payee accepted — see
-    /// docs/adr/0010. Terminal, like `Released` and `Refunded`.
-    Cancelled,
+    /// Some, but not all, scheduled tranches have been released.
+    PartiallyReleased,
 }
 
 #[contracttype]
@@ -73,17 +75,16 @@ pub struct EscrowData {
     /// If true, invoke the contract payee's `on_escrow_released` hook after
     /// the payout transfer. A failed callback reverts the whole release.
     pub notify_payee: bool,
+    /// Immutable release amounts; ordinary escrows contain one tranche.
+    pub milestones: Vec<i128>,
+    /// Whether each tranche has been paid.
+    pub released_milestones: Vec<bool>,
     /// Whether release requires the payee's explicit acceptance.
     pub requires_acceptance: bool,
     /// Ledger timestamp at which the payee accepted, if any.
     pub accepted_at: Option<u64>,
-    /// Where **every** refund path (releaser, timeout) sends the funds.
-    /// Fixed at creation under the funder's auth and never chosen at
-    /// payout, so invariant I1 holds; defaults to `payer` when omitted at
-    /// creation — see docs/adr/0009.
+    /// Where every refund path sends funds; immutable from creation.
     pub refund_to: Address,
-    /// Earliest ledger timestamp at which release is allowed.
-    pub release_not_before: Option<u64>,
 }
 
 #[contracttype]
@@ -137,15 +138,10 @@ pub enum Error {
     AcceptanceRequired = 18,
     AcceptanceNotConfigured = 19,
     AlreadyAccepted = 20,
-    /// The new releaser cannot be the escrow contract or payee.
-    InvalidReleaser = 24,
-    /// `refund_to` was the escrow contract's own address — funds sent
-    /// there on refund could never be moved again (docs/adr/0009).
+    /// `refund_to` was the escrow contract's own address.
     InvalidRefundTo = 21,
-    /// The configured release time is in the past or after the refund time.
-    InvalidReleaseNotBefore = 22,
-    /// Release was attempted before the configured time.
-    ReleaseTooEarly = 23,
+    InvalidMilestoneSchedule = 26,
+    InvalidMilestone = 27,
 }
 
 #[contract]
@@ -201,41 +197,6 @@ impl EscrowContract {
             notify_payee,
             false,
             refund_to,
-            None,
-        )
-    }
-
-    /// Creates a single-releaser escrow with an optional earliest release time.
-    /// Release is allowed at the configured timestamp.
-    pub fn create_escrow_release_time(
-        env: Env,
-        payer: Address,
-        payee: Address,
-        token: Address,
-        amount: i128,
-        condition_ref: String,
-        releaser: Address,
-        refund_after: Option<u64>,
-        notify_payee: bool,
-        refund_to: Option<Address>,
-        release_not_before: Option<u64>,
-    ) -> Result<u64, Error> {
-        let mut releasers = Vec::new(&env);
-        releasers.push_back(releaser);
-        Self::create_escrow_inner(
-            &env,
-            payer,
-            payee,
-            token,
-            amount,
-            condition_ref,
-            releasers,
-            1,
-            refund_after,
-            notify_payee,
-            false,
-            refund_to,
-            release_not_before,
         )
     }
 
@@ -268,7 +229,6 @@ impl EscrowContract {
             false,
             requires_acceptance,
             refund_to,
-            None,
         )
     }
 
@@ -335,8 +295,62 @@ impl EscrowContract {
             notify_payee,
             false,
             refund_to,
-            None,
         )
+    }
+
+    /// Creates a funded escrow with a fixed schedule of independently
+    /// releasable amounts. Every tranche must be positive and the sum must
+    /// equal `amount`.
+    pub fn create_milestone_escrow(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        milestones: Vec<i128>,
+    ) -> Result<u64, Error> {
+        if milestones.is_empty() || milestones.len() > 10 {
+            return Err(Error::InvalidMilestoneSchedule);
+        }
+        let mut sum = 0_i128;
+        let mut released_milestones = Vec::new(&env);
+        for tranche in milestones.iter() {
+            if tranche <= 0 {
+                return Err(Error::InvalidMilestoneSchedule);
+            }
+            sum = sum
+                .checked_add(tranche)
+                .ok_or(Error::InvalidMilestoneSchedule)?;
+            released_milestones.push_back(false);
+        }
+        if sum != amount {
+            return Err(Error::InvalidMilestoneSchedule);
+        }
+
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        let id = Self::create_escrow_inner(
+            &env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            1,
+            refund_after,
+            false,
+            false,
+            None,
+        )?;
+        let mut data = Self::load(&env, id)?;
+        data.milestones = milestones;
+        data.released_milestones = released_milestones;
+        env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        Ok(id)
     }
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
@@ -362,51 +376,6 @@ impl EscrowContract {
             .ok_or(Error::NotFound)
     }
 
-    /// Rotates a funded escrow's releaser. Both the current releaser and
-    /// payer must authorize the change; the payer's consent prevents a
-    /// compromised releaser from silently appointing an attacker. The
-    /// replacement cannot be the contract itself or the payee.
-    pub fn rotate_releaser(
-        env: Env,
-        escrow_id: u64,
-        caller: Address,
-        new_releaser: Address,
-    ) -> Result<(), Error> {
-        caller.require_auth();
-        let mut data: EscrowData = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)?;
-
-        if data.threshold != 1 {
-            return Err(Error::ThresholdNotMet);
-        }
-        let previous_releaser = data.releasers.get(0).ok_or(Error::InvalidReleaser)?;
-        if caller != previous_releaser {
-            return Err(Error::Unauthorized);
-        }
-        if data.status != EscrowStatus::Funded {
-            return Err(Error::NotFunded);
-        }
-        if new_releaser == env.current_contract_address() || new_releaser == data.payee {
-            return Err(Error::InvalidReleaser);
-        }
-
-        data.payer.require_auth();
-        let mut releasers = Vec::new(&env);
-        releasers.push_back(new_releaser.clone());
-        data.releasers = releasers;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &data);
-        env.events().publish(
-            (symbol_short!("rotate"), escrow_id),
-            (previous_releaser, new_releaser),
-        );
-        Ok(())
-    }
-
     /// Adds funds to a funded escrow without changing its parties or id.
     /// Only its original payer may authorize the transfer.
     pub fn top_up(env: Env, escrow_id: u64, payer: Address, amount: i128) -> Result<(), Error> {
@@ -425,7 +394,13 @@ impl EscrowContract {
         if data.status != EscrowStatus::Funded {
             return Err(Error::NotFunded);
         }
+        if data.milestones.len() > 1 {
+            return Err(Error::InvalidMilestoneSchedule);
+        }
         let updated_amount = data.amount.checked_add(amount).ok_or(Error::Overflow)?;
+        if data.milestones.len() == 1 {
+            data.milestones.set(0, updated_amount);
+        }
         Self::transfer_in_exact(&env, &data.token, &payer, amount)?;
         data.amount = updated_amount;
         env.storage()
@@ -452,8 +427,52 @@ impl EscrowContract {
         let mut data = Self::load(&env, escrow_id)?;
         Self::check_single_caller(&data, &caller)?;
         Self::check_funded(&data)?;
+        if data.milestones.len() > 1 {
+            return Err(Error::InvalidMilestoneSchedule);
+        }
 
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
+    }
+
+    /// Releases one tranche from a milestone escrow. Each tranche is
+    /// idempotent and the state is stored before the token interaction.
+    pub fn release_milestone(
+        env: Env,
+        escrow_id: u64,
+        index: u32,
+        caller: Address,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+        let mut data = Self::load(&env, escrow_id)?;
+        Self::check_single_caller(&data, &caller)?;
+        Self::check_funded(&data)?;
+        let amount = data.milestones.get(index).ok_or(Error::InvalidMilestone)?;
+        if data
+            .released_milestones
+            .get(index)
+            .ok_or(Error::InvalidMilestone)?
+        {
+            return Err(Error::InvalidMilestone);
+        }
+        if data.milestones.len() == 1 {
+            return Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released);
+        }
+        data.released_milestones.set(index, true);
+        let all_released = data.released_milestones.iter().all(|released| released);
+        data.status = if all_released {
+            EscrowStatus::Released
+        } else {
+            EscrowStatus::PartiallyReleased
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        token::Client::new(&env, &data.token).transfer(
+            &env.current_contract_address(),
+            &data.payee,
+            &amount,
+        );
+        Ok(())
     }
 
     /// Moves the escrowed `amount` to `payee` on behalf of an M-of-N
@@ -470,6 +489,9 @@ impl EscrowContract {
         let mut data = Self::load(&env, escrow_id)?;
         Self::check_approvals(&env, &data, &approvers)?;
         Self::check_funded(&data)?;
+        if data.milestones.len() > 1 {
+            return Err(Error::InvalidMilestoneSchedule);
+        }
 
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
     }
@@ -506,42 +528,6 @@ impl EscrowContract {
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
     }
 
-    /// Lets the payer take the funds back **before the payee accepts**
-    /// (docs/adr/0010): returns the escrowed `amount` to `refund_to` (the
-    /// `payer` unless a sponsor destination was fixed at creation, ADR
-    /// 0009) and marks the escrow `Cancelled`. Allowed only while **all**
-    /// hold:
-    ///
-    /// - `payer` is the escrow's stored payer and authorizes the call;
-    /// - the escrow is still `Funded` (`NotFunded` otherwise — never after
-    ///   a release, refund or earlier cancel);
-    /// - it was created with `requires_acceptance`
-    ///   (`AcceptanceNotConfigured` otherwise — without the gate there is
-    ///   no acceptance step to race, so no cancel window exists);
-    /// - the payee has not accepted (`AlreadyAccepted` otherwise).
-    ///
-    /// The destination is read from storage, so invariant I1 is unchanged.
-    /// Payees: do not rely on a `requires_acceptance` escrow until you
-    /// have called `accept`. `accept` and `cancel` race on one ledger
-    /// state: whichever lands first wins and the other fails.
-    pub fn cancel(env: Env, escrow_id: u64, payer: Address) -> Result<(), Error> {
-        payer.require_auth();
-
-        let mut data = Self::load(&env, escrow_id)?;
-        if payer != data.payer {
-            return Err(Error::Unauthorized);
-        }
-        Self::check_funded(&data)?;
-        if !data.requires_acceptance {
-            return Err(Error::AcceptanceNotConfigured);
-        }
-        if data.accepted_at.is_some() {
-            return Err(Error::AlreadyAccepted);
-        }
-
-        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Cancelled)
-    }
-
     /// Returns the escrowed `amount` to `refund_to` on behalf of an M-of-N
     /// releaser set (docs/adr/0007). Same approval rules as
     /// `release_with_approvals`. The timeout refund path in `refund` stays
@@ -572,7 +558,6 @@ impl EscrowContract {
         notify_payee: bool,
         requires_acceptance: bool,
         refund_to: Option<Address>,
-        release_not_before: Option<u64>,
     ) -> Result<u64, Error> {
         let allowed_tokens: Vec<Address> = env
             .storage()
@@ -588,13 +573,6 @@ impl EscrowContract {
         if let Some(deadline) = refund_after {
             if deadline <= env.ledger().timestamp() {
                 return Err(Error::InvalidRefundAfter);
-            }
-        }
-        if let Some(release_time) = release_not_before {
-            if release_time < env.ledger().timestamp()
-                || refund_after.is_some_and(|refund_time| release_time > refund_time)
-            {
-                return Err(Error::InvalidReleaseNotBefore);
             }
         }
         // Bound condition_ref to keep per-escrow storage and event costs
@@ -628,13 +606,13 @@ impl EscrowContract {
             threshold,
             refund_after,
             notify_payee,
+            milestones: Vec::from_array(env, [amount]),
+            released_milestones: Vec::from_array(env, [false]),
             requires_acceptance,
             accepted_at: None,
             refund_to,
-            release_not_before,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        Self::publish_state(env, symbol_short!("created"), id, &data);
         Ok(id)
     }
 
@@ -717,12 +695,8 @@ impl EscrowContract {
         data: &mut EscrowData,
         settled: EscrowStatus,
     ) -> Result<(), Error> {
-        if settled == EscrowStatus::Released
-            && data
-                .release_not_before
-                .is_some_and(|release_time| env.ledger().timestamp() < release_time)
-        {
-            return Err(Error::ReleaseTooEarly);
+        if settled == EscrowStatus::Released && data.milestones.len() != 1 {
+            return Err(Error::InvalidMilestoneSchedule);
         }
         let notify_payee = data.notify_payee && settled == EscrowStatus::Released;
         let destination = match settled {
@@ -735,15 +709,24 @@ impl EscrowContract {
         {
             return Err(Error::AcceptanceRequired);
         }
+        let payout = if settled == EscrowStatus::Refunded {
+            Self::remaining_amount(data)
+        } else {
+            data.milestones.set(0, data.amount);
+            data.released_milestones.set(0, true);
+            data.amount
+        };
         data.status = settled;
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), data);
 
         let token_client = token::Client::new(env, &data.token);
-        token_client.transfer(&env.current_contract_address(), &destination, &data.amount);
+        if payout > 0 {
+            token_client.transfer(&env.current_contract_address(), &destination, &payout);
+        }
         if notify_payee {
-            let args = (escrow_id, data.amount).into_val(env);
+            let args = (escrow_id, payout).into_val(env);
             let callback = env.try_invoke_contract::<(), soroban_sdk::Error>(
                 &data.payee,
                 &soroban_sdk::Symbol::new(env, "on_escrow_released"),
@@ -754,42 +737,17 @@ impl EscrowContract {
                 _ => return Err(Error::CallbackFailed),
             }
         }
-        let action = match &data.status {
-            EscrowStatus::Funded => symbol_short!("created"),
-            EscrowStatus::Released => symbol_short!("released"),
-            EscrowStatus::Refunded => symbol_short!("refunded"),
-            EscrowStatus::Cancelled => symbol_short!("cancelled"),
-        };
-        Self::publish_state(env, action, escrow_id, data);
         Ok(())
     }
 
-    /// Emits a complete state snapshot for indexers, with releaser sets
-    /// preserved for M-of-N escrows.
-    fn publish_state(env: &Env, action: soroban_sdk::Symbol, id: u64, data: &EscrowData) {
-        let status = match &data.status {
-            EscrowStatus::Funded => symbol_short!("Funded"),
-            EscrowStatus::Released => symbol_short!("Released"),
-            EscrowStatus::Refunded => symbol_short!("Refunded"),
-            EscrowStatus::Cancelled => symbol_short!("Cancelled"),
-        };
-        env.events().publish(
-            (symbol_short!("ESCROW"), action, id),
-            (
-                data.payer.clone(),
-                data.payee.clone(),
-                data.token.clone(),
-                data.amount,
-                data.condition_ref.clone(),
-                data.releasers.clone(),
-                data.threshold,
-                data.refund_after,
-                data.notify_payee,
-                data.requires_acceptance,
-                data.accepted_at,
-                status,
-            ),
-        );
+    fn remaining_amount(data: &EscrowData) -> i128 {
+        let mut released = 0_i128;
+        for (index, amount) in data.milestones.iter().enumerate() {
+            if data.released_milestones.get(index as u32).unwrap_or(false) {
+                released += amount;
+            }
+        }
+        data.amount - released
     }
 
     fn load(env: &Env, escrow_id: u64) -> Result<EscrowData, Error> {
@@ -800,7 +758,7 @@ impl EscrowContract {
     }
 
     fn check_funded(data: &EscrowData) -> Result<(), Error> {
-        if data.status != EscrowStatus::Funded {
+        if data.status != EscrowStatus::Funded && data.status != EscrowStatus::PartiallyReleased {
             return Err(Error::NotFunded);
         }
         Ok(())

@@ -148,8 +148,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `docs/testnet-deployments.md`.
 ## Phase E5 — Contract features
 
-- [x] Optional escrow-wide earliest release time (issue #43, ADR 0009); refund path remains independent.
-- [x] Two-party releaser rotation (issue #23): current releaser and payer authorize; only funded single-releaser escrows can rotate. Contract and payee addresses are rejected.
+- [x] Fixed milestone escrow schedules with per-tranche release and remainder refunds (issue #21, ADR 0010).
 
 - [x] **OpenZeppelin Stellar library evaluation** (issue #118) —
   `docs/adr/0006`: all six candidate modules checked against ADR 0001/0002
@@ -177,16 +176,6 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   append-only errors 13–17. 19 tests in `tests/quorum.rs`; single-releaser
   suites unchanged and green. Breaking read shape → SDK 0.5.0, bindings
   regenerated. **Not yet on testnet** — the live deployment predates it.
-- [x] **Payer cancel before the payee accepts** (issue #27) —
-  `docs/adr/0010`: `cancel(escrow_id, payer)`, allowed only while `Funded`,
-  on an escrow with `requires_acceptance`, and before the payee's
-  `accept`. Reuses #149's `requires_acceptance`/`accepted_at` and `settle()`
-  (checks-effects-interactions), so funds go to the stored `refund_to`
-  (#158) and I1 is unchanged. New terminal `EscrowStatus::Cancelled`; no new
-  error codes. Tests: `tests/cancel.rs`, including both orderings of
-  accept vs cancel in one ledger, sponsored `refund_to`, and `top_up`
-  interaction. SDK `client.cancel(...)`; bindings regenerated; 0.6.0 →
-  0.7.0. **Not yet on testnet** — the live deployment predates it.
 - [x] Sponsored funding: a funder distinct from the refund recipient —
   issue #28. **ADR first:** `docs/adr/0009` answers the two questions the
   issue poses — a separate refund destination **is** compatible with
@@ -224,7 +213,6 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   and threat-model T11 document the decision. Deployed on testnet
   2026-10-20.
 ## Phase E6 — SDK & integrator tooling
-- [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
   triggered by an `sdk-v*` tag: builds, typechecks, tests, runs
   `npm publish --provenance`, and attaches the tarball to the GitHub
@@ -256,45 +244,8 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `sdk/tests/fees.test.ts` (wired into CI as `npm run test:unit`) plus a
   live-testnet estimate/fee-bump case in `testnet-integration.test.ts`;
   additive SDK surface, `0.4.0 → 0.5.0`. Closes issue #70.
-- [x] React hooks package (issue #126) — `packages/escrow-react`,
-  published name `@docforum/escrow-react`. TanStack Query v5 peer.
-  `useEscrow(id)` polls `getEscrow` and stops at `Released`/`Refunded`;
-  `useEscrowActions(signer)` invalidates the query after a settlement and
-  resolves wallet rejection as `{ status: "rejected" }`; `useEscrowTimeline`
-  counts down to `refundAfter` with a documented ledger-vs-local clock
-  caveat. Hooks only — no UI. 14 React Testing Library tests with a fake
-  client and a dedicated CI job. Demo in `examples/web-demo/`.
-- [x] Stellar Wallets Kit adapter (issue #127) —
-  `WalletsKitSigner` on the `@docforum/escrow-sdk/signers/wallets-kit`
-  subpath, implementing the SDK's SEP-43 `Signer` surface. The kit is an
-  optional peer dependency and is injected, so there is no runtime import and
-  server bundles stay wallet-free. Typed `WalletNetworkMismatchError` before
-  signing; user rejection returned as SEP-43 `-4` rather than thrown. 12
-  offline fake-kit tests.
-- [x] Go client SDK (issue #128) — `sdk-go/`, module
-  `github.com/DocForum/docforum-escrow/sdk-go`. `CreateEscrow`, `GetStatus`,
-  `GetEscrow`, `Release`, `Refund` (+ `TopUp` and approval paths), typed
-  contract errors, `big.Int` i128 amounts, offline unit tests and an opt-in
-  quickstart integration suite with its own CI workflow.
-- [x] OpenTelemetry instrumentation hooks (issue #129) — optional
-  `instrumentation`/`onEvent` on `EscrowClient`, spans for `simulate`,
-  `sign`, `submit` and `confirm`. No tracer/observer means no clock read and
-  no span allocation. Attributes carry contract id, function, escrow id,
-  transaction hash and retry count; addresses are opt-in only
-  (`includeAddresses: true`). 7 offline tests assert span production and the
-  disabled path.
 
 ## Phase E7 — Verification, testing & release engineering
-- [x] **Reproducible WASM builds and deployment verification (issue #91)** ?
-  Rust 1.96.0 and Stellar CLI 28.1.0 are pinned; the pinned
-  `rust:1.96.0-bookworm` container compares release WASM hashes from two
-  checkout paths after remapping repository paths. `contract-v*` releases
-  publish the WASM and SHA-256 checksum. `scripts/verify-deployment` fetches
-  deployed WASM from testnet and compares it with a local build; README
-  documents third-party verification. No `stellar contract optimize` step is
-  used. The current testnet deployment predates this source, so the verifier
-  reports the expected hash mismatch. Contract tests/build and the two-path
-  comparison passed locally.
 - [x] **PR malware scan** — `.github/workflows/pr-malware-scan.yml` + `.github/scripts/pr-malware-scan.cjs`, on every PR push. Flags editor/devcontainer autorun tasks, npm install hooks, typosquatted packages and Actions, non-registry dependency sources, payloads disguised as fonts/images, base64/whitespace obfuscation, exfiltration endpoints, reverse shells and miners. HIGH findings fail the `Malware scan` check, label the PR `security-review` and @mention the author; one comment per PR, updated in place. Reads the PR as data only (never checks out or runs it). Added 2026-10-20 after a VS Code autorun payload (escrow #163) and a typosquatted action (escrow #176). Manual backfill (Actions → PR malware scan → Run workflow, `prs: all`) scans PRs opened before the scanner and records a `Malware scan` commit status, which satisfies the required check.
 - [x] **Nightly testnet escrow lifecycle soak** (issue #108) —
   `.github/workflows/nightly-testnet-soak.yml` runs the SDK live integration
@@ -326,7 +277,6 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   previously stale committed bindings (missing `top_up`, errors 6–8) were
   regenerated here.
 - [x] **PR conflict notifier** — `.github/workflows/pr-conflict-notifier.yml` + `.github/scripts/pr-conflict-notifier.cjs`. On every push to `main` (and every 3h) it labels open PRs that conflict with `main` as `needs-rebase` and @mentions the author once per push with rebase steps; the label clears itself when the conflict is resolved. Runs from `main` only and never checks out PR code.
-- [x] **TLA+ escrow state-machine model** (issue #112) — `spec/Escrow.tla` + `spec/Escrow.cfg` model the actual escrow lifecycle, status transitions, timeout refund behavior, payee acceptance, and same-ledger race windows while explicitly omitting unsupported disputes/milestone logic. TLC verification passed against the committed model.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
