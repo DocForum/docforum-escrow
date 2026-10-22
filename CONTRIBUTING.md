@@ -72,6 +72,10 @@ verification/release-engineering tracks.
   entry as a new file in `changelog.d/`, in the same PR. Don't append to
   the end of `ROADMAP.md`; that is what made every PR conflict. See
   `changelog.d/README.md`.
+- Changes to escrow lifecycle semantics must also update the TLA+
+  specification under `spec/` and rerun TLC. That includes changes to
+  settlement auth, status transitions, timeouts, payee acceptance,
+  release/refund rules, or quorum behavior.
 - Keep doc edits to your own lines: add rows and lines, don't rewrite
   other people's paragraphs. See `AGENTS.md` → "Shared docs".
 - Run `cargo test` and `cargo build --target wasm32v1-none --release`
