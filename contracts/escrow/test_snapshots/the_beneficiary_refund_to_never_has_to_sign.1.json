@@ -644,6 +644,69 @@
         }
       },
       "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+        "type_": "contract",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "ESCROW"
+              },
+              {
+                "symbol": "created"
+              },
+              {
+                "u64": "0"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                },
+                {
+                  "address": "CBEPDNVYXQGWB5YUBXKJWYJA7OXTZW5LFLNO5JRRGE6Z6C5OSUZPCCEL"
+                },
+                {
+                  "i128": "300"
+                },
+                {
+                  "string": "opaque-condition-ref"
+                },
+                {
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                    }
+                  ]
+                },
+                {
+                  "u32": 1
+                },
+                "void",
+                {
+                  "bool": false
+                },
+                {
+                  "bool": false
+                },
+                "void",
+                {
+                  "symbol": "Funded"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
     }
   ]
 }

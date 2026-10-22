@@ -1,4 +1,4 @@
-# Pinned Stellar CLI used to generate sdk/src/generated/contract-client.ts.
+# Pinned Stellar CLI used for generated bindings and deployment verification.
 #
 # Generator output is only comparable across runs of the *same* CLI version, so
 # the CI bindings check (issue #121) and scripts/check-generated-bindings.sh
