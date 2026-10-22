@@ -12,6 +12,9 @@ pattern (custodial, as `docforum-core` uses it today). The live testnet
 deployment is listed in `docs/testnet-deployments.md`.
 Updated 2026-10-07 for the issue #12 balance-delta check and
 mock-token tests (§1 I4, T4, T5, §6).
+Updated 2026-10-22 for the formal-verification spike (issue #101): §1 I1–I3
+now link to their properties in `certora/escrow.spec`. The properties are
+specified but not yet machine-checked — see `docs/formal-verification.md`.
 
 *Updated 2026-10-20 for issues #118/#119: §1 I2 and §2 now describe the
 releaser set with a threshold instead of a single address; T1 and T2 record
@@ -36,9 +39,9 @@ and §6.*
 
 | # | Invariant | Enforced by |
 |---|---|---|
-| I1 | Funds only leave an escrow to that escrow's `payee` (on release) or the escrow's stored `refund_to` (on refund; equals `payer` unless a different one was set at creation). No other destination exists. | Both destinations are written once in `create_escrow` under the funder's auth and read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination, and `refund_to` (issue #28, ADR 0009) is a second stored-at-creation destination, not a payout-time choice: nothing sets it after creation. |
-| I2 | Only the escrow's releasers can move funds out — `threshold` distinct ones when the escrow was created M-of-N (ADR 0007); release additionally requires payee acceptance when configured — or, once `refund_after` has passed, anyone at all, and then still only to the stored `refund_to`. | `require_auth()` per caller/approver + membership in the stored `releasers` set + the threshold check (`check_single_caller`, `check_approvals`), relaxed solely by the deadline check in `refund`. Duplicate approvers are rejected. |
-| I3 | Each escrow pays out at most once. | `status == Funded` check and terminal status write before transfer/callback; failures roll back atomically. |
+| I1 | Funds only leave an escrow to that escrow's `payee` (on release) or the escrow's stored `refund_to` (on refund; equals `payer` unless a different one was set at creation). No other destination exists. | Both destinations are written once in `create_escrow` under the funder's auth and read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination, and `refund_to` (issue #28, ADR 0009) is a second stored-at-creation destination, not a payout-time choice: nothing sets it after creation. Specified as `I1.*` in `certora/escrow.spec` (not yet machine-checked; `docs/formal-verification.md`). |
+| I2 | Only the escrow's releasers can move funds out — `threshold` distinct ones when the escrow was created M-of-N (ADR 0007); release additionally requires payee acceptance when configured — or, once `refund_after` has passed, anyone at all, and then still only to the stored `refund_to`. | `require_auth()` per caller/approver + membership in the stored `releasers` set + the threshold check (`check_single_caller`, `check_approvals`), relaxed solely by the deadline check in `refund`. Duplicate approvers are rejected. Specified as `I2.*` in `certora/escrow.spec` (not yet machine-checked). |
+| I3 | Each escrow pays out at most once. | `status == Funded` check and terminal status write before transfer/callback; failures roll back atomically. Specified as `I3.*` in `certora/escrow.spec` (not yet machine-checked). |
 | I4 | An escrow only exists, or grows, if the declared funds were actually transferred in. | `payer.require_auth()` + shared exact-balance-delta verification on create/top-up before storage is updated. |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
 
