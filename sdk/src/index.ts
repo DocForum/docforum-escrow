@@ -50,6 +50,36 @@ export {
 export { EscrowIndexerClient } from "./indexer-client.js";
 export type { EscrowIndexerClientConfig, EscrowPage, IndexedEscrow } from "./indexer-client.js";
 
+// Multisig releaser account helpers (T1 mitigation). Client-side only: they
+// build classic `setOptions` transactions for the releaser account itself and
+// never touch the escrow contract.
+export {
+  buildMultisigSetup,
+  dryRunMultisigSetup,
+  printMultisigDryRun,
+  readOnChainMultisig,
+  resolveMultisigPolicy,
+  validateMultisigPolicy,
+  verifyMultisig,
+  MultisigLockOutError,
+  MultisigValidationError,
+  MAX_WEIGHT,
+  MIN_WEIGHT,
+  TESTNET_PASSPHRASE,
+} from "./multisig.js";
+export type {
+  BuildMultisigSetupOptions,
+  HorizonServerLike,
+  MultisigDryRun,
+  MultisigOnState,
+  MultisigPolicy,
+  MultisigSetupResult,
+  MultisigSigner,
+  MultisigVerificationResult,
+  ResolvedMultisigPolicy,
+  VerifyMultisigOptions,
+} from "./multisig.js";
+
 export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Cancelled";
 
 export type ArchivedEntryBehavior = "auto" | "error";
