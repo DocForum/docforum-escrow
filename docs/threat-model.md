@@ -30,6 +30,11 @@ refund destination that may differ from the funder (`payer`), decided in
 `docs/adr/0006`. Touches §1 (I1, I2), §2 (actors), T1, T2, T8, a new T11
 and §6.*
 
+*Updated 2026-10-24 for issue #29 (Phase E5): batch settlement
+`settle_many(caller, ops)` with per-op results, decided best-effort in
+`docs/adr/0011`. Touches §1 (I2, I3), §2 (actors), T1 (recovery guidance),
+T3, a new T12 and §6.*
+
 ---
 
 ## 1. What the contract is supposed to guarantee
@@ -38,7 +43,7 @@ and §6.*
 |---|---|---|
 | I1 | Funds only leave an escrow to that escrow's `payee` (on release) or the escrow's stored `refund_to` (on refund; equals `payer` unless a different one was set at creation). No other destination exists. | Both destinations are written once in `create_escrow` under the funder's auth and read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination, and `refund_to` (issue #28, ADR 0009) is a second stored-at-creation destination, not a payout-time choice: nothing sets it after creation. |
 | I2 | Only the escrow's releasers can move funds out — `threshold` distinct ones when the escrow was created M-of-N (ADR 0007); release additionally requires payee acceptance when configured — or, once `refund_after` has passed, anyone at all, and then still only to the stored `refund_to`. | `require_auth()` per caller/approver + membership in the stored `releasers` set + the threshold check (`check_single_caller`, `check_approvals`), relaxed solely by the deadline check in `refund`. Duplicate approvers are rejected. |
-| I3 | Each escrow pays out at most once. | `status == Funded` check and terminal status write before transfer/callback; failures roll back atomically. |
+| I3 | Each escrow pays out at most once. | `status == Funded` check and terminal status write before transfer/callback; failures roll back atomically. `settle_many` re-checks `Funded` per op, so a repeated `escrow_id` in one batch fails the second op with `NotFunded`. |
 | I4 | An escrow only exists, or grows, if the declared funds were actually transferred in. | `payer.require_auth()` + shared exact-balance-delta verification on create/top-up before storage is updated. |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
 
@@ -59,7 +64,7 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 |---|---|---|
 | `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser`, and optionally a distinct `refund_to` — all under its single creation signature | Nothing after creation. Has no on-chain power to cancel. |
 | `payee` | Receive funds; optionally accept an escrow before release | Without the opt-in acceptance gate, has no on-chain power to object to release or refund. |
-| `releaser` (one address, or an M-of-N `releasers` set, ADR 0007) | `release` or `refund` its escrows, once — a quorum escrow needs `threshold` distinct releasers on one call | Choosing the correct outcome. This is the main trust assumption; a quorum splits it across the set. |
+| `releaser` (one address, or an M-of-N `releasers` set, ADR 0007) | `release` or `refund` its escrows, once — a quorum escrow needs `threshold` distinct releasers on one call; `settle_many` does the same per op, each op authorized independently | Choosing the correct outcome. This is the main trust assumption; a quorum splits it across the set. |
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |
 | Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds to that escrow's stored `refund_to` | Nothing. |
 
@@ -128,6 +133,13 @@ value. **Reviewers should challenge these ratings.**
   - Keep the releaser key in a KMS/HSM, not as an environment variable.
   - In the consumer, rotate releaser keys periodically for **new**
     escrows, so a leak only reaches escrows from that key's period.
+  - **Batch settlement (issue #29, ADR 0011):** `settle_many` lets the
+    legitimate releaser settle many escrows in one transaction, which is
+    the intended response to a suspected leak — race the attacker by
+    settling every open escrow correctly first. It is best-effort, not
+    atomic: each op returns its own result, so a partial batch still
+    settles the ops that succeeded. It does not reduce the attacker's
+    power; it only shortens the defender's reaction time.
 
 ### T2 — `releaser` key lost · **High for escrows created without a timeout; mitigated (still worth planning for) with one**
 - **Effect (before issue #11):** every `Funded` escrow with that
@@ -173,6 +185,11 @@ value. **Reviewers should challenge these ratings.**
 - Auth replay: Soroban auth entries carry a nonce and an expiration
   ledger, so a captured signed `release` can't be replayed on another
   escrow (the `escrow_id` is part of the signed invocation) or reused.
+- **Batch settlement (issue #29, ADR 0011):** `settle_many` is
+  best-effort, so a batch is not all-or-nothing. Each op re-checks
+  `status == Funded` and re-runs the caller's auth and membership check
+  before settling. The same `escrow_id` twice in one batch settles at
+  most once; the second op fails `NotFunded`.
 - **Reviewer, please verify:** that no path writes a status other than
   through these two functions, and that the status check can't be
   bypassed if the escrow entry is archived and then restored (see T6).
@@ -393,6 +410,29 @@ behave like SEP-41.
 - **Residual risk:** none that I1 doesn't already cover — no one but the
   funder chooses the address, and only at creation.
 
+### T12 — Batch settlement partial failure / batch-size abuse · **Low–Medium**
+- **What can go wrong:** `settle_many(caller, ops)` settles a vector of
+  `(escrow_id, Release|Refund)` ops in one transaction. It is
+  **best-effort** (ADR 0011): each op returns its own result, so a batch
+  can partially succeed. A caller that treats the batch as atomic may
+  mis-record which escrows actually settled.
+- **Per-op results:** the return value is a vector of per-op results in
+  input order, each identifying its `escrow_id` and outcome (settled, or
+  the error). This makes it unambiguous which escrows settled. Integrators
+  must reconcile against these results, not against "the transaction
+  succeeded".
+- **Auth:** each op requires the caller to be a releaser of *that* escrow
+  (or meet its threshold, or be past its `refund_after` for a refund).
+  A batch cannot settle escrows whose releaser is someone else; those ops
+  fail individually without affecting the rest.
+- **Batch-size bound:** the batch length is capped by a measured
+  resource limit (see ADR 0011 for the number and the measurement), so a
+  caller cannot submit an unbounded batch that exhausts the transaction
+  budget. Ops beyond the cap are rejected before any settlement runs.
+- **Residual risk:** a partial batch is a normal outcome, not a bug. The
+  defender racing a leaked key (T1) should still verify per-op results and
+  re-issue any failed ops in a follow-up batch.
+
 ## 4. SDK-specific notes (`sdk/src/index.ts`)
 
 - **Defaults are testnet only** (hard rule 4). A caller can still pass a
@@ -448,6 +488,10 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
       updated — issue #28, `docs/adr/0006`, `tests/sponsored_refund.rs`.
       Also rejects the contract itself as `refund_to` (T11). Not yet
       deployed to testnet.
+- [x] ⚙ Batch release/refund `settle_many` with per-op results, best-effort
+      (T1, T3, T12) — issue #29, `docs/adr/0011`, tests in
+      `contracts/escrow/tests/batch_settle.rs`. Batch size bounded by a
+      measured resource limit.
 - [ ] ⚙ TTL extension for escrow entries and instance (T6)
 - [ ] ⚙ Emit create/release/refund events (T7)
 - [x] Tests with a malicious mock token: lying transfer, short
@@ -473,3 +517,8 @@ A review only counts toward E4 if the reviewer is not the implementer
 ## T6 archive/restore regression coverage
 
 Escrow identifiers are monotonic and are never derived from the number of live entries. The restoration test plan therefore verifies that restoring an archived `NextId` cannot overwrite a live escrow; a new create must receive an identifier greater than every previously issued identifier. Settlement tests also re-check the `Funded` guard after restoration before release or refund.
+
+The batch settlement tests (`tests/batch_settle.rs`) extend this: a
+restored escrow that is no longer `Funded` fails its op with `NotFunded`
+inside `settle_many` without aborting the rest of the batch, and the
+per-op result names the failed `escrow_id`.

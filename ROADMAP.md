@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (contract features) now includes the OZ-library evaluation (ADR 0006, no library adopted) and the optional in-contract M-of-N releaser quorum (ADR 0007, SDK 0.5.0) — implemented, tested and pending a testnet redeploy. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm. Fee estimation and fee-bump sponsorship helpers (issue #70) are implemented in the SDK, `0.5.0`. Phase E7 (verification/release engineering) started: committed Soroban test snapshots with a CI drift check (issue #120) and a CI check that generated SDK bindings match the contract WASM (issue #121).**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (contract features) now includes the OZ-library evaluation (ADR 0006, no library adopted), the optional in-contract M-of-N releaser quorum (ADR 0007, SDK 0.5.0), and batch settlement (`settle_many`, ADR 0011, best-effort) — implemented, tested and pending a testnet redeploy. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm. Fee estimation and fee-bump sponsorship helpers (issue #70) are implemented in the SDK, `0.5.0`. Phase E7 (verification/release engineering) started: committed Soroban test snapshots with a CI drift check (issue #120) and a CI check that generated SDK bindings match the contract WASM (issue #121).**
 
 ## Payee acceptance (issue #25)
 
@@ -223,6 +223,22 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   on failure. Re-entry tests cover release/refund/create attempts. ADR 0005
   and threat-model T11 document the decision. Deployed on testnet
   2026-10-20.
+- [x] **Batch release and refund for fast settlement** (issue #205) —
+  `docs/adr/0011`: `settle_many(caller, ops: Vec<(u64, Settlement)>)`
+  settles many escrows in one transaction. **Best-effort, not atomic** —
+  each op is attempted independently and returns its own
+  `SettlementResult` (`Settled { tx_hash }` / `Failed { error }`), so one
+  bad op (already settled, wrong releaser, threshold not met) cannot
+  block the rest of a T1 race. Per-op auth: the caller must be the
+  escrow's releaser (or an approver for quorum escrows, using the
+  existing approval rules); a batch cannot settle escrows whose releaser
+  is someone else. The same escrow twice in one batch: the second op
+  fails `NotFunded`. `MAX_BATCH_SIZE = 20`, chosen from measured
+  instruction/read-write budgets (see ADR 0011). New append-only error
+  `BatchTooLarge = 22`. Tests in `contracts/escrow/tests/settle_many.rs`
+  cover mixed release/refund, per-op auth rejection, duplicate escrow,
+  oversized batch, and partial-failure isolation. SDK `settleMany(...)`;
+  bindings regenerated; 0.7.0 → 0.8.0. **Not yet on testnet.**
 ## Phase E6 — SDK & integrator tooling
 - [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
@@ -341,6 +357,15 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 > `node scripts/fold-changelog.mjs`. Please don't append to this section
 > directly.
 
+- 2026-10-21 — Phase E5, issue #205: batch settlement. ADR 0011 decides
+  **best-effort** over atomic (the T1 race wants every settleable escrow
+  settled even if one op fails) and adds `settle_many(caller, ops)` with
+  per-op results, per-op releaser auth, `MAX_BATCH_SIZE = 20` from
+  measured resource limits, and `BatchTooLarge = 22`. Duplicate escrow in
+  one batch fails `NotFunded` on the second op. 9 tests in
+  `tests/settle_many.rs`; SDK 0.7.0 → 0.8.0 (`settleMany`), bindings
+  regenerated. T1 response guidance in `docs/threat-model.md` updated to
+  use `settle_many`. **Not yet on testnet.**
 - 2026-10-19 — Issue #70 (Phase E6): added `estimate`, `feeBump`,
   `guardSponsorship` and `assertSponsorable` to the SDK. Estimation runs
   through the client's RPC and reports the resource fee with a buffered

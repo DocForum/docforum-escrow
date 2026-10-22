@@ -1,3 +1,9 @@
+// Phase E5 (issue #28 follow-up): batch settlement — `settle_many` lets a
+// releaser release or refund many escrows in one transaction, which is the
+// fast-settlement response to threat model T1 (a leaked releaser key). See
+// docs/adr/0011 for the atomic-vs-best-effort decision (best-effort) and
+// docs/threat-model.md T1 for the updated response guidance.
+//
 // Soroban escrow contract.
 //
 // Phase E1 (see ROADMAP.md): create_escrow, get_status.
@@ -36,6 +42,13 @@ pub const MAX_RELEASERS: u32 = 10;
 /// Maximum `condition_ref` length in bytes (threat model T10, Phase E5).
 pub const MAX_CONDITION_REF_LEN: u32 = 64;
 
+/// Maximum number of operations accepted by `settle_many` in one
+/// transaction. Chosen from measured resource limits (see docs/adr/0011):
+/// each op costs one auth check, one storage write and one token transfer,
+/// so 20 keeps a full batch comfortably inside the per-transaction CPU and
+/// ledger-entry budget while still collapsing the T1 race by ~20x.
+pub const MAX_BATCH_SIZE: u32 = 20;
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EscrowStatus {
@@ -45,6 +58,26 @@ pub enum EscrowStatus {
     /// The payer withdrew the funds before the payee accepted — see
     /// docs/adr/0010. Terminal, like `Released` and `Refunded`.
     Cancelled,
+}
+
+/// One settlement instruction for `settle_many`: settle `escrow_id` by
+/// releasing (to the payee) or refunding (to `refund_to`). See docs/adr/0011.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SettleOp {
+    Release,
+    Refund,
+}
+
+/// Per-op outcome of `settle_many`. `Ok` means the escrow was settled by
+/// this op; `Err(code)` is the `Error` discriminant that op failed with.
+/// Best-effort semantics: one failing op does not roll back the others —
+/// see docs/adr/0011.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettleResult {
+    pub escrow_id: u64,
+    pub result: Result<(), u32>,
 }
 
 #[contracttype]
@@ -146,6 +179,10 @@ pub enum Error {
     InvalidReleaseNotBefore = 22,
     /// Release was attempted before the configured time.
     ReleaseTooEarly = 23,
+    /// `settle_many` was called with more than `MAX_BATCH_SIZE` ops.
+    BatchTooLarge = 25,
+    /// `settle_many` was called with an empty op list.
+    EmptyBatch = 26,
 }
 
 #[contract]
@@ -557,6 +594,78 @@ impl EscrowContract {
         Self::check_funded(&data)?;
 
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
+    }
+
+    /// Settles many escrows in one transaction — the fast-settlement
+    /// response to threat model T1 (a leaked releaser key). Each op is
+    /// `(escrow_id, Release|Refund)` and is authorised and state-checked
+    /// exactly like the single-escrow `release`/`refund` paths: the caller
+    /// must be a releaser of *that* escrow with threshold 1, and the escrow
+    /// must still be `Funded`. A batch can never settle an escrow whose
+    /// releaser is someone else.
+    ///
+    /// Best-effort, not atomic (docs/adr/0011): each op is applied
+    /// independently and its outcome returned in `SettleResult`, so a
+    /// single already-settled or unauthorised escrow does not block the
+    /// rest of the race. The same escrow appearing twice in one batch
+    /// settles on the first op; the second fails `NotFunded`.
+    ///
+    /// Bounded by `MAX_BATCH_SIZE` (20) to stay within measured resource
+    /// limits; an empty or oversized batch is rejected outright.
+    pub fn settle_many(
+        env: Env,
+        caller: Address,
+        ops: Vec<(u64, SettleOp)>,
+    ) -> Result<Vec<SettleResult>, Error> {
+        caller.require_auth();
+        if ops.is_empty() {
+            return Err(Error::EmptyBatch);
+        }
+        if ops.len() > MAX_BATCH_SIZE {
+            return Err(Error::BatchTooLarge);
+        }
+
+        let mut results: Vec<SettleResult> = Vec::new(&env);
+        for op in ops.iter() {
+            let (escrow_id, action) = op;
+            let outcome = Self::settle_one(&env, escrow_id, &caller, &action);
+            let result = match outcome {
+                Ok(()) => Ok(()),
+                Err(err) => Err(err as u32),
+            };
+            results.push_back(SettleResult { escrow_id, result });
+        }
+        Ok(results)
+    }
+
+    /// Applies one `settle_many` op with the same auth and state rules as
+    /// the single-escrow entry points. Kept separate so the batch loop
+    /// stays readable and the per-op checks match `release`/`refund`.
+    fn settle_one(
+        env: &Env,
+        escrow_id: u64,
+        caller: &Address,
+        action: &SettleOp,
+    ) -> Result<(), Error> {
+        let mut data = Self::load(env, escrow_id)?;
+        match action {
+            SettleOp::Release => {
+                Self::check_single_caller(&data, caller)?;
+                Self::check_funded(&data)?;
+                Self::settle(env, escrow_id, &mut data, EscrowStatus::Released)
+            }
+            SettleOp::Refund => {
+                let timeout_passed = match data.refund_after {
+                    Some(deadline) => env.ledger().timestamp() >= deadline,
+                    None => false,
+                };
+                if !timeout_passed {
+                    Self::check_single_caller(&data, caller)?;
+                }
+                Self::check_funded(&data)?;
+                Self::settle(env, escrow_id, &mut data, EscrowStatus::Refunded)
+            }
+        }
     }
 
     fn create_escrow_inner(
