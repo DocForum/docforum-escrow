@@ -1,5 +1,5 @@
 import { scValToNative, xdr } from "@stellar/stellar-sdk";
-import type { Escrow, EscrowStatus } from "./index.js";
+import type { Escrow, EscrowStatus, SplitRecipient } from "./index.js";
 
 const ESCROW_STATUSES: ReadonlySet<string> = new Set<EscrowStatus>([
   "Funded",
@@ -39,6 +39,22 @@ function asBoolean(value: unknown, field: string): boolean {
 function asStringArray(value: unknown, field: string): string[] {
   if (!Array.isArray(value)) return fail(field, "an array", value);
   return value.map((entry, index) => asString(entry, `${field}[${index}]`));
+}
+
+/** Split payouts, or an empty list on a deployment that predates them. */
+function asSplits(value: unknown): SplitRecipient[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) return fail("splits", "an array", value);
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      return fail(`splits[${index}]`, "a split record", entry);
+    }
+    const record = entry as Record<string, unknown>;
+    return {
+      address: asString(record.address, `splits[${index}].address`),
+      bps: asNumber(record.bps, `splits[${index}].bps`),
+    };
+  });
 }
 
 function asStatus(value: unknown): EscrowStatus {
@@ -84,6 +100,13 @@ export function decodeEscrowDataFromScVal(value: xdr.ScVal): Escrow {
     releaseNotBefore: asOptionalBigInt(record.release_not_before, "release_not_before"),
     notifyPayee: asBoolean(record.notify_payee, "notify_payee"),
     refundTo: asString(record.refund_to, "refund_to"),
+    // Pre-E6 deployments predate splits and the protocol fee: default them so
+    // reads keep working across contract versions (issue #224 pattern).
+    splits: asSplits(record.splits),
+    feeBps: record.fee_bps === undefined ? 0 : asNumber(record.fee_bps, "fee_bps"),
+    feeRecipient: record.fee_recipient === undefined
+      ? asString(record.payer, "payer")
+      : asString(record.fee_recipient, "fee_recipient"),
     status: asStatus(record.status),
   };
 }

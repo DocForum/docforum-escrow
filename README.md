@@ -43,10 +43,22 @@ the payout is settled by release (to the stored payee) or refund (to the
 stored `refund_to`, which is the payer unless set otherwise at creation).
 Creation options: a single releaser or an M-of-N releaser quorum, an
 optional payee-acceptance gate, an optional `refund_after` timeout that
-lets anyone trigger the refund, an optional `refund_to`, and an optional
-release callback to a contract payee. Funded escrows can be topped up by
+lets anyone trigger the refund, an optional `refund_to`, an optional
+release callback to a contract payee, and — on the single-releaser
+`create_escrow_with_splits` path — an optional split payout plus protocol
+fee. Funded escrows can be topped up by
 the original payer, and `get_status`/`get_escrow` are read-only. A token
 allowlist is fixed at deploy time.
+
+**Splits and the protocol fee.** `create_escrow_with_splits` divides the
+released amount between up to ten recipients in basis points summing to
+exactly 10,000, with an optional fee in basis points taken off the top first.
+Rounding dust always goes to the last recipient, so the shares and the fee
+add up to exactly the escrowed amount — nothing is left behind in a contract
+that has no sweep and no admin. The configuration is fixed at creation,
+refunds ignore it entirely (they return the full amount to `refund_to`), and
+`preview_payout` reports the exact per-recipient numbers before you fund.
+See [ADR 0011](docs/adr/0011-split-payouts-and-protocol-fees.md).
 
 **The full function list, signatures and rules are in
 [`ARCHITECTURE_ESSENTIALS.md` → Contract surface](ARCHITECTURE_ESSENTIALS.md#contract-surface).**

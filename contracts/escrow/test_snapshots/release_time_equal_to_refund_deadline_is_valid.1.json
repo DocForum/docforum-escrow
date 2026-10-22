@@ -250,6 +250,22 @@
                   },
                   {
                     "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": {
+                      "u32": 0
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "notify_payee"
                     },
                     "val": {
@@ -314,6 +330,14 @@
                     },
                     "val": {
                       "bool": false
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "splits"
+                    },
+                    "val": {
+                      "vec": []
                     }
                   },
                   {
