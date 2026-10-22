@@ -1,5 +1,11 @@
 # Testnet deployments
 
+> This file tracks **testnet** deployments of `docforum_escrow`. For futurenet
+> protocol-compatibility checks (Phase E7) see the per-protocol reports under
+> [`docs/futurenet-compatibility-reports/`](./futurenet-compatibility-reports/)
+> and the `Futurenet compatibility checks` workflow
+> (`.github/workflows/futurenet-compatibility.yml`).
+
 ## `docforum_escrow` — 2026-10-20 (latest upstream main at `80ce157`, issue #109)
 
 | | |
