@@ -1,0 +1,20 @@
+{
+  "name": "@docforum/escrow-indexer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "codegen": "subql codegen",
+    "build": "subql build",
+    "start": "subql-node -f .",
+    "query": "subql-query --name 0.0.0.0"
+  },
+  "devDependencies": {
+    "@subql/cli": "^5.0.0",
+    "@subql/node-stellar": "*",
+    "@subql/query": "*",
+    "@subql/types-stellar": "^5.2.0",
+    "@stellar/stellar-sdk": "^16.1.0",
+    "@types/node": "^22.5.4",
+    "typescript": "^5.6.2"
+  }
+}

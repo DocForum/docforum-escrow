@@ -66,12 +66,26 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 
 There is **no admin, no upgrade function, and no pause.** The deployed
 WASM is immutable. Nobody, including the deployer, can change an
-escrow's data or move funds outside `release`/`refund`.
+escrow's data or move funds outside `release`/`refund`. This is a chosen
+security property, not an unimplemented recovery mechanism: see
+[`docs/adr/0005`](adr/0005-immutable-contract-and-redeploy-migrations.md)
+for the redeployment and old-escrow settlement procedure.
 
 ## 3. Threats
 
 Severity is the author's estimate for a mainnet deployment with real
 value. **Reviewers should challenge these ratings.**
+
+### T11 — Multiple contract deployments · **Medium (operational)**
+- **What can go wrong:** after a redeployment, an integrator may query or
+  operate only the newest contract ID and lose track of still-funded
+  escrows held by an older deployment.
+- **Impact:** old escrow records may be overlooked or remain unsettled;
+  the new contract cannot migrate or recover them.
+- **Mitigation:** retain the old contract ID, reconcile escrow records by
+  deployment, and settle old escrows under their existing rules before
+  retiring the old ID from writes. See ADR 0005. No upgrade key or
+  migration hook is introduced to address this operational risk.
 
 ### T1 — `releaser` key leaked or stolen · **High**
 - **What an attacker can do:** call `release` or `refund` on every
@@ -89,10 +103,16 @@ value. **Reviewers should challenge these ratings.**
   its ADR 0004) uses **one** `PLATFORM_RELEASER_SECRET` as the releaser of
   every escrow it creates. So today one leaked key affects every open
   escrow. The scoping benefit is available, but nobody uses it.
-- **Recovery:** none on-chain. You can't rotate a `releaser` on an
-  existing escrow (no setter exists). The only response is to race the
-  attacker: use the same key to settle every open escrow correctly first.
+- **Recovery:** a funded escrow can rotate its releaser when both the
+  current releaser and payer authorize the change (issue #23, ADR 0009).
+  Possession of the releaser key alone is insufficient to appoint an
+  attacker. Rotation cannot undo a settlement that already landed, and
+  it is unavailable if the payer cannot authorize. The timeout refund
+  path remains the fallback for escrows whose releaser is unavailable.
 - **Mitigations to consider:**
+  - [x] Allow the current releaser and payer to rotate the releaser on a
+    funded escrow (issue #23, ADR 0009); the payer's consent prevents
+    compromised releaser key alone from redirecting future control.
   - Make the `releaser` a Stellar multisig account (e.g. 2-of-3 signers).
     This works with no contract change, because `require_auth` on an
     account address checks that account's own signer thresholds.
@@ -254,9 +274,13 @@ behave like SEP-41.
   **archived** if nothing extends them.
 - Archived entries are not deleted, so funds are not lost. But
   `get_status`/`release`/`refund` on an archived entry need a restore
-  first. Depending on protocol version and client tooling, this either
-  happens automatically during simulation or needs an explicit restore
-  operation. Either way, someone has to pay for it.
+  first. The SDK defaults to surfacing `ArchivedEntryError`; consumers
+  can opt into `archivalBehavior: "auto"` to use the Stellar SDK's
+  restore preamble handling. A state-changing call's `payer` or `caller`
+  pays the restore transaction. Read-only calls need a configured
+  `restoreSigner`, which signs and pays for that transaction. The SDK
+  allows one restore transaction per call and fails with a typed error
+  if the retry still needs archived state.
 - **Reviewer, please verify:** that an archived-then-restored `NextId`
   can't cause an escrow id to be reused, overwriting a live escrow. The
   author believes restore brings back the last written value, so ids
@@ -284,6 +308,13 @@ behave like SEP-41.
   locked under the stored `releaser`'s control." It does **not** mean
   "the funds are committed to me." A payee should check who the
   `releaser` is before relying on an escrow.
+- **With the acceptance gate (issue #25, `docs/adr/0008`) the payer can
+  still cancel until the payee accepts (issue #27, `docs/adr/0010`):** on an
+  escrow with `requires_acceptance`, `Funded` plus `accepted_at == None`
+  means the payer may take the funds back to `refund_to` at any moment;
+  `accept` and `cancel` race and the first to land wins. Payees must call
+  `accept` before relying on such an escrow. After acceptance `cancel` is
+  closed for good. Escrows without the gate have no cancel.
 - **With an M-of-N releaser set (issue #119, `docs/adr/0007`), what a payee
   must check changes:** fewer than `threshold` colluding releasers cannot
   settle early, but `threshold` colluding releasers can — read `releasers`
@@ -438,3 +469,8 @@ Most useful to the project, in order:
 Leave findings as comments on the PR that adds this file, or on issue #6.
 A review only counts toward E4 if the reviewer is not the implementer
 (see issue #6).
+
+
+## T6 archive/restore regression coverage
+
+Escrow identifiers are monotonic and are never derived from the number of live entries. The restoration test plan therefore verifies that restoring an archived `NextId` cannot overwrite a live escrow; a new create must receive an identifier greater than every previously issued identifier. Settlement tests also re-check the `Funded` guard after restoration before release or refund.

@@ -6,6 +6,14 @@ on:
   pull_request:
 
 jobs:
+  resource-baseline:
+    name: Resource cost baseline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check public function baseline
+        run: python3 scripts/check-resource-baseline.py
+
   contract:
     name: Soroban contract (test + wasm build)
     runs-on: ubuntu-latest
@@ -16,7 +24,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.96.0
         with:
           targets: wasm32v1-none
 
@@ -55,10 +63,29 @@ jobs:
       - name: Confirm wasm artifact exists
         run: test -f target/wasm32v1-none/release/docforum_escrow.wasm
 
-  # Issue #121: the committed generated client must be exactly what the pinned
-  # Stellar CLI generates from the current contract WASM. Catches both a
-  # contract change without regeneration and a hand edit to the generated file.
-  # It never commits: the job fails and tells the contributor to regenerate.
+      - name: Test custom releaser account
+        run: cargo test --manifest-path ../releaser-account/Cargo.toml
+
+      - name: Build custom releaser account (wasm)
+        run: cargo build --manifest-path ../releaser-account/Cargo.toml --target wasm32v1-none --release
+
+      - name: Confirm custom account wasm exists
+        run: test -f ../releaser-account/target/wasm32v1-none/release/docforum_releaser_account.wasm
+
+  reproducible-wasm:
+    name: Reproducible WASM across checkout paths
+    runs-on: ubuntu-latest
+    container: rust:1.96.0-bookworm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install WASM target
+        run: rustup target add wasm32v1-none
+
+      - name: Compare builds from two different checkout paths
+        run: bash scripts/check-wasm-reproducibility.sh
+
+  # Issue #121: the committed generated client must match the pinned CLI output.
   sdk-bindings:
     name: SDK bindings match contract WASM
     runs-on: ubuntu-latest
@@ -66,7 +93,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.96.0
         with:
           targets: wasm32v1-none
 
@@ -186,3 +213,30 @@ jobs:
       # Deliberately NOT run here: `npm run test:integration`
       # (tests/testnet-integration.test.ts) depends on live testnet and
       # Friendbot funding. Runtime checks use local fixtures only.
+
+  escrow-react:
+    name: React hooks package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            sdk/package-lock.json
+            packages/escrow-react/package-lock.json
+      # The hooks package resolves the SDK's types from `sdk/dist` via a
+      # tsconfig path (the SDK is an optional peer), so build it first.
+      - run: npm ci
+        working-directory: sdk
+      - run: npm run build
+        working-directory: sdk
+      - run: npm ci
+        working-directory: packages/escrow-react
+      - run: npm run typecheck
+        working-directory: packages/escrow-react
+      - run: npm test
+        working-directory: packages/escrow-react
+      - run: npm run build
+        working-directory: packages/escrow-react
