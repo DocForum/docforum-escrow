@@ -48,6 +48,56 @@ release callback to a contract payee. Funded escrows can be topped up by
 the original payer, and `get_status`/`get_escrow` are read-only. A token
 allowlist is fixed at deploy time.
 
+| Function | Status | Description |
+|---|---|---|
+| `__constructor(allowed_tokens)` | ✅ Implemented | Stores the immutable deploy-time token allowlist; an empty list allows all tokens. |
+| `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to) -> escrow_id` | ✅ Implemented locally (callback not deployed) | Pulls funds from `payer`, stores a bounded `condition_ref`, and stores the single `releaser` as a one-address set with threshold 1. Requires payer auth; when `notify_payee` is true, also requires payee auth and calls `on_escrow_released` on release. |
+| `create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id` | ✅ Implemented locally | Optional payee acceptance gate. When enabled, the payee must call `accept(escrow_id, payee)` before a releaser can release; refunds remain available. |
+| `accept(escrow_id, payee)` | ✅ Implemented locally | Payee-authorized, one-time acceptance for a funded escrow configured with the acceptance gate. |
+| `cancel(escrow_id, payer)` | ✅ Implemented locally | Payer-authorized, only while `Funded` + `requires_acceptance` + not yet accepted; returns the funds to `refund_to` and marks the escrow `Cancelled` ([ADR 0010](docs/adr/0010-payer-cancel-before-payee-accepts.md)). |
+| `create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id` | ✅ Implemented | Same, but settles by M-of-N: 1–10 distinct `releasers` (`MAX_RELEASERS`), `1 <= threshold <= releasers.len()`. Callback opt-in has the same payee-authorization requirement. See [ADR 0007](docs/adr/0007-in-contract-m-of-n-releaser-quorum.md). |
+| `create_escrow_with_arbiter(..., arbiter, notify_payee, refund_to, release_not_before) -> escrow_id` | ✅ Implemented | Same as `create_escrow`, plus the only address allowed to adjudicate a dispute over this escrow. Escrows created without one can be disputed but never resolved. See [ADR 0009](docs/adr/0009-disputes-and-split-settlement.md). |
+| `raise_dispute(escrow_id, caller) -> Result<()>` | ✅ Implemented | `payer`, `payee` or any `releaser` may open a dispute on a `Funded` escrow. Moves it to `Disputed`, which rejects every direct settlement path until the arbiter's split is settled. |
+| `resolve_dispute(escrow_id, caller, payer_bps, payee_bps) -> Result<()>` | ✅ Implemented | Arbiter-only, one-time. Records the split in basis points (`payer_bps + payee_bps == 10_000`); moves no funds. |
+| `settle(escrow_id) -> Result<()>` | ✅ Implemented | Permissionless once a split is recorded: pays both sides from it and marks the escrow `Released`, leaving no dust. |
+| `get_dispute(escrow_id) -> DisputeState` | ✅ Implemented | Read-only: the escrow's `arbiter` and recorded split, if any. |
+| `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
+| `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releasers`, `threshold` and `refund_after`, so payees can check the deal before relying on it. |
+| `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser` when the threshold is 1; moves funds to `payee`. Never gated by `refund_after`. |
+| `release_with_approvals(escrow_id, approvers) -> Result<()>` | ✅ Implemented | M-of-N release: at least `threshold` distinct releasers, each authorizing this exact invocation. Approvals are not stored, so nothing can be replayed. Only while `Funded`. |
+| `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it (threshold 1); once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
+| `refund_with_approvals(escrow_id, approvers) -> Result<()>` | ✅ Implemented | M-of-N refund with the same approval rules; the timeout path above needs no approvals. |
+| `top_up(escrow_id, payer, amount) -> Result<()>` | ✅ Implemented | Adds funds to a `Funded` escrow; original payer only. Emits a `top_up` event. |
+
+```
+EscrowStatus = Funded | Released | Refunded | Disputed | Cancelled
+```
+
+`refund_after` is optional: an escrow created without one behaves exactly
+as it did before the timeout existed — releaser-only refunds, forever.
+That's the answer to "what if the releaser's key is lost?" (threat model
+T2): instead of locking funds permanently, a deadline lets anyone return
+them to the payer. See [ADR 0004](docs/adr/0004-timeout-refund-path.md)
+for the decision and what it means for payees.
+
+Single-releaser escrows are unchanged by the M-of-N option: `create_escrow`
+stores the one address with `threshold = 1`, `release`/`refund` behave exactly
+as before, and the approval entry points simply accept that one address too.
+Disputes are the non-binary settlement path: while an escrow is `Funded`, the
+payer, the payee or any releaser may `raise_dispute`; only the arbiter recorded
+at creation may `resolve_dispute` (once, as basis points of the amount); and
+`settle` then pays both sides. `release`/`refund` are frozen while the dispute
+is open, so it cannot be raced. `settle` needs no caller auth because the split
+is already fixed and can only pay the escrow's own `payer`/`payee` — that way a
+disappeared arbiter cannot strand the funds. See
+[ADR 0009](docs/adr/0009-disputes-and-split-settlement.md).
+
+No new admin, owner, pause or upgrade role exists — `releasers` is escrow data
+chosen by the payer, not authority over the contract (see
+[ADR 0006](docs/adr/0006-openzeppelin-stellar-library-evaluation.md) for why
+OpenZeppelin's pause/upgradeable/access modules are deliberately **not**
+adopted).
+
 **The full function list, signatures and rules are in
 [`ARCHITECTURE_ESSENTIALS.md` → Contract surface](ARCHITECTURE_ESSENTIALS.md#contract-surface).**
 It's kept in that one place so that adding or changing a contract function
@@ -235,6 +285,29 @@ exceed `maxFee` — the cap is never silently overshot:
 ```ts
 const { xdr, fee } = client.feeBump(signedXdr, sponsor, { maxFee: 10_000n });
 ```
+
+An escrow created with an `arbiter` can be adjudicated instead of settled
+directly. `raiseDispute` is open to the payer, payee or a releaser;
+`resolveDispute` is arbiter-only and records basis points; `settle` pays both
+sides from the recorded split and is permissionless (the signer only pays the
+fee):
+
+```ts
+const { escrowId } = await client.createEscrow({
+  payer, payee: payee.publicKey(), token, amount, conditionRef,
+  releaser: releaser.publicKey(),
+  arbiter: arbiter.publicKey(),
+});
+
+await client.raiseDispute({ escrowId, caller: payee });
+await client.resolveDispute({ escrowId, caller: arbiter, payerBps: 4_000, payeeBps: 6_000 });
+await client.settle({ escrowId, signer: relayer });
+```
+
+`availableActions(escrow, address, now)` is the pure, contract-mirroring helper
+for UIs: it returns the calls that address may make at ledger time `now`
+(`now` is compared against `refundAfter`, so pass ledger time rather than
+`Date.now()`).
 
 ### Browser wallets (Stellar Wallets Kit)
 

@@ -32,6 +32,11 @@ import { EscrowClient } from "../src/index.js";
 // Public contract addresses, not secrets.
 const CONTRACT_ID = "CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR";
 const NATIVE_XLM_SAC = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+// Phase E6 (`create_escrow_with_arbiter`/`raise_dispute`/`resolve_dispute`/
+// `settle`) is not on the Phase E4 deployment above, so the dispute round trip
+// only runs against a Phase E6 deployment an operator names explicitly:
+//   DOCFORUM_ESCROW_E6_CONTRACT_ID=C... npm run test:integration
+const E6_CONTRACT_ID = process.env.DOCFORUM_ESCROW_E6_CONTRACT_ID;
 
 async function fundedKeypair(): Promise<Keypair> {
   const kp = Keypair.random();
@@ -314,4 +319,41 @@ describe("EscrowClient against live testnet", () => {
     await client.refund({ escrowId, caller: stranger });
     expect(await client.getStatus(escrowId)).toBe("Refunded");
   }, 90_000);
+});
+
+describe.skipIf(!E6_CONTRACT_ID)("EscrowClient dispute flow against live testnet", () => {
+  it("raises, resolves and settles a disputed escrow end-to-end", async () => {
+    const [payer, payee, releaser, arbiter, settler] = await Promise.all([
+      fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(),
+    ]);
+    const client = new EscrowClient({ contractId: E6_CONTRACT_ID! });
+
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-dispute",
+      releaser: releaser.publicKey(),
+      arbiter: arbiter.publicKey(),
+    });
+
+    const created = await client.getEscrow(escrowId);
+    expect(created.status).toBe("Funded");
+    expect(created.arbiter).toBe(arbiter.publicKey());
+    expect(created.splitBps).toBeUndefined();
+
+    // The payee opens the dispute; the arbiter resolves it 40/60.
+    await client.raiseDispute({ escrowId, caller: payee });
+    expect(await client.getStatus(escrowId)).toBe("Disputed");
+
+    await client.resolveDispute({ escrowId, caller: arbiter, payerBps: 4_000, payeeBps: 6_000 });
+    const resolved = await client.getEscrow(escrowId);
+    expect(resolved.status).toBe("Disputed");
+    expect(resolved.splitBps).toEqual({ payerBps: 4_000, payeeBps: 6_000 });
+
+    // Settlement is permissionless: a fresh account only pays the fee.
+    await client.settle({ escrowId, signer: settler });
+    expect(await client.getStatus(escrowId)).toBe("Released");
+  }, 120_000);
 });

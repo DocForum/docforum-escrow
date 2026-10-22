@@ -256,6 +256,19 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `sdk/tests/fees.test.ts` (wired into CI as `npm run test:unit`) plus a
   live-testnet estimate/fee-bump case in `testnet-integration.test.ts`;
   additive SDK surface, `0.4.0 → 0.5.0`. Closes issue #70.
+- [x] **SDK: dispute and arbiter support, including split settlement**
+  (issue #73) — ADR 0009 adds the contract surface the SDK needed:
+  `create_escrow_with_arbiter`, `raise_dispute`, `resolve_dispute`,
+  `settle`, `get_dispute`, and the `Disputed` status. Dispute state is
+  stored under its own key, so pre-E6 escrows and the committed snapshots
+  are unchanged. Arbiter-only, one-time resolutions in basis points;
+  direct `release`/`refund` are frozen while disputed; `settle` is
+  permissionless and pays both sides with no dust. The new errors are
+  appended as 25–28 so the codes already on testnet do not move. SDK
+  0.5.0 → **0.6.0** with `raiseDispute`/`resolveDispute`/`settle`,
+  `arbiter`/`splitBps` on create and `getEscrow`, and the pure
+  `availableActions` helper plus offline matrix tests. **Not yet on
+  testnet.**
 - [x] React hooks package (issue #126) — `packages/escrow-react`,
   published name `@docforum/escrow-react`. TanStack Query v5 peer.
   `useEscrow(id)` polls `getEscrow` and stops at `Released`/`Refunded`;

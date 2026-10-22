@@ -16,7 +16,12 @@ create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id 
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
 cancel(escrow_id, payer) -> ()   // payer-authorized, only while Funded + requires_acceptance + not yet accepted; funds to refund_to, status Cancelled (ADR 0010); not deployed yet
 create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, deployed on testnet
-get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded | Cancelled — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
+create_escrow_with_arbiter(payer, payee, token, amount, condition_ref, releaser, refund_after, arbiter, notify_payee, refund_to, release_not_before) -> escrow_id // IMPLEMENTED (Phase E6, issue #73, ADR 0009) — same as create_escrow plus the only address allowed to adjudicate a dispute
+raise_dispute(escrow_id, caller) -> result   // IMPLEMENTED (Phase E6, ADR 0009) — payer/payee/any releaser, only while Funded; moves the escrow to Disputed
+resolve_dispute(escrow_id, caller, payer_bps, payee_bps) -> result   // IMPLEMENTED (Phase E6, ADR 0009) — arbiter only, once; bps must sum to 10_000; records the split, moves no funds
+settle(escrow_id) -> result   // IMPLEMENTED (Phase E6, ADR 0009) — permissionless once resolved; pays both sides from the recorded split
+get_dispute(escrow_id) -> DisputeState   // IMPLEMENTED (Phase E6, ADR 0009) — read-only: arbiter + recorded split
+get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded | Disputed | Cancelled — IMPLEMENTED + LIVE ON TESTNET (Phase E1); Disputed added in Phase E6
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after, refund_to — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
 release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser, threshold must be 1, only while Funded
 release_with_approvals(escrow_id, approvers) -> result   // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — >= threshold distinct releasers, each authorizing this invocation
@@ -25,6 +30,12 @@ refund_with_approvals(escrow_id, approvers) -> result    // IMPLEMENTED (Phase E
 top_up(escrow_id, payer, amount) -> result // IMPLEMENTED (issue #26) — original payer only, funded state only; emits `top_up`
 rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue #23) — single-releaser escrow only; current releaser and payer authorize; funded only
 ```
+
+No new contract-level role came in with the dispute work either: the arbiter
+is per-escrow data chosen by the payer at creation (`create_escrow_with_arbiter`),
+not a contract-level role. `settle` takes no caller at all. `release`/`refund`
+(and the approval variants) reject a `Disputed` escrow, so an adjudication
+cannot be raced.
 
 No new contract-level role came in with the M-of-N work: `releasers` is
 escrow data chosen by the payer at creation and immutable afterwards. There is

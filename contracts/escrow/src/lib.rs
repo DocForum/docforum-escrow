@@ -14,6 +14,12 @@
 // releaser set (`create_escrow_with_releasers`) — see docs/adr/0007.
 // Single-releaser escrows are stored as a one-address set with threshold 1
 // and behave exactly as before.
+// Phase E6 (issue #73): disputes. `create_escrow_with_arbiter` records an
+// arbiter at creation time. `payer`, `payee` or any releaser may open a
+// dispute while the escrow is `Funded`; only the stored arbiter may record
+// a split (`resolve_dispute`), and `settle` then pays both sides from that
+// recorded split. Dispute state lives under its own storage key so escrows
+// created before this phase read back exactly as they did before.
 //
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
@@ -42,9 +48,35 @@ pub enum EscrowStatus {
     Funded,
     Released,
     Refunded,
+    /// A `Funded` escrow whose parties asked the arbiter to adjudicate it.
+    /// `release`/`refund` are rejected until the arbiter records a split and
+    /// it is settled — see docs/adr/0009.
+    Disputed,
     /// The payer withdrew the funds before the payee accepted — see
     /// docs/adr/0010. Terminal, like `Released` and `Refunded`.
     Cancelled,
+}
+
+/// Per-escrow dispute state — deliberately a separate storage entry from
+/// `EscrowData` so adding disputes did not rewrite the encoding of every
+/// escrow created by earlier phases.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeState {
+    /// The only address permitted to record a resolution. `None` for escrows
+    /// created through the pre-E6 entry points; those can never be resolved.
+    pub arbiter: Option<Address>,
+    /// Whether `resolve_dispute` has recorded a split. The split fields below
+    /// are meaningful only when this is true.
+    ///
+    /// A flat flag plus two `u32`s rather than `Option<SplitBps>`: an
+    /// `Option<contracttype struct>` field is not round-trippable by the SDK
+    /// 27 derive under `testutils`, so it would not compile for the tests.
+    pub resolved: bool,
+    /// Share of `amount` returned to `payer`, in basis points.
+    pub payer_bps: u32,
+    /// Share of `amount` paid to `payee`, in basis points.
+    pub payee_bps: u32,
 }
 
 #[contracttype]
@@ -91,6 +123,9 @@ enum DataKey {
     Escrow(u64),
     NextId,
     AllowedTokens,
+    /// Per-escrow arbiter + recorded split, stored apart from `EscrowData` so
+    /// pre-E6 escrows keep their existing encoding (docs/adr/0009).
+    Dispute(u64),
 }
 
 #[contracterror]
@@ -146,6 +181,20 @@ pub enum Error {
     InvalidReleaseNotBefore = 22,
     /// Release was attempted before the configured time.
     ReleaseTooEarly = 23,
+    /// A settlement (`resolve_dispute`/`settle`) was attempted on an escrow
+    /// that is not currently `Disputed`.
+    ///
+    /// The Phase E6 codes are appended after the ones already on testnet:
+    /// published `Error` discriminants are part of the contract's ABI, so a
+    /// new phase must never renumber an existing one.
+    NotDisputed = 25,
+    /// The basis points are out of range or don't sum to 10_000.
+    InvalidSplit = 26,
+    /// `resolve_dispute` was called on a dispute that already has a recorded
+    /// split. One resolution per dispute keeps the payout deterministic.
+    AlreadyResolved = 27,
+    /// `settle` was called before the arbiter recorded a split.
+    NotResolved = 28,
 }
 
 #[contract]
@@ -198,6 +247,7 @@ impl EscrowContract {
             releasers,
             1,
             refund_after,
+            None,
             notify_payee,
             false,
             refund_to,
@@ -232,6 +282,7 @@ impl EscrowContract {
             releasers,
             1,
             refund_after,
+            None,
             notify_payee,
             false,
             refund_to,
@@ -265,6 +316,7 @@ impl EscrowContract {
             releasers,
             1,
             refund_after,
+            None,
             false,
             requires_acceptance,
             refund_to,
@@ -332,10 +384,54 @@ impl EscrowContract {
             releasers,
             threshold,
             refund_after,
+            None,
             notify_payee,
             false,
             refund_to,
             None,
+        )
+    }
+
+    /// Same as `create_escrow`, but also records the only address allowed to
+    /// adjudicate a dispute over this escrow (Phase E6, docs/adr/0009).
+    /// Omitting this entry point (i.e. using `create_escrow`) keeps the
+    /// pre-E6 behaviour: nobody can resolve a dispute on that escrow.
+    ///
+    /// `refund_to` and `release_not_before` mean exactly what they mean on
+    /// `create_escrow` / `create_escrow_release_time`; they are accepted here
+    /// too so that adding an arbiter never costs an escrow its sponsored
+    /// refund destination or release schedule.
+    pub fn create_escrow_with_arbiter(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        arbiter: Address,
+        notify_payee: bool,
+        refund_to: Option<Address>,
+        release_not_before: Option<u64>,
+    ) -> Result<u64, Error> {
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        Self::create_escrow_inner(
+            &env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            1,
+            refund_after,
+            Some(arbiter),
+            notify_payee,
+            false,
+            refund_to,
+            release_not_before,
         )
     }
 
@@ -453,7 +549,7 @@ impl EscrowContract {
         Self::check_single_caller(&data, &caller)?;
         Self::check_funded(&data)?;
 
-        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
+        Self::finalize(&env, escrow_id, &mut data, EscrowStatus::Released)
     }
 
     /// Moves the escrowed `amount` to `payee` on behalf of an M-of-N
@@ -471,7 +567,7 @@ impl EscrowContract {
         Self::check_approvals(&env, &data, &approvers)?;
         Self::check_funded(&data)?;
 
-        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
+        Self::finalize(&env, escrow_id, &mut data, EscrowStatus::Released)
     }
 
     /// Returns the escrowed `amount` to the escrow's `refund_to` (the
@@ -503,7 +599,7 @@ impl EscrowContract {
         }
         Self::check_funded(&data)?;
 
-        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
+        Self::finalize(&env, escrow_id, &mut data, EscrowStatus::Refunded)
     }
 
     /// Lets the payer take the funds back **before the payee accepts**
@@ -539,7 +635,7 @@ impl EscrowContract {
             return Err(Error::AlreadyAccepted);
         }
 
-        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Cancelled)
+        Self::finalize(&env, escrow_id, &mut data, EscrowStatus::Cancelled)
     }
 
     /// Returns the escrowed `amount` to `refund_to` on behalf of an M-of-N
@@ -556,7 +652,173 @@ impl EscrowContract {
         Self::check_approvals(&env, &data, &approvers)?;
         Self::check_funded(&data)?;
 
-        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
+        Self::finalize(&env, escrow_id, &mut data, EscrowStatus::Refunded)
+    }
+
+    /// Opens a dispute on a `Funded` escrow (Phase E6, docs/adr/0009).
+    ///
+    /// `payer`, `payee` and any address in the escrow's releaser set may call
+    /// this — everyone with a stake in the outcome. The escrow moves to
+    /// `Disputed`, which rejects `release`/`refund` (and the approval
+    /// variants) until the arbiter's split is settled, so the funds cannot
+    /// move out from under an in-flight adjudication.
+    ///
+    /// Raising a dispute never transfers anything, so it is safe to allow
+    /// every party to trigger it; the arbiter, not the caller, decides the
+    /// outcome.
+    pub fn raise_dispute(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
+        caller.require_auth();
+
+        let mut data = Self::load(&env, escrow_id)?;
+        if caller != data.payer && caller != data.payee && !Self::contains(&data.releasers, &caller)
+        {
+            return Err(Error::Unauthorized);
+        }
+        Self::check_funded(&data)?;
+
+        data.status = EscrowStatus::Disputed;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        env.events()
+            .publish((symbol_short!("disputed"), escrow_id), caller);
+        Ok(())
+    }
+
+    /// Records the arbiter's resolution for a `Disputed` escrow as basis
+    /// points of the escrowed `amount`: `payer_bps` back to `payer`,
+    /// `payee_bps` to `payee` (Phase E6, docs/adr/0009).
+    ///
+    /// Only the escrow's stored arbiter may call this, only while the escrow
+    /// is `Disputed`, and only once — a recorded split is final, so a second
+    /// call fails `AlreadyResolved` instead of silently rewriting the payout.
+    /// `payer_bps + payee_bps` must equal 10_000 (100%); a `0`/`10_000` split
+    /// is a full refund/release and is allowed.
+    ///
+    /// This call only records the split; `settle` is what moves the funds, so
+    /// a resolver can be inspected before it pays out.
+    pub fn resolve_dispute(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        payer_bps: u32,
+        payee_bps: u32,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let data = Self::load(&env, escrow_id)?;
+        if data.status != EscrowStatus::Disputed {
+            return Err(Error::NotDisputed);
+        }
+        let mut dispute = Self::load_dispute(&env, escrow_id);
+        if dispute.arbiter.as_ref() != Some(&caller) {
+            return Err(Error::Unauthorized);
+        }
+        if dispute.resolved {
+            return Err(Error::AlreadyResolved);
+        }
+        if payer_bps.checked_add(payee_bps) != Some(10_000) {
+            return Err(Error::InvalidSplit);
+        }
+
+        dispute.resolved = true;
+        dispute.payer_bps = payer_bps;
+        dispute.payee_bps = payee_bps;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Dispute(escrow_id), &dispute);
+        env.events().publish(
+            (symbol_short!("resolved"), escrow_id),
+            (payer_bps, payee_bps),
+        );
+        Ok(())
+    }
+
+    /// Pays both sides of a `Disputed` escrow according to the split the
+    /// arbiter recorded with `resolve_dispute` (Phase E6, docs/adr/0009).
+    ///
+    /// Deliberately permissionless: the split is already fixed and was
+    /// authorised by the arbiter, so settling it is a deterministic transfer
+    /// that cannot be redirected. Letting anyone submit it means a
+    /// disappeared arbiter (or a payer/payee who stops paying fees) cannot
+    /// strand the funds. Fails `NotResolved` before a split exists and
+    /// `NotDisputed` on a settled or non-disputed escrow.
+    ///
+    /// The escrow is marked `Released` before the transfers
+    /// (checks-effects-interactions, docs/adr/0006) and a failing transfer
+    /// rolls the whole invocation back. The payee acceptance gate is not
+    /// applied here: an arbiter's resolution is the authorisation.
+    pub fn settle(env: Env, escrow_id: u64) -> Result<(), Error> {
+        let mut data = Self::load(&env, escrow_id)?;
+        if data.status != EscrowStatus::Disputed {
+            return Err(Error::NotDisputed);
+        }
+        let dispute = Self::load_dispute(&env, escrow_id);
+        if !dispute.resolved {
+            return Err(Error::NotResolved);
+        }
+
+        let payer_amount = data
+            .amount
+            .checked_mul(dispute.payer_bps as i128)
+            .ok_or(Error::Overflow)?
+            / 10_000;
+        // Pay the remainder rather than a second rounded share: 10_000 - x
+        // and x are complementary, so this leaves no dust in the contract.
+        let payee_amount = data.amount - payer_amount;
+
+        data.status = EscrowStatus::Released;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+
+        let token_client = token::Client::new(&env, &data.token);
+        let contract_address = env.current_contract_address();
+        if payer_amount > 0 {
+            token_client.transfer(&contract_address, &data.payer, &payer_amount);
+        }
+        if payee_amount > 0 {
+            token_client.transfer(&contract_address, &data.payee, &payee_amount);
+        }
+        env.events().publish(
+            (symbol_short!("settled"), escrow_id),
+            (payer_amount, payee_amount),
+        );
+
+        if data.notify_payee && payee_amount > 0 {
+            let args = (escrow_id, payee_amount).into_val(&env);
+            let callback = env.try_invoke_contract::<(), soroban_sdk::Error>(
+                &data.payee,
+                &soroban_sdk::Symbol::new(&env, "on_escrow_released"),
+                args,
+            );
+            match callback {
+                Ok(Ok(())) => {}
+                _ => return Err(Error::CallbackFailed),
+            }
+        }
+        Ok(())
+    }
+
+    /// Read-only: the escrow's arbiter and recorded split, if any. Errors if
+    /// `escrow_id` doesn't exist. Escrows created before Phase E6 (and those
+    /// created without `create_escrow_with_arbiter`) report `arbiter: None`
+    /// and can never be resolved.
+    pub fn get_dispute(env: Env, escrow_id: u64) -> Result<DisputeState, Error> {
+        Self::load(&env, escrow_id)?;
+        Ok(Self::load_dispute(&env, escrow_id))
+    }
+
+    fn load_dispute(env: &Env, escrow_id: u64) -> DisputeState {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Dispute(escrow_id))
+            .unwrap_or(DisputeState {
+                arbiter: None,
+                resolved: false,
+                payer_bps: 0,
+                payee_bps: 0,
+            })
     }
 
     fn create_escrow_inner(
@@ -569,6 +831,7 @@ impl EscrowContract {
         releasers: Vec<Address>,
         threshold: u32,
         refund_after: Option<u64>,
+        arbiter: Option<Address>,
         notify_payee: bool,
         requires_acceptance: bool,
         refund_to: Option<Address>,
@@ -634,6 +897,17 @@ impl EscrowContract {
             release_not_before,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        if let Some(arbiter) = arbiter {
+            let dispute = DisputeState {
+                arbiter: Some(arbiter),
+                resolved: false,
+                payer_bps: 0,
+                payee_bps: 0,
+            };
+            env.storage()
+                .persistent()
+                .set(&DataKey::Dispute(id), &dispute);
+        }
         Self::publish_state(env, symbol_short!("created"), id, &data);
         Ok(id)
     }
@@ -711,7 +985,7 @@ impl EscrowContract {
     /// token contract, which aborts and rolls back this whole invocation —
     /// including the status write — so a failed payout can never leave an
     /// escrow marked `Released`/`Refunded`.
-    fn settle(
+    fn finalize(
         env: &Env,
         escrow_id: u64,
         data: &mut EscrowData,
@@ -758,6 +1032,7 @@ impl EscrowContract {
             EscrowStatus::Funded => symbol_short!("created"),
             EscrowStatus::Released => symbol_short!("released"),
             EscrowStatus::Refunded => symbol_short!("refunded"),
+            EscrowStatus::Disputed => symbol_short!("disputed"),
             EscrowStatus::Cancelled => symbol_short!("cancelled"),
         };
         Self::publish_state(env, action, escrow_id, data);
@@ -771,6 +1046,7 @@ impl EscrowContract {
             EscrowStatus::Funded => symbol_short!("Funded"),
             EscrowStatus::Released => symbol_short!("Released"),
             EscrowStatus::Refunded => symbol_short!("Refunded"),
+            EscrowStatus::Disputed => symbol_short!("Disputed"),
             EscrowStatus::Cancelled => symbol_short!("Cancelled"),
         };
         env.events().publish(
