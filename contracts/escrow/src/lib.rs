@@ -76,6 +76,9 @@ pub enum EscrowStatus {
     Funded,
     Released,
     Refunded,
+    /// The payer withdrew the funds before the payee accepted — see
+    /// docs/adr/0010. Terminal, like `Released` and `Refunded`.
+    Cancelled,
 }
 
 #[contracttype]
@@ -549,6 +552,42 @@ impl EscrowContract {
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
     }
 
+    /// Lets the payer take the funds back **before the payee accepts**
+    /// (docs/adr/0010): returns the escrowed `amount` to `refund_to` (the
+    /// `payer` unless a sponsor destination was fixed at creation, ADR
+    /// 0009) and marks the escrow `Cancelled`. Allowed only while **all**
+    /// hold:
+    ///
+    /// - `payer` is the escrow's stored payer and authorizes the call;
+    /// - the escrow is still `Funded` (`NotFunded` otherwise — never after
+    ///   a release, refund or earlier cancel);
+    /// - it was created with `requires_acceptance`
+    ///   (`AcceptanceNotConfigured` otherwise — without the gate there is
+    ///   no acceptance step to race, so no cancel window exists);
+    /// - the payee has not accepted (`AlreadyAccepted` otherwise).
+    ///
+    /// The destination is read from storage, so invariant I1 is unchanged.
+    /// Payees: do not rely on a `requires_acceptance` escrow until you
+    /// have called `accept`. `accept` and `cancel` race on one ledger
+    /// state: whichever lands first wins and the other fails.
+    pub fn cancel(env: Env, escrow_id: u64, payer: Address) -> Result<(), Error> {
+        payer.require_auth();
+
+        let mut data = Self::load(&env, escrow_id)?;
+        if payer != data.payer {
+            return Err(Error::Unauthorized);
+        }
+        Self::check_funded(&data)?;
+        if !data.requires_acceptance {
+            return Err(Error::AcceptanceNotConfigured);
+        }
+        if data.accepted_at.is_some() {
+            return Err(Error::AlreadyAccepted);
+        }
+
+        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Cancelled)
+    }
+
     /// Returns the escrowed `amount` to `refund_to` on behalf of an M-of-N
     /// releaser set (docs/adr/0007). Same approval rules as
     /// `release_with_approvals`. The timeout refund path in `refund` stays
@@ -773,6 +812,7 @@ impl EscrowContract {
             EscrowStatus::Funded => symbol_short!("created"),
             EscrowStatus::Released => symbol_short!("released"),
             EscrowStatus::Refunded => symbol_short!("refunded"),
+            EscrowStatus::Cancelled => symbol_short!("cancelled"),
         };
         Self::publish_state(env, action, escrow_id, data);
         Ok(())
@@ -785,6 +825,7 @@ impl EscrowContract {
             EscrowStatus::Funded => symbol_short!("Funded"),
             EscrowStatus::Released => symbol_short!("Released"),
             EscrowStatus::Refunded => symbol_short!("Refunded"),
+            EscrowStatus::Cancelled => symbol_short!("Cancelled"),
         };
         env.events().publish(
             (symbol_short!("ESCROW"), action, id),
