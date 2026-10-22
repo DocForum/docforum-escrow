@@ -1,0 +1,6 @@
+{
+  "$comment": "Machine-readable testnet deployment record. Updated automatically by the .github/workflows/testnet-deploy.yml workflow. Do not edit by hand.",
+  "schemaVersion": 1,
+  "network": "testnet",
+  "deployments": []
+}
