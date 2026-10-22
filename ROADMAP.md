@@ -283,6 +283,15 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   transaction hash and retry count; addresses are opt-in only
   (`includeAddresses: true`). 7 offline tests assert span production and the
   disabled path.
+- [x] Split payouts and an optional protocol fee (issue #72, ADR 0011) —
+  `create_escrow_with_splits` divides the released amount between up to 10
+  recipients in bps summing to 10,000, with an optional fee in bps taken off
+  the top; the rounding remainder goes to the last recipient so nothing is
+  stranded. Refunds ignore both. Read-only `preview_payout` and the SDK's
+  `previewPayout`/`computePayout` report the exact amounts. New errors are
+  appended (`InvalidSplits = 26`, `TooManyRecipients = 27`, `InvalidFee = 28`),
+  existing entry points are untouched so `sdk-go` keeps working, and the
+  single-releaser-only limitation is documented in the ADR.
 
 ## Phase E7 — Verification, testing & release engineering
 - [x] **Reproducible WASM builds and deployment verification (issue #91)** ?

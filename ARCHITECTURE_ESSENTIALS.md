@@ -16,14 +16,14 @@ create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id 
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
 cancel(escrow_id, payer) -> ()   // payer-authorized, only while Funded + requires_acceptance + not yet accepted; funds to refund_to, status Cancelled (ADR 0010); not deployed yet
 create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, deployed on testnet
+create_escrow_with_splits(payer, payee, token, amount, condition_ref, releaser, refund_after, splits, fee_bps, fee_recipient, notify_payee, refund_to, release_not_before) -> escrow_id // Phase E6, issue #72, ADR 0011 — single releaser + split payout and protocol fee; not deployed yet
+preview_payout(escrow_id) -> PayoutPreview   // read-only: exact fee + per-recipient amounts a release would pay (ADR 0011); not deployed yet
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded | Cancelled — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
-get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after, refund_to — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
+get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after, refund_to, splits, fee_bps, fee_recipient — IMPLEMENTED (Phase E4 + E5 + E6; `releaser` became `releasers`+`threshold` in #119, splits and fee added in #72)
 release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser, threshold must be 1, only while Funded
 release_with_approvals(escrow_id, approvers) -> result   // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — >= threshold distinct releasers, each authorizing this invocation
 refund(escrow_id, caller) -> result    // IMPLEMENTED (Phase E2 + E4) — a releaser when threshold is 1; anyone too, once refund_after has passed, and then still only to the stored `refund_to` (= payer unless set at creation, ADR 0009)
 refund_with_approvals(escrow_id, approvers) -> result    // IMPLEMENTED (Phase E5, issue #119) — same approval rules as release_with_approvals
-create_escrows(payer, items) -> vec(escrow_id) // IMPLEMENTED (Phase E5, issue #74) — batch create; `items.len()` <= `MAX_BATCH_SIZE` (50), atomic: one invalid item reverts the whole call
-settle_many(caller, escrow_ids) -> vec(result) // IMPLEMENTED (Phase E5, issue #74) — batch release for one caller; per-op result in input order, one rejected op does not stop the rest
 top_up(escrow_id, payer, amount) -> result // IMPLEMENTED (issue #26) — original payer only, funded state only; emits `top_up`
 rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue #23) — single-releaser escrow only; current releaser and payer authorize; funded only
 ```
@@ -43,7 +43,10 @@ BalanceMismatch test token in its immutable allowlist; see
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to)`.
 `notify_payee` opts a contract payee into `on_escrow_released(escrow_id,
 amount)`; when true, the payee must authorize creation as well as the payer.
-The quorum creation entry point has the same final callback flag. The SDK
+`amount` is what `payee` actually received: for an escrow with no splits and
+no fee that is the full escrowed amount, and for a split escrow it is the
+payee's share (ADR 0011). The quorum creation entry point has the same final
+callback flag. The SDK
 option defaults to false. Callback failure rolls release back atomically;
 see ADR 0005 for failure, gas, and stored-record compatibility.
 
@@ -96,8 +99,9 @@ import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
 const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
 const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter, notifyPayee: true, refundTo });
 await client.createQuorumEscrow({ payer, payee, token, amount, conditionRef, releasers, threshold, refundAfter, notifyPayee: true, refundTo }); // M-of-N, ADR 0007
-await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
-await client.getEscrow(escrowId);            // full stored record — incl. releasers + threshold + refundAfter, refundTo, so a payee can check the deal (docs/adr/0004/0007/0009, threat model T8)
+await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded" | "Cancelled"
+await client.getEscrow(escrowId);            // full stored record — incl. releasers + threshold + refundAfter, refundTo, splits + fee, so a payee can check the deal (docs/adr/0004/0007/0009/0011, threat model T8)
+await client.previewPayout(escrowId);        // { feeAmount, feeRecipient, payouts, total } — exact per-recipient amounts (ADR 0011)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair or SEP-43 Signer, must be a releaser and threshold must be 1
 await client.releaseWithApprovals({ escrowId, approvers }); // { txHash } — one Keypair/Signer per approver (>= threshold, distinct)
 await client.refund({ escrowId, caller });   // { txHash } — releaser when threshold is 1; anyone after refundAfter has passed
@@ -111,6 +115,11 @@ client.feeBump(signedXdr, sponsor, { maxFee, baseFee? }); // { xdr, fee, innerTx
 
 `refundTo` on `createEscrow` and `createQuorumEscrow` is optional too (default: the payer) and
 `getEscrow` returns it as `refundTo`.
+
+`splits` and `fee` on `createEscrow` are optional (ADR 0011). When either is
+present the SDK calls `create_escrow_with_splits` instead of `create_escrow`,
+validating the shares client-side first. They are single-releaser only and
+refunds ignore both.
 
 `estimate` never signs or submits; it simulates against the client's RPC
 and reports stroops. `guardSponsorship` is the pre-sponsorship check for

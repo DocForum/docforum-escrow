@@ -165,6 +165,15 @@ export interface Escrow {
    * reversal would pay.
    */
   refundTo: string;
+  /**
+   * Split payout configuration (docs/adr/0011), in stored order. Empty for a
+   * plain escrow, where `payee` receives everything on release.
+   */
+  splits: SplitRecipient[];
+  /** Protocol fee in basis points of `amount`, taken off the top (0 = none). */
+  feeBps: number;
+  /** Receives the fee; equals `payer` when `feeBps` is 0. */
+  feeRecipient: string;
   status: EscrowStatus;
 }
 
@@ -198,6 +207,16 @@ export const MAX_RELEASERS = 10;
  * contract; a change is an SDK semver event (hard rule 3).
  */
 export const MAX_BATCH_SIZE = 50;
+
+/** Basis points denominator used by the contract's split and fee maths. */
+export const BPS_DENOMINATOR = 10_000;
+
+/**
+ * Maximum split recipients per escrow — must match the contract's
+ * `MAX_RECIPIENTS` (currently 10, see docs/adr/0011). Validated client-side so
+ * callers fail fast instead of paying fees for a rejected transaction.
+ */
+export const MAX_SPLIT_RECIPIENTS = 10;
 
 /** One escrow to create in a batched `createEscrows` call. */
 export interface BatchCreateItem extends CreateEscrowParams {}
@@ -290,6 +309,134 @@ export interface EscrowClientConfig {
   restoreSigner?: Keypair;
 }
 
+/** One payout destination for a released escrow (docs/adr/0011). */
+export interface SplitRecipient {
+  /** Recipient address; may be an account or a contract. */
+  address: string;
+  /** Share of the escrowed amount in basis points (must sum to 10,000). */
+  bps: number;
+}
+
+/**
+ * Optional protocol fee, taken off the top before the split is applied
+ * (docs/adr/0011). `bps` of 0 means no fee.
+ */
+export interface ProtocolFee {
+  bps: number;
+  /** Receives the fee; must not be the escrow contract itself. */
+  recipient: string;
+}
+
+/** One line of a `PayoutPreview`: who gets how much on release. */
+export interface PayoutShare {
+  address: string;
+  amount: bigint;
+}
+
+/** Exact amounts a release would pay, without changing any state. */
+export interface PayoutPreview {
+  /** Fee taken off the top (0 when none is configured). */
+  feeAmount: bigint;
+  /** Where the fee goes; equals the payer when there is no fee. */
+  feeRecipient: string;
+  /** Per-recipient amounts, in stored split order. */
+  payouts: PayoutShare[];
+  /** `feeAmount` plus every payout — always the escrowed amount. */
+  total: bigint;
+}
+
+/**
+ * Validate a split configuration the way the contract will
+ * (docs/adr/0011): 1..=10 distinct recipients, no zero-bps share, and
+ * exactly 10,000 bps in total. Throws with a precise message otherwise.
+ */
+export function validateSplits(splits: readonly SplitRecipient[], contractId?: string): void {
+  if (splits.length === 0) {
+    throw new Error("splits must contain at least one recipient");
+  }
+  if (splits.length > MAX_SPLIT_RECIPIENTS) {
+    throw new Error(
+      `splits must contain at most ${MAX_SPLIT_RECIPIENTS} recipients, got ${splits.length}`,
+    );
+  }
+  const seen = new Set<string>();
+  let total = 0;
+  for (const split of splits) {
+    if (!Number.isInteger(split.bps) || split.bps <= 0 || split.bps > BPS_DENOMINATOR) {
+      throw new Error(`split bps must be an integer in 1..=${BPS_DENOMINATOR}, got ${split.bps}`);
+    }
+    if (seen.has(split.address)) {
+      throw new Error(`splits must not repeat a recipient (${split.address})`);
+    }
+    if (contractId && split.address === contractId) {
+      throw new Error("a split recipient cannot be the escrow contract itself");
+    }
+    seen.add(split.address);
+    total += split.bps;
+  }
+  if (total !== BPS_DENOMINATOR) {
+    throw new Error(`split bps must sum to ${BPS_DENOMINATOR}, got ${total}`);
+  }
+}
+
+/** Validate a protocol fee the way the contract will (docs/adr/0011). */
+export function validateFee(fee: ProtocolFee | undefined, contractId?: string): void {
+  if (!fee) return;
+  if (!Number.isInteger(fee.bps) || fee.bps < 0 || fee.bps > BPS_DENOMINATOR) {
+    throw new Error(`fee bps must be an integer in 0..=${BPS_DENOMINATOR}, got ${fee.bps}`);
+  }
+  if (contractId && fee.recipient === contractId) {
+    throw new Error("the fee recipient cannot be the escrow contract itself");
+  }
+}
+
+/**
+ * Offline mirror of the contract's payout maths (docs/adr/0011): fee off the
+ * top with floor division, then each share with floor division, with every
+ * rounding remainder going to the **last** recipient so the total is exact.
+ * With no splits the whole distributable amount goes to `payee`.
+ */
+export function computePayout(
+  total: bigint,
+  splits: readonly SplitRecipient[],
+  fee?: ProtocolFee,
+  payee?: string,
+): PayoutPreview {
+  validateFee(fee);
+  if (splits.length > 0) validateSplits(splits);
+  if (total <= 0n) throw new Error(`amount must be positive, got ${total}`);
+  const denom = BigInt(BPS_DENOMINATOR);
+  const feeAmount = fee && fee.bps > 0 ? (total * BigInt(fee.bps)) / denom : 0n;
+  const distributable = total - feeAmount;
+
+  if (splits.length === 0) {
+    if (!payee) throw new Error("payee is required when no splits are configured");
+    return {
+      feeAmount,
+      feeRecipient: fee?.recipient ?? payee,
+      payouts: [{ address: payee, amount: distributable }],
+      total,
+    };
+  }
+
+  const payouts: PayoutShare[] = [];
+  let distributed = 0n;
+  splits.forEach((split, index) => {
+    const share =
+      index + 1 === splits.length
+        ? distributable - distributed
+        : (distributable * BigInt(split.bps)) / denom;
+    distributed += share;
+    payouts.push({ address: split.address, amount: share });
+  });
+  return {
+    feeAmount,
+    feeRecipient: fee?.recipient ?? payouts[payouts.length - 1].address,
+    payouts,
+    total,
+  };
+}
+
 export interface CreateEscrowParams {
   /** Signs and pays for this call; funds are pulled from this account. */
   payer: EscrowSigner;
@@ -324,6 +471,14 @@ export interface CreateEscrowParams {
   refundTo?: string;
   /** Earliest ledger timestamp at which release is allowed; omit for immediate release. */
   releaseNotBefore?: bigint;
+  /**
+   * Optional split payout (docs/adr/0011). When present (or when `fee` is),
+   * the SDK calls `create_escrow_with_splits` instead of `create_escrow`.
+   * Basis points must sum to exactly 10,000 and name each recipient once.
+   */
+  splits?: SplitRecipient[];
+  /** Optional protocol fee taken off the top before splits (docs/adr/0011). */
+  fee?: ProtocolFee;
 }
 
 export interface CancelParams {
@@ -633,6 +788,18 @@ export class EscrowClient {
         `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
       );
     }
+    const useSplits = params.splits !== undefined || params.fee !== undefined;
+    if (useSplits) {
+      validateFee(params.fee, this.contractId);
+      if (params.splits !== undefined) validateSplits(params.splits, this.contractId);
+      else if (params.fee!.bps > 0) {
+        throw new Error("a fee without splits needs a payee-destination split list; pass splits or drop the fee");
+      }
+      if (params.releaseNotBefore !== undefined) {
+        // The split entry point carries a release time directly, so there is
+        // no separate `create_escrow_release_time` variant to route to.
+      }
+    }
     const client = this.contractClient(params.payer);
     const createParams = {
       payer: signerAddress(params.payer),
@@ -646,14 +813,25 @@ export class EscrowClient {
       refund_to: params.refundTo,
     };
     const sent = await this.invoke(
-      "create_escrow",
+      useSplits ? "create_escrow_with_splits" : "create_escrow",
       undefined,
-      () => params.releaseNotBefore === undefined
-        ? client.create_escrow(createParams)
-        : client.create_escrow_release_time({
+      () => useSplits
+        ? client.create_escrow_with_splits({
             ...createParams,
+            splits: (params.splits ?? []).map((split) => ({
+              address: split.address,
+              bps: split.bps,
+            })),
+            fee_bps: params.fee?.bps ?? 0,
+            fee_recipient: params.fee?.recipient,
             release_not_before: params.releaseNotBefore,
-          }),
+          })
+        : params.releaseNotBefore === undefined
+          ? client.create_escrow(createParams)
+          : client.create_escrow_release_time({
+              ...createParams,
+              release_not_before: params.releaseNotBefore,
+            }),
       { address: signerAddress(params.payer) },
     );
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
@@ -773,7 +951,36 @@ export class EscrowClient {
       notifyPayee: data.notify_payee,
       refundTo: data.refund_to,
       releaseNotBefore: data.release_not_before ?? undefined,
+      splits: data.splits,
+      feeBps: data.fee_bps,
+      feeRecipient: data.fee_recipient,
       status: data.status.tag,
+    };
+  }
+
+  /**
+   * Exact amounts a `release` would pay right now, including the protocol fee
+   * and the rounding rule (docs/adr/0011). Read-only; costs a simulation and
+   * never signs. Throws if `escrowId` doesn't exist.
+   */
+  async previewPayout(escrowId: bigint): Promise<PayoutPreview> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("preview_payout", escrowId),
+      () => client.preview_payout({ escrow_id: escrowId }),
+    );
+    const preview = tx.result.unwrap();
+    const payouts = preview.payouts.map((share) => ({
+      address: share.address,
+      amount: share.amount,
+    }));
+    return {
+      feeAmount: preview.fee_amount,
+      feeRecipient: preview.fee_recipient,
+      payouts,
+      total: preview.fee_amount + payouts.reduce((sum, share) => sum + share.amount, 0n),
     };
   }
 

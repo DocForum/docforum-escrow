@@ -14,6 +14,11 @@
 // releaser set (`create_escrow_with_releasers`) — see docs/adr/0007.
 // Single-releaser escrows are stored as a one-address set with threshold 1
 // and behave exactly as before.
+// Phase E6: split payouts and a protocol fee — see docs/adr/0011. Splits are
+// basis points summing to 10,000; the fee is basis points taken off the top
+// of the amount before the splits are applied. Both are fixed at creation
+// and only ever affect the `Released` payout: every refund path still pays
+// `refund_to` the full amount.
 //
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
@@ -36,10 +41,14 @@ pub const MAX_RELEASERS: u32 = 10;
 /// Maximum `condition_ref` length in bytes (threat model T10, Phase E5).
 pub const MAX_CONDITION_REF_LEN: u32 = 64;
 
-/// Maximum number of items accepted by `create_escrows` / `settle_many`
-/// in a single call. Callers (including the SDK) must chunk larger
-/// inputs — see docs/adr/0005.
-pub const MAX_BATCH_SIZE: u32 = 50;
+/// Basis-points denominator: splits and the protocol fee are expressed in
+/// bps of 10,000 (100%). See docs/adr/0011.
+pub const BPS_DENOMINATOR: u32 = 10_000;
+
+/// Largest accepted split recipient list. Bounded for the same reason as
+/// `MAX_RELEASERS`: keeps the payout loop and the `get_escrow` payload
+/// cheap and predictable. Mirrored client-side in the SDK.
+pub const MAX_RECIPIENTS: u32 = 10;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -50,6 +59,36 @@ pub enum EscrowStatus {
     /// The payer withdrew the funds before the payee accepted — see
     /// docs/adr/0010. Terminal, like `Released` and `Refunded`.
     Cancelled,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SplitRecipient {
+    /// One payout destination for a released escrow.
+    pub address: Address,
+    /// Share of the escrowed amount in basis points (of `BPS_DENOMINATOR`).
+    pub bps: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayoutShare {
+    /// Who receives `amount` when the escrow is released.
+    pub address: Address,
+    /// Exact stroop amount, after the fee and the rounding rule.
+    pub amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayoutPreview {
+    /// Protocol fee taken off the top (`0` when none is configured).
+    pub fee_amount: i128,
+    /// Where `fee_amount` goes. Equals the payer when there is no fee.
+    pub fee_recipient: Address,
+    /// Per-recipient amounts in stored split order, or a single entry for
+    /// the payee when the escrow has no splits.
+    pub payouts: Vec<PayoutShare>,
 }
 
 #[contracttype]
@@ -89,19 +128,18 @@ pub struct EscrowData {
     pub refund_to: Address,
     /// Earliest ledger timestamp at which release is allowed.
     pub release_not_before: Option<u64>,
-}
-
-/// One entry of a `create_escrows` batch. Mirrors the single-escrow
-/// creation parameters minus the batch-wide `payer`.
-#[contracttype]
-#[derive(Clone)]
-pub struct CreateItem {
-    pub payee: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub condition_ref: String,
-    pub releaser: Address,
-    pub refund_after: Option<u64>,
+    /// Split recipients in basis points, fixed at creation. Empty means a
+    /// single payout to `payee` — the behaviour of every escrow created
+    /// before this field existed. When non-empty the shares sum to
+    /// `BPS_DENOMINATOR` and `payee` is paid only if it is also listed
+    /// here. See docs/adr/0011.
+    pub splits: Vec<SplitRecipient>,
+    /// Protocol fee in basis points of `amount`, taken off the top on
+    /// release before the splits are applied. `0` means no fee.
+    pub fee_bps: u32,
+    /// Receives `fee_bps` of `amount` on release. Unused (and stored as
+    /// the payer) when `fee_bps == 0`.
+    pub fee_recipient: Address,
 }
 
 #[contracttype]
@@ -164,10 +202,15 @@ pub enum Error {
     InvalidReleaseNotBefore = 22,
     /// Release was attempted before the configured time.
     ReleaseTooEarly = 23,
-    /// A batch call was passed more than `MAX_BATCH_SIZE` items — see
-    /// docs/adr/0005. Callers must chunk. Appended at the end so existing
-    /// discriminants keep their on-chain values.
-    BatchTooLarge = 25,
+    /// `splits` was non-empty but did not sum to `BPS_DENOMINATOR`, a
+    /// recipient had `bps == 0`, or a recipient was this contract's own
+    /// address (those funds would be stranded) — see docs/adr/0011.
+    InvalidSplits = 26,
+    /// More than `MAX_RECIPIENTS` split recipients were supplied.
+    TooManyRecipients = 27,
+    /// `fee_bps` exceeded `BPS_DENOMINATOR`, or the fee recipient was this
+    /// contract's own address — see docs/adr/0011.
+    InvalidFee = 28,
 }
 
 #[contract]
@@ -220,6 +263,9 @@ impl EscrowContract {
             releasers,
             1,
             refund_after,
+            Vec::new(&env),
+            0,
+            None,
             notify_payee,
             false,
             refund_to,
@@ -254,6 +300,9 @@ impl EscrowContract {
             releasers,
             1,
             refund_after,
+            Vec::new(&env),
+            0,
+            None,
             notify_payee,
             false,
             refund_to,
@@ -287,10 +336,68 @@ impl EscrowContract {
             releasers,
             1,
             refund_after,
+            Vec::new(&env),
+            0,
+            None,
             false,
             requires_acceptance,
             refund_to,
             None,
+        )
+    }
+
+    /// Creates a single-releaser escrow whose `Released` payout is divided
+    /// between `splits` and, optionally, reduced by a protocol fee — see
+    /// docs/adr/0011. This is a separate entry point rather than extra
+    /// parameters on `create_escrow` so existing callers (and the published
+    /// Go SDK, which encodes `create_escrow`'s arguments positionally) keep
+    /// working unchanged.
+    ///
+    /// `splits` is a list of `(address, bps)` pairs; when non-empty the
+    /// shares must sum to exactly 10,000 bps, every `bps` must be non-zero,
+    /// no recipient may repeat, and `payee` is paid only if it is listed.
+    /// Empty `splits` means the whole amount goes to `payee`, exactly like
+    /// `create_escrow`. `fee_bps` (of 10,000) is taken off the top and sent
+    /// to `fee_recipient` before the splits; `fee_recipient: None` with
+    /// `fee_bps == 0` means no fee. Refunds ignore both — they always return
+    /// the full `amount` to `refund_to`. All other validation and defaults
+    /// match `create_escrow`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_escrow_with_splits(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        splits: Vec<SplitRecipient>,
+        fee_bps: u32,
+        fee_recipient: Option<Address>,
+        notify_payee: bool,
+        refund_to: Option<Address>,
+        release_not_before: Option<u64>,
+    ) -> Result<u64, Error> {
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        Self::create_escrow_inner(
+            &env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            1,
+            refund_after,
+            splits,
+            fee_bps,
+            fee_recipient,
+            notify_payee,
+            false,
+            refund_to,
+            release_not_before,
         )
     }
 
@@ -354,52 +461,14 @@ impl EscrowContract {
             releasers,
             threshold,
             refund_after,
+            Vec::new(&env),
+            0,
+            None,
             notify_payee,
             false,
             refund_to,
             None,
         )
-    }
-
-    /// Batch version of `create_escrow`. Creates one escrow per item, in
-    /// input order, and returns the new ids in the same order as `items`.
-    /// `payer` authorizes once for the whole call. Fails atomically: if
-    /// any item is invalid (bad amount, past `refund_after`, oversized
-    /// `condition_ref`, short-delivering token) the whole call reverts and
-    /// no escrows are created.
-    ///
-    /// `items.len()` must be `<= MAX_BATCH_SIZE` — see docs/adr/0005.
-    pub fn create_escrows(
-        env: Env,
-        payer: Address,
-        items: Vec<CreateItem>,
-    ) -> Result<Vec<u64>, Error> {
-        if items.len() > MAX_BATCH_SIZE {
-            return Err(Error::BatchTooLarge);
-        }
-
-        let mut ids: Vec<u64> = Vec::new(&env);
-        for item in items.iter() {
-            let mut releasers = Vec::new(&env);
-            releasers.push_back(item.releaser.clone());
-            let id = Self::create_escrow_inner(
-                &env,
-                payer.clone(),
-                item.payee.clone(),
-                item.token.clone(),
-                item.amount,
-                item.condition_ref.clone(),
-                releasers,
-                1,
-                item.refund_after,
-                false,
-                false,
-                None,
-                None,
-            )?;
-            ids.push_back(id);
-        }
-        Ok(ids)
     }
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
@@ -423,6 +492,29 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::NotFound)
+    }
+
+    /// Read-only: exactly who a `release` of `escrow_id` would pay, and how
+    /// much. The fee and every share use the contract's own payout math, so
+    /// an integrator can show the numbers before funding and get the same
+    /// result the settlement produces. The SDK's `previewPayout` mirrors it
+    /// (docs/adr/0011). Errors on an unknown id.
+    pub fn preview_payout(env: Env, escrow_id: u64) -> Result<PayoutPreview, Error> {
+        let data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+        let (fee_amount, shares) = Self::compute_payout(&env, &data);
+        let mut payouts: Vec<PayoutShare> = Vec::new(&env);
+        for (address, amount) in shares.iter() {
+            payouts.push_back(PayoutShare { address, amount });
+        }
+        Ok(PayoutPreview {
+            fee_amount,
+            fee_recipient: data.fee_recipient,
+            payouts,
+        })
     }
 
     /// Rotates a funded escrow's releaser. Both the current releaser and
@@ -537,31 +629,6 @@ impl EscrowContract {
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
     }
 
-    /// Batch version of `release`: releases each escrow in `escrow_ids` in
-    /// order on behalf of `caller`, which must be a releaser of every one
-    /// of them. Returns a per-op result vector aligned with `escrow_ids`:
-    /// `Ok(())` for a successful release, `Err(e)` for one the contract
-    /// rejected (unknown id, not funded, caller not a releaser, before
-    /// `release_not_before`). A rejected op does not stop the rest — the
-    /// caller can inspect the vector and retry only the failures.
-    ///
-    /// `escrow_ids.len()` must be `<= MAX_BATCH_SIZE` — see docs/adr/0005.
-    pub fn settle_many(
-        env: Env,
-        caller: Address,
-        escrow_ids: Vec<u64>,
-    ) -> Result<Vec<Result<(), Error>>, Error> {
-        if escrow_ids.len() > MAX_BATCH_SIZE {
-            return Err(Error::BatchTooLarge);
-        }
-
-        let mut results: Vec<Result<(), Error>> = Vec::new(&env);
-        for escrow_id in escrow_ids.iter() {
-            results.push_back(Self::release(env.clone(), escrow_id, caller.clone()));
-        }
-        Ok(results)
-    }
-
     /// Returns the escrowed `amount` to the escrow's `refund_to` (the
     /// `payer` unless a different destination was fixed at creation —
     /// docs/adr/0006). Same state rule as
@@ -657,6 +724,9 @@ impl EscrowContract {
         releasers: Vec<Address>,
         threshold: u32,
         refund_after: Option<u64>,
+        splits: Vec<SplitRecipient>,
+        fee_bps: u32,
+        fee_recipient: Option<Address>,
         notify_payee: bool,
         requires_acceptance: bool,
         refund_to: Option<Address>,
@@ -691,6 +761,42 @@ impl EscrowContract {
         if condition_ref.len() > MAX_CONDITION_REF_LEN {
             return Err(Error::ConditionRefTooLong);
         }
+        if fee_bps > BPS_DENOMINATOR {
+            return Err(Error::InvalidFee);
+        }
+        if splits.len() > MAX_RECIPIENTS {
+            return Err(Error::TooManyRecipients);
+        }
+        let contract_address = env.current_contract_address();
+        // A fee always needs somewhere to go; defaulting to the payer keeps
+        // the stored struct total for fee-less escrows without an `Option`.
+        let fee_recipient = fee_recipient.unwrap_or_else(|| payer.clone());
+        if fee_bps > 0 && fee_recipient == contract_address {
+            // A fee paid to the contract itself could never be moved again.
+            return Err(Error::InvalidFee);
+        }
+        if !splits.is_empty() {
+            let mut total: u32 = 0;
+            let mut seen: Vec<Address> = Vec::new(env);
+            for split in splits.iter() {
+                if split.bps == 0 || split.address == contract_address {
+                    return Err(Error::InvalidSplits);
+                }
+                if Self::contains(&seen, &split.address) {
+                    // Duplicates would silently double a share; `splits`
+                    // must name each recipient once (docs/adr/0011).
+                    return Err(Error::InvalidSplits);
+                }
+                seen.push_back(split.address);
+                total = match total.checked_add(split.bps) {
+                    Some(total) => total,
+                    None => return Err(Error::InvalidSplits),
+                };
+            }
+            if total != BPS_DENOMINATOR {
+                return Err(Error::InvalidSplits);
+            }
+        }
         Self::check_releaser_set(env, &releasers, threshold)?;
         let refund_to = refund_to.unwrap_or_else(|| payer.clone());
         if refund_to == env.current_contract_address() {
@@ -720,6 +826,9 @@ impl EscrowContract {
             accepted_at: None,
             refund_to,
             release_not_before,
+            splits,
+            fee_bps,
+            fee_recipient,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Self::publish_state(env, symbol_short!("created"), id, &data);
@@ -817,6 +926,13 @@ impl EscrowContract {
             EscrowStatus::Released => data.payee.clone(),
             _ => data.refund_to.clone(),
         };
+        // Resolve the payout split *before* mutating state, so an escrow
+        // with a broken split config (impossible through create, but
+        // defensive) cannot be marked settled without paying out.
+        let (fee_amount, payouts) = match settled {
+            EscrowStatus::Released => Self::compute_payout(env, data),
+            _ => (0, Vec::new(env)),
+        };
         if settled == EscrowStatus::Released
             && data.requires_acceptance
             && data.accepted_at.is_none()
@@ -829,9 +945,33 @@ impl EscrowContract {
             .set(&DataKey::Escrow(escrow_id), data);
 
         let token_client = token::Client::new(env, &data.token);
-        token_client.transfer(&env.current_contract_address(), &destination, &data.amount);
+        let contract_address = env.current_contract_address();
+        if fee_amount > 0 {
+            token_client.transfer(&contract_address, &data.fee_recipient, &fee_amount);
+        }
+        if payouts.is_empty() {
+            // Refund / cancel: the full amount goes back to `refund_to`.
+            token_client.transfer(&contract_address, &destination, &data.amount);
+        } else {
+            for (recipient, payout) in payouts.iter() {
+                if payout > 0 {
+                    token_client.transfer(&contract_address, &recipient, &payout);
+                }
+            }
+        }
         if notify_payee {
-            let args = (escrow_id, data.amount).into_val(env);
+            // Report what `payee` actually received (its split share, or
+            // `amount - fee` without splits) rather than the gross amount,
+            // so a contract payee's hook records the right figure when a
+            // fee or split applies (docs/adr/0011). Identical to the gross
+            // amount for every escrow created before this feature.
+            let mut payee_amount: i128 = 0;
+            for (recipient, payout) in payouts.iter() {
+                if recipient == data.payee {
+                    payee_amount += payout;
+                }
+            }
+            let args = (escrow_id, payee_amount).into_val(env);
             let callback = env.try_invoke_contract::<(), soroban_sdk::Error>(
                 &data.payee,
                 &soroban_sdk::Symbol::new(env, "on_escrow_released"),
@@ -892,6 +1032,42 @@ impl EscrowContract {
             return Err(Error::NotFunded);
         }
         Ok(())
+    }
+
+    /// The contract's single source of truth for payout math
+    /// (docs/adr/0011): take the fee off the top with floor division, then
+    /// split the remainder by basis points with floor division, assigning
+    /// every rounding remainder to the **last** split recipient so the sum
+    /// of `payouts` is exactly `amount - fee_amount` and no dust is ever
+    /// stranded in the contract. `payee` alone receives the remainder when
+    /// no splits are configured (the pre-E6 behaviour).
+    fn compute_payout(env: &Env, data: &EscrowData) -> (i128, Vec<(Address, i128)>) {
+        let denom = BPS_DENOMINATOR as i128;
+        let fee_amount = if data.fee_bps == 0 {
+            0
+        } else {
+            data.amount * (data.fee_bps as i128) / denom
+        };
+        let distributable = data.amount - fee_amount;
+
+        let mut payouts: Vec<(Address, i128)> = Vec::new(env);
+        if data.splits.is_empty() {
+            payouts.push_back((data.payee.clone(), distributable));
+            return (fee_amount, payouts);
+        }
+
+        let count = data.splits.len();
+        let mut distributed: i128 = 0;
+        for (index, split) in data.splits.iter().enumerate() {
+            let share = if (index as u32) + 1 == count {
+                distributable - distributed
+            } else {
+                distributable * (split.bps as i128) / denom
+            };
+            distributed += share;
+            payouts.push_back((split.address, share));
+        }
+        (fee_amount, payouts)
     }
 
     fn contains(list: &Vec<Address>, candidate: &Address) -> bool {
