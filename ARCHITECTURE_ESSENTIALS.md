@@ -25,6 +25,8 @@ release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser,
 release_with_approvals(escrow_id, approvers) -> result   // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — >= threshold distinct releasers, each authorizing this invocation
 refund(escrow_id, caller) -> result    // IMPLEMENTED (Phase E2 + E4) — a releaser when threshold is 1; anyone too, once refund_after has passed, and then still only to the stored `refund_to` (= payer unless set at creation, ADR 0009)
 refund_with_approvals(escrow_id, approvers) -> result    // IMPLEMENTED (Phase E5, issue #119) — same approval rules as release_with_approvals
+create_escrows(payer, items) -> vec(escrow_id) // IMPLEMENTED (Phase E5, issue #74) — batch create; `items.len()` <= `MAX_BATCH_SIZE` (50), atomic: one invalid item reverts the whole call
+settle_many(caller, escrow_ids) -> vec(result) // IMPLEMENTED (Phase E5, issue #74) — batch release for one caller; per-op result in input order, one rejected op does not stop the rest
 top_up(escrow_id, payer, amount) -> result // IMPLEMENTED (issue #26) — original payer only, funded state only; emits `top_up`
 rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue #23) — single-releaser escrow only; current releaser and payer authorize; funded only
 ```
