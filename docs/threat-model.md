@@ -315,13 +315,6 @@ behave like SEP-41.
   locked under the stored `releaser`'s control." It does **not** mean
   "the funds are committed to me." A payee should check who the
   `releaser` is before relying on an escrow.
-- **With the acceptance gate (issue #25, `docs/adr/0008`) the payer can
-  still cancel until the payee accepts (issue #27, `docs/adr/0010`):** on an
-  escrow with `requires_acceptance`, `Funded` plus `accepted_at == None`
-  means the payer may take the funds back to `refund_to` at any moment;
-  `accept` and `cancel` race and the first to land wins. Payees must call
-  `accept` before relying on such an escrow. After acceptance `cancel` is
-  closed for good. Escrows without the gate have no cancel.
 - **With an M-of-N releaser set (issue #119, `docs/adr/0007`), what a payee
   must check changes:** fewer than `threshold` colluding releasers cannot
   settle early, but `threshold` colluding releasers can — read `releasers`
@@ -478,6 +471,6 @@ A review only counts toward E4 if the reviewer is not the implementer
 (see issue #6).
 
 
-## T6 archive/restore regression coverage
+## T4 intermediate-contract re-entry regression coverage
 
-Escrow identifiers are monotonic and are never derived from the number of live entries. The restoration test plan therefore verifies that restoring an archived `NextId` cannot overwrite a live escrow; a new create must receive an identifier greater than every previously issued identifier. Settlement tests also re-check the `Funded` guard after restoration before release or refund.
+Token callbacks must be treated as hostile even when they route through another contract. The regression suite exercises a helper contract that attempts to call back into escrow during a token transfer; the invocation must fail closed and leave the escrow status and balance unchanged.

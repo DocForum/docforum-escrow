@@ -19,8 +19,13 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { Api, Server as RpcServer } from "@stellar/stellar-sdk/rpc";
-import type { AssembledTransaction, SentTransaction } from "@stellar/stellar-sdk/contract";
-import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
+import type { AssembledTransaction, Result, SentTransaction } from "@stellar/stellar-sdk/contract";
+import {
+  Client as EscrowContractClient,
+  type EscrowData as GeneratedEscrowData,
+  type EscrowStatus as GeneratedEscrowStatus,
+} from "./generated/contract-client.js";
+import { decodeEscrowDataFromScVal } from "./escrow-data.js";
 import {
   beginPhase,
   isInstrumentationEnabled,
@@ -304,11 +309,19 @@ export interface RelayedAuthorizationParams {
   relayer: Keypair;
 }
 
-/** Serialized, simulated transaction containing a short-lived signed auth entry. */
+/**
+ * Serialized, simulated transaction containing a short-lived signed auth
+ * entry. `transaction` is the JSON form produced by the Stellar SDK's
+ * `AssembledTransaction.toJSON()` (it carries the simulation metadata the
+ * relayer needs to sign the envelope); it is not a base64 envelope.
+ */
 export interface RelayedAuthorization {
   transaction: string;
   expiresAtLedger: number;
 }
+
+/** How long a relayed auth entry stays valid, in ledgers. */
+export const RELAYED_AUTH_TTL_LEDGERS = 10;
 
 // ---------------------------------------------------------------------------
 // Fee estimation + sponsorship (issue #70)
@@ -650,7 +663,24 @@ export class EscrowClient {
       this.spanAttributesIfEnabled("get_escrow", escrowId),
       () => client.get_escrow({ escrow_id: escrowId }),
     );
-    const data = tx.result.unwrap();
+    let data: GeneratedEscrowData;
+    try {
+      data = tx.result.unwrap();
+    } catch (error) {
+      // The generated bindings embed the current contract spec. A testnet
+      // deployment that predates a newly added `EscrowData` field still
+      // returns a valid map, but the SDK's positional struct decoder can
+      // mis-read it (for example before `release_not_before` existed).
+      // Decode the same map by field name so reads keep working across
+      // deployed contract versions (issue #224).
+      const retval = error instanceof TypeError
+        ? tx.simulationData.result?.retval
+        : undefined;
+      if (retval?.switch().name === "scvMap") {
+        return decodeEscrowDataFromScVal(retval);
+      }
+      throw error;
+    }
     return {
       payer: data.payer,
       payee: data.payee,
@@ -713,6 +743,84 @@ export class EscrowClient {
       () => client.refund({ escrow_id: params.escrowId, caller: signerAddress(params.caller) }),
       { address: signerAddress(params.caller) },
     );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Simulates a `release`, has the releaser sign only its short-lived contract
+   * authorization entry, and returns the resulting transaction for a separate
+   * relayer to sign and submit. The relayer is the transaction source, so it
+   * pays the fee; no envelope signature is collected here. Keep the returned
+   * authorization private and submit it before `expiresAtLedger`.
+   */
+  async authorizeRelease(params: RelayedAuthorizationParams): Promise<RelayedAuthorization> {
+    return this.authorizeSettlement("release", params);
+  }
+
+  /**
+   * Simulates a `refund` and collects only the releaser's contract auth entry,
+   * leaving the envelope for the relayer to sign and pay for. Same lifetime and
+   * privacy rules as `authorizeRelease`.
+   */
+  async authorizeRefund(params: RelayedAuthorizationParams): Promise<RelayedAuthorization> {
+    return this.authorizeSettlement("refund", params);
+  }
+
+  private async authorizeSettlement(
+    settlement: "release" | "refund",
+    params: RelayedAuthorizationParams,
+  ): Promise<RelayedAuthorization> {
+    const client = this.contractClient(params.relayer);
+    const tx = settlement === "release"
+      ? await client.release({ escrow_id: params.escrowId, caller: params.releaser.publicKey() })
+      : await client.refund({ escrow_id: params.escrowId, caller: params.releaser.publicKey() });
+
+    if (tx.isReadCall) {
+      throw new Error(`${settlement} was simulated as a read call; no transaction was assembled.`);
+    }
+
+    const latestLedger = await this.rpc.getLatestLedger();
+    const expiresAtLedger = latestLedger.sequence + RELAYED_AUTH_TTL_LEDGERS;
+
+    // The relayer is the transaction source, so the envelope signature covers
+    // its own auth; only the releaser's separate auth entry needs signing here.
+    if (tx.needsNonInvokerSigningBy().includes(params.releaser.publicKey())) {
+      await tx.signAuthEntries({
+        signAuthEntry: params.releaser,
+        expiration: expiresAtLedger,
+      });
+    }
+
+    return { transaction: tx.toJSON(), expiresAtLedger };
+  }
+
+  /**
+   * Signs a relayed authorization's envelope as `relayer` and submits it.
+   * Rejects an authorization for a different settlement method than the one
+   * named, so a `release` authorization cannot be smuggled through `refund`.
+   * Returns the submitted transaction's hash.
+   */
+  async submitRelayed(
+    settlement: "release" | "refund",
+    authorization: RelayedAuthorization,
+    relayer: EscrowSigner,
+  ): Promise<{ txHash: string }> {
+    let method: unknown;
+    try {
+      method = (JSON.parse(authorization.transaction) as { method?: unknown }).method;
+    } catch (error) {
+      throw new TypeError(`Relayed authorization is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (method !== settlement) {
+      throw new TypeError(
+        `Relayed authorization is for ${String(method) || "an unknown method"}, not ${settlement}.`
+      );
+    }
+
+    const client = this.contractClient(relayer);
+    const tx = client.txFromJSON<Result<void>>(authorization.transaction);
+    const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
   }
