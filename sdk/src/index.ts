@@ -19,8 +19,13 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { Api, Server as RpcServer } from "@stellar/stellar-sdk/rpc";
-import type { AssembledTransaction, SentTransaction } from "@stellar/stellar-sdk/contract";
-import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
+import type { AssembledTransaction, Result, SentTransaction } from "@stellar/stellar-sdk/contract";
+import {
+  Client as EscrowContractClient,
+  type EscrowData as GeneratedEscrowData,
+  type EscrowStatus as GeneratedEscrowStatus,
+} from "./generated/contract-client.js";
+import { decodeEscrowDataFromScVal } from "./escrow-data.js";
 import {
   beginPhase,
   isInstrumentationEnabled,
@@ -186,6 +191,83 @@ export const MAX_CONDITION_REF_LENGTH = 64;
  */
 export const MAX_RELEASERS = 10;
 
+/**
+ * Maximum number of items in one batched call — must match the contract's
+ * `MAX_BATCH_SIZE` (currently 50, see docs/adr/0005). `createEscrows` and
+ * `settleMany` chunk larger inputs automatically. Keep in sync with the
+ * contract; a change is an SDK semver event (hard rule 3).
+ */
+export const MAX_BATCH_SIZE = 50;
+
+/** One escrow to create in a batched `createEscrows` call. */
+export interface BatchCreateItem extends CreateEscrowParams {}
+
+/** One operation in a batched `settleMany` call. */
+export interface BatchSettleOperation {
+  escrowId: bigint;
+  /** `release` pays the escrow's payee; `refund` returns the funds to `refundTo`. */
+  kind: "release" | "refund";
+  /** Must be the escrow's `releaser` (docs/adr/0002). */
+  caller: EscrowSigner;
+}
+
+/** Outcome of one batched item; `index` is always the input's position. */
+export interface BatchItemResult<T> {
+  /** Index into the caller-supplied input array. */
+  index: number;
+  /** The original input this result corresponds to. */
+  item: T;
+  ok: boolean;
+  /** Set when `ok`: the transaction hash that carried the operation. */
+  txHash?: string;
+  /** Set when `ok` and the operation created an escrow. */
+  escrowId?: bigint;
+  /** Set when the operation failed: the reason the call threw. */
+  error?: string;
+  /** True when the item was carried over from `resumeFrom` instead of re-sent. */
+  skipped?: boolean;
+}
+
+export interface BatchOptions<T> {
+  /**
+   * Operations attempted per chunk. Defaults to `MAX_BATCH_SIZE` and is
+   * clamped to it, because the contract rejects anything larger.
+   */
+  chunkSize?: number;
+  /**
+   * Results from a previous partial run. Items that already succeeded are
+   * carried over (with `skipped: true`) instead of being sent again, so a
+   * retry after `BatchPartialFailureError` never double-creates or
+   * double-settles anything.
+   */
+  resumeFrom?: BatchItemResult<T>[];
+}
+
+/**
+ * Thrown by `createEscrows`/`settleMany` when at least one item failed.
+ * `results` covers the whole input in order, so items that were already
+ * committed (or settled) before the failure are visible and retryable
+ * through `resumeFrom`.
+ */
+export class BatchPartialFailureError<T> extends Error {
+  readonly name = "BatchPartialFailureError";
+  readonly results: BatchItemResult<T>[];
+  readonly failedIndices: number[];
+
+  constructor(results: BatchItemResult<T>[]) {
+    const failedIndices = results.filter((result) => !result.ok).map((result) => result.index);
+    super(
+      `batch failed for ${failedIndices.length} of ${results.length} item(s) at index ${failedIndices.join(", ")}`,
+    );
+    this.results = results;
+    this.failedIndices = failedIndices;
+  }
+}
+
+function batchErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Shared placeholder used on the uninstrumented path (no per-call allocation). */
 const EMPTY_SPAN_ATTRIBUTES = {} as EscrowSpanAttributes;
 
@@ -304,11 +386,19 @@ export interface RelayedAuthorizationParams {
   relayer: Keypair;
 }
 
-/** Serialized, simulated transaction containing a short-lived signed auth entry. */
+/**
+ * Serialized, simulated transaction containing a short-lived signed auth
+ * entry. `transaction` is the JSON form produced by the Stellar SDK's
+ * `AssembledTransaction.toJSON()` (it carries the simulation metadata the
+ * relayer needs to sign the envelope); it is not a base64 envelope.
+ */
 export interface RelayedAuthorization {
   transaction: string;
   expiresAtLedger: number;
 }
+
+/** How long a relayed auth entry stays valid, in ledgers. */
+export const RELAYED_AUTH_TTL_LEDGERS = 10;
 
 // ---------------------------------------------------------------------------
 // Fee estimation + sponsorship (issue #70)
@@ -650,7 +740,24 @@ export class EscrowClient {
       this.spanAttributesIfEnabled("get_escrow", escrowId),
       () => client.get_escrow({ escrow_id: escrowId }),
     );
-    const data = tx.result.unwrap();
+    let data: GeneratedEscrowData;
+    try {
+      data = tx.result.unwrap();
+    } catch (error) {
+      // The generated bindings embed the current contract spec. A testnet
+      // deployment that predates a newly added `EscrowData` field still
+      // returns a valid map, but the SDK's positional struct decoder can
+      // mis-read it (for example before `release_not_before` existed).
+      // Decode the same map by field name so reads keep working across
+      // deployed contract versions (issue #224).
+      const retval = error instanceof TypeError
+        ? tx.simulationData.result?.retval
+        : undefined;
+      if (retval?.switch().name === "scvMap") {
+        return decodeEscrowDataFromScVal(retval);
+      }
+      throw error;
+    }
     return {
       payer: data.payer,
       payee: data.payee,
@@ -713,6 +820,194 @@ export class EscrowClient {
       () => client.refund({ escrow_id: params.escrowId, caller: signerAddress(params.caller) }),
       { address: signerAddress(params.caller) },
     );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /** The contract's limit on items per batched call (docs/adr/0005). */
+  get maxBatchSize(): number {
+    return MAX_BATCH_SIZE;
+  }
+
+  /**
+   * Creates several escrows, chunked to the contract's max batch size and
+   * mapped back to the caller's input order. Each item goes through the
+   * normal single-escrow `create_escrow` path, so validation, auth and
+   * events are identical to `createEscrow`.
+   *
+   * A failure never stops later chunks: every item is attempted, then a
+   * `BatchPartialFailureError` carrying all per-item results is thrown if
+   * any failed. Retry with `{ resumeFrom: error.results }` to send only the
+   * failures.
+   */
+  async createEscrows(
+    items: BatchCreateItem[],
+    options: BatchOptions<BatchCreateItem> = {},
+  ): Promise<BatchItemResult<BatchCreateItem>[]> {
+    const results = this.batchResults(items, options.resumeFrom);
+    const chunkSize = this.resolveChunkSize(options.chunkSize);
+
+    for (let start = 0; start < items.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, items.length);
+      for (let index = start; index < end; index++) {
+        if (results[index].ok) continue;
+        try {
+          const created = await this.createEscrow(items[index]);
+          results[index] = { index, item: items[index], ok: true, skipped: false, ...created };
+        } catch (error) {
+          results[index] = {
+            index,
+            item: items[index],
+            ok: false,
+            skipped: false,
+            error: batchErrorMessage(error),
+          };
+        }
+      }
+    }
+
+    this.throwOnBatchFailure(results);
+    return results;
+  }
+
+  /**
+   * Settles several escrows (`release` or `refund`), chunked to the
+   * contract's max batch size and mapped back to the caller's input order.
+   * Each operation goes through the existing single-op `release`/`refund`
+   * path, so auth and state rules are unchanged.
+   *
+   * A failure never stops later chunks: every operation is attempted, then
+   * a `BatchPartialFailureError` carrying all per-op results is thrown if
+   * any failed. Retry with `{ resumeFrom: error.results }` to send only the
+   * failures — already settled escrows are then skipped, never re-sent.
+   */
+  async settleMany(
+    ops: BatchSettleOperation[],
+    options: BatchOptions<BatchSettleOperation> = {},
+  ): Promise<BatchItemResult<BatchSettleOperation>[]> {
+    const results = this.batchResults(ops, options.resumeFrom);
+    const chunkSize = this.resolveChunkSize(options.chunkSize);
+
+    for (let start = 0; start < ops.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, ops.length);
+      for (let index = start; index < end; index++) {
+        if (results[index].ok) continue;
+        const op = ops[index];
+        try {
+          const settled = op.kind === "release"
+            ? await this.release({ escrowId: op.escrowId, caller: op.caller })
+            : await this.refund({ escrowId: op.escrowId, caller: op.caller });
+          results[index] = { index, item: op, ok: true, skipped: false, ...settled };
+        } catch (error) {
+          results[index] = { index, item: op, ok: false, skipped: false, error: batchErrorMessage(error) };
+        }
+      }
+    }
+
+    this.throwOnBatchFailure(results);
+    return results;
+  }
+
+  /** One not-yet-successful result per input, pre-filled from `resumeFrom`. */
+  private batchResults<T>(items: T[], resumeFrom?: BatchItemResult<T>[]): BatchItemResult<T>[] {
+    const results: BatchItemResult<T>[] = items.map((item, index) => ({
+      index,
+      item,
+      ok: false,
+      skipped: false,
+    }));
+    for (const prior of resumeFrom ?? []) {
+      if (!prior.ok || prior.index < 0 || prior.index >= results.length) continue;
+      results[prior.index] = { ...prior, item: items[prior.index], skipped: true };
+    }
+    return results;
+  }
+
+  private throwOnBatchFailure<T>(results: BatchItemResult<T>[]): void {
+    if (results.some((result) => !result.ok)) throw new BatchPartialFailureError(results);
+  }
+
+  /** Clamp a caller-supplied chunk size to the contract's max batch size. */
+  private resolveChunkSize(requested?: number): number {
+    if (requested === undefined || !Number.isFinite(requested) || requested < 1) return MAX_BATCH_SIZE;
+    return Math.min(Math.floor(requested), MAX_BATCH_SIZE);
+  }
+
+
+  /**
+   * Simulates a `release`, has the releaser sign only its short-lived contract
+   * authorization entry, and returns the resulting transaction for a separate
+   * relayer to sign and submit. The relayer is the transaction source, so it
+   * pays the fee; no envelope signature is collected here. Keep the returned
+   * authorization private and submit it before `expiresAtLedger`.
+   */
+  async authorizeRelease(params: RelayedAuthorizationParams): Promise<RelayedAuthorization> {
+    return this.authorizeSettlement("release", params);
+  }
+
+  /**
+   * Simulates a `refund` and collects only the releaser's contract auth entry,
+   * leaving the envelope for the relayer to sign and pay for. Same lifetime and
+   * privacy rules as `authorizeRelease`.
+   */
+  async authorizeRefund(params: RelayedAuthorizationParams): Promise<RelayedAuthorization> {
+    return this.authorizeSettlement("refund", params);
+  }
+
+  private async authorizeSettlement(
+    settlement: "release" | "refund",
+    params: RelayedAuthorizationParams,
+  ): Promise<RelayedAuthorization> {
+    const client = this.contractClient(params.relayer);
+    const tx = settlement === "release"
+      ? await client.release({ escrow_id: params.escrowId, caller: params.releaser.publicKey() })
+      : await client.refund({ escrow_id: params.escrowId, caller: params.releaser.publicKey() });
+
+    if (tx.isReadCall) {
+      throw new Error(`${settlement} was simulated as a read call; no transaction was assembled.`);
+    }
+
+    const latestLedger = await this.rpc.getLatestLedger();
+    const expiresAtLedger = latestLedger.sequence + RELAYED_AUTH_TTL_LEDGERS;
+
+    // The relayer is the transaction source, so the envelope signature covers
+    // its own auth; only the releaser's separate auth entry needs signing here.
+    if (tx.needsNonInvokerSigningBy().includes(params.releaser.publicKey())) {
+      await tx.signAuthEntries({
+        signAuthEntry: params.releaser,
+        expiration: expiresAtLedger,
+      });
+    }
+
+    return { transaction: tx.toJSON(), expiresAtLedger };
+  }
+
+  /**
+   * Signs a relayed authorization's envelope as `relayer` and submits it.
+   * Rejects an authorization for a different settlement method than the one
+   * named, so a `release` authorization cannot be smuggled through `refund`.
+   * Returns the submitted transaction's hash.
+   */
+  async submitRelayed(
+    settlement: "release" | "refund",
+    authorization: RelayedAuthorization,
+    relayer: EscrowSigner,
+  ): Promise<{ txHash: string }> {
+    let method: unknown;
+    try {
+      method = (JSON.parse(authorization.transaction) as { method?: unknown }).method;
+    } catch (error) {
+      throw new TypeError(`Relayed authorization is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (method !== settlement) {
+      throw new TypeError(
+        `Relayed authorization is for ${String(method) || "an unknown method"}, not ${settlement}.`
+      );
+    }
+
+    const client = this.contractClient(relayer);
+    const tx = client.txFromJSON<Result<void>>(authorization.transaction);
+    const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
   }
