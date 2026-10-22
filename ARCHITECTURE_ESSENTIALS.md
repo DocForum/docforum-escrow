@@ -22,8 +22,6 @@ release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser,
 release_with_approvals(escrow_id, approvers) -> result   // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — >= threshold distinct releasers, each authorizing this invocation
 refund(escrow_id, caller) -> result    // IMPLEMENTED (Phase E2 + E4) — a releaser when threshold is 1; anyone too, once refund_after has passed, and then still only to the stored `refund_to` (= payer unless set at creation, ADR 0009)
 refund_with_approvals(escrow_id, approvers) -> result    // IMPLEMENTED (Phase E5, issue #119) — same approval rules as release_with_approvals
-create_escrows(payer, items) -> vec(escrow_id) // IMPLEMENTED (Phase E5, issue #74) — batch create; `items.len()` <= `MAX_BATCH_SIZE` (50), atomic: one invalid item reverts the whole call
-settle_many(caller, escrow_ids) -> vec(result) // IMPLEMENTED (Phase E5, issue #74) — batch release for one caller; per-op result in input order, one rejected op does not stop the rest
 top_up(escrow_id, payer, amount) -> result // IMPLEMENTED (issue #26) — original payer only, funded state only; emits `top_up`
 rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue #23) — single-releaser escrow only; current releaser and payer authorize; funded only
 ```
@@ -210,6 +208,21 @@ contract enforces *who* can call release/refund, not *why* — keep it that
 way. Baking healthcare-specific logic into the contract is exactly the
 scope creep this repo exists to avoid (see README "why this repo exists,
 honestly").
+
+### Contract-account (passkey / smart-wallet) payers
+
+`payer` is an `Address`, so a Soroban contract account (for example a
+passkey-backed smart wallet) is a valid payer and the escrow contract needs no
+change. what differs is authorization: a `C...` account cannot sign a
+transaction envelope, so it authorizes the invocation with a signed **auth
+entry** that its own `__check_auth` verifies (secp256r1/WebAuthn for a passkey
+wallet).
+
+The SDK's write path signs envelopes, so it covers `G...` payers only; it does
+not build or accept auth entries for `C...` payers yet. The flow, the missing
+two-step API and the test contract the follow-up needs are written up in
+`docs/smart-wallet-auth-flow.md`. The SDK read path (`getEscrow`,
+`getStatus`) needs no signer and works for any payer type today.
 
 ### Signer interface and browser wallets (issue #127)
 
