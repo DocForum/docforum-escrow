@@ -22,8 +22,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
-    IntoVal, String, Vec,
+    address_payload::AddressPayload, contract, contracterror, contractimpl, contracttype,
+    symbol_short, token, Address, Bytes, BytesN, Env, IntoVal, String, Vec,
 };
 
 /// Largest allowed releaser set for one escrow. Ten covers every
@@ -35,6 +35,11 @@ pub const MAX_RELEASERS: u32 = 10;
 
 /// Maximum `condition_ref` length in bytes (threat model T10, Phase E5).
 pub const MAX_CONDITION_REF_LEN: u32 = 64;
+
+/// Domain separator for attestation messages. Written into every message
+/// without a length prefix and mirrored byte for byte in the SDK's
+/// `buildAttestationMessage` — see docs/adr/0005.
+pub const ATTESTATION_DOMAIN: &[u8] = b"docforum-escrow-attestation";
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -146,6 +151,12 @@ pub enum Error {
     InvalidReleaseNotBefore = 22,
     /// Release was attempted before the configured time.
     ReleaseTooEarly = 23,
+    /// The escrow's single releaser is not an ed25519 account key, so an
+    /// attestation signature cannot be checked against it. Appended at the
+    /// end so existing discriminants keep their on-chain values.
+    InvalidSignature = 25,
+    /// The attestation `action` was not the expected `"release"` value.
+    InvalidAction = 26,
 }
 
 #[contract]
@@ -559,6 +570,49 @@ impl EscrowContract {
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
     }
 
+    /// Releases the escrowed `amount` to `payee` on presentation of an
+    /// off-chain ed25519 attestation, instead of the releaser signing this
+    /// transaction (docs/adr/0005). Anyone may submit the call; the
+    /// authorisation comes entirely from `signature`.
+    ///
+    /// The escrow must have exactly one releaser and that releaser must be
+    /// an ed25519 account address (`G…`) — its account key is the
+    /// attestation key. M-of-N escrows use `release_with_approvals`.
+    ///
+    /// The signed message is `attestation_message(escrow_id, action)`: it is
+    /// domain-separated, bound to this contract's address, this network's id
+    /// and the `escrow_id`, so a signature can never be replayed on another
+    /// network, contract or escrow. `action` must be `"release"`.
+    ///
+    /// Same state rule as `release`: only while `Funded`. A bad signature
+    /// fails verification (the host traps), so nothing is released.
+    pub fn release_with_attestation(
+        env: Env,
+        escrow_id: u64,
+        action: String,
+        signature: BytesN<64>,
+    ) -> Result<(), Error> {
+        if action != String::from_str(&env, "release") {
+            return Err(Error::InvalidAction);
+        }
+
+        let mut data = Self::load(&env, escrow_id)?;
+        Self::check_funded(&data)?;
+        let public_key = Self::releaser_ed25519_key(&data)?;
+        let message = Self::build_attestation_message(&env, escrow_id, &action);
+        env.crypto().ed25519_verify(&public_key, &message, &signature);
+
+        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
+    }
+
+    /// The canonical attestation message for `escrow_id` and `action`,
+    /// exposed read-only so clients and auditor tooling can verify a
+    /// signature without reconstructing the layout themselves. Mirrored
+    /// exactly by `buildAttestationMessage` in the SDK.
+    pub fn attestation_message(env: Env, escrow_id: u64, action: String) -> Bytes {
+        Self::build_attestation_message(&env, escrow_id, &action)
+    }
+
     fn create_escrow_inner(
         env: &Env,
         payer: Address,
@@ -804,6 +858,52 @@ impl EscrowContract {
             return Err(Error::NotFunded);
         }
         Ok(())
+    }
+
+    /// The ed25519 key an attestation must be signed with: the master key
+    /// of the escrow's single releaser account. Errs for M-of-N escrows and
+    /// for contract-address releasers, which have no ed25519 key.
+    fn releaser_ed25519_key(data: &EscrowData) -> Result<BytesN<32>, Error> {
+        if data.threshold != 1 {
+            return Err(Error::ThresholdNotMet);
+        }
+        let releaser = data.releasers.get(0).ok_or(Error::InvalidReleaser)?;
+        match releaser.to_payload() {
+            Some(AddressPayload::AccountIdPublicKeyEd25519(key)) => Ok(key),
+            _ => Err(Error::InvalidSignature),
+        }
+    }
+
+    /// Builds the canonical attestation message. Layout (big-endian, no
+    /// padding), mirrored by the SDK:
+    ///
+    ///   domain         : `ATTESTATION_DOMAIN` bytes, no length prefix
+    ///   network_id     : 32 bytes (sha256 of the network passphrase)
+    ///   contract_len   : u32
+    ///   contract_id    : UTF-8 strkey of this contract (`C…`)
+    ///   escrow_id      : u64
+    ///   action_len     : u32
+    ///   action         : UTF-8 bytes
+    fn build_attestation_message(env: &Env, escrow_id: u64, action: &String) -> Bytes {
+        let mut message = Bytes::new(env);
+        message.append(&Bytes::from_slice(env, ATTESTATION_DOMAIN));
+        message.append(&Bytes::from_array(env, &env.ledger().network_id().to_array()));
+
+        let contract_id = env.current_contract_address().to_string().to_bytes();
+        message.append(&Bytes::from_array(
+            env,
+            &(contract_id.len() as u32).to_be_bytes(),
+        ));
+        message.append(&contract_id);
+
+        message.append(&Bytes::from_array(env, &escrow_id.to_be_bytes()));
+        let action_bytes = action.to_bytes();
+        message.append(&Bytes::from_array(
+            env,
+            &(action_bytes.len() as u32).to_be_bytes(),
+        ));
+        message.append(&action_bytes);
+        message
     }
 
     fn contains(list: &Vec<Address>, candidate: &Address) -> bool {

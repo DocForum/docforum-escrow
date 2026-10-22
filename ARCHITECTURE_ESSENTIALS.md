@@ -22,6 +22,8 @@ release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser,
 release_with_approvals(escrow_id, approvers) -> result   // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — >= threshold distinct releasers, each authorizing this invocation
 refund(escrow_id, caller) -> result    // IMPLEMENTED (Phase E2 + E4) — a releaser when threshold is 1; anyone too, once refund_after has passed, and then still only to the stored `refund_to` (= payer unless set at creation, ADR 0009)
 refund_with_approvals(escrow_id, approvers) -> result    // IMPLEMENTED (Phase E5, issue #119) — same approval rules as release_with_approvals
+release_with_attestation(escrow_id, action, signature) -> result // IMPLEMENTED (Phase E5, issue #75) — single-releaser ed25519 attestation; `action` must be "release"
+attestation_message(escrow_id, action) -> bytes // IMPLEMENTED (Phase E5, issue #75) — read-only: the exact bytes an attestation signs
 top_up(escrow_id, payer, amount) -> result // IMPLEMENTED (issue #26) — original payer only, funded state only; emits `top_up`
 rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue #23) — single-releaser escrow only; current releaser and payer authorize; funded only
 ```
@@ -31,6 +33,17 @@ escrow data chosen by the payer at creation and immutable afterwards. There is
 still no admin, no owner, no pause and no upgrade path — OpenZeppelin's
 pausable/upgradeable/access modules were evaluated and rejected in
 `docs/adr/0006` precisely because they would add one.
+`release_with_attestation` lets a single-releaser escrow settle on an
+off-chain ed25519 attestation instead of a transaction signed by the
+releaser: the releaser's account key signs a message binding the domain
+(`docforum-escrow-attestation`), the network id, the contract address, the
+escrow id and the action, so a signature cannot be replayed on another
+network, deployment, escrow or action. The message layout is mirrored
+byte-for-byte by the SDK's `buildAttestationMessage`; M-of-N escrows keep
+using `release_with_approvals`, and escrows whose releaser is a contract
+address have no ed25519 key to verify against. The transaction fee can be
+paid by any account, so a relayer can submit a release it did not authorise.
+
 The allowlist is fixed when the contract is deployed. `create_escrow`
 rejects any token outside a non-empty list with `DisallowedToken` (error
 code 8); an empty list preserves the prior open-token behavior. The
