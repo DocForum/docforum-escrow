@@ -466,7 +466,12 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   resume, retention errors, and stopping. Bumped the additive SDK surface
   from 0.3.0 to 0.4.0. SDK typecheck/build and contract tests/build pass;
   lifecycle events remain unavailable until issue #9 changes the contract.
-
+- 2026-10-18 — Phase E7 (issue #64): added a pure-Rust reference
+  model of the escrow state machine (`contracts/escrow/tests/model.rs`)
+  and proptest state-machine tests comparing contract results and stored
+  state against the model after every generated operation, including
+  auth outcomes. CI runs a bounded case count; a nightly workflow runs
+  a larger one.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-10-09 — Phase E6 started: added `.github/workflows/release-sdk.yml`
   (tag-triggered `sdk-v*` build/test/`npm publish --provenance` + GitHub
