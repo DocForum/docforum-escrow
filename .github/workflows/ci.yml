@@ -211,8 +211,36 @@ jobs:
         working-directory: sdk
 
       # Deliberately NOT run here: `npm run test:integration`
-      # (tests/testnet-integration.test.ts) depends on live testnet and
-      # Friendbot funding. Runtime checks use local fixtures only.
+      # (tests/testnet-integration.test.ts) — it depends on live testnet
+      # + Friendbot funding, a materially different reliability profile
+      # than this job's deterministic checks. Run it manually; see that
+      # file's own comment for why.
+  sdk-python:
+    name: Python SDK (unit tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk-python
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run offline unit tests
+        run: pytest -q
+
+      # Deliberately NOT run here: the testnet integration test
+      # (tests/testnet_integration.py) — it depends on live testnet +
+      # Friendbot funding, a materially different reliability profile
+      # than this job's deterministic checks. Run it manually; see that
+      # file's own comment for why.
 
   escrow-react:
     name: React hooks package

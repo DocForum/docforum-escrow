@@ -1,18 +1,18 @@
-// Real-network integration test — per issue #4's DoD: "at least one test
+// Real-network integration test -- per issue #4's DoD: "at least one test
 // exercising both [create_escrow/get_status] against a running/testnet
 // contract instance, not just the contract's own test suite." Now also
 // covers release/refund (Phase E2) and the `refund_after` deadline +
 // `get_escrow` read path (Phase E4, issue #11).
 //
-// Deliberately NOT wired into `npm test`/CI (see package.json — this
+// Deliberately NOT wired into `npm test`/CI (see package.json -- this
 // runs via `npm run test:integration` only): it depends on testnet
 // liveness and Friendbot's funding rate limits, a materially different
 // reliability profile than this org's other "integration" tests (e.g.
-// docforum-core's booking test spins up its own throwaway Postgres —
+// docforum-core's booking test spins up its own throwaway Postgres --
 // self-contained, no external service). A flaky external network
 // shouldn't block every contributor's PR here.
 //
-// Fresh keypairs are generated and Friendbot-funded per run — never
+// Fresh keypairs are generated and Friendbot-funded per run -- never
 // commit a real secret key, even a testnet one, into a repo.
 import { describe, expect, it } from "vitest";
 import {
@@ -27,11 +27,11 @@ import {
 } from "@stellar/stellar-sdk";
 import { EscrowClient } from "../src/index.js";
 
-// Current upstream-main testnet deployment, including BalanceMismatch
-// and opt-in payee acceptance — see docs/testnet-deployments.md.
+// Live testnet deployment of the Phase E4 contract (adds `refund_after`
+// timeout refund + `get_escrow`) -- see docs/testnet-deployments.md.
 // Public contract addresses, not secrets.
-const CONTRACT_ID = "CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR";
-const NATIVE_XLM_SAC = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+const CONTRACT_ID = "CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5";
+const NATIVE_XLM_SAC = "CDLZFC3SYYJDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 
 async function fundedKeypair(): Promise<Keypair> {
   const kp = Keypair.random();
