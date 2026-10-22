@@ -211,6 +211,29 @@ export interface Client {
   accept: ({escrow_id, payee}: {escrow_id: u64, payee: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
 
   /**
+   * Construct and simulate a cancel transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Lets the payer take the funds back **before the payee accepts**
+   * (docs/adr/0010): returns the escrowed `amount` to `refund_to` (the
+   * `payer` unless a sponsor destination was fixed at creation, ADR
+   * 0009) and marks the escrow `Cancelled`. Allowed only while **all**
+   * hold:
+   * 
+   * - `payer` is the escrow's stored payer and authorizes the call;
+   * - the escrow is still `Funded` (`NotFunded` otherwise — never after
+   * a release, refund or earlier cancel);
+   * - it was created with `requires_acceptance`
+   * (`AcceptanceNotConfigured` otherwise — without the gate there is
+   * no acceptance step to race, so no cancel window exists);
+   * - the payee has not accepted (`AlreadyAccepted` otherwise).
+   * 
+   * The destination is read from storage, so invariant I1 is unchanged.
+   * Payees: do not rely on a `requires_acceptance` escrow until you
+   * have called `accept`. `accept` and `cancel` race on one ledger
+   * state: whichever lands first wins and the other fails.
+   */
+  cancel: ({escrow_id, payer}: {escrow_id: u64, payer: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
+
+  /**
    * Construct and simulate a refund transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Returns the escrowed `amount` to the escrow's `refund_to` (the
    * `payer` unless a different destination was fixed at creation —
@@ -448,6 +471,7 @@ export class Client extends ContractClient {
   }
   public readonly fromJSON = {
     accept: this.txFromJSON<Result<void>>,
+        cancel: this.txFromJSON<Result<void>>,
         refund: this.txFromJSON<Result<void>>,
         settle: this.txFromJSON<Result<void>>,
         top_up: this.txFromJSON<Result<void>>,
