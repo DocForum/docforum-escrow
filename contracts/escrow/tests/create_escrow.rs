@@ -139,6 +139,15 @@ fn get_status_errors_for_unknown_escrow() {
 }
 
 #[test]
+fn version_reports_the_contract_semver() {
+    let env = Env::default();
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert_eq!(client.version(), String::from_str(&env, "1.0.0"));
+}
+
+#[test]
 fn create_escrow_rejects_condition_ref_that_is_too_long() {
     let env = Env::default();
     env.mock_all_auths();

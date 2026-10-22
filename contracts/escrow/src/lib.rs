@@ -36,6 +36,12 @@ pub const MAX_RELEASERS: u32 = 10;
 /// Maximum `condition_ref` length in bytes (threat model T10, Phase E5).
 pub const MAX_CONDITION_REF_LEN: u32 = 64;
 
+// Bump this value whenever a contract interface or behavior change is made.
+// CI checks this constant against the base branch when this file changes.
+pub const CONTRACT_VERSION: &str = "1.0.0";
+
+include!(concat!(env!("OUT_DIR"), "/contract_metadata.rs"));
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EscrowStatus {
@@ -153,6 +159,13 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
+    /// Semantic version of this contract interface and behavior.
+    /// Build provenance is available separately in the WASM contract
+    /// metadata (`git_sha` and `soroban_sdk_version`).
+    pub fn version(env: Env) -> String {
+        String::from_str(&env, CONTRACT_VERSION)
+    }
+
     /// Sets the immutable token allowlist at deployment. An empty list
     /// preserves the legacy behavior and allows any token address.
     pub fn __constructor(env: Env, allowed_tokens: Vec<Address>) {
