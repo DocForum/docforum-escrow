@@ -326,6 +326,16 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   previously stale committed bindings (missing `top_up`, errors 6–8) were
   regenerated here.
 - [x] **PR conflict notifier** — `.github/workflows/pr-conflict-notifier.yml` + `.github/scripts/pr-conflict-notifier.cjs`. On every push to `main` (and every 3h) it labels open PRs that conflict with `main` as `needs-rebase` and @mentions the author once per push with rebase steps; the label clears itself when the conflict is resolved. Runs from `main` only and never checks out PR code.
+- [x] Property-based state-machine tests with proptest (issue #64).
+  Pure-Rust reference model of the escrow state machine in
+  `contracts/escrow/tests/model.rs` — no Soroban types, intentionally simple
+  enough to review independently. A proptest state machine generates
+  operation sequences (create/release/refund/timeout-refund) and compares
+  contract results and stored state against the model after every step,
+  including auth outcomes (who may call what, when). Shrunk failures
+  print a readable operation sequence. CI runs a bounded case count
+  (`PROPTEST_CASES`); a nightly workflow runs a larger count. Closes
+  issue #64.
 - [x] **TLA+ escrow state-machine model** (issue #112) — `spec/Escrow.tla` + `spec/Escrow.cfg` model the actual escrow lifecycle, status transitions, timeout refund behavior, payee acceptance, and same-ledger race windows while explicitly omitting unsupported disputes/milestone logic. TLC verification passed against the committed model.
 
 ## Explicitly out of scope for this repo
@@ -417,7 +427,12 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   resume, retention errors, and stopping. Bumped the additive SDK surface
   from 0.3.0 to 0.4.0. SDK typecheck/build and contract tests/build pass;
   lifecycle events remain unavailable until issue #9 changes the contract.
-
+- 2026-10-18 — Phase E7 (issue #64): added a pure-Rust reference
+  model of the escrow state machine (`contracts/escrow/tests/model.rs`)
+  and proptest state-machine tests comparing contract results and stored
+  state against the model after every generated operation, including
+  auth outcomes. CI runs a bounded case count; a nightly workflow runs
+  a larger one.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-10-09 — Phase E6 started: added `.github/workflows/release-sdk.yml`
   (tag-triggered `sdk-v*` build/test/`npm publish --provenance` + GitHub
