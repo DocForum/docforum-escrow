@@ -1,6 +1,6 @@
 {
   "name": "@docforum/escrow-sdk",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "TypeScript client for the docforum-escrow Soroban contract.",
   "type": "module",
   "main": "dist/index.js",
@@ -27,7 +27,7 @@
     "test:fixtures": "vitest run tests/events.test.ts",
     "test:unit": "vitest run tests/fees.test.ts tests/signers.test.ts",
     "test:instrumentation": "vitest run tests/instrumentation.test.ts",
-    "test:offline": "vitest run tests/events.test.ts tests/quorum-validation.test.ts tests/instrumentation.test.ts tests/signers.test.ts",
+    "test:offline": "vitest run tests/batch.test.ts tests/events.test.ts tests/quorum-validation.test.ts tests/instrumentation.test.ts tests/signers.test.ts tests/relayed.test.ts tests/escrow-data.test.ts",
     "typecheck": "tsc --noEmit",
     "test:runtime": "node tests/runtime-smoke.mjs",
     "test:browser": "node tests/browser-smoke.mjs"

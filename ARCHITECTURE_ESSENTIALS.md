@@ -14,13 +14,16 @@ __constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; emp
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009); deployed on testnet
 create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id   // optional payee acceptance gate; deployed on testnet
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
+cancel(escrow_id, payer) -> ()   // payer-authorized, only while Funded + requires_acceptance + not yet accepted; funds to refund_to, status Cancelled (ADR 0010); not deployed yet
 create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, deployed on testnet
-get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
+get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded | Cancelled — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after, refund_to — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
 release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser, threshold must be 1, only while Funded
 release_with_approvals(escrow_id, approvers) -> result   // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — >= threshold distinct releasers, each authorizing this invocation
 refund(escrow_id, caller) -> result    // IMPLEMENTED (Phase E2 + E4) — a releaser when threshold is 1; anyone too, once refund_after has passed, and then still only to the stored `refund_to` (= payer unless set at creation, ADR 0009)
 refund_with_approvals(escrow_id, approvers) -> result    // IMPLEMENTED (Phase E5, issue #119) — same approval rules as release_with_approvals
+create_escrows(payer, items) -> vec(escrow_id) // IMPLEMENTED (Phase E5, issue #74) — batch create; `items.len()` <= `MAX_BATCH_SIZE` (50), atomic: one invalid item reverts the whole call
+settle_many(caller, escrow_ids) -> vec(result) // IMPLEMENTED (Phase E5, issue #74) — batch release for one caller; per-op result in input order, one rejected op does not stop the rest
 top_up(escrow_id, payer, amount) -> result // IMPLEMENTED (issue #26) — original payer only, funded state only; emits `top_up`
 rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue #23) — single-releaser escrow only; current releaser and payer authorize; funded only
 ```
