@@ -22,6 +22,8 @@ release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser,
 release_with_approvals(escrow_id, approvers) -> result   // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — >= threshold distinct releasers, each authorizing this invocation
 refund(escrow_id, caller) -> result    // IMPLEMENTED (Phase E2 + E4) — a releaser when threshold is 1; anyone too, once refund_after has passed, and then still only to the stored `refund_to` (= payer unless set at creation, ADR 0009)
 refund_with_approvals(escrow_id, approvers) -> result    // IMPLEMENTED (Phase E5, issue #119) — same approval rules as release_with_approvals
+create_escrows(payer, items) -> vec(escrow_id) // IMPLEMENTED (Phase E5, issue #74) — batch create; `items.len()` <= `MAX_BATCH_SIZE` (50), atomic: one invalid item reverts the whole call
+settle_many(caller, escrow_ids) -> vec(result) // IMPLEMENTED (Phase E5, issue #74) — batch release for one caller; per-op result in input order, one rejected op does not stop the rest
 top_up(escrow_id, payer, amount) -> result // IMPLEMENTED (issue #26) — original payer only, funded state only; emits `top_up`
 rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue #23) — single-releaser escrow only; current releaser and payer authorize; funded only
 ```
@@ -102,10 +104,26 @@ await client.refund({ escrowId, caller });   // { txHash } — releaser when thr
 await client.refundWithApprovals({ escrowId, approvers });  // { txHash } — M-of-N refund
 await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
 const stop = client.subscribe(handler, { cursor, pollIntervalMs }); // serial polling; await handler for back-pressure
+await client.createMilestoneEscrow({ payer, payee, token, amount, conditionRef, releaser, milestones }); // milestones: bigint[] tranches, validated client-side (sum == amount, all > 0); one escrow per tranche
+await client.releaseMilestone({ escrow: group, milestoneIndex, caller }); // releases that tranche's escrow, once
+await client.refundMilestone({ escrow: group, milestoneIndex, caller }); // refunds that tranche's escrow, same rules as refund
+await client.getMilestones(group);           // [{ index, amount, escrowId, status: "unreleased" | "released" | "refunded" }]
 await client.estimate({ source, method, args }); // { resourceFee, inclusionFee, total, minResourceFee } — simulation only, 20% resource buffer
 client.guardSponsorship(signedXdr);          // { ok, reasons, invokedContracts } — every op + contract auth entry must target this escrow
 client.feeBump(signedXdr, sponsor, { maxFee, baseFee? }); // { xdr, fee, innerTxHash } — throws MaxFeeExceededError, never overshoots the cap
 ```
+
+Milestones are an SDK-level grouping, not a contract entry point: the
+deployed contract is single-tranche, so `createMilestoneEscrow` creates one
+ordinary escrow per tranche, tags its `conditionRef` as
+`<conditionRef>#m<i+1>/<n>`, and returns the ids. Each tranche therefore
+settles independently, release/refund act per tranche, and creation is one
+transaction per tranche. `validateMilestoneSchedule` checks the schedule
+(positive tranches summing exactly to `amount`, i128-safe) before the first
+RPC call and throws `MilestoneScheduleError`; a tag that would exceed the
+64-byte `condition_ref` limit is rejected the same way. A failure partway
+through throws `MilestoneEscrowPartialError`, which carries the ids of the
+tranches already funded so the caller can release or refund them.
 
 `refundTo` on `createEscrow` and `createQuorumEscrow` is optional too (default: the payer) and
 `getEscrow` returns it as `refundTo`.
