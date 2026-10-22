@@ -52,6 +52,23 @@ export type { EscrowIndexerClientConfig, EscrowPage, IndexedEscrow } from "./ind
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Cancelled";
 
+/**
+ * One tranche of a milestone schedule. A milestone escrow is a *group* of
+ * single-tranche escrows — see `createMilestoneEscrow`.
+ */
+export type MilestoneStatus = "unreleased" | "released" | "refunded";
+
+/** A single tranche of a milestone escrow. */
+export interface Milestone {
+  /** Position in the schedule, `0`-based — pass this to `releaseMilestone`. */
+  index: number;
+  /** Tranche amount in the token's smallest unit. */
+  amount: bigint;
+  /** The escrow that holds this tranche — see `createMilestoneEscrow`. */
+  escrowId: bigint;
+  status: MilestoneStatus;
+}
+
 export type ArchivedEntryBehavior = "auto" | "error";
 
 /** Typed error for contract calls that cannot restore archived ledger entries. */
@@ -168,6 +185,103 @@ export interface Escrow {
   status: EscrowStatus;
 }
 
+/** Largest value an `i128` can hold — the contract's arithmetic type. */
+const I128_MAX = 2n ** 127n - 1n;
+
+/**
+ * `condition_ref` is capped on-chain at `MAX_CONDITION_REF_LENGTH` bytes
+ * (`contracts/escrow/src/lib.rs` `MAX_CONDITION_REF_LEN`, threat model T10);
+ * a longer value is rejected with `ConditionRefTooLong`. A milestone group
+ * tags each tranche, so the base ref has that much less room.
+ */
+
+/**
+ * Thrown when a milestone schedule is invalid. Caught before any network
+ * call, so an obviously-invalid schedule costs nothing.
+ */
+export class MilestoneScheduleError extends Error {
+  readonly reason: string;
+  constructor(reason: string) {
+    super(`Invalid milestone schedule: ${reason}`);
+    this.name = "MilestoneScheduleError";
+    this.reason = reason;
+  }
+}
+
+/**
+ * `amount` must be positive, the schedule non-empty, every tranche positive,
+ * the sum exactly `amount`, and every value representable as an `i128`.
+ * Pure and synchronous: a malformed schedule is a programmer error, not a
+ * transaction to pay for.
+ */
+export function validateMilestoneSchedule(milestones: readonly bigint[], amount: bigint): void {
+  if (amount <= 0n) throw new MilestoneScheduleError(`amount must be positive, got ${amount}`);
+  if (milestones.length === 0) throw new MilestoneScheduleError("schedule must not be empty");
+  let sum = 0n;
+  for (const [index, tranche] of milestones.entries()) {
+    if (tranche <= 0n) throw new MilestoneScheduleError(`tranche ${index} must be positive, got ${tranche}`);
+    if (tranche > I128_MAX) throw new MilestoneScheduleError(`tranche ${index} exceeds the i128 maximum`);
+    sum += tranche;
+    if (sum > I128_MAX) throw new MilestoneScheduleError("schedule total exceeds the i128 maximum");
+  }
+  if (sum !== amount) {
+    throw new MilestoneScheduleError(`schedule sums to ${sum} but amount is ${amount}`);
+  }
+}
+
+/**
+ * `condition_ref` for tranche `index` of `count`: `<base>#m<index+1>/<count>`.
+ * Tagged so each tranche stays traceable back to its group on-chain, where
+ * only the ref is visible.
+ */
+export function milestoneConditionRef(base: string, index: number, count: number): string {
+  const ref = `${base}#m${index + 1}/${count}`;
+  if (ref.length > MAX_CONDITION_REF_LENGTH) {
+    throw new MilestoneScheduleError(
+      `conditionRef "${base}" is too long: the tranche tag needs "${ref}" (${ref.length} bytes) but the contract allows ${MAX_CONDITION_REF_LENGTH}`,
+    );
+  }
+  return ref;
+}
+
+/**
+ * Thrown when `createMilestoneEscrow` fails partway through: a group is N
+ * separate transactions, so the tranches before the failure are already
+ * funded on-chain and must be dealt with by the caller.
+ */
+export class MilestoneEscrowPartialError extends Error {
+  /** Escrow ids of the tranches that were created, in schedule order. */
+  readonly createdEscrowIds: readonly bigint[];
+  /** How many tranches had been created when the failure happened. */
+  readonly createdCount: number;
+  /** Total tranches the schedule asked for. */
+  readonly totalCount: number;
+  override readonly cause?: unknown;
+
+  constructor(createdEscrowIds: readonly bigint[], createdCount: number, totalCount: number, cause?: unknown) {
+    super(
+      `Milestone escrow creation failed at tranche ${createdCount + 1} of ${totalCount}; ` +
+        `${createdCount} tranche escrow(s) already exist and are funded: [${createdEscrowIds.join(", ")}]. ` +
+        "Release or refund them, then retry the remaining tranches.",
+    );
+    this.name = "MilestoneEscrowPartialError";
+    this.createdEscrowIds = createdEscrowIds;
+    this.createdCount = createdCount;
+    this.totalCount = totalCount;
+    this.cause = cause;
+  }
+}
+
+/** The tranche at `milestoneIndex`, with a clear error outside the schedule. */
+function trancheOf(escrow: MilestoneEscrow, milestoneIndex: number): Milestone {
+  if (!Number.isInteger(milestoneIndex) || milestoneIndex < 0 || milestoneIndex >= escrow.milestones.length) {
+    throw new RangeError(
+      `milestoneIndex ${milestoneIndex} is outside the schedule (0-${escrow.milestones.length - 1})`,
+    );
+  }
+  return escrow.milestones[milestoneIndex];
+}
+
 const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
 const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
 
@@ -249,6 +363,27 @@ export interface CreateEscrowParams {
   releaseNotBefore?: bigint;
 }
 
+export interface CreateMilestoneEscrowParams extends Omit<CreateEscrowParams, "amount"> {
+  /** Total across all tranches; must equal the sum of `milestones`. */
+  amount: bigint;
+  /**
+   * Tranche schedule in payout order. Every entry must be positive and the
+   * entries must sum exactly to `amount`; validated before any transaction
+   * (`MilestoneScheduleError`).
+   */
+  milestones: readonly bigint[];
+}
+
+/**
+ * A milestone schedule, as returned by `createMilestoneEscrow`: one
+ * single-tranche escrow per tranche, in schedule order.
+ */
+export interface MilestoneEscrow {
+  milestones: Milestone[];
+  /** The tranche escrow ids, in schedule order. */
+  escrowIds: bigint[];
+}
+
 export interface CancelParams {
   escrowId: bigint;
   /** The escrow's payer; signs the cancellation. */
@@ -263,6 +398,23 @@ export interface ReleaseOrRefundParams {
    * multi-signature escrow settles via `releaseWithApprovals` /
    * `refundWithApprovals`.
    */
+  caller: EscrowSigner;
+}
+
+/** Release params for one tranche of a milestone escrow. */
+export interface ReleaseMilestoneParams {
+  /** The group returned by `createMilestoneEscrow`. */
+  escrow: MilestoneEscrow;
+  /** `0`-based position in the schedule. */
+  milestoneIndex: number;
+  /** Must be that tranche's `releaser` (set at creation) — see docs/adr/0002. */
+  caller: EscrowSigner;
+}
+
+/** Refund params for one tranche of a milestone escrow — same rules as `refund`. */
+export interface RefundMilestoneParams {
+  escrow: MilestoneEscrow;
+  milestoneIndex: number;
   caller: EscrowSigner;
 }
 
@@ -698,6 +850,100 @@ export class EscrowClient {
       releaseNotBefore: data.release_not_before ?? undefined,
       status: data.status.tag,
     };
+  }
+
+  /**
+   * Creates a milestone escrow: one single-tranche escrow per entry in
+   * `milestones`, created in schedule order.
+   *
+   * The deployed contract is single-tranche, so a milestone schedule is
+   * modelled client-side as a *group* of escrows rather than a new contract
+   * entry point. That keeps every guarantee the contract already gives —
+   * per-tranche releaser auth, refund deadlines, `Funded`/`Released` state —
+   * and needs no contract change. Trade-offs, all visible in the return
+   * value:
+   *  - each tranche is its own escrow, so `releaseMilestone` /
+   *    `refundMilestone` act on one `escrowId` at a time;
+   *  - `payer` signs one transaction per tranche, so a group costs N
+   *    transactions ("N tranches = N escrows" is logged in `conditionRef`
+   *    as `<conditionRef>#m<i+1>/<n>`);
+   *  - creation is sequential and not atomic: if tranche *k* fails, the
+   *    earlier escrows already exist and are funded. The thrown
+   *    `MilestoneEscrowPartialError` carries their ids so the caller can
+   *    release or refund them.
+   *
+   * `milestones` must be positive and sum exactly to `amount`, validated
+   * before the first transaction (`MilestoneScheduleError`).
+   */
+  async createMilestoneEscrow(params: CreateMilestoneEscrowParams): Promise<MilestoneEscrow> {
+    validateMilestoneSchedule(params.milestones, params.amount);
+
+    // Validate every tagged ref up front: failing on tranche 3 after 2
+    // funded escrows exist is exactly the partial state this API must avoid.
+    const refs = params.milestones.map((_, index) =>
+      milestoneConditionRef(params.conditionRef, index, params.milestones.length),
+    );
+
+    const created: Milestone[] = [];
+    const { milestones: schedule, ...escrowParams } = params;
+    for (const [index, amount] of schedule.entries()) {
+      try {
+        const { escrowId } = await this.createEscrow({
+          ...escrowParams,
+          amount,
+          conditionRef: refs[index],
+        });
+        created.push({ index, amount, escrowId, status: "unreleased" });
+      } catch (error) {
+        throw new MilestoneEscrowPartialError(
+          created.map((milestone) => milestone.escrowId),
+          created.length,
+          schedule.length,
+          error,
+        );
+      }
+    }
+
+    return {
+      milestones: created,
+      escrowIds: created.map((milestone) => milestone.escrowId),
+    };
+  }
+
+  /**
+   * Releases one tranche to the payee. `caller` must be that tranche's
+   * `releaser`; out-of-order release is fine. Each tranche can be released
+   * at most once, because each is its own single-tranche escrow. Returns the
+   * transaction's hash.
+   */
+  async releaseMilestone(params: ReleaseMilestoneParams): Promise<{ txHash: string }> {
+    const { escrowId } = trancheOf(params.escrow, params.milestoneIndex);
+    return this.release({ escrowId, caller: params.caller });
+  }
+
+  /** Refunds one unreleased tranche to its `refundTo` — same rules as `refund`. */
+  async refundMilestone(params: RefundMilestoneParams): Promise<{ txHash: string }> {
+    const { escrowId } = trancheOf(params.escrow, params.milestoneIndex);
+    return this.refund({ escrowId, caller: params.caller });
+  }
+
+  /**
+   * Read-only: re-reads every tranche's escrow and reports it as
+   * `"unreleased"` (`Funded`), `"released"` (`Released`) or `"refunded"`
+   * (anything terminal otherwise). One `get_escrow` per tranche.
+   */
+  async getMilestones(escrow: MilestoneEscrow): Promise<Milestone[]> {
+    return Promise.all(
+      escrow.milestones.map(async ({ index, amount, escrowId }) => {
+        const status = (await this.getEscrow(escrowId)).status;
+        return {
+          index,
+          amount,
+          escrowId,
+          status: status === "Released" ? "released" : status === "Funded" ? "unreleased" : "refunded",
+        } satisfies Milestone;
+      }),
+    );
   }
 
   /** Moves the escrow's funds to its payee. Throws if `caller` isn't the escrow's `releaser`, or the escrow isn't `Funded`. Returns the transaction's hash. */
