@@ -6,6 +6,14 @@ on:
   pull_request:
 
 jobs:
+  resource-baseline:
+    name: Resource cost baseline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check public function baseline
+        run: python3 scripts/check-resource-baseline.py
+
   contract:
     name: Soroban contract (test + wasm build)
     runs-on: ubuntu-latest
