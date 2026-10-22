@@ -102,10 +102,16 @@ value. **Reviewers should challenge these ratings.**
   its ADR 0004) uses **one** `PLATFORM_RELEASER_SECRET` as the releaser of
   every escrow it creates. So today one leaked key affects every open
   escrow. The scoping benefit is available, but nobody uses it.
-- **Recovery:** none on-chain. You can't rotate a `releaser` on an
-  existing escrow (no setter exists). The only response is to race the
-  attacker: use the same key to settle every open escrow correctly first.
+- **Recovery:** a funded escrow can rotate its releaser when both the
+  current releaser and payer authorize the change (issue #23, ADR 0009).
+  Possession of the releaser key alone is insufficient to appoint an
+  attacker. Rotation cannot undo a settlement that already landed, and
+  it is unavailable if the payer cannot authorize. The timeout refund
+  path remains the fallback for escrows whose releaser is unavailable.
 - **Mitigations to consider:**
+  - [x] Allow the current releaser and payer to rotate the releaser on a
+    funded escrow (issue #23, ADR 0009); the payer's consent prevents
+    compromised releaser key alone from redirecting future control.
   - Make the `releaser` a Stellar multisig account (e.g. 2-of-3 signers).
     This works with no contract change, because `require_auth` on an
     account address checks that account's own signer thresholds.
@@ -301,6 +307,13 @@ behave like SEP-41.
   locked under the stored `releaser`'s control." It does **not** mean
   "the funds are committed to me." A payee should check who the
   `releaser` is before relying on an escrow.
+- **With the acceptance gate (issue #25, `docs/adr/0008`) the payer can
+  still cancel until the payee accepts (issue #27, `docs/adr/0010`):** on an
+  escrow with `requires_acceptance`, `Funded` plus `accepted_at == None`
+  means the payer may take the funds back to `refund_to` at any moment;
+  `accept` and `cancel` race and the first to land wins. Payees must call
+  `accept` before relying on such an escrow. After acceptance `cancel` is
+  closed for good. Escrows without the gate have no cancel.
 - **With an M-of-N releaser set (issue #119, `docs/adr/0007`), what a payee
   must check changes:** fewer than `threshold` colluding releasers cannot
   settle early, but `threshold` colluding releasers can — read `releasers`
@@ -455,3 +468,8 @@ Most useful to the project, in order:
 Leave findings as comments on the PR that adds this file, or on issue #6.
 A review only counts toward E4 if the reviewer is not the implementer
 (see issue #6).
+
+
+## T6 archive/restore regression coverage
+
+Escrow identifiers are monotonic and are never derived from the number of live entries. The restoration test plan therefore verifies that restoring an archived `NextId` cannot overwrite a live escrow; a new create must receive an identifier greater than every previously issued identifier. Settlement tests also re-check the `Funded` guard after restoration before release or refund.

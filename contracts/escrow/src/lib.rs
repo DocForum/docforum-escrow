@@ -267,6 +267,51 @@ impl EscrowContract {
             .ok_or(Error::NotFound)
     }
 
+    /// Rotates a funded escrow's releaser. Both the current releaser and
+    /// payer must authorize the change; the payer's consent prevents a
+    /// compromised releaser from silently appointing an attacker. The
+    /// replacement cannot be the contract itself or the payee.
+    pub fn rotate_releaser(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        new_releaser: Address,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+
+        if data.threshold != 1 {
+            return Err(Error::ThresholdNotMet);
+        }
+        let previous_releaser = data.releasers.get(0).ok_or(Error::InvalidReleaser)?;
+        if caller != previous_releaser {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        if new_releaser == env.current_contract_address() || new_releaser == data.payee {
+            return Err(Error::InvalidReleaser);
+        }
+
+        data.payer.require_auth();
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(new_releaser.clone());
+        data.releasers = releasers;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        env.events().publish(
+            (symbol_short!("rotate"), escrow_id),
+            (previous_releaser, new_releaser),
+        );
+        Ok(())
+    }
+
     /// Adds funds to a funded escrow without changing its parties or id.
     /// Only its original payer may authorize the transfer.
     pub fn top_up(env: Env, escrow_id: u64, payer: Address, amount: i128) -> Result<(), Error> {
@@ -369,6 +414,42 @@ impl EscrowContract {
         Self::check_funded(&data)?;
 
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
+    }
+
+    /// Lets the payer take the funds back **before the payee accepts**
+    /// (docs/adr/0010): returns the escrowed `amount` to `refund_to` (the
+    /// `payer` unless a sponsor destination was fixed at creation, ADR
+    /// 0009) and marks the escrow `Cancelled`. Allowed only while **all**
+    /// hold:
+    ///
+    /// - `payer` is the escrow's stored payer and authorizes the call;
+    /// - the escrow is still `Funded` (`NotFunded` otherwise — never after
+    ///   a release, refund or earlier cancel);
+    /// - it was created with `requires_acceptance`
+    ///   (`AcceptanceNotConfigured` otherwise — without the gate there is
+    ///   no acceptance step to race, so no cancel window exists);
+    /// - the payee has not accepted (`AlreadyAccepted` otherwise).
+    ///
+    /// The destination is read from storage, so invariant I1 is unchanged.
+    /// Payees: do not rely on a `requires_acceptance` escrow until you
+    /// have called `accept`. `accept` and `cancel` race on one ledger
+    /// state: whichever lands first wins and the other fails.
+    pub fn cancel(env: Env, escrow_id: u64, payer: Address) -> Result<(), Error> {
+        payer.require_auth();
+
+        let mut data = Self::load(&env, escrow_id)?;
+        if payer != data.payer {
+            return Err(Error::Unauthorized);
+        }
+        Self::check_funded(&data)?;
+        if !data.requires_acceptance {
+            return Err(Error::AcceptanceNotConfigured);
+        }
+        if data.accepted_at.is_some() {
+            return Err(Error::AlreadyAccepted);
+        }
+
+        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Cancelled)
     }
 
     /// Returns the escrowed `amount` to `refund_to` on behalf of an M-of-N
@@ -587,6 +668,7 @@ impl EscrowContract {
             EscrowStatus::Funded => symbol_short!("created"),
             EscrowStatus::Released => symbol_short!("released"),
             EscrowStatus::Refunded => symbol_short!("refunded"),
+            EscrowStatus::Cancelled => symbol_short!("cancelled"),
         };
         Self::publish_state(env, action, escrow_id, data);
         Ok(())
@@ -599,6 +681,7 @@ impl EscrowContract {
             EscrowStatus::Funded => symbol_short!("Funded"),
             EscrowStatus::Released => symbol_short!("Released"),
             EscrowStatus::Refunded => symbol_short!("Refunded"),
+            EscrowStatus::Cancelled => symbol_short!("Cancelled"),
         };
         env.events().publish(
             (symbol_short!("ESCROW"), action, id),
