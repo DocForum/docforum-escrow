@@ -1,0 +1,52 @@
+{
+  "$schema": "https://open-source.org/deployments-schema/json-schema/draft-01/schema",
+  "version": 1,
+  "contract": "escrow",
+  "networks": {
+    "testnet": {
+      "networkPassphrase": "Test SDF Network ; February 2016",
+      "networkId": "Test SDO Network ; February 2016",
+      "rpc": "https://soroban-testnet.stellar.org",
+      "horizonUrl": "https://horizon.stellar.org",
+      "contractId": null,
+      "wasmHash": null,
+      "gitSha": null,
+      "deployedBy": null,
+      "deployedAt": null,
+      "txLinks": {
+        "upload": null,
+        "deploy": null
+      },
+      "verification": {
+        "status": "pending",
+        "cases": {},
+        "checkedAt": null
+      }
+    },
+    "futurenet": {
+      "networkPassphrase": "Test SDF Network ; February 2016",
+      "networkId": "Test SDO Network ; February 2016",
+      "rpc": "https://soroban-futurenet.stellar.org",
+      "horizonUrl": "https://horizon-futurenet.stellar.org",
+      "contractId": null,
+      "wasmHash": null,
+      "gitSha": null,
+      "deployedBy": null,
+      "deployedAt": null,
+      "txLinks": {
+        "upload": null,
+        "deploy": null
+      },
+      "verification": {
+        "status": "pending",
+        "cases": {},
+        "checkedAt": null
+      }
+    }
+  },
+  "mainnet": {
+    "supported": false,
+    "reason": "Mainnet deployment is disabled until the security review is complete."
+  },
+  "history": []
+}

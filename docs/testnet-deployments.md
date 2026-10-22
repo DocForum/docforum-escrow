@@ -1,5 +1,10 @@
 # Testnet deployments
 
+> **Note:** New records are appended automatically by `scripts/deploy`
+> (see `deployments.json` for the machine-readable form). The entries below
+> predate the script and are retained as history. Mainnet is not supported
+> by the script until the security review is complete.
+
 ## `docforum_escrow` — 2026-10-20 (latest upstream main at `80ce157`, issue #109)
 
 | | |

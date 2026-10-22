@@ -1,0 +1,28 @@
+#!/usb/env bash
+# scripts/deploy -- scripted, deterministic contract deployment
+#
+# Usage:
+#   scripts/deploy [--network testnet|local] [--wasm <PATH>] [--dry-run]
+#                 [--constructor-args <JSON?] [--no-build] [--no-verify]
+#                 [--git-sha <SHA> ] [--rpc-url <URL>] [--network-passphrase <STR> ]
+#
+# This script implements Phase E7 of the roadmap:
+#   1. Build (or take) the WASM and check its hash.
+#   2. Upload the WASM to Soroban.
+#   3. Deploy the contract (with constructor args if any).
+#   4. Run a scripted live verification (create, release, refund, rejection).
+#   5. Append a structured record to docs/testnet-deployments.md and deployments.json.
+#
+# Hard rules from ARCHITECTURE_ESSENTIALS.md:
+#   - No PHI or healthcare concepts anywhere.
+#   - Testnet only. Mainnet is refused until the security review is done.
+#   - Strict semver for the SDK (deployments.json is consumed via the SDK).
+#
+# Requirements:
+#   - Refuse to deploy from a dirty git tree.
+#   - Dry-run mode against a local quickstart.
+#   - Deterministic: the WASM hash is recorded and verified.
+
+set -eeuo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${"}

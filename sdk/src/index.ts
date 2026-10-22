@@ -36,6 +36,7 @@ import {
 import { signerAddress, type EscrowSigner } from "./signers/types.js";
 
 export { Keypair };
+export { knownContractIds, resolveContractId, type KnownContractIds } from "./deployments.js";
 export { signerAddress, type EscrowSigner } from "./signers/types.js";
 export {
   otelTracer,
@@ -172,6 +173,12 @@ const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
 const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
 
 /**
+ * Network key used to look up a known contract id in `deployments.json` when
+ * the caller does not pass an explicit `contractId`.
+ */
+export type EscrowNetwork = "testnet" | "local";
+
+/**
  * Maximum allowed length of `conditionRef` in bytes — must match the
  * contract's bound (currently 64 bytes, see contracts/escrow/src/lib.rs
  * and docs/threat-model.md T10). Validated client-side so callers fail
@@ -195,8 +202,14 @@ export const MAX_RELEASERS = 10;
 const EMPTY_SPAN_ATTRIBUTES = {} as EscrowSpanAttributes;
 
 export interface EscrowClientConfig {
-  /** The deployed docforum-escrow contract's address (`C…`). */
-  contractId: string;
+  /**
+   * The deployed docforum-escrow contract's address (`C…`). Optional when
+   * `network` is given: the client then resolves the id from the
+   * machine-readable `deployments.json` written by `scripts/deploy`.
+   */
+  contractId?: string;
+  /** Network whose recorded deployment to use when `contractId` is omitted. */
+  network?: EscrowNetwork;
   /** Default: Soroban testnet RPC. */
   rpcUrl?: string;
   /** Default: Stellar testnet passphrase. */
@@ -446,7 +459,13 @@ export class EscrowClient {
   private readonly restoreSigner?: Keypair;
 
   constructor(config: EscrowClientConfig) {
-    this.contractId = config.contractId;
+    if (!config.contractId && !config.network) {
+      throw new TypeError("EscrowClientConfig requires either contractId or network.");
+    }
+    // Resolve a recorded deployment id lazily so a caller passing an explicit
+    // contractId never touches deployments.json (and never fails on a
+    // checkout that has not run scripts/deploy yet).
+    this.contractId = config.contractId ?? resolveContractId(config.network!);
     this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
     this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
     this.rpc = new RpcServer(this.rpcUrl);
@@ -455,6 +474,11 @@ export class EscrowClient {
       : config.instrumentation;
     this.archivalBehavior = config.archivalBehavior ?? "error";
     this.restoreSigner = config.restoreSigner;
+  }
+
+  /** The contract id this client talks to (explicit or resolved from deployments.json). */
+  getContractId(): string {
+    return this.contractId;
   }
 
   private contractClient(signer?: EscrowSigner): EscrowContractClient {

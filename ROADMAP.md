@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (contract features) now includes the OZ-library evaluation (ADR 0006, no library adopted) and the optional in-contract M-of-N releaser quorum (ADR 0007, SDK 0.5.0) — implemented, tested and pending a testnet redeploy. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm. Fee estimation and fee-bump sponsorship helpers (issue #70) are implemented in the SDK, `0.5.0`. Phase E7 (verification/release engineering) started: committed Soroban test snapshots with a CI drift check (issue #120) and a CI check that generated SDK bindings match the contract WASM (issue #121).**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (contract features) now includes the OZ-library evaluation (ADR 0006, no library adopted) and the optional in-contract M-of-N releaser quorum (ADR 0007, SDK 0.5.0) — implemented, tested and pending a testnet redeploy. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm. Fee estimation and fee-bump sponsorship helpers (issue #70) are implemented in the SDK, `0.5.0`. Phase E7 (verification/release engineering) started: committed Soroban test snapshots with a CI drift check (issue #120), a CI check that generated SDK bindings match the contract WASM (issue #121), and a scripted deterministic deploy (`scripts/deploy`) that builds/checks the WASM, uploads, deploys, runs live verification, and appends structured records to `docs/testnet-deployments.md` + `deployments.json` (refuses dirty trees, testnet-only, dry-run against local quickstart).**
 
 ## Payee acceptance (issue #25)
 
@@ -327,6 +327,16 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   regenerated here.
 - [x] **PR conflict notifier** — `.github/workflows/pr-conflict-notifier.yml` + `.github/scripts/pr-conflict-notifier.cjs`. On every push to `main` (and every 3h) it labels open PRs that conflict with `main` as `needs-rebase` and @mentions the author once per push with rebase steps; the label clears itself when the conflict is resolved. Runs from `main` only and never checks out PR code.
 - [x] **TLA+ escrow state-machine model** (issue #112) — `spec/Escrow.tla` + `spec/Escrow.cfg` model the actual escrow lifecycle, status transitions, timeout refund behavior, payee acceptance, and same-ledger race windows while explicitly omitting unsupported disputes/milestone logic. TLC verification passed against the committed model.
+- [x] **Scripted, deterministic contract deployment with automatic
+  deployment records** — `scripts/deploy` builds (or takes) the WASM,
+  checks its hash, uploads, deploys (with constructor args), and runs a
+  scripted live verification (create, release, refund, rejection cases).
+  Appends a structured record (network, contract id, WASM hash, git sha,
+  tx links, verification results) to `docs/testnet-deployments.md` and a
+  machine-readable `deployments.json`; the SDK reads known contract ids
+  per network from `deployments.json`. Refuses to deploy from a dirty git
+  tree; mainnet is refused until the security review is done; dry-run mode
+  targets a local quickstart. One real testnet deployment recorded with it.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -341,6 +351,14 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 > `node scripts/fold-changelog.mjs`. Please don't append to this section
 > directly.
 
+- 2026-10-21 — Phase E7: added `scripts/deploy`, a scripted deterministic
+  deploy (build/verify WASM hash → upload → deploy with constructor args →
+  live create/release/refund/rejection verification) that appends a
+  structured record to `docs/testnet-deployments.md` and
+  `deployments.json`. Refuses a dirty git tree and any non-testnet network
+  until the security review lands; `--dry-run` targets a local quickstart.
+  The SDK now resolves known contract ids per network from
+  `deployments.json`. One real testnet deployment recorded with it.
 - 2026-10-19 — Issue #70 (Phase E6): added `estimate`, `feeBump`,
   `guardSponsorship` and `assertSponsorable` to the SDK. Estimation runs
   through the client's RPC and reports the resource fee with a buffered
