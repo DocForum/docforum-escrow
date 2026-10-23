@@ -264,6 +264,28 @@ additive client — the contract and TypeScript SDK are unchanged by it. Offline
 unit tests run in CI; integration tests are opt-in and run against a local
 quickstart deployment.
 
+## Storage TTL & Archival (issue #10, threat model T6)
+
+To prevent contract instance data (`NextId`, executable reference, `AllowedTokens`)
+and escrow entries (`EscrowData`) from archiving prematurely under Soroban's state
+archival model, the contract manages entry lifetimes automatically:
+
+- **Instance TTL**: Extended on every public contract call (`INSTANCE_TTL_THRESHOLD`
+  = 120,960 ledgers / ~7 days, `INSTANCE_EXTEND_TO` = 518,400 ledgers / ~30 days).
+  Active contracts and the `NextId` generator never archive.
+- **Escrow entry TTL**: Extended at creation in `create_escrow*` to cover the
+  longest expected escrow duration (`ESCROW_EXTEND_TO` = 3,110,400 ledgers / ~180 days;
+  threshold = 518,400 ledgers / ~30 days). When an explicit `refund_after` deadline is
+  configured, the extension dynamically scales to cover up to the deadline plus a
+  30-day grace period, capped by the network maximum (~365 days / 6,312,000 ledgers).
+- **Interim active writes**: `top_up`, `rotate_releaser`, and `accept` refresh the
+  entry's TTL to the target duration whenever it falls below the 30-day threshold.
+- **Settlement retention**: `release` and `refund` do not re-extend the escrow for the
+  full 180 days (which would waste rent on inactive state holding no tokens). Instead,
+  they guarantee a post-settlement audit window (`SETTLED_ESCROW_TTL_THRESHOLD` = 7 days,
+  `SETTLED_ESCROW_EXTEND_TO` = 30 days) so indexers, payees, and payers can retrieve
+  settlement status and receipts without an archival restoration.
+
 ## Hard rules
 1. **No PHI, ever, anywhere in this repo.** Not in tests, not in example
    fixtures, not in comments. This repo should be safely public and

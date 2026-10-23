@@ -125,7 +125,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 - [ ] Rest of the `docs/threat-model.md` §6 pre-mainnet checklist, scoped
   into issues: [#8](https://github.com/DocForum/docforum-escrow/issues/8) write status before transfer + reject
   contract-self addresses (Trivial), [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium),
-  [#10](https://github.com/DocForum/docforum-escrow/issues/10) storage TTL (Medium), [#15](https://github.com/DocForum/docforum-escrow/issues/15) integrator trust-model
+  [#10](https://github.com/DocForum/docforum-escrow/issues/10) storage TTL (Medium — **done**, see `contracts/escrow/tests/ttl.rs` and `ARCHITECTURE_ESSENTIALS.md § Storage TTL & Archival`), [#15](https://github.com/DocForum/docforum-escrow/issues/15) integrator trust-model
   docs (Trivial).
 - [ ] Related, not in the checklist: [#13](https://github.com/DocForum/docforum-escrow/issues/13) `get_escrow`
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI

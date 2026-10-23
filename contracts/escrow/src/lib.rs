@@ -41,6 +41,40 @@ pub const MAX_RELEASERS: u32 = 10;
 /// Maximum `condition_ref` length in bytes (threat model T10, Phase E5).
 pub const MAX_CONDITION_REF_LEN: u32 = 64;
 
+/// Storage TTL parameters (threat model T6, Phase E4).
+///
+/// On Stellar/Soroban:
+/// - Ledger close time is approximately 5 seconds.
+/// - 1 day   = 17,280 ledgers (24 * 60 * 12)
+/// - 7 days  = 120,960 ledgers
+/// - 30 days = 518,400 ledgers
+/// - 180 days = 3,110,400 ledgers
+/// - Network max entry TTL is ~6,312,000 ledgers (~365 days / 1 year).
+///
+/// Instance TTL (contract code reference, NextId counter, AllowedTokens):
+/// Extended on every contract call so active contracts and NextId never archive.
+/// Threshold: ~7 days. If remaining TTL < 7 days, extend to ~30 days.
+pub const INSTANCE_TTL_THRESHOLD: u32 = 120_960;
+pub const INSTANCE_EXTEND_TO: u32 = 518_400;
+
+/// Escrow entry TTL (persistent storage for EscrowData):
+/// Sized to the longest expected escrow duration. Medical/commercial escrows
+/// typically settle within weeks or months. We default to 180 days (~6 months).
+/// If `refund_after` is set, the extension dynamically covers up to the deadline
+/// plus a 30-day grace period, capped by the network maximum (~365 days).
+/// Threshold: ~30 days.
+pub const ESCROW_TTL_THRESHOLD: u32 = 518_400;
+pub const ESCROW_EXTEND_TO: u32 = 3_110_400;
+pub const ESCROW_GRACE_PERIOD_LEDGERS: u32 = 518_400; // ~30 days
+pub const MAX_NETWORK_TTL_LEDGERS: u32 = 6_312_000;   // ~365 days
+
+/// Settled escrow retention TTL:
+/// Settle paths (release and refund) retain the entry for post-settlement audit
+/// queries (indexers, audit receipts) for at least ~30 days if remaining TTL < 7 days,
+/// without indefinitely extending settled state that no longer locks funds.
+pub const SETTLED_ESCROW_TTL_THRESHOLD: u32 = 120_960;
+pub const SETTLED_ESCROW_EXTEND_TO: u32 = 518_400;
+
 /// Maximum number of items accepted by `create_escrows` / `settle_many`
 /// in a single call. Callers (including the SDK) must chunk larger
 /// inputs — see docs/adr/0005.
@@ -141,7 +175,7 @@ pub struct CreateItem {
 }
 
 #[contracttype]
-enum DataKey {
+pub enum DataKey {
     Escrow(u64),
     NextId,
     AllowedTokens,
@@ -252,6 +286,7 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::AllowedTokens, &allowed_tokens);
+        Self::extend_instance_ttl(&env);
     }
 
     /// Locks `amount` of `token` pulled from `payer`, held for `payee`,
@@ -367,6 +402,7 @@ impl EscrowContract {
 
     /// Records the payee's acceptance for an opted-in funded escrow.
     pub fn accept(env: Env, escrow_id: u64, payee: Address) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         payee.require_auth();
         let mut data: EscrowData = env
             .storage()
@@ -390,6 +426,7 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), &data);
+        Self::extend_escrow_ttl(&env, escrow_id, data.refund_after);
         env.events()
             .publish((symbol_short!("accepted"), escrow_id), (payee, accepted_at));
         Ok(())
@@ -475,6 +512,7 @@ impl EscrowContract {
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
     pub fn get_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, Error> {
+        Self::extend_instance_ttl(&env);
         let data: EscrowData = env
             .storage()
             .persistent()
@@ -490,6 +528,7 @@ impl EscrowContract {
     /// before relying on a `Funded` escrow (docs/adr/0004, threat model T8).
     /// Errors on an unknown id.
     pub fn get_escrow(env: Env, escrow_id: u64) -> Result<EscrowData, Error> {
+        Self::extend_instance_ttl(&env);
         env.storage()
             .persistent()
             .get(&DataKey::Escrow(escrow_id))
@@ -751,6 +790,7 @@ impl EscrowContract {
         caller: Address,
         new_releaser: Address,
     ) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         caller.require_auth();
         let mut data: EscrowData = env
             .storage()
@@ -779,6 +819,7 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), &data);
+        Self::extend_escrow_ttl(&env, escrow_id, data.refund_after);
         env.events().publish(
             (symbol_short!("rotate"), escrow_id),
             (previous_releaser, new_releaser),
@@ -789,6 +830,7 @@ impl EscrowContract {
     /// Adds funds to a funded escrow without changing its parties or id.
     /// Only its original payer may authorize the transfer.
     pub fn top_up(env: Env, escrow_id: u64, payer: Address, amount: i128) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
@@ -815,6 +857,7 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), &data);
+        Self::extend_escrow_ttl(&env, escrow_id, data.refund_after);
         env.events().publish(
             (symbol_short!("top_up"), escrow_id),
             (amount, updated_amount),
@@ -831,6 +874,7 @@ impl EscrowContract {
     /// the deadline the releaser can still release, racing any timeout
     /// refund — whoever lands first wins and the other fails `NotFunded`.
     pub fn release(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         caller.require_auth();
 
         let mut data = Self::load(&env, escrow_id)?;
@@ -852,6 +896,7 @@ impl EscrowContract {
         escrow_id: u64,
         approvers: Vec<Address>,
     ) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         let mut data = Self::load(&env, escrow_id)?;
         Self::check_approvals(&env, &data, &approvers)?;
         Self::check_funded(&data)?;
@@ -901,6 +946,7 @@ impl EscrowContract {
     /// a threshold of 1; otherwise use `refund_with_approvals` (the timeout
     /// path stays open to anyone).
     pub fn refund(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         caller.require_auth();
 
         let mut data = Self::load(&env, escrow_id)?;
@@ -972,6 +1018,7 @@ impl EscrowContract {
         escrow_id: u64,
         approvers: Vec<Address>,
     ) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         let mut data = Self::load(&env, escrow_id)?;
         // See `refund`: pooled escrows never push refunds (docs/adr/0011).
         Self::reject_pooled(&env, escrow_id)?;
@@ -996,6 +1043,7 @@ impl EscrowContract {
         refund_to: Option<Address>,
         release_not_before: Option<u64>,
     ) -> Result<u64, Error> {
+        Self::extend_instance_ttl(env);
         let allowed_tokens: Vec<Address> = env
             .storage()
             .instance()
@@ -1056,6 +1104,7 @@ impl EscrowContract {
             release_not_before,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        Self::extend_escrow_ttl(env, id, refund_after);
         Self::publish_state(env, symbol_short!("created"), id, &data);
         Ok(id)
     }
@@ -1161,6 +1210,11 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), data);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Escrow(escrow_id),
+            SETTLED_ESCROW_TTL_THRESHOLD,
+            SETTLED_ESCROW_EXTEND_TO,
+        );
 
         let token_client = token::Client::new(env, &data.token);
         token_client.transfer(&env.current_contract_address(), &destination, &data.amount);
@@ -1304,5 +1358,37 @@ impl EscrowContract {
             return Err(Error::BalanceMismatch);
         }
         Ok(())
+    }
+
+    /// Extends the contract instance and code TTL if below `INSTANCE_TTL_THRESHOLD`.
+    /// Called on every public entry point so active contracts and NextId never archive.
+    fn extend_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_EXTEND_TO);
+    }
+
+    /// Extends an escrow entry's persistent storage TTL, sized to the longest
+    /// expected escrow duration (at least 180 days, or deadline + 30-day grace).
+    fn extend_escrow_ttl(env: &Env, escrow_id: u64, refund_after: Option<u64>) {
+        let now = env.ledger().timestamp();
+        let extend_to = if let Some(deadline) = refund_after {
+            if deadline > now {
+                let duration_seconds = deadline - now;
+                let deadline_ledgers = (duration_seconds / 5) as u32;
+                let target = deadline_ledgers.saturating_add(ESCROW_GRACE_PERIOD_LEDGERS);
+                target.max(ESCROW_EXTEND_TO).min(MAX_NETWORK_TTL_LEDGERS)
+            } else {
+                ESCROW_EXTEND_TO
+            }
+        } else {
+            ESCROW_EXTEND_TO
+        };
+
+        env.storage().persistent().extend_ttl(
+            &DataKey::Escrow(escrow_id),
+            ESCROW_TTL_THRESHOLD.min(extend_to),
+            extend_to,
+        );
     }
 }
