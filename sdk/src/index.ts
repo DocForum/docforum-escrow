@@ -37,8 +37,23 @@ import {
 } from "./instrumentation.js";
 import type { FactoryClient as FactoryClientType } from "./factory.js";
 import { signerAddress, type EscrowSigner } from "./signers/types.js";
+import { getTokenInfo as readTokenInfo, rpcTokenInfoSource, type TokenInfo } from "./amounts.js";
 
 export { Keypair };
+export {
+  getTokenInfo,
+  parseAmount,
+  formatAmount,
+  normaliseAmount,
+  clearTokenInfoCache,
+  rpcTokenInfoSource,
+  AmountError,
+  InvalidAmountError,
+  MAX_TOKEN_DECIMALS,
+  type TokenInfo,
+  type TokenInfoSource,
+  type TokenInfoSourceOptions,
+} from "./amounts.js";
 export { signerAddress, type EscrowSigner } from "./signers/types.js";
 export {
   otelTracer,
@@ -814,6 +829,19 @@ export class EscrowClient {
       { address: signerAddress(params.payer) },
     );
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Read-only: `decimals`, `symbol` and `name` for `token`, read from the
+   * SEP-41 contract over this client's RPC and cached per contract address.
+   * Pass the returned `decimals` to `parseAmount`/`formatAmount` instead of
+   * assuming 7.
+   */
+  async getTokenInfo(token: string): Promise<TokenInfo> {
+    return readTokenInfo(
+      token,
+      rpcTokenInfoSource({ rpcUrl: this.rpcUrl, networkPassphrase: this.networkPassphrase }),
+    );
   }
 
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
