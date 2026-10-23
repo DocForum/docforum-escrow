@@ -24,6 +24,16 @@
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
 // never interprets it. Keep it that way; domain logic belongs in the
 // consuming application (docforum-core), never here.
+//
+// Formal verification (issue #101): invariants I1 (funds only leave to the
+// stored `payee`, or to the stored `refund_to` on refund/cancel), I2 (only
+// releasers settle — `threshold` distinct ones on a quorum escrow, and payee
+// acceptance when configured — or anyone after `refund_after`) and I3 (at
+// most one payout) are specified in `certora/escrow.spec`. The spec names the
+// entry points and `Error` discriminants below, and
+// `docs/formal-verification.md` records the scope, the assumptions and the
+// current status. The properties have not been machine-checked yet: do not
+// describe them as proven.
 #![no_std]
 
 use soroban_sdk::{

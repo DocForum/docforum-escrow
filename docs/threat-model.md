@@ -12,6 +12,9 @@ pattern (custodial, as `docforum-core` uses it today). The live testnet
 deployment is listed in `docs/testnet-deployments.md`.
 Updated 2026-10-07 for the issue #12 balance-delta check and
 mock-token tests (§1 I4, T4, T5, §6).
+Updated 2026-10-22 for the formal-verification spike (issue #101): §1 I1–I3
+now link to their properties in `certora/escrow.spec`. The properties are
+specified but not yet machine-checked — see `docs/formal-verification.md`.
 
 *Updated 2026-10-20 for issues #118/#119: §1 I2 and §2 now describe the
 releaser set with a threshold instead of a single address; T1 and T2 record
