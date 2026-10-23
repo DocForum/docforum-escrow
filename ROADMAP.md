@@ -303,6 +303,13 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   transaction hash and retry count; addresses are opt-in only
   (`includeAddresses: true`). 7 offline tests assert span production and the
   disabled path.
+- [ ] SDK lifecycle amendments (issue #84). Done: `topUp`, `accept`,
+  `cancel` (now `EscrowSigner`), `createEscrow({ requiresAcceptance })`,
+  typed `EscrowPreconditionError` checks before submission, and a
+  `prepareLifecycleCall` → `signLifecycleCall` → `submitLifecycleCall` flow
+  for parties on different machines. SDK `0.7.0 → 0.8.0`. Waiting on the
+  contract: `extendRefundAfter` (#41) and `refundByPayee` (#40) need their
+  contract functions merged first.
 
 ## Phase E7 — Verification, testing & release engineering
 - [x] **Reproducible WASM builds and deployment verification (issue #91)** ?
