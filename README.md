@@ -300,6 +300,36 @@ const { escrowId } = await client.createQuorumEscrow({
 await client.releaseWithApprovals({ escrowId, approvers: [a, c] });
 ```
 
+### Lifecycle amendments
+
+Top up a funded escrow, accept as the payee, or cancel as the payer before
+the payee accepts. Each call reads the escrow first and throws
+`EscrowPreconditionError` (with a `code` such as `"AlreadyAccepted"`) instead
+of sending a transaction the contract would reject:
+
+```ts
+await client.topUp({ escrowId, payer, amount: 500_000n });
+
+const { escrowId: gated } = await client.createEscrow({ ...params, requiresAcceptance: true });
+await client.accept({ escrowId: gated, payee });   // payer can no longer cancel
+// before acceptance: await client.cancel({ escrowId: gated, payer });
+```
+
+When the signer and the submitter are on different machines, pass the call
+between them as JSON:
+
+```ts
+// Machine A (submitter, pays the fee)
+const prepared = await client.prepareLifecycleCall({
+  call: { method: "top_up", escrowId, payer: payerAddress, amount: 500_000n },
+  source: relayerAddress,
+});
+// Machine B (each address in prepared.pendingSigners)
+const signed = await client.signLifecycleCall(prepared, payer);
+// Machine A
+await client.submitLifecycleCall(signed, relayer, "top_up");
+```
+
 ### Fee estimation and fee-bump sponsorship
 
 Sponsors can price a call before paying for it, and wrap a user-signed
