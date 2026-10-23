@@ -1,0 +1,166 @@
+{
+  "format": 1,
+  "functions": [
+    {
+      "name": "__constructor",
+      "args": "env: Env, allowed_tokens: Vec<Address>",
+      "return": ""
+    },
+    {
+      "name": "create_escrow",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, notify_payee: bool, refund_to: Option<Address>,",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "create_escrow_release_time",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, notify_payee: bool, refund_to: Option<Address>, release_not_before: Option<u64>,",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "create_escrow_with_acceptance",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, requires_acceptance: bool, refund_to: Option<Address>,",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "accept",
+      "args": "env: Env, escrow_id: u64, payee: Address",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "create_escrow_with_releasers",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releasers: Vec<Address>, threshold: u32, refund_after: Option<u64>, notify_payee: bool, refund_to: Option<Address>,",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "get_status",
+      "args": "env: Env, escrow_id: u64",
+      "return": "Result<EscrowStatus, Error>"
+    },
+    {
+      "name": "get_escrow",
+      "args": "env: Env, escrow_id: u64",
+      "return": "Result<EscrowData, Error>"
+    },
+    {
+      "name": "rotate_releaser",
+      "args": "env: Env, escrow_id: u64, caller: Address, new_releaser: Address,",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "top_up",
+      "args": "env: Env, escrow_id: u64, payer: Address, amount: i128",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "release",
+      "args": "env: Env, escrow_id: u64, caller: Address",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "release_with_approvals",
+      "args": "env: Env, escrow_id: u64, approvers: Vec<Address>,",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "refund",
+      "args": "env: Env, escrow_id: u64, caller: Address",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "refund_with_approvals",
+      "args": "env: Env, escrow_id: u64, approvers: Vec<Address>,",
+      "return": "Result<(), Error>"
+    }
+  ],
+  "errors": [
+    {
+      "name": "NotFound",
+      "code": 1
+    },
+    {
+      "name": "InvalidAmount",
+      "code": 2
+    },
+    {
+      "name": "Unauthorized",
+      "code": 3
+    },
+    {
+      "name": "NotFunded",
+      "code": 4
+    },
+    {
+      "name": "InvalidRefundAfter",
+      "code": 5
+    },
+    {
+      "name": "BalanceMismatch",
+      "code": 6
+    },
+    {
+      "name": "ConditionRefTooLong",
+      "code": 7
+    },
+    {
+      "name": "DisallowedToken",
+      "code": 8
+    },
+    {
+      "name": "CallbackFailed",
+      "code": 9
+    },
+    {
+      "name": "Overflow",
+      "code": 12
+    },
+    {
+      "name": "InvalidThreshold",
+      "code": 13
+    },
+    {
+      "name": "TooManyReleasers",
+      "code": 14
+    },
+    {
+      "name": "ThresholdNotMet",
+      "code": 15
+    },
+    {
+      "name": "DuplicateApprover",
+      "code": 16
+    },
+    {
+      "name": "DuplicateReleaser",
+      "code": 17
+    },
+    {
+      "name": "AcceptanceRequired",
+      "code": 18
+    },
+    {
+      "name": "AcceptanceNotConfigured",
+      "code": 19
+    },
+    {
+      "name": "AlreadyAccepted",
+      "code": 20
+    },
+    {
+      "name": "InvalidReleaser",
+      "code": 24
+    },
+    {
+      "name": "InvalidRefundTo",
+      "code": 21
+    },
+    {
+      "name": "InvalidReleaseNotBefore",
+      "code": 22
+    },
+    {
+      "name": "ReleaseTooEarly",
+      "code": 23
+    }
+  ]
+}
+
