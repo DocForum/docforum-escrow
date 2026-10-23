@@ -2,13 +2,17 @@
 // exercising both [create_escrow/get_status] against a running/testnet
 // contract instance, not just the contract's own test suite." Now also
 // covers release/refund (Phase E2) and the `refund_after` deadline +
-// `get_escrow` read path (Phase E4, issue #11).
+// `get_escrow` read path (Phase E4, issue #11). Adds Phase E6 factory
+// deployment + instance discovery coverage (deterministic address
+// prediction must match the on-chain deployment).
 //
 // The suite is parameterised by network (tests/integration-network.ts):
 //   npm run test:integration        → live testnet (default, unchanged)
 //   npm run test:integration:local  → a local `stellar/quickstart` network
 // The local run is what CI executes on every PR, so a regression in a
-// network call fails the PR instead of waiting for the nightly soak.
+// network call fails the PR instead of waiting for the nightly soak. The
+// factory suite stays gated on TESTNET_FACTORY_ID: CI's local network
+// deploys no factory.
 //
 // Fresh keypairs are generated and Friendbot-funded per run — never
 // commit a real secret key, even a testnet or local one, into a repo.
@@ -22,8 +26,18 @@ import {
   TransactionBuilder,
   nativeToScVal,
 } from "@stellar/stellar-sdk";
-import { EscrowClient } from "../src/index.js";
+import { EscrowClient, FactoryClient, predictInstanceAddress } from "../src/index.js";
 import { fundedKeypair, network, networkNow } from "./integration-network.js";
+
+// Phase E6 factory contract deployed on testnet alongside the instance
+// contract. Overridable via env for forks that deploy their own factory.
+// Public contract address, not a secret.
+// A factory contract id must be provided to run the live factory suite. The
+// fallback is only a syntactically valid contract id so the file still loads.
+const FACTORY_ID = process.env.TESTNET_FACTORY_ID ?? "CBCYSOQ3HKYQDHLSHTFNIAA7X2NUGJVYOCN24DCVT46VG4YI6DMNARMD";
+// The repo ships no factory contract, so the live factory suites only run when
+// a factory is actually deployed and TESTNET_FACTORY_ID points at it.
+const describeFactory = process.env.TESTNET_FACTORY_ID ? describe : describe.skip;
 
 function newClient(): EscrowClient {
   return new EscrowClient({
@@ -310,4 +324,62 @@ describe(`EscrowClient against ${network.label}`, () => {
     await client.refund({ escrowId, caller: stranger });
     expect(await client.getStatus(escrowId)).toBe("Refunded");
   }, 150_000);
+});
+
+describeFactory("FactoryClient against live testnet", () => {
+  it("predicts the instance address that the factory actually deploys", async () => {
+    const integrator = await fundedKeypair();
+    const factory = new FactoryClient({ factoryId: FACTORY_ID });
+    const salt = Buffer.alloc(32, 0x01);
+
+    // Offline prediction must match the on-chain derivation exactly.
+    const predicted = predictInstanceAddress(FACTORY_ID, salt);
+    const { instanceId } = await factory.deployInstance({
+      integrator: integrator.publicKey(),
+      salt,
+      signer: integrator,
+    });
+    expect(instanceId).toBe(predicted);
+
+    // Discovery via the factory must return the same instance.
+    const found = await factory.getInstance(integrator.publicKey());
+    expect(found?.contractId).toBe(predicted);
+
+    // Deploying again is graceful: the existing address is returned.
+    const again = await factory.deployInstance({
+      integrator: integrator.publicKey(),
+      salt,
+      signer: integrator,
+    });
+    expect(again.instanceId).toBe(predicted);
+  });
+
+  it("runs a full lifecycle on a factory-deployed instance", async () => {
+    const [integrator, payer, payee, releaser] = await Promise.all([
+      fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(),
+    ]);
+    const factory = new FactoryClient({ factoryId: FACTORY_ID });
+    const salt = Buffer.alloc(32, 0x02);
+    const { instanceId } = await factory.deployInstance({
+      integrator: integrator.publicKey(),
+      salt,
+      signer: integrator,
+    });
+    expect(instanceId).toBe(predictInstanceAddress(FACTORY_ID, salt));
+
+    const client = await EscrowClient.forIntegrator(factory, integrator.publicKey());
+    expect(client.contractId).toBe(instanceId);
+
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: network.nativeTokenId,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-factory-lifecycle",
+      releaser: releaser.publicKey(),
+    });
+    expect(await client.getStatus(escrowId)).toBe("Funded");
+    await client.release({ escrowId, caller: releaser });
+    expect(await client.getStatus(escrowId)).toBe("Released");
+  });
 });

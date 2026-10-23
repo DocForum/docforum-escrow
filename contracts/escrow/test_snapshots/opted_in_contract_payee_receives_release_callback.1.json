@@ -79,7 +79,8 @@
                 "void",
                 {
                   "bool": true
-                }
+                },
+                "void"
               ]
             }
           },
@@ -136,7 +137,8 @@
                 "void",
                 {
                   "bool": true
-                }
+                },
+                "void"
               ]
             }
           },
@@ -417,6 +419,20 @@
                   {
                     "key": {
                       "symbol": "refund_after"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "refund_to"
+                    },
+                    "val": {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "release_not_before"
                     },
                     "val": "void"
                   },

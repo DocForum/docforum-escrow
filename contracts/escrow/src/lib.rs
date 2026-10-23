@@ -7,6 +7,9 @@
 // Phase E4 (issue #11): optional `refund_after` timeout refund — see
 // docs/adr/0004. After that deadline anyone may refund, but only back to
 // the payer, so a lost `releaser` key can no longer lock funds forever.
+// Phase E5 (issue #28): optional `refund_to` — a refund destination that
+// differs from the funder (`payer`), fixed at creation with the funder's
+// auth and used by every refund path; see docs/adr/0009.
 // Phase E5 (issue #119): an escrow can instead be created with an M-of-N
 // releaser set (`create_escrow_with_releasers`) — see docs/adr/0007.
 // Single-releaser escrows are stored as a one-address set with threshold 1
@@ -33,17 +36,27 @@ pub const MAX_RELEASERS: u32 = 10;
 /// Maximum `condition_ref` length in bytes (threat model T10, Phase E5).
 pub const MAX_CONDITION_REF_LEN: u32 = 64;
 
+/// Maximum number of items accepted by `create_escrows` / `settle_many`
+/// in a single call. Callers (including the SDK) must chunk larger
+/// inputs — see docs/adr/0005.
+pub const MAX_BATCH_SIZE: u32 = 50;
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EscrowStatus {
     Funded,
     Released,
     Refunded,
+    /// The payer withdrew the funds before the payee accepted — see
+    /// docs/adr/0010. Terminal, like `Released` and `Refunded`.
+    Cancelled,
 }
 
 #[contracttype]
 #[derive(Clone)]
 pub struct EscrowData {
+    /// The funder: authorises and pays for the escrow at creation. Also
+    /// the refund destination unless `refund_to` says otherwise.
     pub payer: Address,
     pub payee: Address,
     pub token: Address,
@@ -59,7 +72,7 @@ pub struct EscrowData {
     /// single releaser can settle (the pre-quorum behaviour).
     pub threshold: u32,
     /// Optional deadline (unix seconds) after which `refund` opens to
-    /// anyone — still only back to `payer`. `None` means no timeout,
+    /// anyone — still only to `refund_to`. `None` means no timeout,
     /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
     /// If true, invoke the contract payee's `on_escrow_released` hook after
@@ -69,6 +82,26 @@ pub struct EscrowData {
     pub requires_acceptance: bool,
     /// Ledger timestamp at which the payee accepted, if any.
     pub accepted_at: Option<u64>,
+    /// Where **every** refund path (releaser, timeout) sends the funds.
+    /// Fixed at creation under the funder's auth and never chosen at
+    /// payout, so invariant I1 holds; defaults to `payer` when omitted at
+    /// creation — see docs/adr/0009.
+    pub refund_to: Address,
+    /// Earliest ledger timestamp at which release is allowed.
+    pub release_not_before: Option<u64>,
+}
+
+/// One entry of a `create_escrows` batch. Mirrors the single-escrow
+/// creation parameters minus the batch-wide `payer`.
+#[contracttype]
+#[derive(Clone)]
+pub struct CreateItem {
+    pub payee: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub condition_ref: String,
+    pub releaser: Address,
+    pub refund_after: Option<u64>,
 }
 
 #[contracttype]
@@ -122,6 +155,19 @@ pub enum Error {
     AcceptanceRequired = 18,
     AcceptanceNotConfigured = 19,
     AlreadyAccepted = 20,
+    /// The new releaser cannot be the escrow contract or payee.
+    InvalidReleaser = 24,
+    /// `refund_to` was the escrow contract's own address — funds sent
+    /// there on refund could never be moved again (docs/adr/0009).
+    InvalidRefundTo = 21,
+    /// The configured release time is in the past or after the refund time.
+    InvalidReleaseNotBefore = 22,
+    /// Release was attempted before the configured time.
+    ReleaseTooEarly = 23,
+    /// A batch call was passed more than `MAX_BATCH_SIZE` items — see
+    /// docs/adr/0005. Callers must chunk. Appended at the end so existing
+    /// discriminants keep their on-chain values.
+    BatchTooLarge = 25,
 }
 
 #[contract]
@@ -144,7 +190,11 @@ impl EscrowContract {
     /// `notify_payee` opts an implementing contract payee into
     /// `on_escrow_released(escrow_id, amount)` (docs/adr/0005). The payer
     /// must authorize creation, and the payee must also authorize if
-    /// `notify_payee` is true. For M-of-N releasers use
+    /// `notify_payee` is true. `refund_to` is the optional refund
+    /// destination for a sponsored escrow where the funder (`payer`) is
+    /// not who should get the money back (docs/adr/0009): `None` means
+    /// `payer`; it may not be this contract's own address, and the
+    /// `payer`'s auth on this call covers it. For M-of-N releasers use
     /// `create_escrow_with_releasers`.
     pub fn create_escrow(
         env: Env,
@@ -156,6 +206,7 @@ impl EscrowContract {
         releaser: Address,
         refund_after: Option<u64>,
         notify_payee: bool,
+        refund_to: Option<Address>,
     ) -> Result<u64, Error> {
         let mut releasers = Vec::new(&env);
         releasers.push_back(releaser);
@@ -171,6 +222,42 @@ impl EscrowContract {
             refund_after,
             notify_payee,
             false,
+            refund_to,
+            None,
+        )
+    }
+
+    /// Creates a single-releaser escrow with an optional earliest release time.
+    /// Release is allowed at the configured timestamp.
+    pub fn create_escrow_release_time(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        notify_payee: bool,
+        refund_to: Option<Address>,
+        release_not_before: Option<u64>,
+    ) -> Result<u64, Error> {
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        Self::create_escrow_inner(
+            &env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            1,
+            refund_after,
+            notify_payee,
+            false,
+            refund_to,
+            release_not_before,
         )
     }
 
@@ -186,6 +273,7 @@ impl EscrowContract {
         releaser: Address,
         refund_after: Option<u64>,
         requires_acceptance: bool,
+        refund_to: Option<Address>,
     ) -> Result<u64, Error> {
         let mut releasers = Vec::new(&env);
         releasers.push_back(releaser);
@@ -201,6 +289,8 @@ impl EscrowContract {
             refund_after,
             false,
             requires_acceptance,
+            refund_to,
+            None,
         )
     }
 
@@ -252,6 +342,7 @@ impl EscrowContract {
         threshold: u32,
         refund_after: Option<u64>,
         notify_payee: bool,
+        refund_to: Option<Address>,
     ) -> Result<u64, Error> {
         Self::create_escrow_inner(
             &env,
@@ -265,7 +356,50 @@ impl EscrowContract {
             refund_after,
             notify_payee,
             false,
+            refund_to,
+            None,
         )
+    }
+
+    /// Batch version of `create_escrow`. Creates one escrow per item, in
+    /// input order, and returns the new ids in the same order as `items`.
+    /// `payer` authorizes once for the whole call. Fails atomically: if
+    /// any item is invalid (bad amount, past `refund_after`, oversized
+    /// `condition_ref`, short-delivering token) the whole call reverts and
+    /// no escrows are created.
+    ///
+    /// `items.len()` must be `<= MAX_BATCH_SIZE` — see docs/adr/0005.
+    pub fn create_escrows(
+        env: Env,
+        payer: Address,
+        items: Vec<CreateItem>,
+    ) -> Result<Vec<u64>, Error> {
+        if items.len() > MAX_BATCH_SIZE {
+            return Err(Error::BatchTooLarge);
+        }
+
+        let mut ids: Vec<u64> = Vec::new(&env);
+        for item in items.iter() {
+            let mut releasers = Vec::new(&env);
+            releasers.push_back(item.releaser.clone());
+            let id = Self::create_escrow_inner(
+                &env,
+                payer.clone(),
+                item.payee.clone(),
+                item.token.clone(),
+                item.amount,
+                item.condition_ref.clone(),
+                releasers,
+                1,
+                item.refund_after,
+                false,
+                false,
+                None,
+                None,
+            )?;
+            ids.push_back(id);
+        }
+        Ok(ids)
     }
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
@@ -280,14 +414,60 @@ impl EscrowContract {
 
     /// Read-only accessor for everything stored about `escrow_id` — payer,
     /// payee, token, amount, `condition_ref`, status, the releaser set with
-    /// its threshold, and `refund_after`. Exists so payees and integrators
-    /// can check who can settle and when before relying on a `Funded`
-    /// escrow (docs/adr/0004, threat model T8). Errors on an unknown id.
+    /// its threshold, `refund_after` and `refund_to`. Exists so payees and
+    /// integrators can check who can settle, when, and where a refund goes
+    /// before relying on a `Funded` escrow (docs/adr/0004, threat model T8).
+    /// Errors on an unknown id.
     pub fn get_escrow(env: Env, escrow_id: u64) -> Result<EscrowData, Error> {
         env.storage()
             .persistent()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::NotFound)
+    }
+
+    /// Rotates a funded escrow's releaser. Both the current releaser and
+    /// payer must authorize the change; the payer's consent prevents a
+    /// compromised releaser from silently appointing an attacker. The
+    /// replacement cannot be the contract itself or the payee.
+    pub fn rotate_releaser(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        new_releaser: Address,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+
+        if data.threshold != 1 {
+            return Err(Error::ThresholdNotMet);
+        }
+        let previous_releaser = data.releasers.get(0).ok_or(Error::InvalidReleaser)?;
+        if caller != previous_releaser {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        if new_releaser == env.current_contract_address() || new_releaser == data.payee {
+            return Err(Error::InvalidReleaser);
+        }
+
+        data.payer.require_auth();
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(new_releaser.clone());
+        data.releasers = releasers;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        env.events().publish(
+            (symbol_short!("rotate"), escrow_id),
+            (previous_releaser, new_releaser),
+        );
+        Ok(())
     }
 
     /// Adds funds to a funded escrow without changing its parties or id.
@@ -357,7 +537,34 @@ impl EscrowContract {
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
     }
 
-    /// Returns the escrowed `amount` to `payer`. Same state rule as
+    /// Batch version of `release`: releases each escrow in `escrow_ids` in
+    /// order on behalf of `caller`, which must be a releaser of every one
+    /// of them. Returns a per-op result vector aligned with `escrow_ids`:
+    /// `Ok(())` for a successful release, `Err(e)` for one the contract
+    /// rejected (unknown id, not funded, caller not a releaser, before
+    /// `release_not_before`). A rejected op does not stop the rest — the
+    /// caller can inspect the vector and retry only the failures.
+    ///
+    /// `escrow_ids.len()` must be `<= MAX_BATCH_SIZE` — see docs/adr/0005.
+    pub fn settle_many(
+        env: Env,
+        caller: Address,
+        escrow_ids: Vec<u64>,
+    ) -> Result<Vec<Result<(), Error>>, Error> {
+        if escrow_ids.len() > MAX_BATCH_SIZE {
+            return Err(Error::BatchTooLarge);
+        }
+
+        let mut results: Vec<Result<(), Error>> = Vec::new(&env);
+        for escrow_id in escrow_ids.iter() {
+            results.push_back(Self::release(env.clone(), escrow_id, caller.clone()));
+        }
+        Ok(results)
+    }
+
+    /// Returns the escrowed `amount` to the escrow's `refund_to` (the
+    /// `payer` unless a different destination was fixed at creation —
+    /// docs/adr/0006). Same state rule as
     /// `release` (only while `Funded`), but two callers are authorised:
     ///
     /// - the escrow's releaser (docs/adr/0002), always; or
@@ -365,10 +572,11 @@ impl EscrowContract {
     ///   refund path for a lost/unsignable releaser key (docs/adr/0004).
     ///
     /// The destination never changes: timeout or not, funds only ever go
-    /// back to the stored `payer`. With no `refund_after` set, behaviour
-    /// is identical to before the timeout existed — releaser only. On an
-    /// M-of-N escrow the releaser path needs a threshold of 1; otherwise use
-    /// `refund_with_approvals` (the timeout path stays open to anyone).
+    /// to the stored `refund_to`, which no caller can influence. With no
+    /// `refund_after` set, behaviour is identical to before the timeout
+    /// existed — releaser only. On an M-of-N escrow the releaser path needs
+    /// a threshold of 1; otherwise use `refund_with_approvals` (the timeout
+    /// path stays open to anyone).
     pub fn refund(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
@@ -386,7 +594,43 @@ impl EscrowContract {
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
     }
 
-    /// Returns the escrowed `amount` to `payer` on behalf of an M-of-N
+    /// Lets the payer take the funds back **before the payee accepts**
+    /// (docs/adr/0010): returns the escrowed `amount` to `refund_to` (the
+    /// `payer` unless a sponsor destination was fixed at creation, ADR
+    /// 0009) and marks the escrow `Cancelled`. Allowed only while **all**
+    /// hold:
+    ///
+    /// - `payer` is the escrow's stored payer and authorizes the call;
+    /// - the escrow is still `Funded` (`NotFunded` otherwise — never after
+    ///   a release, refund or earlier cancel);
+    /// - it was created with `requires_acceptance`
+    ///   (`AcceptanceNotConfigured` otherwise — without the gate there is
+    ///   no acceptance step to race, so no cancel window exists);
+    /// - the payee has not accepted (`AlreadyAccepted` otherwise).
+    ///
+    /// The destination is read from storage, so invariant I1 is unchanged.
+    /// Payees: do not rely on a `requires_acceptance` escrow until you
+    /// have called `accept`. `accept` and `cancel` race on one ledger
+    /// state: whichever lands first wins and the other fails.
+    pub fn cancel(env: Env, escrow_id: u64, payer: Address) -> Result<(), Error> {
+        payer.require_auth();
+
+        let mut data = Self::load(&env, escrow_id)?;
+        if payer != data.payer {
+            return Err(Error::Unauthorized);
+        }
+        Self::check_funded(&data)?;
+        if !data.requires_acceptance {
+            return Err(Error::AcceptanceNotConfigured);
+        }
+        if data.accepted_at.is_some() {
+            return Err(Error::AlreadyAccepted);
+        }
+
+        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Cancelled)
+    }
+
+    /// Returns the escrowed `amount` to `refund_to` on behalf of an M-of-N
     /// releaser set (docs/adr/0007). Same approval rules as
     /// `release_with_approvals`. The timeout refund path in `refund` stays
     /// available as well: once `refund_after` passes, anyone can return the
@@ -415,6 +659,8 @@ impl EscrowContract {
         refund_after: Option<u64>,
         notify_payee: bool,
         requires_acceptance: bool,
+        refund_to: Option<Address>,
+        release_not_before: Option<u64>,
     ) -> Result<u64, Error> {
         let allowed_tokens: Vec<Address> = env
             .storage()
@@ -432,6 +678,13 @@ impl EscrowContract {
                 return Err(Error::InvalidRefundAfter);
             }
         }
+        if let Some(release_time) = release_not_before {
+            if release_time < env.ledger().timestamp()
+                || refund_after.is_some_and(|refund_time| release_time > refund_time)
+            {
+                return Err(Error::InvalidReleaseNotBefore);
+            }
+        }
         // Bound condition_ref to keep per-escrow storage and event costs
         // predictable (threat model T10, Phase E5). 64 bytes is generous
         // for a UUID or short label while capping spam risk.
@@ -439,6 +692,10 @@ impl EscrowContract {
             return Err(Error::ConditionRefTooLong);
         }
         Self::check_releaser_set(env, &releasers, threshold)?;
+        let refund_to = refund_to.unwrap_or_else(|| payer.clone());
+        if refund_to == env.current_contract_address() {
+            return Err(Error::InvalidRefundTo);
+        }
 
         payer.require_auth();
         if notify_payee {
@@ -461,8 +718,11 @@ impl EscrowContract {
             notify_payee,
             requires_acceptance,
             accepted_at: None,
+            refund_to,
+            release_not_before,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        Self::publish_state(env, symbol_short!("created"), id, &data);
         Ok(id)
     }
 
@@ -545,10 +805,17 @@ impl EscrowContract {
         data: &mut EscrowData,
         settled: EscrowStatus,
     ) -> Result<(), Error> {
+        if settled == EscrowStatus::Released
+            && data
+                .release_not_before
+                .is_some_and(|release_time| env.ledger().timestamp() < release_time)
+        {
+            return Err(Error::ReleaseTooEarly);
+        }
         let notify_payee = data.notify_payee && settled == EscrowStatus::Released;
         let destination = match settled {
             EscrowStatus::Released => data.payee.clone(),
-            _ => data.payer.clone(),
+            _ => data.refund_to.clone(),
         };
         if settled == EscrowStatus::Released
             && data.requires_acceptance
@@ -575,7 +842,42 @@ impl EscrowContract {
                 _ => return Err(Error::CallbackFailed),
             }
         }
+        let action = match &data.status {
+            EscrowStatus::Funded => symbol_short!("created"),
+            EscrowStatus::Released => symbol_short!("released"),
+            EscrowStatus::Refunded => symbol_short!("refunded"),
+            EscrowStatus::Cancelled => symbol_short!("cancelled"),
+        };
+        Self::publish_state(env, action, escrow_id, data);
         Ok(())
+    }
+
+    /// Emits a complete state snapshot for indexers, with releaser sets
+    /// preserved for M-of-N escrows.
+    fn publish_state(env: &Env, action: soroban_sdk::Symbol, id: u64, data: &EscrowData) {
+        let status = match &data.status {
+            EscrowStatus::Funded => symbol_short!("Funded"),
+            EscrowStatus::Released => symbol_short!("Released"),
+            EscrowStatus::Refunded => symbol_short!("Refunded"),
+            EscrowStatus::Cancelled => symbol_short!("Cancelled"),
+        };
+        env.events().publish(
+            (symbol_short!("ESCROW"), action, id),
+            (
+                data.payer.clone(),
+                data.payee.clone(),
+                data.token.clone(),
+                data.amount,
+                data.condition_ref.clone(),
+                data.releasers.clone(),
+                data.threshold,
+                data.refund_after,
+                data.notify_payee,
+                data.requires_acceptance,
+                data.accepted_at,
+                status,
+            ),
+        );
     }
 
     fn load(env: &Env, escrow_id: u64) -> Result<EscrowData, Error> {
