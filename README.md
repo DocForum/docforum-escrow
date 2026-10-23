@@ -46,7 +46,11 @@ optional payee-acceptance gate, an optional `refund_after` timeout that
 lets anyone trigger the refund, an optional `refund_to`, and an optional
 release callback to a contract payee. Funded escrows can be topped up by
 the original payer, and `get_status`/`get_escrow` are read-only. A token
-allowlist is fixed at deploy time.
+allowlist is fixed at deploy time. Pooled escrows — one agreement funded
+by many payers, with per-payer contribution records and pull-based
+pro-rata refunds — are a separate creation entry point
+(`create_pooled_escrow`, see [ADR 0011](docs/adr/0011-pooled-escrow-funding.md)
+and the contract surface list).
 
 **The full function list, signatures and rules are in
 [`ARCHITECTURE_ESSENTIALS.md` → Contract surface](ARCHITECTURE_ESSENTIALS.md#contract-surface).**
@@ -212,6 +216,66 @@ Two consequences of "one escrow per tranche" are worth knowing:
   refund them instead of paying twice.
 - Each tranche settles independently: refunding tranche 1 does not touch
   tranche 2, and released tranches are final.
+
+### Pooled escrows
+
+A pooled escrow funds **one agreement from many payers** (group purchase,
+shared cost, crowdfunded work) while keeping every contribution on-chain
+and refunding each payer exactly what they put in (issue #113,
+[ADR 0011](docs/adr/0011-pooled-escrow-funding.md)). It is a distinct
+creation entry point; single-payer escrows are untouched. All amounts are
+raw token units.
+
+```ts
+// 1. Anyone creates the pool: target 1_000_000, funding closes at a deadline.
+const { escrowId } = await client.createPooledEscrow({
+  creator, payee, token,
+  fundingTarget: 1_000_000n,
+  conditionRef: "group-order-42",
+  releaser,
+  fundingDeadline: 1_760_000_000n, // unix seconds, must be in the future
+});
+
+// 2. Contributors fund it — accepted only before the deadline and only
+//    while the total stays within the target (overfunding is rejected).
+await client.contribute({ escrowId, payer: alice, amount: 400_000n });
+await client.contribute({ escrowId, payer: bob,   amount: 350_000n });
+await client.contribute({ escrowId, payer: alice, amount: 250_000n }); // accumulates: alice = 650_000
+
+// 3a. Target reached (1_000_000): the releaser releases the pooled total.
+await client.release({ escrowId, caller: releaser }); // 1_000_000 to payee
+
+// 3b. Deadline passed below target: the round failed — release is blocked
+//     (`FundingIncomplete`), late contributions are rejected, and every
+//     contributor pulls back their own exact record, in any order.
+await client.claimRefund({ escrowId, contributor: alice }); // 650_000 back to alice
+await client.claimRefund({ escrowId, contributor: bob });   // 350_000 back to bob
+```
+
+Rules worth knowing before integrating:
+
+- **Release needs the full target.** A partially funded pool can never
+  be released; once the target is met, the deadline no longer matters —
+  the round succeeded and the ordinary releaser rules apply.
+- **The deadline is the only early exit.** Contributors cannot withdraw
+  before it. After it passes with the target unmet, contributions are
+  frozen forever and `claim_refund` opens to each contributor, once each
+  (`AlreadyRefunded` afterwards), payable at any later time.
+- **Refunds are pull-based and order-independent:** each claim pays only
+  the calling contributor's recorded amount under their own signature —
+  no one can claim anyone else's (`NoContribution`), and no entry point
+  ever loops over contributors, so there is no contributor cap to hit.
+- **Push refunds and `top_up` do not exist for pooled escrows**
+  (`NotSupportedForPooled`): they would route the pool to one address or
+  grow it without a per-payer record. Pooled escrows have no
+  `refund_after` either — a *failed* round is the only refund window.
+- **Read funding state with `getPooled`:** `getStatus` still returns
+  `"Funded"` for a failed round (status describes settlement), so poll
+  `getPooled()` (`fundingTarget`, `fundingDeadline`) plus the escrow's
+  `amount` to tell open / succeeded / failed apart.
+- The live testnet deployment predates these entry points; pooled
+  functions work locally until the next redeploy
+  ([`docs/testnet-deployments.md`](docs/testnet-deployments.md)).
 
 ## Verify this deployment
 
