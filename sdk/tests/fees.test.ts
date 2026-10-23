@@ -2,8 +2,9 @@
 // helpers (issue #70). Everything here builds real transaction envelopes and
 // signs them with throwaway keypairs — no RPC, no network, no fixtures on disk.
 //
-// The one testnet integration case lives in `testnet-integration.test.ts`,
-// which is deliberately not wired into CI.
+// The real-network integration cases live in `integration.test.ts`, which runs
+// against a local quickstart network in CI (`npm run test:integration:local`)
+// and against testnet on demand (`npm run test:integration`).
 import {
   Account,
   Address,

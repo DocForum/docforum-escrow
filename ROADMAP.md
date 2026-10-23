@@ -75,7 +75,8 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   end-to-end: installed and imported successfully from
   `docforum-core/backend`. See `docs/adr/0003`.
 - [x] Integration test against testnet from the SDK itself, not just the
-  contract's own test suite. `sdk/tests/testnet-integration.test.ts` — 3
+  contract's own test suite. `sdk/tests/integration.test.ts` (renamed from
+  `testnet-integration.test.ts` when it became network-parameterised) — 3
   tests, all passing against the live Phase E2 deployment: full release
   lifecycle, full refund lifecycle, unauthorized-caller rejection.
   Deliberately **not** wired into `npm test`/CI (`npm run
@@ -274,7 +275,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   already-bumped envelopes while allowing the account auth entries a
   legitimate escrow call carries. 17 offline unit tests in
   `sdk/tests/fees.test.ts` (wired into CI as `npm run test:unit`) plus a
-  live-testnet estimate/fee-bump case in `testnet-integration.test.ts`;
+  live-testnet estimate/fee-bump case in `integration.test.ts`;
   additive SDK surface, `0.4.0 → 0.5.0`. Closes issue #70.
 - [x] React hooks package (issue #126) — `packages/escrow-react`,
   published name `@docforum/escrow-react`. TanStack Query v5 peer.
@@ -357,6 +358,26 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   (`PROPTEST_CASES`); a nightly workflow runs a larger count. Closes
   issue #64.
 - [x] **TLA+ escrow state-machine model** (issue #112) — `spec/Escrow.tla` + `spec/Escrow.cfg` model the actual escrow lifecycle, status transitions, timeout refund behavior, payee acceptance, and same-ledger race windows while explicitly omitting unsupported disputes/milestone logic. TLC verification passed against the committed model.
+
+- [x] **SDK integration suite runs against a local Stellar network on every PR**
+  (distinct from #14, the offline unit suites: this is a real network, just
+  local). `.github/workflows/ci.yml`'s `sdk-integration-local` job starts
+  `stellar/quickstart` with `--local --enable-soroban-rpc`, waits for
+  readiness by polling RPC `getHealth` and checking `getNetwork`'s passphrase
+  (no fixed sleep), deploys the native asset contract plus the freshly built
+  WASM, and runs `npm run test:integration:local`. The suite is parameterised
+  by `sdk/tests/integration-network.ts` (`ESCROW_TEST_NETWORK=local|testnet`),
+  and `npm run test:integration` still targets live testnet, so the nightly
+  soak is unchanged. Deadlines come from the ledger clock rather than
+  wall-clock time, so the same assertions hold on both networks, and the
+  quorum case now runs locally (it is skipped on the older testnet
+  deployment). The quickstart image is cached with `actions/cache`
+  (`docker save`/`load`). Running the suite locally surfaced two gaps, both
+  fixed here: `EscrowClient` needed an opt-in `allowHttp` for the local
+  plain-HTTP RPC, and the documented `authorizeRelease`/`authorizeRefund`/
+  `submitRelayed` methods had never actually been implemented. Local steps:
+  README, "Running the integration suite locally"; contributor notes in
+  `CONTRIBUTING.md`.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -527,7 +548,8 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   landed in the same session, so there was no reason to ship an
   immediately-stale SDK. Accepts a `Keypair` directly as a signer (no
   manual XDR signing exposed). 3 real tests in
-  `sdk/tests/testnet-integration.test.ts`, all passing against the live
+  `sdk/tests/integration.test.ts` (then named `testnet-integration.test.ts`),
+  all passing against the live
   Phase E2 deployment — full release lifecycle, full refund lifecycle,
   unauthorized-caller rejection — satisfying Phase E3's "integration
   test against testnet from the SDK itself" item. Deliberately kept out

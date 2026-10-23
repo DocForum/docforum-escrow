@@ -330,6 +330,13 @@ export interface EscrowClientConfig {
   /** Use the restore signer to authorize calls that automatically restore archived entries. */
   archivalBehavior?: ArchivedEntryBehavior;
   restoreSigner?: Keypair;
+  /**
+   * Allow a plain-HTTP RPC endpoint. Default: false, so a public RPC can never
+   * be reached over an unencrypted connection by accident. Set this only for a
+   * local network, e.g. `stellar/quickstart` on `http://localhost:8000` (see
+   * the README's "Running the integration suite locally" section).
+   */
+  allowHttp?: boolean;
 }
 
 export interface CreateEscrowParams {
@@ -526,7 +533,9 @@ export interface RelayedAuthorizationParams {
  * Serialized, simulated transaction containing a short-lived signed auth
  * entry. `transaction` is the JSON form produced by the Stellar SDK's
  * `AssembledTransaction.toJSON()` (it carries the simulation metadata the
- * relayer needs to sign the envelope); it is not a base64 envelope.
+ * relayer needs to sign the envelope); it is not a base64 envelope. Keep it
+ * private and do not retry it after `expiresAtLedger`: the entry is bound to
+ * that one invocation and stops being valid as ledgers advance.
  */
 export interface RelayedAuthorization {
   transaction: string;
@@ -654,6 +663,7 @@ export class EscrowClient {
   readonly contractId: string;
   private readonly rpcUrl: string;
   private readonly networkPassphrase: string;
+  private readonly allowHttp: boolean;
   private readonly rpc: RpcServer;
   private readonly instrumentation?: InstrumentationOptions;
   private readonly archivalBehavior: ArchivedEntryBehavior;
@@ -663,7 +673,8 @@ export class EscrowClient {
     this.contractId = config.contractId;
     this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
     this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
-    this.rpc = new RpcServer(this.rpcUrl);
+    this.allowHttp = config.allowHttp ?? false;
+    this.rpc = new RpcServer(this.rpcUrl, { allowHttp: this.allowHttp });
     this.instrumentation = config.onEvent
       ? { ...config.instrumentation, onEvent: config.onEvent }
       : config.instrumentation;
@@ -697,6 +708,7 @@ export class EscrowClient {
       contractId: this.contractId,
       rpcUrl: this.rpcUrl,
       networkPassphrase: this.networkPassphrase,
+      allowHttp: this.allowHttp,
       ...(effectiveSigner
         ? { publicKey: signerAddress(effectiveSigner), signTransaction: effectiveSigner }
         : {}),

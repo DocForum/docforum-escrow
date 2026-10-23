@@ -226,7 +226,7 @@ contract's own (`0`–`3`).
   only paid fees) — the refund landed on the payer, as ADR 0004
   requires.
 - **SDK integration suite**: all 5 tests in
-  `sdk/tests/testnet-integration.test.ts` pass against this contract id
+  `sdk/tests/integration.test.ts` pass against this contract id
   (`npm run test:integration`) — release lifecycle, refund lifecycle,
   unauthorized-caller rejection, deadline surfacing via `getEscrow`, and
   rejection of an already-past `refundAfter`.

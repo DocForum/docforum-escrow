@@ -162,7 +162,7 @@ jobs:
       - run: npm run build
 
       # Offline only: events fixture decoding plus quorum input validation.
-      # Never the live testnet suite (see the note at the end of this file).
+      # The real-network suite runs in `sdk-integration-local` below.
       - run: npm run test:offline
 
       - run: npm run test:milestones
@@ -170,6 +170,207 @@ jobs:
       - run: npm run test:unit
 
       - run: npm run test:runtime
+
+  # The SDK integration suite used to be testnet-only and was kept
+  # out of CI (Friendbot + public RPC flakiness), so SDK regressions merged
+  # unnoticed. This job runs the exact same suite (tests/integration.test.ts,
+  # parameterised by tests/integration-network.ts) against a local
+  # `stellar/quickstart` network with Soroban RPC, deploying the WASM built
+  # from this checkout — no public network, no rate limits.
+  #
+  # Distinct from the offline unit suites (#14): this is a real network, just
+  # local. `npm run test:integration` still targets live testnet.
+  sdk-integration-local:
+    name: SDK integration (local Stellar quickstart)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      QUICKSTART_IMAGE: stellar/quickstart:latest
+      QUICKSTART_CONTAINER: escrow-quickstart
+      LOCAL_RPC_URL: http://localhost:8000/soroban/rpc
+      LOCAL_FRIENDBOT_URL: http://localhost:8000/friendbot
+      LOCAL_NETWORK_PASSPHRASE: Standalone Network ; February 2017
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+
+      # The image is ~1 GB pulled; cache the saved tarball so PR runs only
+      # pay for `docker load`. The key carries an explicit version suffix:
+      # bump it when the quickstart image itself should be refreshed, rather
+      # than silently keeping a stale `latest` forever.
+      - name: Restore cached quickstart image
+        id: quickstart-image
+        uses: actions/cache@v4
+        with:
+          path: /tmp/stellar-quickstart.tar
+          key: ${{ runner.os }}-stellar-quickstart-latest-v1
+
+      - name: Pull quickstart image (cache miss)
+        if: steps.quickstart-image.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          docker pull "$QUICKSTART_IMAGE"
+          docker save "$QUICKSTART_IMAGE" -o /tmp/stellar-quickstart.tar
+
+      - name: Load quickstart image (cache hit)
+        if: steps.quickstart-image.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/stellar-quickstart.tar
+
+      - name: Start quickstart (local network + Soroban RPC)
+        run: |
+          set -euo pipefail
+          docker run --detach --name "$QUICKSTART_CONTAINER" \
+            --publish 8000:8000 \
+            "$QUICKSTART_IMAGE" --local --enable-soroban-rpc
+
+      # Poll the RPC itself rather than sleeping: quickstart's boot time
+      # varies by runner, and a fixed sleep is either a race or wasted time.
+      # A healthy getHealth *and* the expected passphrase means RPC is serving
+      # the network this suite is configured for.
+      - name: Wait for quickstart readiness
+        run: |
+          set -euo pipefail
+          rpc() {
+            curl -fsS --max-time 5 -X POST "$LOCAL_RPC_URL" \
+              -H 'Content-Type: application/json' \
+              -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$1\"}"
+          }
+          deadline=$(( SECONDS + 300 ))
+          echo "Waiting for Soroban RPC at $LOCAL_RPC_URL ..."
+          until health=$(rpc getHealth 2>/dev/null) && printf '%s' "$health" | grep -q '"status":"healthy"'; do
+            if (( SECONDS > deadline )); then
+              echo "::error::Soroban RPC did not become healthy within 300s"
+              docker logs "$QUICKSTART_CONTAINER" | tail -n 100
+              exit 1
+            fi
+            sleep 3
+          done
+          echo "RPC healthy: $health"
+
+          network=$(rpc getNetwork)
+          if ! printf '%s' "$network" | grep -Fq "\"passphrase\":\"$LOCAL_NETWORK_PASSPHRASE\""; then
+            echo "::error::quickstart serves an unexpected network: $network"
+            exit 1
+          fi
+          echo "RPC serves the expected passphrase."
+
+          # Friendbot boots separately from RPC: while it is starting, nginx
+          # answers with a gateway error / plain 404. A ready friendbot answers
+          # a request without `addr` with a structured 4xx, so that is the
+          # signal to wait for (funding the deployer too early fails on HTML).
+          echo "Waiting for Friendbot at $LOCAL_FRIENDBOT_URL ..."
+          until code=$(curl -s -o /dev/null -w '%{http_code}' "$LOCAL_FRIENDBOT_URL" 2>/dev/null) \
+            && [ -n "$code" ] && [ "$code" -ge 400 ] && [ "$code" -lt 500 ]; do
+            if (( SECONDS > deadline )); then
+              echo "::error::Friendbot did not become ready within 300s"
+              docker logs "$QUICKSTART_CONTAINER" | tail -n 100
+              exit 1
+            fi
+            sleep 3
+          done
+          echo "Friendbot is ready."
+
+      # Pinned to scripts/stellar-cli-version, same as the sdk-bindings job: the
+      # deploy path should be reproducible, not whatever `latest` is that day.
+      - name: Install pinned Stellar CLI
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version=//p' scripts/stellar-cli-version)
+          checksum=$(sed -n 's/^linux-x86_64-sha256=//p' scripts/stellar-cli-version)
+          url="https://github.com/stellar/stellar-cli/releases/download/v${version}/stellar-cli-${version}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o /tmp/stellar-cli.tar.gz "$url"
+          echo "${checksum}  /tmp/stellar-cli.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf /tmp/stellar-cli.tar.gz -C "$HOME/.local/bin"
+          "$HOME/.local/bin/stellar" --version
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build contract WASM
+        working-directory: contracts/escrow
+        run: cargo build --target wasm32v1-none --release
+
+      - name: Deploy the freshly built WASM to the local network
+        run: |
+          set -euo pipefail
+          stellar keys generate deployer --overwrite
+          echo "Deployer: $(stellar keys address deployer)"
+
+          # quickstart's Friendbot funds the deployer; `keys fund` resolves the
+          # friendbot URL from the configured network's getNetwork response.
+          stellar keys fund deployer \
+            --rpc-url "$LOCAL_RPC_URL" \
+            --network-passphrase "$LOCAL_NETWORK_PASSPHRASE"
+
+          # A fresh standalone network has no Stellar Asset Contract for the
+          # native asset yet, unlike testnet. Deploy it at its deterministic
+          # address (`Asset.native().contractId(passphrase)` in the suite); the
+          # escrow contract calls `balance`/`transfer` on it.
+          stellar contract asset deploy \
+            --asset native \
+            --source-account deployer \
+            --rpc-url "$LOCAL_RPC_URL" \
+            --network-passphrase "$LOCAL_NETWORK_PASSPHRASE"
+
+          # `__constructor(allowed_tokens)`: an empty list keeps the open-token
+          # behaviour, so the native XLM SAC used by the suite is accepted.
+          deploy_output=$(stellar contract deploy \
+            --wasm contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm \
+            --source-account deployer \
+            --rpc-url "$LOCAL_RPC_URL" \
+            --network-passphrase "$LOCAL_NETWORK_PASSPHRASE" \
+            -- --allowed_tokens '[]')
+          printf '%s\n' "$deploy_output"
+
+          contract_id=$(printf '%s\n' "$deploy_output" | grep -oE 'C[A-Z2-7]{55}' | tail -n1)
+          if [ -z "${contract_id:-}" ]; then
+            echo "::error::Could not read the deployed contract id from the deploy output"
+            exit 1
+          fi
+          echo "Deployed escrow contract: $contract_id"
+          {
+            echo "ESCROW_TEST_NETWORK=local"
+            echo "ESCROW_LOCAL_CONTRACT_ID=$contract_id"
+            echo "ESCROW_LOCAL_RPC_URL=$LOCAL_RPC_URL"
+            echo "ESCROW_LOCAL_FRIENDBOT_URL=$LOCAL_FRIENDBOT_URL"
+            echo "ESCROW_LOCAL_NETWORK_PASSPHRASE=$LOCAL_NETWORK_PASSPHRASE"
+          } >> "$GITHUB_ENV"
+
+      - name: Install SDK dependencies
+        working-directory: sdk
+        run: npm ci
+
+      - name: Run the SDK integration suite against the local network
+        working-directory: sdk
+        run: npm run test:integration:local
+
+      - name: Dump quickstart logs on failure
+        if: failure()
+        run: docker logs "$QUICKSTART_CONTAINER" | tail -n 200
+
+      - name: Stop quickstart
+        if: always()
+        run: docker rm -f "$QUICKSTART_CONTAINER"
 
   sdk-bun:
     name: TypeScript SDK (Bun)
@@ -226,9 +427,9 @@ jobs:
       - run: npm run test:browser
         working-directory: sdk
 
-      # Deliberately NOT run here: `npm run test:integration`
-      # (tests/testnet-integration.test.ts) depends on live testnet and
-      # Friendbot funding. Runtime checks use local fixtures only.
+      # Deliberately NOT run here: `npm run test:integration`, which targets
+      # live testnet. Runtime checks use local fixtures only; the network
+      # suite runs in the `sdk-integration-local` job against quickstart.
 
   escrow-react:
     name: React hooks package
