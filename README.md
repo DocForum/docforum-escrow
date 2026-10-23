@@ -64,6 +64,33 @@ interpretation (what counts as "fulfilled", who's authorized to attest to
 it) is the consuming application's job. See
 [ADR 0001](docs/adr/0001-generic-escrow-not-healthcare-specific.md).
 
+### Tokens
+
+The contract works with **any SEP-41 token**: it calls exactly two functions
+on the token address — `balance` (the funding delta check, threat model T5)
+and `transfer` — through the generic SEP-41 client. Nothing else: no
+`approve`, no `burn`, no admin function, no issuer flag.
+
+A conformance suite runs the whole escrow lifecycle against each kind of
+token implementation — the native SAC (XLM), an issued-asset SAC with **no**
+issuer flags, and a custom SEP-41 token — and records what differs between
+them in [`docs/token-conformance.md`](docs/token-conformance.md). Two of
+those differences bite integrators, and the suite pins both:
+
+- **Amounts are opaque integers.** The contract never reads `decimals()` and
+  never rescales: one USDC (6 decimals) is `1_000_000` units, one XLM
+  (7 decimals) is `10_000_000`. Scaling is the calling application's job.
+- **A credit asset needs a trustline.** With an issued asset, the payer *and*
+  the payee must each hold a trustline before the escrow can be funded or
+  paid — a payout to a payee without one fails and rolls back atomically.
+  XLM and custom tokens have no trustlines.
+
+Recommended tokens, in order: the **native asset (XLM)** — no issuer, so
+nobody can claw the escrowed funds back afterwards; a **Stellar Asset
+Contract for an issued asset with no issuer flags**; a **well-known custom
+SEP-41 token** (e.g. an OpenZeppelin-style fungible token). Whichever you
+pick, pin it in the deploy-time allowlist.
+
 ## How it's used
 
 ```mermaid
@@ -91,6 +118,7 @@ repo never crosses back into `docforum-core`'s database or domain model.
 contracts/escrow/
   src/lib.rs             Contract implementation
   tests/                 Integration tests (soroban-sdk testutils) — required for any contract change
+  tests/conformance/     Token conformance harness + custom SEP-41 token — issue #133
   test_snapshots/        Committed Soroban snapshots (events/auth/storage) per test — issue #120
   Cargo.toml
 sdk/
@@ -118,7 +146,7 @@ the repository root; it normalizes source paths and the build timestamp.
 git clone https://github.com/DocForum/docforum-escrow.git
 cd docforum-escrow/contracts/escrow
 
-# Run the test suite (also writes the
+# Run the test suite (126 tests, all passing today; also writes the
 # committed test_snapshots/ files — see CONTRIBUTING.md)
 cargo test
 
@@ -412,6 +440,7 @@ typed contract errors and `big.Int` i128 amounts. See
 | Doc | Purpose |
 |---|---|
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
+| [`docs/token-conformance.md`](docs/token-conformance.md) | Which SEP-41 tokens the contract supports, how token implementations differ, and which tokens integrators should use. |
 | [`ROADMAP.md`](ROADMAP.md) | Phase breakdown and current status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
