@@ -70,6 +70,7 @@ describe("get_escrow cross-version decoding", () => {
       new EscrowClient({
         contractId: Keypair.random().publicKey(),
         rpcUrl: "https://127.0.0.1:1",
+        verifyNetwork: false,
       }),
       { contractClient: () => ({ get_escrow: async () => fakeTx }) }
     );
@@ -93,6 +94,7 @@ describe("get_escrow cross-version decoding", () => {
       new EscrowClient({
         contractId: Keypair.random().publicKey(),
         rpcUrl: "https://127.0.0.1:1",
+        verifyNetwork: false,
       }),
       { contractClient: () => ({ get_escrow: async () => fakeTx }) }
     );
