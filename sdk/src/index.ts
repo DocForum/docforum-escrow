@@ -24,6 +24,8 @@ import {
   Client as EscrowContractClient,
   type EscrowData as GeneratedEscrowData,
   type EscrowStatus as GeneratedEscrowStatus,
+  type PooledData as GeneratedPooledData,
+  type Contribution as GeneratedContribution,
 } from "./generated/contract-client.js";
 import { decodeEscrowDataFromScVal } from "./escrow-data.js";
 import {
@@ -391,6 +393,62 @@ export interface CancelParams {
   escrowId: bigint;
   /** The escrow's payer; signs the cancellation. */
   payer: Keypair;
+}
+
+/**
+ * Creation parameters for a pooled escrow (issue #113, docs/adr/0011): one
+ * agreement funded by many payers. Creation funds nothing — `contribute`
+ * does, before `fundingDeadline`, up to `fundingTarget`.
+ */
+export interface CreatePooledEscrowParams {
+  /** Signs and pays for creation; funds nothing at this step. */
+  creator: EscrowSigner;
+  payee: string;
+  token: string;
+  /**
+   * Raw token units the contributors must reach before `release` becomes
+   * possible. Must be positive; fixed at creation, never changed.
+   */
+  fundingTarget: bigint;
+  conditionRef: string;
+  /** The address permitted to `release` the fully funded pool (docs/adr/0002). */
+  releaser: string;
+  /**
+   * Unix seconds after which contributions are rejected forever and, if
+   * the target was missed, `claimRefund` opens to every contributor.
+   * Must be strictly in the future (contract error
+   * `InvalidFundingDeadline`, 34).
+   */
+  fundingDeadline: bigint;
+}
+
+export interface ContributeParams {
+  escrowId: bigint;
+  /** Signs the transfer; the funds come from this account. */
+  payer: EscrowSigner;
+  /** Raw token units; positive, and only while the pool is under target. */
+  amount: bigint;
+}
+
+/** Pull-based refund params — the contributor claims their own record. */
+export interface ClaimRefundParams {
+  escrowId: bigint;
+  /** Must be the recorded contributor; signs the claim (docs/adr/0011). */
+  contributor: EscrowSigner;
+}
+
+/** Read-only funding config of a pooled escrow (`getPooled`). */
+export interface PooledEscrow {
+  fundingTarget: bigint;
+  fundingDeadline: bigint;
+}
+
+/** One contributor's record on a pooled escrow (`getContribution`). */
+export interface ContributionRecord {
+  /** Total accepted contributions from this address — claimable if not `refunded`. */
+  amount: bigint;
+  /** True once `claimRefund` has paid this record; a second claim fails. */
+  refunded: boolean;
 }
 
 export interface ReleaseOrRefundParams {
@@ -996,6 +1054,145 @@ export class EscrowClient {
     const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Creates a pooled escrow (issue #113, docs/adr/0011): one agreement
+   * that many payers fund with `contribute`. Creation moves no tokens —
+   * the pool starts at 0 and grows to `fundingTarget`. Release becomes
+   * possible only at exactly the target; if `fundingDeadline` passes
+   * first, the round failed and each contributor pulls their own record
+   * back with `claimRefund`. Returns the new escrow id and tx hash.
+   */
+  async createPooledEscrow(
+    params: CreatePooledEscrowParams
+  ): Promise<{ escrowId: bigint; txHash: string }> {
+    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+      throw new Error(
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+      );
+    }
+    if (params.fundingTarget <= 0n) {
+      throw new Error(`fundingTarget must be a positive raw amount, got ${params.fundingTarget}`);
+    }
+    if (params.fundingDeadline <= 0n) {
+      throw new Error(
+        `fundingDeadline must be a positive unix timestamp in seconds, got ${params.fundingDeadline}`
+      );
+    }
+    const client = this.contractClient(params.creator);
+    const sent = await this.invoke(
+      "create_pooled_escrow",
+      undefined,
+      () =>
+        client.create_pooled_escrow({
+          creator: signerAddress(params.creator),
+          payee: params.payee,
+          token: params.token,
+          funding_target: params.fundingTarget,
+          condition_ref: params.conditionRef,
+          releaser: params.releaser,
+          funding_deadline: params.fundingDeadline,
+        }),
+      { address: signerAddress(params.creator) },
+    );
+    return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Contributes `amount` to a pooled escrow from `payer` (docs/adr/0011).
+   * Accepted only before the funding deadline and only while the pool
+   * stays at or under its target; the contract verifies the received
+   * amount with a balance-delta check and records it against `payer`,
+   * accumulating across repeat contributions. Returns the tx hash.
+   */
+  async contribute(params: ContributeParams): Promise<{ txHash: string }> {
+    if (params.amount <= 0n) {
+      throw new Error(`amount must be a positive raw amount, got ${params.amount}`);
+    }
+    const client = this.contractClient(params.payer);
+    const sent = await this.invoke(
+      "contribute",
+      params.escrowId,
+      () =>
+        client.contribute({
+          escrow_id: params.escrowId,
+          payer: signerAddress(params.payer),
+          amount: params.amount,
+        }),
+      { address: signerAddress(params.payer) },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Pull-based refund of a failed funding round (docs/adr/0011): pays
+   * `contributor` exactly their recorded amount, once. Only available
+   * after the funding deadline passed below the target, and never after
+   * a release. The contributor signs their own claim; anyone else's
+   * claim of this record is impossible. Returns the tx hash.
+   */
+  async claimRefund(params: ClaimRefundParams): Promise<{ txHash: string }> {
+    const client = this.contractClient(params.contributor);
+    const sent = await this.invoke(
+      "claim_refund",
+      params.escrowId,
+      () =>
+        client.claim_refund({
+          escrow_id: params.escrowId,
+          contributor: signerAddress(params.contributor),
+        }),
+      { address: signerAddress(params.contributor) },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Read-only: a pooled escrow's immutable funding config. Combine with
+   * `getEscrow().amount` and the current ledger time to classify the
+   * round: `amount === fundingTarget` succeeded (releasable at any time);
+   * `now >= fundingDeadline && amount < fundingTarget` failed
+   * (`claimRefund` is open). A failed round still reads `"Funded"` from
+   * `getStatus` — status describes settlement, not funding. Throws
+   * `NotPooled` (error 26) on a non-pooled or unknown id.
+   */
+  async getPooled(escrowId: bigint): Promise<PooledEscrow> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("get_pooled", escrowId),
+      () => client.get_pooled({ escrow_id: escrowId }),
+    );
+    const data: GeneratedPooledData = tx.result.unwrap();
+    return {
+      fundingTarget: data.funding_target,
+      fundingDeadline: data.funding_deadline,
+    };
+  }
+
+  /**
+   * Read-only: one contributor's record on a pooled escrow — the exact
+   * amount they can claim from a failed round and whether it is already
+   * claimed. `undefined` means the address never contributed. Throws
+   * `NotFound` (1) on an unknown id, `NotPooled` (26) on a non-pooled one.
+   */
+  async getContribution(
+    escrowId: bigint,
+    contributor: string
+  ): Promise<ContributionRecord | undefined> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("get_contribution", escrowId, contributor),
+      () => client.get_contribution({ escrow_id: escrowId, contributor }),
+    );
+    const record: GeneratedContribution | undefined = tx.result.unwrap();
+    if (record == null) return undefined;
+    return { amount: record.amount, refunded: record.refunded };
   }
 
   /**
