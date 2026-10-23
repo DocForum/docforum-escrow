@@ -896,30 +896,6 @@
                 },
                 {
                   "i128": "100"
-                },
-                {
-                  "string": "ref-b"
-                },
-                {
-                  "vec": [
-                    {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
-                    }
-                  ]
-                },
-                {
-                  "u32": 1
-                },
-                "void",
-                {
-                  "bool": false
-                },
-                {
-                  "bool": false
-                },
-                "void",
-                {
-                  "symbol": "Funded"
                 }
               ]
             }

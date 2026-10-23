@@ -300,14 +300,17 @@ behave like SEP-41.
   the instance TTL on each call), sized to the longest expected escrow
   duration.
 
-### T7 — No events emitted · **Low**
-- The contract publishes no events of its own. The only on-chain trace
-  of create/release/refund is the token's `transfer` event plus storage
-  changes. That makes it harder to monitor for T1 (an unexpected burst
-  of releases from a leaked key).
-- **Mitigation:** emit `created`/`released`/`refunded` events with the
-  `escrow_id`. Alert in the consumer on any release/refund it didn't
-  initiate.
+### T7 — No events emitted · **Low — mitigated (issue #9)**
+- **Addressed:** the contract now emits `created`, `released`, and `refunded`
+  events keyed by `escrow_id`. Topic: `("ESCROW", action, escrow_id)`.
+  Payload: `(payer, destination, token, amount)`. `condition_ref` is absent
+  (T9 guard). Error paths emit nothing. See `ARCHITECTURE_ESSENTIALS.md §
+  Events` for the full shape, and `contracts/escrow/tests/events.rs` for
+  tests asserting exact topics/payloads on every happy path and nothing on
+  every error path. A consumer can now alert on any `released` or `refunded`
+  event it didn't initiate to detect a leaked releaser key (T1).
+- **Prior state:** the contract published no events; the only trace of
+  create/release/refund was the token's `transfer` event plus storage changes.
 
 ### T8 — Payee has no protection against the releaser · **By design, document it**
 - The `payer` chooses the `releaser`. Nothing stops `releaser == payer`,
@@ -640,7 +643,7 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
       Also rejects the contract itself as `refund_to` (T11). Not yet
       deployed to testnet.
 - [ ] ⚙ TTL extension for escrow entries and instance (T6)
-- [ ] ⚙ Emit create/release/refund events (T7)
+- [x] ⚙ Emit create/release/refund events (T7) — issue #9; `contracts/escrow/tests/events.rs`
 - [x] Tests with a malicious mock token: lying transfer, short
       delivery, re-entry attempt (T4, T5) — issue #12,
       `tests/malicious_token.rs`

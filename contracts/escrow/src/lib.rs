@@ -1056,7 +1056,15 @@ impl EscrowContract {
             release_not_before,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        Self::publish_state(env, symbol_short!("created"), id, &data);
+        Self::emit_lifecycle(
+            env,
+            symbol_short!("created"),
+            id,
+            &data.payer,
+            &data.payee,
+            &data.token,
+            data.amount,
+        );
         Ok(id)
     }
 
@@ -1182,7 +1190,15 @@ impl EscrowContract {
             EscrowStatus::Refunded => symbol_short!("refunded"),
             EscrowStatus::Cancelled => symbol_short!("cancelled"),
         };
-        Self::publish_state(env, action, escrow_id, data);
+        Self::emit_lifecycle(
+            env,
+            action,
+            escrow_id,
+            &data.payer,
+            event_destination,
+            &data.token,
+            data.amount,
+        );
         Ok(())
     }
 
@@ -1196,21 +1212,8 @@ impl EscrowContract {
             EscrowStatus::Cancelled => symbol_short!("Cancelled"),
         };
         env.events().publish(
-            (symbol_short!("ESCROW"), action, id),
-            (
-                data.payer.clone(),
-                data.payee.clone(),
-                data.token.clone(),
-                data.amount,
-                data.condition_ref.clone(),
-                data.releasers.clone(),
-                data.threshold,
-                data.refund_after,
-                data.notify_payee,
-                data.requires_acceptance,
-                data.accepted_at,
-                status,
-            ),
+            (symbol_short!("ESCROW"), action, escrow_id),
+            (payer.clone(), destination.clone(), token.clone(), amount),
         );
     }
 

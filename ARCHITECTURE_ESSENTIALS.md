@@ -31,6 +31,45 @@ get_contribution(escrow_id, contributor) -> Option<Contribution> // read-only: o
 rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue #23) — single-releaser escrow only; current releaser and payer authorize; funded only
 ```
 
+## Events
+
+The contract emits lifecycle events on every successful `create_escrow*`,
+`release*`, and `refund*` call (issue #9, addresses threat-model T7).
+Error paths emit nothing — an event is a signal that a state change
+actually committed.
+
+All three lifecycle events share the same shape:
+
+```
+Topic:   ("ESCROW", action, escrow_id)
+           action  ∈ { "created", "released", "refunded" }
+           escrow_id : u64
+
+Payload: (payer, destination, token, amount)
+           payer       : Address  — the original funder
+           destination : Address  — payee on create/release;
+                                    refund_to on refund
+           token       : Address  — the SEP-41 token contract
+           amount      : i128     — the settled (or locked) amount
+```
+
+`condition_ref` is **intentionally absent** from events (threat model T9:
+condition_ref is opaque and callers must not put sensitive data there; its
+absence from events is an extra guard). `releasers`, `threshold`, and
+creation-time flags are also omitted to keep the shape minimal and stable
+over time — use `get_escrow` to read the full record.
+
+The destination field encodes where the funds went or will go:
+- `created`  → `payee`     (funds are locked for this address)
+- `released` → `payee`     (funds were transferred to this address)
+- `refunded` → `refund_to` (funds were returned here; equals `payer` unless
+  a distinct `refund_to` was set at creation — see ADR 0009)
+
+Other emitted events (not lifecycle):
+- `top_up`   — topic `("top_up", escrow_id)`,   payload `(added, new_total)`
+- `rotate`   — topic `("rotate", escrow_id)`,   payload `(old_releaser, new_releaser)`
+- `accepted` — topic `("accepted", escrow_id)`, payload `(payee, accepted_at)`
+
 No new contract-level role came in with the M-of-N work: `releasers` is
 escrow data chosen by the payer at creation and immutable afterwards.There is still no admin, no owner, no pause and no upgrade path — OpenZeppelin's
 pausable/upgradeable/access modules were evaluated and rejected in

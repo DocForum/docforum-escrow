@@ -674,30 +674,6 @@
                 },
                 {
                   "i128": "100"
-                },
-                {
-                  "string": "allowlist-test"
-                },
-                {
-                  "vec": [
-                    {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                    }
-                  ]
-                },
-                {
-                  "u32": 1
-                },
-                "void",
-                {
-                  "bool": false
-                },
-                {
-                  "bool": false
-                },
-                "void",
-                {
-                  "symbol": "Funded"
                 }
               ]
             }
