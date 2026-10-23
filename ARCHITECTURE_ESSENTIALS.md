@@ -12,7 +12,10 @@
 ```
 __constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009); deployed on testnet
+create_escrow_release_time(..., release_not_before) -> escrow_id   // Optional earliest release time; cannot be after refund_after
+create_escrow_with_dependency(..., depends_on: EscrowDependency) -> escrow_id   // Single-releaser; local dependency must reference existing lower id and require Released or Refunded
 create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id   // optional payee acceptance gate; deployed on testnet
+create_acceptance_dependency(..., depends_on) -> escrow_id   // Acceptance gate plus local dependency
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
 cancel(escrow_id, payer) -> ()   // payer-authorized, only while Funded + requires_acceptance + not yet accepted; funds to refund_to, status Cancelled (ADR 0010); not deployed yet
 create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, deployed on testnet
@@ -113,6 +116,19 @@ only while the escrow is `Funded`. The payee-acceptance gate
 
 The contract decides **who** may call `release`/`refund`, never **why**:
 `condition_ref` is opaque to it (`docs/adr/0001`).
+
+Dependent escrows (Phase E5, issue #114) store an optional
+`EscrowDependency { escrow_id, required_status }` under a separate
+persistent key, rather than changing the serialized `EscrowData` layout.
+Dependency-aware entry points are additive; existing creation signatures
+and no-dependency behavior remain unchanged. A dependency must point to an
+existing escrow in this contract deployment with a lower, monotonically
+assigned ID. Only terminal statuses (`Released` or `Refunded`) are valid
+requirements. Both single-releaser and quorum releases verify the current
+dependency status before settlement. Refund entry points do not inspect
+dependencies, so a refunded prerequisite cannot block a valid refund of its
+dependent escrow. Cross-contract and cross-deployment dependencies are out
+of scope.
 
 ## TypeScript SDK surface (`sdk/`)
 ```ts
