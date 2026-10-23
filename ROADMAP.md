@@ -303,6 +303,15 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   transaction hash and retry count; addresses are opt-in only
   (`includeAddresses: true`). 7 offline tests assert span production and the
   disabled path.
+- [x] Network presets with an explicit mainnet opt-in guard (issue #67) —
+  `networks.testnet`, `networks.futurenet`, `networks.local` presets carry
+  an RPC URL, network passphrase and known contract ids. Constructing a
+  client with the mainnet passphrase throws unless `allowMainnet: true` is
+  passed; custom networks (private quickstart) remain possible. The first
+  network call verifies the RPC's `getNetwork` passphrase matches the
+  configured one (on by default, cached per client), so a custom `rpcUrl`
+  cannot bypass the guard. Offline unit tests cover each guard. Additive
+  SDK surface (minor changeset).
 
 ## Phase E7 — Verification, testing & release engineering
 - [x] **Reproducible WASM builds and deployment verification (issue #91)** ?

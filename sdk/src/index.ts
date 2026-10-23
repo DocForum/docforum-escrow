@@ -13,6 +13,7 @@ import {
   FeeBumpTransaction,
   Keypair,
   Operation,
+  Networks,
   Transaction,
   TransactionBuilder,
   scValToNative,
@@ -291,6 +292,83 @@ const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
 const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
 
 /**
+ * Named network presets (Phase E6). Each preset bundles the RPC URL, the
+ * network passphrase and the known contract ids for that network. Hard rule
+ * 4: testnet only until the security review — mainnet is deliberately not a
+ * preset, and constructing a client against the mainnet passphrase throws
+ * unless the caller passes `allowMainnet: true`.
+ */
+export interface NetworkPreset {
+  /** Human-readable network name. */
+  name: string;
+  /** Soroban RPC endpoint for this network. */
+  rpcUrl: string;
+  /** Stellar network passphrase. */
+  networkPassphrase: string;
+  /** Known docforum-escrow contract ids deployed on this network. */
+  contractIds: Record<string, string>;
+  /** Plain-HTTP RPC is allowed (local quickstart only). Defaults to `false`. */
+  allowHttp?: boolean;
+}
+
+/** The Stellar mainnet passphrase — never a default, only an explicit opt-in. */
+export const MAINNET_NETWORK_PASSPHRASE = Networks.PUBLIC;
+
+export const networks = {
+  /** Soroban testnet — the only network wired into defaults (hard rule 4). */
+  testnet: {
+    name: "testnet",
+    rpcUrl: TESTNET_RPC_URL,
+    networkPassphrase: TESTNET_NETWORK_PASSPHRASE,
+    // Current upstream deployment (docs/testnet-deployments.md) and the
+    // testnet native XLM Stellar Asset Contract on its token allowlist.
+    contractIds: {
+      escrow: "CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR",
+      nativeXlm: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+    },
+  } as NetworkPreset,
+  /** Stellar futurenet — an experimental testnet, still not mainnet. */
+  futurenet: {
+    name: "futurenet",
+    rpcUrl: "https://rpc-futurenet.stellar.org",
+    networkPassphrase: Networks.FUTURENET,
+    contractIds: {},
+  } as NetworkPreset,
+  /** A local quickstart node (private network). */
+  local: {
+    name: "local",
+    rpcUrl: "http://localhost:8000/soroban/rpc",
+    networkPassphrase: "Standalone Network ; February 2017",
+    contractIds: {},
+    allowHttp: true,
+  } as NetworkPreset,
+} as const;
+
+/** Thrown when a client is configured for mainnet without the explicit opt-in. */
+export class MainnetNotAllowedError extends Error {
+  readonly name = "MainnetNotAllowedError";
+  constructor() {
+    super(
+      "Refusing to construct a client against the Stellar mainnet passphrase. " +
+        "Hard rule 4 keeps mainnet out of defaults until the security review; " +
+        "pass allowMainnet: true to opt in deliberately.",
+    );
+  }
+}
+
+/** Thrown when the RPC's reported network passphrase does not match the configured one. */
+export class NetworkMismatchError extends Error {
+  readonly name = "NetworkMismatchError";
+  readonly expected: string;
+  readonly actual: string;
+  constructor(expected: string, actual: string) {
+    super(`RPC network passphrase mismatch: expected "${expected}", got "${actual}".`);
+    this.expected = expected;
+    this.actual = actual;
+  }
+}
+
+/**
  * Maximum allowed length of `conditionRef` in bytes — must match the
  * contract's bound (currently 64 bytes, see contracts/escrow/src/lib.rs
  * and docs/threat-model.md T10). Validated client-side so callers fail
@@ -330,6 +408,32 @@ export interface EscrowClientConfig {
   /** Use the restore signer to authorize calls that automatically restore archived entries. */
   archivalBehavior?: ArchivedEntryBehavior;
   restoreSigner?: Keypair;
+  /**
+   * Named network preset (Phase E6). Supplies `rpcUrl` and `networkPassphrase`
+   * defaults; explicit `rpcUrl`/`networkPassphrase` still win. Custom networks
+   * (e.g. a private quickstart) can be configured without a preset.
+   */
+  network?: NetworkPreset;
+  /**
+   * Explicit opt-in required to construct a client against the Stellar
+   * mainnet passphrase (hard rule 4). Defaults to `false`.
+   */
+  allowMainnet?: boolean;
+  /**
+   * Allow a plain-HTTP `rpcUrl` (e.g. a private quickstart node). Defaults to
+   * the preset's `allowHttp` (only `networks.local` sets it), else `false`.
+   */
+  allowHttp?: boolean;
+  /**
+   * Verify the RPC's reported network passphrase against the configured one
+   * on the first network call, and throw `NetworkMismatchError` on a
+   * mismatch. Defaults to `true`, so a custom `rpcUrl` cannot silently point a
+   * client at a different network (including mainnet) than its passphrase
+   * says. The result is cached: one `getNetwork` round trip per client, not
+   * per call. Pass `false` only for offline use (e.g. test doubles); you can
+   * still call `verifyNetwork()` on demand.
+   */
+  verifyNetwork?: boolean;
 }
 
 export interface CreateEscrowParams {
@@ -658,12 +762,24 @@ export class EscrowClient {
   private readonly instrumentation?: InstrumentationOptions;
   private readonly archivalBehavior: ArchivedEntryBehavior;
   private readonly restoreSigner?: Keypair;
+  private readonly allowMainnet: boolean;
+  private readonly allowHttp: boolean;
+  private readonly verifyNetworkOnCall: boolean;
+  /** Cached result of the network passphrase verification. */
+  private networkVerified?: Promise<void>;
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
-    this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
-    this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
-    this.rpc = new RpcServer(this.rpcUrl);
+    this.rpcUrl = config.rpcUrl ?? config.network?.rpcUrl ?? TESTNET_RPC_URL;
+    this.networkPassphrase =
+      config.networkPassphrase ?? config.network?.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
+    this.allowMainnet = config.allowMainnet === true;
+    if (this.networkPassphrase === MAINNET_NETWORK_PASSPHRASE && !this.allowMainnet) {
+      throw new MainnetNotAllowedError();
+    }
+    this.verifyNetworkOnCall = config.verifyNetwork !== false;
+    this.allowHttp = config.allowHttp ?? config.network?.allowHttp ?? false;
+    this.rpc = new RpcServer(this.rpcUrl, { allowHttp: this.allowHttp });
     this.instrumentation = config.onEvent
       ? { ...config.instrumentation, onEvent: config.onEvent }
       : config.instrumentation;
@@ -691,12 +807,45 @@ export class EscrowClient {
     });
   }
 
+  /**
+   * Verifies once (and caches) that the RPC's reported network passphrase
+   * matches the configured one. A mismatch throws `NetworkMismatchError` so a
+   * custom `rpcUrl` cannot silently point a testnet-configured client at
+   * another network. A rejection is not cached, so a transient RPC failure is
+   * retryable.
+   */
+  verifyNetwork(): Promise<void> {
+    if (!this.networkVerified) {
+      this.networkVerified = (async () => {
+        const rpcNetwork = await this.rpc.getNetwork();
+        if (rpcNetwork.passphrase !== this.networkPassphrase) {
+          throw new NetworkMismatchError(this.networkPassphrase, rpcNetwork.passphrase);
+        }
+      })();
+      this.networkVerified.catch(() => {
+        this.networkVerified = undefined;
+      });
+    }
+    return this.networkVerified;
+  }
+
+  /**
+   * Gate on every network call path: verifies the RPC's passphrase once (see
+   * `verifyNetwork()`), then reuses the cached result. A no-op when the
+   * client was built with `verifyNetwork: false`.
+   */
+  private async ensureNetworkVerified(): Promise<void> {
+    if (!this.verifyNetworkOnCall) return;
+    await this.verifyNetwork();
+  }
+
   private contractClient(signer?: EscrowSigner): EscrowContractClient {
     const effectiveSigner = signer ?? (this.archivalBehavior === "auto" ? this.restoreSigner : undefined);
     return new EscrowContractClient({
       contractId: this.contractId,
       rpcUrl: this.rpcUrl,
       networkPassphrase: this.networkPassphrase,
+      allowHttp: this.allowHttp,
       ...(effectiveSigner
         ? { publicKey: signerAddress(effectiveSigner), signTransaction: effectiveSigner }
         : {}),
@@ -732,6 +881,7 @@ export class EscrowClient {
     build: () => Promise<AssembledTransaction<T>>,
     hooks: { beforeSign?: (tx: AssembledTransaction<T>) => Promise<void>; address?: string } = {},
   ): Promise<SentTransaction<T>> {
+    await this.ensureNetworkVerified();
     const attributes = this.spanAttributesIfEnabled(method, escrowId, hooks.address);
     const tx = await tracePhase(this.instrumentation, "simulate", attributes, build);
     if (tx.isReadCall) {
@@ -818,6 +968,7 @@ export class EscrowClient {
 
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
   async getStatus(escrowId: bigint): Promise<EscrowStatus> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient();
     const tx = await tracePhase(
       this.instrumentation,
@@ -890,6 +1041,7 @@ export class EscrowClient {
    * T8). Throws if `escrowId` doesn't exist.
    */
   async getEscrow(escrowId: bigint): Promise<Escrow> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient();
     const tx = await tracePhase(
       this.instrumentation,
@@ -1049,6 +1201,7 @@ export class EscrowClient {
    * transaction's hash.
    */
   async cancel(params: CancelParams): Promise<{ txHash: string }> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient(params.payer);
     const tx = await client.cancel({ escrow_id: params.escrowId, payer: params.payer.publicKey() });
     const sent = await tx.signAndSend();
@@ -1159,6 +1312,7 @@ export class EscrowClient {
    * `NotPooled` (error 26) on a non-pooled or unknown id.
    */
   async getPooled(escrowId: bigint): Promise<PooledEscrow> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient();
     const tx = await tracePhase(
       this.instrumentation,
@@ -1183,6 +1337,7 @@ export class EscrowClient {
     escrowId: bigint,
     contributor: string
   ): Promise<ContributionRecord | undefined> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient();
     const tx = await tracePhase(
       this.instrumentation,
@@ -1238,6 +1393,7 @@ export class EscrowClient {
     settlement: "release" | "refund",
     params: RelayedAuthorizationParams,
   ): Promise<RelayedAuthorization> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient(params.relayer);
     const tx = settlement === "release"
       ? await client.release({ escrow_id: params.escrowId, caller: params.releaser.publicKey() })
@@ -1285,6 +1441,7 @@ export class EscrowClient {
       );
     }
 
+    await this.ensureNetworkVerified();
     const client = this.contractClient(relayer);
     const tx = client.txFromJSON<Result<void>>(authorization.transaction);
     const sent = await tx.signAndSend();
@@ -1303,6 +1460,7 @@ export class EscrowClient {
    * — fee-bump it with `maxFee` set to the most they are willing to pay.
    */
   async estimate(call: EstimateCallParams): Promise<FeeEstimate> {
+    await this.ensureNetworkVerified();
     const contractId = call.contractId ?? this.contractId;
     const account = await this.rpc.getAccount(signerAddress(call.source));
     const transaction = new TransactionBuilder(account, {
@@ -1503,6 +1661,9 @@ export class EscrowClient {
     if (params.fromLedger !== undefined && (!Number.isSafeInteger(params.fromLedger) || params.fromLedger < 1)) {
       throw new RangeError("fromLedger must be a positive safe integer.");
     }
+    // Validate the arguments before any network work, so a bad call fails
+    // fast and never depends on RPC availability.
+    await this.ensureNetworkVerified();
     const filter: Api.EventFilter = { type: "contract", contractIds: [this.contractId] };
     const request: Api.GetEventsRequest = "cursor" in params && params.cursor !== undefined
       ? { cursor: params.cursor, filters: [filter], limit: 100 }

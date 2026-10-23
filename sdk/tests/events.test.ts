@@ -5,7 +5,7 @@ import { EscrowClient, EventCursorExpiredError } from "../src/index.js";
 import { createdEventFixture, unknownEventFixture } from "./fixtures/events.js";
 
 const contractId = Keypair.random().publicKey();
-const client = new EscrowClient({ contractId, rpcUrl: "https://rpc.example.test" });
+const client = new EscrowClient({ contractId, rpcUrl: "https://rpc.example.test", verifyNetwork: false });
 
 // Hydrate the committed XDR fixture into the SDK's decoded RPC response type.
 const fixture = {

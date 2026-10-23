@@ -7,6 +7,7 @@ function makeClient(fakes: Record<string, unknown>): EscrowClient {
     new EscrowClient({
       contractId: Keypair.random().publicKey(),
       rpcUrl: "https://127.0.0.1:1",
+      verifyNetwork: false,
     }),
     fakes
   );

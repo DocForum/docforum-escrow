@@ -25,7 +25,8 @@ function fakeSent(hash = "b".repeat(64)) {
 }
 
 function invokeClient(options: ConstructorParameters<typeof EscrowClient>[0]) {
-  const client = new EscrowClient(options);
+  // Offline test doubles: skip the first-call getNetwork passphrase check.
+  const client = new EscrowClient({ verifyNetwork: false, ...options });
   const invoke = (client as unknown as {
     invoke: (
       method: string,
