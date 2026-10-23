@@ -13,6 +13,7 @@ docforum-escrow-interface = { path = "../../crates/escrow-interface" }
 
 [dev-dependencies]
 soroban-sdk = { version = "27.0.6", features = ["testutils"] }
+proptest = "1.5"
 
 [profile.release]
 opt-level = "z"
