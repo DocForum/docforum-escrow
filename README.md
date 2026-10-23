@@ -189,6 +189,47 @@ const { txHash } = await client.submitRelayed("release", authorization, relayer)
 Keep the serialized authorization private until submission and do not
 retry it after its expiration ledger.
 
+### Milestone escrows
+
+A milestone escrow pays out in fixed tranches instead of one lump sum.
+The deployed contract is single-tranche, so the SDK models a schedule as a
+**group of escrows** — one per tranche — created by `createMilestoneEscrow`.
+No contract change is involved, and every per-escrow guarantee (releaser
+auth, refund deadline, `Funded`/`Released` state) applies to each tranche:
+
+```ts
+const group = await client.createMilestoneEscrow({
+  payer,
+  payee,
+  token,
+  amount: 1_000_000n,             // must equal the sum of `milestones`
+  conditionRef: "milestone-schedule",
+  releaser,
+  milestones: [600_000n, 400_000n],
+});
+group.escrowIds;    // [101n, 102n] — one single-tranche escrow per tranche
+
+await client.releaseMilestone({ escrow: group, milestoneIndex: 0, caller: releaser }); // 600_000 to payee
+await client.getMilestones(group); // [{ index: 0, … status: "released" }, { index: 1, … status: "unreleased" }]
+await client.refundMilestone({ escrow: group, milestoneIndex: 1, caller: releaser });
+```
+
+The schedule is validated before the first transaction: entries must be
+positive and sum exactly to `amount`, otherwise `createMilestoneEscrow`
+rejects with `MilestoneScheduleError` and spends nothing. Each tranche's
+`conditionRef` is tagged `<conditionRef>#m<i+1>/<n>` so a tranche stays
+traceable on-chain, and a tag that would exceed the contract's 64-byte
+`condition_ref` limit is rejected up front.
+
+Two consequences of "one escrow per tranche" are worth knowing:
+
+- A group costs one transaction per tranche, and creation is not atomic. If
+  tranche *k* fails, the earlier escrows are already funded; the thrown
+  `MilestoneEscrowPartialError` carries their ids so you can release or
+  refund them instead of paying twice.
+- Each tranche settles independently: refunding tranche 1 does not touch
+  tranche 2, and released tranches are final.
+
 ## Verify this deployment
 
 Contract WASM releases attach `docforum_escrow.wasm` and its

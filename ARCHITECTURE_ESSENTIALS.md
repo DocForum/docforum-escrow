@@ -113,10 +113,26 @@ await client.refund({ escrowId, caller });   // { txHash } — releaser when thr
 await client.refundWithApprovals({ escrowId, approvers });  // { txHash } — M-of-N refund
 await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
 const stop = client.subscribe(handler, { cursor, pollIntervalMs }); // serial polling; await handler for back-pressure
+await client.createMilestoneEscrow({ payer, payee, token, amount, conditionRef, releaser, milestones }); // milestones: bigint[] tranches, validated client-side (sum == amount, all > 0); one escrow per tranche
+await client.releaseMilestone({ escrow: group, milestoneIndex, caller }); // releases that tranche's escrow, once
+await client.refundMilestone({ escrow: group, milestoneIndex, caller }); // refunds that tranche's escrow, same rules as refund
+await client.getMilestones(group);           // [{ index, amount, escrowId, status: "unreleased" | "released" | "refunded" }]
 await client.estimate({ source, method, args }); // { resourceFee, inclusionFee, total, minResourceFee } — simulation only, 20% resource buffer
 client.guardSponsorship(signedXdr);          // { ok, reasons, invokedContracts } — every op + contract auth entry must target this escrow
 client.feeBump(signedXdr, sponsor, { maxFee, baseFee? }); // { xdr, fee, innerTxHash } — throws MaxFeeExceededError, never overshoots the cap
 ```
+
+Milestones are an SDK-level grouping, not a contract entry point: the
+deployed contract is single-tranche, so `createMilestoneEscrow` creates one
+ordinary escrow per tranche, tags its `conditionRef` as
+`<conditionRef>#m<i+1>/<n>`, and returns the ids. Each tranche therefore
+settles independently, release/refund act per tranche, and creation is one
+transaction per tranche. `validateMilestoneSchedule` checks the schedule
+(positive tranches summing exactly to `amount`, i128-safe) before the first
+RPC call and throws `MilestoneScheduleError`; a tag that would exceed the
+64-byte `condition_ref` limit is rejected the same way. A failure partway
+through throws `MilestoneEscrowPartialError`, which carries the ids of the
+tranches already funded so the caller can release or refund them.
 
 `refundTo` on `createEscrow` and `createQuorumEscrow` is optional too (default: the payer) and
 `getEscrow` returns it as `refundTo`.
@@ -164,6 +180,21 @@ contract enforces *who* can call release/refund, not *why* — keep it that
 way. Baking healthcare-specific logic into the contract is exactly the
 scope creep this repo exists to avoid (see README "why this repo exists,
 honestly").
+
+### Contract-account (passkey / smart-wallet) payers
+
+`payer` is an `Address`, so a Soroban contract account (for example a
+passkey-backed smart wallet) is a valid payer and the escrow contract needs no
+change. what differs is authorization: a `C...` account cannot sign a
+transaction envelope, so it authorizes the invocation with a signed **auth
+entry** that its own `__check_auth` verifies (secp256r1/WebAuthn for a passkey
+wallet).
+
+The SDK's write path signs envelopes, so it covers `G...` payers only; it does
+not build or accept auth entries for `C...` payers yet. The flow, the missing
+two-step API and the test contract the follow-up needs are written up in
+`docs/smart-wallet-auth-flow.md`. The SDK read path (`getEscrow`,
+`getStatus`) needs no signer and works for any payer type today.
 
 ### Signer interface and browser wallets (issue #127)
 
