@@ -224,6 +224,26 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   on failure. Re-entry tests cover release/refund/create attempts. ADR 0005
   and threat-model T11 document the decision. Deployed on testnet
   2026-10-20.
+- [x] **Pooled escrows funded by multiple payers** (issue #113) —
+  `docs/adr/0011`: open contributions until an explicit
+  `funding_target` (fixed contributor list rejected — see ADR table),
+  bounded by a `funding_deadline`. New entry points
+  `create_pooled_escrow` / `contribute` / `claim_refund` / `get_pooled` /
+  `get_contribution`; `EscrowData` and all existing entry points
+  unchanged (pooled records live under two appended storage keys).
+  `contribute` is permissionless before the deadline, delta-verified via
+  the existing `transfer_in_exact`, recorded per payer (repeats
+  accumulate), and rejects overfunding. `release` additionally requires
+  `funded == target`, so partial pools never release. A missed deadline
+  opens **pull-based** refunds: each contributor claims their exact
+  recorded amount once, independently — no contributor iteration
+  anywhere, no contributor cap by design (ADR 0011 "Resource limits").
+  Push `refund`/`refund_with_approvals`/`cancel`/`top_up` reject pooled
+  escrows (append-only errors 26–34). Threat model: I1–I4 generalized,
+  new T16–T19 + traceability rows. Tests: 18 in `tests/pooled.rs`
+  (scenarios A–M) + 3 malicious-token contribution tests; existing
+  suites and snapshots unchanged. SDK `0.7.0 → 0.8.0` (additive).
+  **Not yet on testnet** — the live deployment predates it.
 ## Phase E6 — SDK & integrator tooling
 - [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
