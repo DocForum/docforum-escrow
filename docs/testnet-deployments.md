@@ -1,5 +1,13 @@
 # Testnet deployments
 
+> **Automated deployments:** testnet deployments can be run from GitHub
+> Actions via the manually dispatched **Testnet Deploy** workflow
+> (`.github/workflows/testnet-deploy.yml`). It runs `scripts/deploy-testnet.sh`
+> from a selected ref using a dedicated deployer identity scoped to the
+> `testnet` environment (required reviewers), then opens a PR updating this
+> file and `deployments.json`. See the workflow header for the required
+> secrets and inputs. Entries below are recorded manually or by that workflow.
+
 ## `docforum_escrow` — 2026-10-20 (latest upstream main at `80ce157`, issue #109)
 
 | | |
