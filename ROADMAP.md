@@ -150,7 +150,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 
 - [x] Optional escrow-wide earliest release time (issue #43, ADR 0009); refund path remains independent.
 - [x] Two-party releaser rotation (issue #23): current releaser and payer authorize; only funded single-releaser escrows can rotate. Contract and payee addresses are rejected.
-
+- [x] Releaser-authorized split settlement: `settle` pays a chosen amount to the payee and returns the remainder to the refund destination (single releaser; quorum escrows use the approval path).
 - [x] **OpenZeppelin Stellar library evaluation** (issue #118) —
   `docs/adr/0006`: all six candidate modules checked against ADR 0001/0002
   and the "no hidden admin" rule. Pausable, Upgradeable and the
