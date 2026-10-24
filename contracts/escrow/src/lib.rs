@@ -14,6 +14,10 @@
 // releaser set (`create_escrow_with_releasers`) — see docs/adr/0007.
 // Single-releaser escrows are stored as a one-address set with threshold 1
 // and behave exactly as before.
+// Phase E5 (issue #29): `settle_many(caller, ops)` settles up to
+// `MAX_SETTLE_OPS` escrows (release or refund each) in one transaction,
+// best-effort with per-op results — see docs/adr/0012 and threat model T1.
+//
 // Phase E5 (issue #113): pooled escrows funded by multiple payers —
 // `create_pooled_escrow` + `contribute` + pull-based `claim_refund`, see
 // docs/adr/0011. Pooled escrows add two storage records (funding config,
@@ -27,8 +31,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
-    IntoVal, String, Vec,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
+    Address, Env, IntoVal, String, Vec,
 };
 
 /// Largest allowed releaser set for one escrow. Ten covers every
@@ -46,6 +50,16 @@ pub const MAX_CONDITION_REF_LEN: u32 = 64;
 /// inputs — see docs/adr/0005.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
+/// Maximum number of operations accepted by one `settle_many` call (issue
+/// #29). Measured, not guessed: every settled op emits a full escrow state
+/// event plus the token's transfer event, and the per-transaction
+/// contract-events-plus-return-value budget (16,384 bytes on Mainnet) is
+/// the first limit a batch hits. The bound keeps a worst-case batch under
+/// that and every other Mainnet per-transaction limit with headroom;
+/// `tests/settle_many.rs::max_batch_fits_mainnet_limits` re-measures it on
+/// every `cargo test`. See docs/adr/0012.
+pub const MAX_SETTLE_OPS: u32 = 20;
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EscrowStatus {
@@ -55,6 +69,16 @@ pub enum EscrowStatus {
     /// The payer withdrew the funds before the payee accepted — see
     /// docs/adr/0010. Terminal, like `Released` and `Refunded`.
     Cancelled,
+}
+
+/// What one `settle_many` operation does to its escrow (issue #29).
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SettleAction {
+    /// Same rules as `release`: pay the stored payee.
+    Release,
+    /// Same rules as `refund`: return the funds to the stored `refund_to`.
+    Refund,
 }
 
 #[contracttype]
@@ -620,15 +644,18 @@ impl EscrowContract {
         Self::transfer_in_exact(&env, &data.token, &payer, amount)?;
 
         let key = DataKey::Contribution(escrow_id, payer.clone());
-        let mut contribution: Contribution = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or(Contribution {
-                amount: 0,
-                refunded: false,
-            });
-        contribution.amount = contribution.amount.checked_add(amount).ok_or(Error::Overflow)?;
+        let mut contribution: Contribution =
+            env.storage()
+                .persistent()
+                .get(&key)
+                .unwrap_or(Contribution {
+                    amount: 0,
+                    refunded: false,
+                });
+        contribution.amount = contribution
+            .amount
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
         let funded = data.amount.checked_add(amount).ok_or(Error::Overflow)?;
         data.amount = funded;
         env.storage().persistent().set(&key, &contribution);
@@ -655,11 +682,7 @@ impl EscrowContract {
     /// change anyone's entitlement. Checks-effects-interactions: the
     /// `refunded` flag and the pooled total are written before the
     /// transfer, and a failing transfer rolls the whole claim back.
-    pub fn claim_refund(
-        env: Env,
-        escrow_id: u64,
-        contributor: Address,
-    ) -> Result<(), Error> {
+    pub fn claim_refund(env: Env, escrow_id: u64, contributor: Address) -> Result<(), Error> {
         contributor.require_auth();
 
         let mut data: EscrowData = Self::load(&env, escrow_id)?;
@@ -688,7 +711,10 @@ impl EscrowContract {
         // the pooled total first, so a failed transfer rolls back
         // atomically and can never double-pay (invariant I3).
         contribution.refunded = true;
-        data.amount = data.amount.checked_sub(refund_amount).ok_or(Error::Overflow)?;
+        data.amount = data
+            .amount
+            .checked_sub(refund_amount)
+            .ok_or(Error::Overflow)?;
         env.storage().persistent().set(&key, &contribution);
         env.storage()
             .persistent()
@@ -833,11 +859,7 @@ impl EscrowContract {
     pub fn release(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
-        let mut data = Self::load(&env, escrow_id)?;
-        Self::check_single_caller(&data, &caller)?;
-        Self::check_funded(&data)?;
-        Self::check_pooled_fully_funded(&env, escrow_id, &data)?;
-
+        let mut data = Self::release_checks(&env, escrow_id, &caller)?;
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
     }
 
@@ -860,27 +882,48 @@ impl EscrowContract {
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
     }
 
-    /// Batch version of `release`: releases each escrow in `escrow_ids` in
-    /// order on behalf of `caller`, which must be a releaser of every one
-    /// of them. Returns a per-op result vector aligned with `escrow_ids`:
-    /// `Ok(())` for a successful release, `Err(e)` for one the contract
-    /// rejected (unknown id, not funded, caller not a releaser, before
-    /// `release_not_before`). A rejected op does not stop the rest — the
-    /// caller can inspect the vector and retry only the failures.
+    /// Settles many escrows in one transaction (issue #29, docs/adr/0012) —
+    /// the fast path for threat model T1's "race the attacker" response and
+    /// for high-volume integrators. Each `(escrow_id, action)` is checked
+    /// exactly like the single-escrow entry point it mirrors:
     ///
-    /// `escrow_ids.len()` must be `<= MAX_BATCH_SIZE` — see docs/adr/0005.
+    /// - `Release`: `caller` must be a releaser of that escrow with
+    ///   threshold 1, the escrow must be `Funded`, a pooled escrow must be
+    ///   fully funded, and `release_not_before`/payee acceptance apply.
+    /// - `Refund`: pooled escrows are rejected; `caller` must be a releaser
+    ///   (threshold 1) unless `refund_after` has passed, in which case
+    ///   anyone may refund — always to the stored `refund_to`.
+    ///
+    /// `caller` authorizes the whole batch once. Per-op authority comes
+    /// only from each escrow's own stored releaser set, so a batch can never
+    /// settle an escrow whose releaser is someone else: that op returns
+    /// `Unauthorized` and touches nothing.
+    ///
+    /// **Best-effort with per-op results:** the returned vector has one
+    /// entry per input op, in input order. `Ok(())` means that escrow was
+    /// settled by this call; `Err(e)` means the op was rejected *before*
+    /// any state changed and that escrow is exactly as it was. The same
+    /// escrow twice in one batch: the first op settles it, the second
+    /// returns `NotFunded`. A failure *after* an op's effects began (a
+    /// failing token transfer or an opted-in payee callback) cannot be
+    /// reported per-op without leaving funds moved under an `Err`, so it
+    /// aborts and reverts the whole batch instead.
+    ///
+    /// `ops.len()` must be `<= MAX_SETTLE_OPS` (`BatchTooLarge`). An empty
+    /// batch returns an empty vector.
     pub fn settle_many(
         env: Env,
         caller: Address,
-        escrow_ids: Vec<u64>,
+        ops: Vec<(u64, SettleAction)>,
     ) -> Result<Vec<Result<(), Error>>, Error> {
-        if escrow_ids.len() > MAX_BATCH_SIZE {
+        if ops.len() > MAX_SETTLE_OPS {
             return Err(Error::BatchTooLarge);
         }
+        caller.require_auth();
 
         let mut results: Vec<Result<(), Error>> = Vec::new(&env);
-        for escrow_id in escrow_ids.iter() {
-            results.push_back(Self::release(env.clone(), escrow_id, caller.clone()));
+        for (escrow_id, action) in ops.iter() {
+            results.push_back(Self::settle_one(&env, escrow_id, &caller, action));
         }
         Ok(results)
     }
@@ -903,22 +946,7 @@ impl EscrowContract {
     pub fn refund(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
-        let mut data = Self::load(&env, escrow_id)?;
-        // A pooled escrow's funds belong to its contributors until the
-        // deadline decides the round; a push refund to one `refund_to`
-        // would violate per-contributor accounting (docs/adr/0011).
-        // Pooled refunds are pull-based: `claim_refund`.
-        Self::reject_pooled(&env, escrow_id)?;
-
-        let timeout_passed = match data.refund_after {
-            Some(deadline) => env.ledger().timestamp() >= deadline,
-            None => false,
-        };
-        if !timeout_passed {
-            Self::check_single_caller(&data, &caller)?;
-        }
-        Self::check_funded(&data)?;
-
+        let mut data = Self::refund_checks(&env, escrow_id, &caller)?;
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
     }
 
@@ -1214,6 +1242,76 @@ impl EscrowContract {
         );
     }
 
+    /// Every check `release` makes before settling, minus the caller's
+    /// `require_auth` (which the entry point does once). Shared by
+    /// `release` and `settle_many` so the two can never disagree.
+    fn release_checks(env: &Env, escrow_id: u64, caller: &Address) -> Result<EscrowData, Error> {
+        let data = Self::load(env, escrow_id)?;
+        Self::check_single_caller(&data, caller)?;
+        Self::check_funded(&data)?;
+        Self::check_pooled_fully_funded(env, escrow_id, &data)?;
+        Ok(data)
+    }
+
+    /// Every check `refund` makes before settling, minus `require_auth`.
+    /// Shared by `refund` and `settle_many`.
+    fn refund_checks(env: &Env, escrow_id: u64, caller: &Address) -> Result<EscrowData, Error> {
+        let data = Self::load(env, escrow_id)?;
+        // A pooled escrow's funds belong to its contributors until the
+        // deadline decides the round; a push refund to one `refund_to`
+        // would violate per-contributor accounting (docs/adr/0011).
+        // Pooled refunds are pull-based: `claim_refund`.
+        Self::reject_pooled(env, escrow_id)?;
+
+        let timeout_passed = match data.refund_after {
+            Some(deadline) => env.ledger().timestamp() >= deadline,
+            None => false,
+        };
+        if !timeout_passed {
+            Self::check_single_caller(&data, caller)?;
+        }
+        Self::check_funded(&data)?;
+        Ok(data)
+    }
+
+    /// One `settle_many` op. Every rejection is returned before any state
+    /// changes: the action's own checks, then `settle()`'s pre-write
+    /// release checks (`release_not_before`, payee acceptance), run here
+    /// so `settle()` can't return them after this op's effects. An error
+    /// `settle()` does return can only come after its status write and
+    /// transfer (a failed payee callback), so it aborts the whole batch
+    /// rather than be reported as a clean per-op `Err` (docs/adr/0012).
+    fn settle_one(
+        env: &Env,
+        escrow_id: u64,
+        caller: &Address,
+        action: SettleAction,
+    ) -> Result<(), Error> {
+        let (mut data, settled) = match action {
+            SettleAction::Release => {
+                let data = Self::release_checks(env, escrow_id, caller)?;
+                if data
+                    .release_not_before
+                    .is_some_and(|release_time| env.ledger().timestamp() < release_time)
+                {
+                    return Err(Error::ReleaseTooEarly);
+                }
+                if data.requires_acceptance && data.accepted_at.is_none() {
+                    return Err(Error::AcceptanceRequired);
+                }
+                (data, EscrowStatus::Released)
+            }
+            SettleAction::Refund => (
+                Self::refund_checks(env, escrow_id, caller)?,
+                EscrowStatus::Refunded,
+            ),
+        };
+        if let Err(error) = Self::settle(env, escrow_id, &mut data, settled) {
+            panic_with_error!(env, error);
+        }
+        Ok(())
+    }
+
     fn load(env: &Env, escrow_id: u64) -> Result<EscrowData, Error> {
         env.storage()
             .persistent()
@@ -1241,11 +1339,7 @@ impl EscrowContract {
     /// (push `refund`, `refund_with_approvals`, `cancel`, `top_up` — see
     /// docs/adr/0011 for why each would break per-contributor accounting).
     fn reject_pooled(env: &Env, escrow_id: u64) -> Result<(), Error> {
-        if env
-            .storage()
-            .persistent()
-            .has(&DataKey::Pooled(escrow_id))
-        {
+        if env.storage().persistent().has(&DataKey::Pooled(escrow_id)) {
             return Err(Error::NotSupportedForPooled);
         }
         Ok(())
