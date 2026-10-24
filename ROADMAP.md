@@ -196,8 +196,8 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   the recipient only receives and need not sign). **Implementation:**
   optional `refund_to` on `create_escrow`, `create_escrow_with_acceptance` and `create_escrow_with_releasers` (default `payer`, so omitted =
   unchanged), stored in `EscrowData`, used by every refund path (releaser
-  and timeout share one transfer; there is no payee-initiated refund in
-  this contract yet — any future one must use `refund_to`), rejected with
+  and timeout share one transfer; payee-initiated voluntary refunds (issue
+  #40, ADR 0010) also use the same stored `refund_to` destination), rejected with
   new `Error::InvalidRefundTo = 21` if it is the contract itself.
   **Tests:** 16 in `contracts/escrow/tests/sponsored_refund.rs` — releaser
   refund, timeout refund (stranger, funder, exactly at the deadline), no

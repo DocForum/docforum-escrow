@@ -637,6 +637,8 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
       covered by `tests/malicious_token.rs` and `tests/sponsored_refund.rs`.
 - [x] ⚙ Optional `refund_to` distinct from the funder, I1 wording
       updated — issue #28, `docs/adr/0006`, `tests/sponsored_refund.rs`.
+- [x] ⚙ Payee-initiated voluntary refund while funded — issue #40 and
+      `docs/adr/0010`; payout remains pinned to the stored `refund_to`.
       Also rejects the contract itself as `refund_to` (T11). Not yet
       deployed to testnet.
 - [ ] ⚙ TTL extension for escrow entries and instance (T6)

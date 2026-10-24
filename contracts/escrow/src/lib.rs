@@ -27,8 +27,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
-    IntoVal, String, Vec,
+    contract, contracterror, contractevent, contractimpl, contracttype, symbol_short, token,
+    Address, Env, IntoVal, String, Vec,
 };
 
 /// Largest allowed releaser set for one escrow. Ten covers every
@@ -94,6 +94,19 @@ pub struct EscrowData {
     pub refund_to: Address,
     /// Earliest ledger timestamp at which release is allowed.
     pub release_not_before: Option<u64>,
+}
+
+/// Identifies voluntary refunds started by the escrow's stored payee.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayeeRefunded {
+    #[topic]
+    pub escrow_id: u64,
+    #[topic]
+    pub payer: Address,
+    #[topic]
+    pub payee: Address,
+    pub amount: i128,
 }
 
 /// One entry of a `create_escrows` batch. Mirrors the single-escrow
@@ -899,7 +912,8 @@ impl EscrowContract {
     /// `refund_after` set, behaviour is identical to before the timeout
     /// existed — releaser only. On an M-of-N escrow the releaser path needs
     /// a threshold of 1; otherwise use `refund_with_approvals` (the timeout
-    /// path stays open to anyone).
+    /// path stays open to anyone). The stored payee may also voluntarily
+    /// refund a funded escrow; that path emits `payee_refunded` (ADR 0010).
     pub fn refund(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
@@ -914,12 +928,22 @@ impl EscrowContract {
             Some(deadline) => env.ledger().timestamp() >= deadline,
             None => false,
         };
-        if !timeout_passed {
+        let payee_initiated = caller == data.payee;
+        if !timeout_passed && !payee_initiated {
             Self::check_single_caller(&data, &caller)?;
         }
         Self::check_funded(&data)?;
-
-        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
+        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)?;
+        if payee_initiated {
+            PayeeRefunded {
+                escrow_id,
+                payer: data.payer,
+                payee: data.payee,
+                amount: data.amount,
+            }
+            .publish(&env);
+        }
+        Ok(())
     }
 
     /// Lets the payer take the funds back **before the payee accepts**
