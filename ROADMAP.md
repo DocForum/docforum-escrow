@@ -3,8 +3,8 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5: token allowlist (issue #36) and payee rights transfer (issue #45) implemented and tested. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm.**
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (contract features) now includes the OZ-library evaluation (ADR 0006, no library adopted) and the optional in-contract M-of-N releaser quorum (ADR 0007, SDK 0.5.0) — implemented, tested and pending a testnet redeploy. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm. Fee estimation and fee-bump sponsorship helpers (issue #70) are implemented in the SDK, `0.5.0`. Phase E7 (verification/release engineering) started: committed Soroban test snapshots with a CI drift check (issue #120) and a CI check that generated SDK bindings match the contract WASM (issue #121).**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (contract features) now includes the OZ-library evaluation (ADR 0006, no library adopted) and the optional in-contract M-of-N releaser quorum (ADR 0007, SDK 0.5.0) and
+  the payee-rights transfer (issue #45) — implemented, tested and pending a testnet redeploy. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm. Fee estimation and fee-bump sponsorship helpers (issue #70) are implemented in the SDK, `0.5.0`. Phase E7 (verification/release engineering) started: committed Soroban test snapshots with a CI drift check (issue #120) and a CI check that generated SDK bindings match the contract WASM (issue #121).**
 
 ## Payee acceptance (issue #25)
 
@@ -216,10 +216,8 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `create_escrow` rejects unlisted tokens with append-only error code 7.
   An empty list preserves allow-all behavior. Tests cover listed,
   unlisted, and empty-list cases. Threat model, deployment guidance, and
-  contract API docs updated. **Not yet on testnet** — the current
-  deployment predates this constructor; a new testnet deployment and
-  verification are required before claiming the live contract is
-  protected. Closes issue #36.
+  contract API docs updated. Deployed and verified with the immutable
+  testnet allowlist on 2026-10-20. Closes issue #36.
 - [x] Payee rights transfer (issue #45): `transfer_payee(escrow_id,
   current_payee, new_payee)` lets the current payee reassign the release
   destination to a new address while the escrow is `Funded`. Only the
@@ -233,18 +231,36 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   12 tests in `contracts/escrow/tests/transfer_payee.rs` covering the
   happy path, release/refund after transfer, chained transfers,
   auth rejection for stranger/payer/releaser, and both rejected
-  `new_payee` targets. Error code 8 (`InvalidNewPayee`). Threat model
-  I1 updated; T11 added covering the new payee-key attack surface.
+  `new_payee` targets. Error code 35 (`InvalidNewPayee`). Threat model
+  I1 updated; T20 added covering the new payee-key attack surface.
   `ARCHITECTURE_ESSENTIALS.md` and `README.md` contract surface updated.
   Closes issue #45.
-  contract API docs updated. Deployed and verified with the immutable
-  testnet allowlist on 2026-10-20. Closes issue #36.
 - [x] Optional release callback (issue #53): both single-releaser and
   quorum creation require payee authorization when `notify_payee` is true;
   release calls `on_escrow_released` after transfer and rolls back atomically
   on failure. Re-entry tests cover release/refund/create attempts. ADR 0005
   and threat-model T11 document the decision. Deployed on testnet
   2026-10-20.
+- [x] **Pooled escrows funded by multiple payers** (issue #113) —
+  `docs/adr/0011`: open contributions until an explicit
+  `funding_target` (fixed contributor list rejected — see ADR table),
+  bounded by a `funding_deadline`. New entry points
+  `create_pooled_escrow` / `contribute` / `claim_refund` / `get_pooled` /
+  `get_contribution`; `EscrowData` and all existing entry points
+  unchanged (pooled records live under two appended storage keys).
+  `contribute` is permissionless before the deadline, delta-verified via
+  the existing `transfer_in_exact`, recorded per payer (repeats
+  accumulate), and rejects overfunding. `release` additionally requires
+  `funded == target`, so partial pools never release. A missed deadline
+  opens **pull-based** refunds: each contributor claims their exact
+  recorded amount once, independently — no contributor iteration
+  anywhere, no contributor cap by design (ADR 0011 "Resource limits").
+  Push `refund`/`refund_with_approvals`/`cancel`/`top_up` reject pooled
+  escrows (append-only errors 26–34). Threat model: I1–I4 generalized,
+  new T16–T19 + traceability rows. Tests: 18 in `tests/pooled.rs`
+  (scenarios A–M) + 3 malicious-token contribution tests; existing
+  suites and snapshots unchanged. SDK `0.7.0 → 0.8.0` (additive).
+  **Not yet on testnet** — the live deployment predates it.
 ## Phase E6 — SDK & integrator tooling
 - [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
@@ -444,13 +460,12 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 - 2026-10-19 — Implemented Phase E5 payee rights transfer (issue #45):
   `transfer_payee(escrow_id, current_payee, new_payee)` — only the
   current payee may authorise; only while `Funded`; `new_payee` may not
-  be the contract address or the payer (error code 8 `InvalidNewPayee`);
+  be the contract address or the payer (error code 35 `InvalidNewPayee`);
   emits `pay_xfer` event. 12 tests in
   `contracts/escrow/tests/transfer_payee.rs`. Threat model I1 updated,
-  T11 added. `ARCHITECTURE_ESSENTIALS.md` and `README.md` contract
-  surface tables updated. This is a wallet-rotation tool — key loss is
-  not recoverable on-chain (documented in T11). Closes issue #45.
-
+  T20 added. `ARCHITECTURE_ESSENTIALS.md` and `README.md` contract
+  surface updated. This is a wallet-rotation tool — key loss is
+  not recoverable on-chain (documented in T20). Closes issue #45.
 - 2026-10-17 — Issue #63 (Phase E6): added SDK `getEvents` pagination and
   typed lifecycle-event decoding, preserving unknown topic variants for
   forward compatibility. Added cursor-resumable serial polling with

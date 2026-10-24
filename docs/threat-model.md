@@ -30,25 +30,23 @@ refund destination that may differ from the funder (`payer`), decided in
 `docs/adr/0006`. Touches §1 (I1, I2), §2 (actors), T1, T2, T8, a new T11
 and §6.*
 
+*Updated 2026-10-22 for issue #113 (Phase E5, `docs/adr/0011`): pooled
+escrows funded by multiple payers. §1 I1–I4 generalize to per-contributor
+accounting; §2 gains the `contributor` actor; new threats T16–T19 cover
+pooled contribution accounting, pooled refunds (double claims, ordering,
+authorization), the funding window (late/overfunding/premature release)
+and contributor-resource exhaustion; §8 traceability gains matching rows.*
+
 ---
 
 ## 1. What the contract is supposed to guarantee
 
 | # | Invariant | Enforced by |
 |---|---|---|
-| I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination. The `transfer_payee` function (issue #45, Phase E5) lets the current payee reassign the release destination to a new address — only the current payee may authorise this; the payer and releaser have no power to redirect funds via this path. |
-| I2 | Only the escrow's `releaser` can move funds out — or, once `refund_after` has passed, anyone at all, and then still only back to `payer`. | `caller.require_auth()` + `caller == data.releaser`, relaxed solely by the deadline check (`lib.rs:149`, `lib.rs:183`, `lib.rs:191`). |
-| I3 | Each escrow pays out at most once. | `status == Funded` check before transfer, status written after — shared by release and both refund paths. |
-| I1 | Funds only leave an escrow to that escrow's `payee` (on release) or `payer` (on refund). No other destination exists. | Destinations are read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination. |
-| I2 | Only the escrow's releasers can move funds out — `threshold` distinct ones when the escrow was created M-of-N (ADR 0007); release additionally requires payee acceptance when configured — or, once `refund_after` has passed, anyone at all, and then still only back to `payer`. | `require_auth()` per caller/approver + membership in the stored `releasers` set + the threshold check (`check_single_caller`, `check_approvals`), relaxed solely by the deadline check in `refund`. Duplicate approvers are rejected. |
-| I1 | Funds only leave an escrow to that escrow's `payee` (on release) or the escrow's stored `refund_to` (on refund; equals `payer` unless a different one was set at creation). No other destination exists. | Both destinations are written once in `create_escrow` under the funder's auth and read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination, and `refund_to` (issue #28, ADR 0009) is a second stored-at-creation destination, not a payout-time choice: nothing sets it after creation. |
-| I2 | Only the escrow's releasers can move funds out — `threshold` distinct ones when the escrow was created M-of-N (ADR 0007); release additionally requires payee acceptance when configured — or, once `refund_after` has passed, anyone at all, and then still only to the stored `refund_to`. | `require_auth()` per caller/approver + membership in the stored `releasers` set + the threshold check (`check_single_caller`, `check_approvals`), relaxed solely by the deadline check in `refund`. Duplicate approvers are rejected. |
-| I3 | Each escrow pays out at most once. | `status == Funded` check and terminal status write before transfer/callback; failures roll back atomically. |
-| I4 | An escrow only exists, or grows, if the declared funds were actually transferred in. | `payer.require_auth()` + shared exact-balance-delta verification on create/top-up before storage is updated. |
-| I1 | Funds only leave an escrow to that escrow's `payee` (on release, subject to the `release_not_before` time-lock guard) or the escrow's stored `refund_to` (on refund; equals `payer` unless a different one was set at creation). No other destination exists. | Both destinations are written once in `create_escrow` under the funder's auth and read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination, and `refund_to` (issue #28, ADR 0009) is a second stored-at-creation destination, not a payout-time choice: nothing sets it after creation. The `release_not_before` field (issue #43) gates the `release` entry point — release before this time is rejected with `ReleaseTooEarly`. |
-| I2 | Only the escrow's releasers can move funds out — `threshold` distinct ones when the escrow was created M-of-N (ADR 0007); release additionally requires payee acceptance when configured — or, once `refund_after` has passed, anyone at all, and then still only to the stored `refund_to`. Rotate‑releaser changes the stored releaser set only when both the current releaser and the payer authorize the change (`rotate_releaser`). `top_up` adds funds to a `Funded` escrow, authorized only by the stored `payer`. | `require_auth()` per caller/approver + membership in the stored `releasers` set + the threshold check (`check_single_caller`, `check_approvals`), relaxed solely by the deadline check in `refund`. Duplicate approvers are rejected. `rotate_releaser` requires auth from both the current releaser and the payer, and rejects if the new releaser is the contract or the payee (`lib.rs:369-408`). `top_up` reads the stored `payer` from escrow data and rejects if `payer != caller` (`lib.rs:412-439`). |
-| I3 | Each escrow pays out at most once. | `status == Funded` check and terminal status write before transfer/callback; failures roll back atomically. Additionally, `cancel` (ADR 0010) is a terminal status — once `Cancelled`, `Released`, or `Refunded`, the escrow cannot be settled again. The accept/cancel race is resolved by ledger-order: whichever transaction lands first wins, the other fails. |
-| I4 | An escrow only exists, or grows, if the declared funds were actually transferred in. | `payer.require_auth()` + shared exact-balance-delta verification on create/top-up before storage is updated. `top_up` verified the transferred amount matches the top‑up amount before updating `data.amount`. |
+| I1 | Funds only leave an escrow to that escrow's `payee` (on release, subject to the `release_not_before` time-lock guard) or the escrow's stored `refund_to` (on refund; equals `payer` unless a different one was set at creation) — or, on a **pooled** escrow (issue #113, ADR 0011), back to each recorded `contributor` in that contributor's exact recorded amount via the pull-based `claim_refund`. No other destination exists in either mode. The `transfer_payee` function (issue #45, Phase E5) lets the current payee reassign the release destination to a new address — only the current payee may authorise this; the payer and releaser have no power to redirect funds via this path. | Both destinations are written once in `create_escrow` under the funder's auth and read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination, and `refund_to` (issue #28, ADR 0009) is a second stored-at-creation destination, not a payout-time choice: nothing sets it after creation. The `release_not_before` field (issue #43) gates the `release` entry point — release before this time is rejected with `ReleaseTooEarly`. For pooled escrows the push paths (`refund`, `refund_with_approvals`, `cancel`) are rejected outright (`NotSupportedForPooled`), so `refund_to` can never drain a pool; `claim_refund` pays only the calling contributor's own record, under that contributor's `require_auth`, and only while the escrow has not been released. |
+| I2 | Only the escrow's releasers can move funds out — `threshold` distinct ones when the escrow was created M-of-N (ADR 0007); release additionally requires payee acceptance when configured — or, once `refund_after` has passed, anyone at all, and then still only to the stored `refund_to`. Rotate‑releaser changes the stored releaser set only when both the current releaser and the payer authorize the change (`rotate_releaser`). `top_up` adds funds to a `Funded` escrow, authorized only by the stored `payer`. The one non-releaser movement that exists is pooled (issue #113): each `contributor` may pull back **only its own recorded amount** via `claim_refund` under its own signature, only from a failed round (deadline passed, target unmet), never after a release — `top_up`, `cancel` and both push-refund paths are rejected on pooled escrows (`NotSupportedForPooled`). | `require_auth()` per caller/approver + membership in the stored `releasers` set + the threshold check (`check_single_caller`, `check_approvals`), relaxed solely by the deadline check in `refund`. Duplicate approvers are rejected. `rotate_releaser` requires auth from both the current releaser and the payer, and rejects if the new releaser is the contract or the payee (`lib.rs:369-408`). `top_up` reads the stored `payer` from escrow data and rejects if `payer != caller` (`lib.rs:412-439`). |
+| I3 | Each escrow pays out at most once — and on a pooled escrow (issue #113), each contribution is refunded at most once; a release and a refund can never spend the same tokens. | `status == Funded` check and terminal status write before transfer/callback; failures roll back atomically. Additionally, `cancel` (ADR 0010) is a terminal status — once `Cancelled`, `Released`, or `Refunded`, the escrow cannot be settled again. The accept/cancel race is resolved by ledger-order: whichever transaction lands first wins, the other fails. For pooled escrows, `claim_refund` writes the `refunded` flag and decrements the pooled total *before* the transfer (checks-effects-interactions), so a second claim fails `AlreadyRefunded` and a claim after release fails `NotFunded`; release requires `funded == target`, which becomes permanently false after any claim of a failed round. |
+| I4 | An escrow only exists, or grows, if the declared funds were actually transferred in — including every contribution to a pooled escrow. | `payer.require_auth()` + shared exact-balance-delta verification on create/top-up before storage is updated. `top_up` verified the transferred amount matches the top‑up amount before updating `data.amount`. `contribute` (issue #113) routes through the same `transfer_in_exact`, and updates both the per-payer record and the pooled total only after the delta is verified. |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
 | I6 | An escrow created with `requires_acceptance` cannot be settled (released/refunded/canceled) without the payee's explicit `accept` call first. | `release`/`refund`/`cancel` all check `data.accepted_at` — `AcceptanceRequired` if absent, `NotFunded` if already terminal. The accept/cancel race on one ledger state is resolved by ordering: first to commit wins. |
 
@@ -67,14 +65,12 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 
 | Actor | Can do | Trusted for |
 |---|---|---|
-| `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser` | Nothing after creation. Has no on-chain power to cancel. |
-| `payee` | Receive funds; reassign future payout to a new address via `transfer_payee` (only while `Funded`, requires their auth) | Nothing beyond the payee-transfer path. Has **no on-chain power to trigger settlement** — they cannot force a release or block a refund. |
-| `releaser` | `release` or `refund` its escrows, once | Choosing the correct outcome. This is the main trust assumption. |
 | `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser`, and optionally a distinct `refund_to` — all under its single creation signature | Nothing after creation. Has no on-chain power to cancel. |
-| `payee` | Receive funds; optionally accept an escrow before release | Without the opt-in acceptance gate, has no on-chain power to object to release or refund. |
+| `payee` | Receive funds; optionally accept an escrow before release; reassign future payout to a new address via `transfer_payee` (issue #45, only while `Funded`, requires their auth) | Nothing beyond the payee-transfer path. Has **no on-chain power to trigger settlement** — they cannot force a release or block a refund. |
 | `releaser` (one address, or an M-of-N `releasers` set, ADR 0007) | `release` or `refund` its escrows, once — a quorum escrow needs `threshold` distinct releasers on one call | Choosing the correct outcome. This is the main trust assumption; a quorum splits it across the set. |
 | `rotate_releaser` (single‑releaser escrow only, ADR 0009) | `rotate_releaser` — both the current releaser and the payer must authorize; the replacement cannot be the contract or the payee | Current releaser key safety: the payer's consent prevents a compromised releaser from silently appointing an attacker. |
 | `top_up` (single‑releaser escrow only, Phase E5) | `top_up` — only the original payer may add funds to a `Funded` escrow | Payer‑controlled fund growth; the escrow amount increases but parties and rules remain unchanged. |
+| `contributor` (pooled escrows, issue #113) | `contribute` its own funds to any open pooled escrow before its funding deadline; after a missed deadline, `claim_refund` back its own exact recorded amount | Nothing. Contributions are self-funding (you can only send your own tokens) and claims can only reach the caller's own record. |
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |
 | Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds to that escrow's stored `refund_to` | Nothing. |
 
@@ -383,7 +379,7 @@ behave like SEP-41.
   settlement helper handles single and quorum releases. The callback is one
   synchronous call with fixed arguments and no retries or loops. See ADR 0005.
 
-### T11 — Payee key compromise or loss · **Medium (new surface from issue #45)**
+### T20 — Payee key compromise or loss · **Medium (new surface from issue #45)**
 - **What changed:** `transfer_payee` (Phase E5) gives the current `payee`
   the ability to redirect the release destination to a new address, while
   the escrow is `Funded`. This is the first on-chain power the payee has
@@ -416,7 +412,7 @@ behave like SEP-41.
     `new_payee == contract_address` (would lock funds) and
     `new_payee == payer` (would let a colluding payee redirect to payer,
     turning a release into a de-facto payer refund that bypasses refund
-    auth). These are rejected with `InvalidNewPayee` (error code 8).
+    auth). These are rejected with `InvalidNewPayee` (error code 35).
   - The releaser cannot use `transfer_payee` — they have no power over
     the payee field. This is enforced by `current_payee.require_auth()`
     plus the `current_payee == data.payee` check.
@@ -491,6 +487,82 @@ behave like SEP-41.
     distinct keys, making single‑key collusion harder (T1).
   - Periodic key rotation and monitoring for unusual releaser activity.
 
+### T16 — Pooled escrow contribution accounting divergence · **Medium (believed mitigated)**
+- **What can go wrong:** on a pooled escrow (issue #113, ADR 0011) the
+  invariant `EscrowData.amount == Σ unclaimed contributions` is what
+  release and `claim_refund` pay out. A contribution recorded without the
+  tokens actually arriving, an arithmetic overflow, or an unrecorded
+  growth path would break exact per-payer refunds.
+- **Mitigations:**
+  - Every contribution goes through the same `transfer_in_exact`
+    balance-delta check as creation (I4): a lying or short-delivering
+    token fails the contribution with `BalanceMismatch` and records
+    nothing (`tests/malicious_token.rs::contribute_rejects_lying_transfer`,
+    `::contribute_rejects_short_delivery`).
+  - All arithmetic is checked (`checked_add`/`checked_sub`, `Overflow`);
+    contributions are rejected before the target (`FundingTargetReached`)
+    so the total stays within `[0, target]`.
+  - `top_up` is rejected on pooled escrows (`NotSupportedForPooled`) so
+    no path can raise `amount` without a contribution record; `cancel` and
+    both push-refund paths are rejected for the same reason.
+  - A failed payout during a claim rolls the whole claim back
+    (`tests/malicious_token.rs::failed_claim_leaves_the_contribution_intact`).
+- **Residual:** a token with post-creation clawback (T5) can still drain
+  the shared pool; the same accepted residual risk applies to pools.
+
+### T17 — Pooled double refund, claim theft, or ordering manipulation · **Low (believed mitigated)**
+- **What can go wrong:** a contributor claims twice, claims another
+  contributor's funds, or uses a particular claim order to change payout
+  totals; a release and claims race for the same tokens.
+- **Mitigations:** each claim requires the contributor's own
+  `require_auth` and pays only that address's stored record — an attacker
+  claiming "as themselves" on someone else's escrow gets `NoContribution`;
+  the `refunded` flag (written before the transfer) makes a second claim
+  fail `AlreadyRefunded`; claims are exact amounts summed against the
+  pooled total, so order cannot change entitlements (tested with three
+  claim orders, `tests/pooled.rs::refund_entitlements_are_order_independent`).
+  Release/claim races cannot share funds: release requires
+  `funded == target` (never true after any claim on a failed round) and
+  claims fail `NotFunded` once released (`tests/pooled.rs::release_and_refund_can_never_share_funds`).
+- **Reviewer, please verify:** no path writes a `Contribution` record
+  except `contribute` (pre-deadline, delta-verified) and `claim_refund`
+  (own address, once).
+
+### T18 — Pooled funding-window manipulation · **Low–Medium (by design, documented)**
+- **Late contributions:** rejected once `now >= funding_deadline`
+  (`FundingDeadlinePassed`) — the deadline is fixed at creation, never
+  caller-supplied afterwards, so nobody can extend the window.
+- **Overfunding:** rejected (`FundingTargetReached`); the contract never
+  holds more than the target for a pool, so there is no excess to skim.
+- **Premature release:** `release`/`release_with_approvals` require
+  `funded == target` (`FundingIncomplete` otherwise), so a colluding
+  releaser cannot take a partially funded pool.
+- **Deadline at creation:** must be strictly in the future
+  (`InvalidFundingDeadline`), mirroring `refund_after`'s rule.
+- **Accepted trade-off:** the funding target and deadline are immutable
+  creator choices; a payee must read them via `get_escrow` + `get_pooled`
+  before relying on a pooled escrow (same advice as T8 for `refundAfter`).
+
+### T19 — Contributor-list exhaustion / refund resource exhaustion · **Low (design choice)**
+- **Unbounded refund loops are structurally absent:** no pooled entry
+  point iterates contributors. `contribute` and `claim_refund` each touch
+  a constant number of storage keys, and the aggregate lives in
+  `EscrowData.amount`, so a pool with hundreds of contributors still
+  settles in bounded work (issue #113's preferred answer to unbounded
+  contributor lists: pull-based refunds).
+- **A hard contributor cap was deliberately rejected:** with O(1) claims
+  a cap buys no safety, and it enables cheap griefing — dust
+  contributions from throwaway addresses fill the cap (cost: fees only),
+  every legitimate contribution is then rejected, funding fails, and the
+  attacker claims its dust back. Without a cap, sabotaging a round
+  requires actually locking the target amount (ADR 0011, "Resource
+  limits").
+- **Residual:** many tiny contributor records cost storage rent, paid by
+  the contributors who write them; `get_escrow`/`get_pooled` never
+  enumerate contributions. Failed rounds stay `Funded` in `get_status`;
+  integrators must read `get_pooled` + the ledger clock to classify a
+  round, or they may misread a failed round as pending (operational).
+
 ### T15 — Time‑lock bypass through the quorum path or the timeout path · **Medium**
 - **What can go wrong:** two independent time‑lock mechanisms exist:
   `release_not_before` (issue #43) gates the `release` entry point, and
@@ -540,6 +612,10 @@ behave like SEP-41.
 | T13 — `top_up` landing after a release is approved | `top_up.rs::top_up_rejects_invalid_payer_amount_overflow_and_settled_state` (covers post‑release rejection) | Covered |
 | T14 — Rotating to a colluding releaser | — | **Residual risk: accepted (reason)**: rotation requires both current releaser and payer auth; collusion is a consumer‑level trust assumption |
 | T15 — Time‑lock bypass through the quorum path or the timeout path | — | **Residual risk: accepted (reason)**: `release_with_approvals` does not check `release_not_before` (quorum design); `refund_after` path is separate. Consumers requiring time‑bounded release should use single‑releaser path. |
+| T16 — Pooled contribution accounting divergence | `tests/pooled.rs` (partial funding, overfunding boundary, per-payer accumulation), `tests/malicious_token.rs::contribute_rejects_lying_transfer`, `::contribute_rejects_short_delivery`, `::failed_claim_leaves_the_contribution_intact` | Covered |
+| T17 — Pooled double refund / claim theft / ordering | `tests/pooled.rs::double_claim_is_rejected`, `::contributor_cannot_claim_another_contributors_funds`, `::claiming_requires_the_contributors_signature`, `::refund_entitlements_are_order_independent`, `::release_and_refund_can_never_share_funds` | Covered |
+| T18 — Pooled funding-window manipulation | `tests/pooled.rs::reaching_the_target_releases_the_pooled_total` (late + overfunding + post-success claim), `::partial_funding_records_and_blocks_release` (premature release), `::pooled_creation_validation` (deadline at creation) | Covered |
+| T19 — Contributor-resource exhaustion / unbounded refund loops | `tests/pooled.rs::no_contributor_cap_each_claim_is_independent` (bounded per-claim work, no cap by design) | Covered (design) |
 
 *Key: "Covered" = at least one test explicitly exercises the threat and verifies the mitigation. "Residual risk: accepted" = the threat is understood and intentionally tolerated with a documented mitigation. "Uncovered" = no test or mitigation exists — should be evaluated for a future release.*
 

@@ -38,49 +38,6 @@ Two reasons, stated plainly rather than blended together:
 
 ## Contract surface
 
-The deploy-time `__constructor(allowed_tokens)` stores an immutable token
-allowlist. Pass the token addresses the deployment accepts; an empty list
-keeps the legacy open-token behavior. This policy cannot be changed after
-deployment, so choosing an empty list deliberately disables the protection.
-
-| Function | Status | Description |
-|---|---|---|
-| `__constructor(allowed_tokens)` | ✅ Implemented | Stores the immutable deploy-time token allowlist; an empty list allows all tokens. |
-| `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee) -> escrow_id` | ✅ Implemented locally (callback not deployed) | Pulls funds from `payer`, stores a bounded `condition_ref`, and stores the single `releaser` as a one-address set with threshold 1. Requires payer auth; when `notify_payee` is true, also requires payee auth and calls `on_escrow_released` on release. |
-| `create_escrow_with_acceptance(..., requires_acceptance) -> escrow_id` | ✅ Implemented locally | Optional payee acceptance gate. When enabled, the payee must call `accept(escrow_id, payee)` before a releaser can release; refunds remain available. |
-| `accept(escrow_id, payee)` | ✅ Implemented locally | Payee-authorized, one-time acceptance for a funded escrow configured with the acceptance gate. |
-| `create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee) -> escrow_id` | ✅ Implemented | Same, but settles by M-of-N: 1–10 distinct `releasers` (`MAX_RELEASERS`), `1 <= threshold <= releasers.len()`. Callback opt-in has the same payee-authorization requirement. See [ADR 0007](docs/adr/0007-in-contract-m-of-n-releaser-quorum.md). |
-| `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
-| `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
-| `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
-| `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
-| `transfer_payee(escrow_id, current_payee, new_payee) -> Result<()>` | ✅ Implemented | Lets the current `payee` reassign the release destination to a new address. Only the payee may authorise this; only while `Funded`. `new_payee` may not be the contract address or the payer. This is a rotation tool — a payee who has lost their key cannot use it. |
-| `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releasers`, `threshold` and `refund_after`, so payees can check the deal before relying on it. |
-| `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser` when the threshold is 1; moves funds to `payee`. Never gated by `refund_after`. |
-| `release_with_approvals(escrow_id, approvers) -> Result<()>` | ✅ Implemented | M-of-N release: at least `threshold` distinct releasers, each authorizing this exact invocation. Approvals are not stored, so nothing can be replayed. Only while `Funded`. |
-| `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it (threshold 1); once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
-| `refund_with_approvals(escrow_id, approvers) -> Result<()>` | ✅ Implemented | M-of-N refund with the same approval rules; the timeout path above needs no approvals. |
-| `top_up(escrow_id, payer, amount) -> Result<()>` | ✅ Implemented | Adds funds to a `Funded` escrow; original payer only. Emits a `top_up` event. |
-
-```
-EscrowStatus = Funded | Released | Refunded
-```
-
-`refund_after` is optional: an escrow created without one behaves exactly
-as it did before the timeout existed — releaser-only refunds, forever.
-That's the answer to "what if the releaser's key is lost?" (threat model
-T2): instead of locking funds permanently, a deadline lets anyone return
-them to the payer. See [ADR 0004](docs/adr/0004-timeout-refund-path.md)
-for the decision and what it means for payees.
-
-Single-releaser escrows are unchanged by the M-of-N option: `create_escrow`
-stores the one address with `threshold = 1`, `release`/`refund` behave exactly
-as before, and the approval entry points simply accept that one address too.
-No new admin, owner, pause or upgrade role exists — `releasers` is escrow data
-chosen by the payer, not authority over the contract (see
-[ADR 0006](docs/adr/0006-openzeppelin-stellar-library-evaluation.md) for why
-OpenZeppelin's pause/upgradeable/access modules are deliberately **not**
-adopted).
 One generic escrow contract. A payer locks a token amount for a payee, and
 the payout is settled by release (to the stored payee) or refund (to the
 stored `refund_to`, which is the payer unless set otherwise at creation).
@@ -88,8 +45,14 @@ Creation options: a single releaser or an M-of-N releaser quorum, an
 optional payee-acceptance gate, an optional `refund_after` timeout that
 lets anyone trigger the refund, an optional `refund_to`, and an optional
 release callback to a contract payee. Funded escrows can be topped up by
-the original payer, and `get_status`/`get_escrow` are read-only. A token
-allowlist is fixed at deploy time.
+the original payer, and a funded escrow's payee can reassign their future
+payout to a new address (`transfer_payee` — a wallet-rotation tool, not
+key-loss recovery); `get_status`/`get_escrow` are read-only. A token
+allowlist is fixed at deploy time. Pooled escrows — one agreement funded
+by many payers, with per-payer contribution records and pull-based
+pro-rata refunds — are a separate creation entry point
+(`create_pooled_escrow`, see [ADR 0011](docs/adr/0011-pooled-escrow-funding.md)
+and the contract surface list).
 
 **The full function list, signatures and rules are in
 [`ARCHITECTURE_ESSENTIALS.md` → Contract surface](ARCHITECTURE_ESSENTIALS.md#contract-surface).**
@@ -157,8 +120,6 @@ the repository root; it normalizes source paths and the build timestamp.
 git clone https://github.com/DocForum/docforum-escrow.git
 cd docforum-escrow/contracts/escrow
 
-# Run the test suite (40 tests, all passing today)
-# Run the test suite (57 tests, all passing today; also writes the
 # Run the test suite (also writes the
 # committed test_snapshots/ files — see CONTRIBUTING.md)
 cargo test
@@ -229,6 +190,66 @@ Two consequences of "one escrow per tranche" are worth knowing:
   refund them instead of paying twice.
 - Each tranche settles independently: refunding tranche 1 does not touch
   tranche 2, and released tranches are final.
+
+### Pooled escrows
+
+A pooled escrow funds **one agreement from many payers** (group purchase,
+shared cost, crowdfunded work) while keeping every contribution on-chain
+and refunding each payer exactly what they put in (issue #113,
+[ADR 0011](docs/adr/0011-pooled-escrow-funding.md)). It is a distinct
+creation entry point; single-payer escrows are untouched. All amounts are
+raw token units.
+
+```ts
+// 1. Anyone creates the pool: target 1_000_000, funding closes at a deadline.
+const { escrowId } = await client.createPooledEscrow({
+  creator, payee, token,
+  fundingTarget: 1_000_000n,
+  conditionRef: "group-order-42",
+  releaser,
+  fundingDeadline: 1_760_000_000n, // unix seconds, must be in the future
+});
+
+// 2. Contributors fund it — accepted only before the deadline and only
+//    while the total stays within the target (overfunding is rejected).
+await client.contribute({ escrowId, payer: alice, amount: 400_000n });
+await client.contribute({ escrowId, payer: bob,   amount: 350_000n });
+await client.contribute({ escrowId, payer: alice, amount: 250_000n }); // accumulates: alice = 650_000
+
+// 3a. Target reached (1_000_000): the releaser releases the pooled total.
+await client.release({ escrowId, caller: releaser }); // 1_000_000 to payee
+
+// 3b. Deadline passed below target: the round failed — release is blocked
+//     (`FundingIncomplete`), late contributions are rejected, and every
+//     contributor pulls back their own exact record, in any order.
+await client.claimRefund({ escrowId, contributor: alice }); // 650_000 back to alice
+await client.claimRefund({ escrowId, contributor: bob });   // 350_000 back to bob
+```
+
+Rules worth knowing before integrating:
+
+- **Release needs the full target.** A partially funded pool can never
+  be released; once the target is met, the deadline no longer matters —
+  the round succeeded and the ordinary releaser rules apply.
+- **The deadline is the only early exit.** Contributors cannot withdraw
+  before it. After it passes with the target unmet, contributions are
+  frozen forever and `claim_refund` opens to each contributor, once each
+  (`AlreadyRefunded` afterwards), payable at any later time.
+- **Refunds are pull-based and order-independent:** each claim pays only
+  the calling contributor's recorded amount under their own signature —
+  no one can claim anyone else's (`NoContribution`), and no entry point
+  ever loops over contributors, so there is no contributor cap to hit.
+- **Push refunds and `top_up` do not exist for pooled escrows**
+  (`NotSupportedForPooled`): they would route the pool to one address or
+  grow it without a per-payer record. Pooled escrows have no
+  `refund_after` either — a *failed* round is the only refund window.
+- **Read funding state with `getPooled`:** `getStatus` still returns
+  `"Funded"` for a failed round (status describes settlement), so poll
+  `getPooled()` (`fundingTarget`, `fundingDeadline`) plus the escrow's
+  `amount` to tell open / succeeded / failed apart.
+- The live testnet deployment predates these entry points; pooled
+  functions work locally until the next redeploy
+  ([`docs/testnet-deployments.md`](docs/testnet-deployments.md)).
 
 ## Verify this deployment
 

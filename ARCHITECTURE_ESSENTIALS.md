@@ -11,17 +11,6 @@
 ## Contract surface
 ```
 __constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
-create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee) -> escrow_id   // Phase E5 callback implemented locally; not deployed
-create_escrow_with_acceptance(..., requires_acceptance) -> escrow_id   // optional payee acceptance gate
-accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release
-create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, 1..=10 releasers, 1 <= threshold <= len
-get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
-get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
-release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
-refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
-top_up(escrow_id, payer, amount) -> result // IMPLEMENTED in PR for issue #26 — original payer only, funded state only
-transfer_payee(escrow_id, current_payee, new_payee) -> result // IMPLEMENTED (Phase E5, issue #45) — current payee only, funded state only; new_payee may not be contract address or payer; rotation tool, not key-loss recovery
-get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009); deployed on testnet
 create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id   // optional payee acceptance gate; deployed on testnet
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
@@ -34,14 +23,42 @@ release_with_approvals(escrow_id, approvers) -> result   // IMPLEMENTED (Phase E
 refund(escrow_id, caller) -> result    // IMPLEMENTED (Phase E2 + E4) — a releaser when threshold is 1; anyone too, once refund_after has passed, and then still only to the stored `refund_to` (= payer unless set at creation, ADR 0009)
 refund_with_approvals(escrow_id, approvers) -> result    // IMPLEMENTED (Phase E5, issue #119) — same approval rules as release_with_approvals
 top_up(escrow_id, payer, amount) -> result // IMPLEMENTED (issue #26) — original payer only, funded state only; emits `top_up`
+transfer_payee(escrow_id, current_payee, new_payee) -> result // IMPLEMENTED (Phase E5, issue #45) — current payee only, funded state only; new_payee may not be contract address or payer; rotation tool, not key-loss recovery
+create_pooled_escrow(creator, payee, token, funding_target, condition_ref, releaser, funding_deadline) -> escrow_id // IMPLEMENTED (Phase E5, issue #113, ADR 0011) — pooled escrow; amount starts at 0, `funding_target` > 0 and a strictly-future `funding_deadline` are fixed at creation; not deployed on testnet yet
+contribute(escrow_id, payer, amount) -> () // IMPLEMENTED (issue #113) — permissionless before the deadline, up to the target only; balance-delta verified (`transfer_in_exact`) and recorded per payer, accumulating across repeats
+claim_refund(escrow_id, contributor) -> () // IMPLEMENTED (issue #113) — pull-based refund, contributor's own auth, only from a failed round (deadline passed, target unmet), pays exactly the recorded amount once (`AlreadyRefunded` after)
+get_pooled(escrow_id) -> PooledData  // read-only: funding_target, funding_deadline — errors NotPooled (26) on non-pooled ids
+get_contribution(escrow_id, contributor) -> Option<Contribution> // read-only: one contributor's record (amount, refunded); None if never contributed
 rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue #23) — single-releaser escrow only; current releaser and payer authorize; funded only
 ```
 
 No new contract-level role came in with the M-of-N work: `releasers` is
-escrow data chosen by the payer at creation and immutable afterwards. There is
-still no admin, no owner, no pause and no upgrade path — OpenZeppelin's
+escrow data chosen by the payer at creation and immutable afterwards.There is still no admin, no owner, no pause and no upgrade path — OpenZeppelin's
 pausable/upgradeable/access modules were evaluated and rejected in
 `docs/adr/0006` precisely because they would add one.
+
+Pooled escrows (Phase E5, issue #113, `docs/adr/0011`) are additive: they
+live behind `create_pooled_escrow` and two appended storage keys
+(`Pooled(id)`, `Contribution(id, address)`), so `EscrowData` and every
+existing entry point keep their exact meaning. Rules, all tested in
+`contracts/escrow/tests/pooled.rs`: an explicit `funding_target` and
+`funding_deadline` are fixed at creation; `contribute` is open to anyone
+until the deadline and rejects anything past the target (overfunding is
+rejected, not refunded); `release` (both paths) additionally requires
+`funded == target` (`FundingIncomplete = 29`), so partial pools never
+release — a successful pool releases its whole total to the payee; if
+the deadline passes with the target unmet, the round is failed for good
+and every contributor pulls back exactly their recorded amount via
+`claim_refund`, independently and once each (`AlreadyRefunded = 31`),
+with no contributor iteration anywhere (no cap by design — see ADR
+0011 "Resource limits"). The push paths `refund`/`refund_with_approvals`/
+`cancel`/`top_up` reject pooled escrows (`NotSupportedForPooled = 33`)
+because they would route the pool to one address or grow it without a
+record; pooled escrows have no `refund_after`. `get_status` keeps its
+four-value settlement vocabulary — a failed round stays `Funded`; read
+`get_pooled` + the ledger clock for funding state. New errors 26–34 are
+append-only (ADR 0011 lists them).
+
 The allowlist is fixed when the contract is deployed. `create_escrow`
 rejects any token outside a non-empty list with `DisallowedToken` (error
 code 8); an empty list preserves the prior open-token behavior. The
