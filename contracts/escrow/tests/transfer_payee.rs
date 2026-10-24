@@ -50,6 +50,8 @@ fn setup(env: &Env) -> Fixture<'_> {
         &String::from_str(env, "opaque-condition-ref"),
         &releaser,
         &None,
+        &false,
+        &None,
     );
 
     Fixture {
