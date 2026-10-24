@@ -149,6 +149,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 ## Phase E5 — Contract features
 
 - [x] Optional escrow-wide earliest release time (issue #43, ADR 0009); refund path remains independent.
+- [x] Two-party releaser rotation (issue #23): current releaser and payer authorize; only funded single-releaser escrows can rotate. Contract and payee addresses are rejected.
 
 - [x] **OpenZeppelin Stellar library evaluation** (issue #118) —
   `docs/adr/0006`: all six candidate modules checked against ADR 0001/0002
@@ -176,6 +177,16 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   append-only errors 13–17. 19 tests in `tests/quorum.rs`; single-releaser
   suites unchanged and green. Breaking read shape → SDK 0.5.0, bindings
   regenerated. **Not yet on testnet** — the live deployment predates it.
+- [x] **Payer cancel before the payee accepts** (issue #27) —
+  `docs/adr/0010`: `cancel(escrow_id, payer)`, allowed only while `Funded`,
+  on an escrow with `requires_acceptance`, and before the payee's
+  `accept`. Reuses #149's `requires_acceptance`/`accepted_at` and `settle()`
+  (checks-effects-interactions), so funds go to the stored `refund_to`
+  (#158) and I1 is unchanged. New terminal `EscrowStatus::Cancelled`; no new
+  error codes. Tests: `tests/cancel.rs`, including both orderings of
+  accept vs cancel in one ledger, sponsored `refund_to`, and `top_up`
+  interaction. SDK `client.cancel(...)`; bindings regenerated; 0.6.0 →
+  0.7.0. **Not yet on testnet** — the live deployment predates it.
 - [x] Sponsored funding: a funder distinct from the refund recipient —
   issue #28. **ADR first:** `docs/adr/0009` answers the two questions the
   issue poses — a separate refund destination **is** compatible with
@@ -212,6 +223,26 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   on failure. Re-entry tests cover release/refund/create attempts. ADR 0005
   and threat-model T11 document the decision. Deployed on testnet
   2026-10-20.
+- [x] **Pooled escrows funded by multiple payers** (issue #113) —
+  `docs/adr/0011`: open contributions until an explicit
+  `funding_target` (fixed contributor list rejected — see ADR table),
+  bounded by a `funding_deadline`. New entry points
+  `create_pooled_escrow` / `contribute` / `claim_refund` / `get_pooled` /
+  `get_contribution`; `EscrowData` and all existing entry points
+  unchanged (pooled records live under two appended storage keys).
+  `contribute` is permissionless before the deadline, delta-verified via
+  the existing `transfer_in_exact`, recorded per payer (repeats
+  accumulate), and rejects overfunding. `release` additionally requires
+  `funded == target`, so partial pools never release. A missed deadline
+  opens **pull-based** refunds: each contributor claims their exact
+  recorded amount once, independently — no contributor iteration
+  anywhere, no contributor cap by design (ADR 0011 "Resource limits").
+  Push `refund`/`refund_with_approvals`/`cancel`/`top_up` reject pooled
+  escrows (append-only errors 26–34). Threat model: I1–I4 generalized,
+  new T16–T19 + traceability rows. Tests: 18 in `tests/pooled.rs`
+  (scenarios A–M) + 3 malicious-token contribution tests; existing
+  suites and snapshots unchanged. SDK `0.7.0 → 0.8.0` (additive).
+  **Not yet on testnet** — the live deployment predates it.
 ## Phase E6 — SDK & integrator tooling
 - [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
@@ -315,6 +346,17 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   previously stale committed bindings (missing `top_up`, errors 6–8) were
   regenerated here.
 - [x] **PR conflict notifier** — `.github/workflows/pr-conflict-notifier.yml` + `.github/scripts/pr-conflict-notifier.cjs`. On every push to `main` (and every 3h) it labels open PRs that conflict with `main` as `needs-rebase` and @mentions the author once per push with rebase steps; the label clears itself when the conflict is resolved. Runs from `main` only and never checks out PR code.
+- [x] Property-based state-machine tests with proptest (issue #64).
+  Pure-Rust reference model of the escrow state machine in
+  `contracts/escrow/tests/model.rs` — no Soroban types, intentionally simple
+  enough to review independently. A proptest state machine generates
+  operation sequences (create/release/refund/timeout-refund) and compares
+  contract results and stored state against the model after every step,
+  including auth outcomes (who may call what, when). Shrunk failures
+  print a readable operation sequence. CI runs a bounded case count
+  (`PROPTEST_CASES`); a nightly workflow runs a larger count. Closes
+  issue #64.
+- [x] **TLA+ escrow state-machine model** (issue #112) — `spec/Escrow.tla` + `spec/Escrow.cfg` model the actual escrow lifecycle, status transitions, timeout refund behavior, payee acceptance, and same-ledger race windows while explicitly omitting unsupported disputes/milestone logic. TLC verification passed against the committed model.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -405,7 +447,12 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   resume, retention errors, and stopping. Bumped the additive SDK surface
   from 0.3.0 to 0.4.0. SDK typecheck/build and contract tests/build pass;
   lifecycle events remain unavailable until issue #9 changes the contract.
-
+- 2026-10-18 — Phase E7 (issue #64): added a pure-Rust reference
+  model of the escrow state machine (`contracts/escrow/tests/model.rs`)
+  and proptest state-machine tests comparing contract results and stored
+  state against the model after every generated operation, including
+  auth outcomes. CI runs a bounded case count; a nightly workflow runs
+  a larger one.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-10-09 — Phase E6 started: added `.github/workflows/release-sdk.yml`
   (tag-triggered `sdk-v*` build/test/`npm publish --provenance` + GitHub

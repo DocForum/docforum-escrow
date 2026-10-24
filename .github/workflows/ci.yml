@@ -4,8 +4,19 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Nightly run of the property-based state-machine tests (larger case count).
+    - cron: '0 3 * * *'
 
 jobs:
+  resource-baseline:
+    name: Resource cost baseline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check public function baseline
+        run: python3 scripts/check-resource-baseline.py
+
   contract:
     name: Soroban contract (test + wasm build)
     runs-on: ubuntu-latest
@@ -31,6 +42,17 @@ jobs:
 
       - name: cargo test
         run: cargo test
+
+      - name: cargo test (proptest state-machine, bounded)
+        env:
+          PROPTEST_CASES: '64'
+        run: cargo test --test model -- --nocapture
+
+      - name: cargo test (proptest state-machine, nightly)
+        if: github.event_name == 'schedule'
+        env:
+          PROPTEST_CASES: '4096'
+        run: cargo test --test model -- --nocapture
 
       # Issue #120: test snapshots are committed so events, storage and auth
       # changes show up as reviewable diffs. `cargo test` above rewrites them;
@@ -142,6 +164,8 @@ jobs:
       # Offline only: events fixture decoding plus quorum input validation.
       # Never the live testnet suite (see the note at the end of this file).
       - run: npm run test:offline
+
+      - run: npm run test:milestones
 
       - run: npm run test:unit
 
