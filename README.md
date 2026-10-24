@@ -45,7 +45,9 @@ Creation options: a single releaser or an M-of-N releaser quorum, an
 optional payee-acceptance gate, an optional `refund_after` timeout that
 lets anyone trigger the refund, an optional `refund_to`, and an optional
 release callback to a contract payee. Funded escrows can be topped up by
-the original payer, and `get_status`/`get_escrow` are read-only. A token
+the original payer, and a funded escrow's payee can reassign their future
+payout to a new address (`transfer_payee` — a wallet-rotation tool, not
+key-loss recovery); `get_status`/`get_escrow` are read-only. A token
 allowlist is fixed at deploy time. Pooled escrows — one agreement funded
 by many payers, with per-payer contribution records and pull-based
 pro-rata refunds — are a separate creation entry point
