@@ -58,7 +58,7 @@ pub const MAX_BATCH_SIZE: u32 = 50;
 /// that and every other Mainnet per-transaction limit with headroom;
 /// `tests/settle_many.rs::max_batch_fits_mainnet_limits` re-measures it on
 /// every `cargo test`. See docs/adr/0012.
-pub const MAX_SETTLE_OPS: u32 = 20;
+pub const MAX_SETTLE_OPS: u32 = 12;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
