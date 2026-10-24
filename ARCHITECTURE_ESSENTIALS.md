@@ -114,6 +114,15 @@ only while the escrow is `Funded`. The payee-acceptance gate
 The contract decides **who** may call `release`/`refund`, never **why**:
 `condition_ref` is opaque to it (`docs/adr/0001`).
 
+`contracts/releaser-account/` provides an optional custom account to use as
+the per-escrow `releaser`: an immutable escrow target plus an M-of-N set of
+Ed25519 keys. Soroban authorization signatures cover the host-generated
+payload, including the nonce and invocation context. The account rejects
+authorization contexts other than one `release` or `refund` call on its
+configured escrow. Signer additions/removals and threshold changes use a
+separate signed management digest bound to the account and a monotonic
+management nonce. See [ADR 0005](docs/adr/0005-custom-releaser-account.md).
+
 ## TypeScript SDK surface (`sdk/`)
 ```ts
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
@@ -272,9 +281,10 @@ quickstart deployment.
 1. **No PHI, ever, anywhere in this repo.** Not in tests, not in example
    fixtures, not in comments. This repo should be safely public and
    understandable with zero healthcare context.
-2. Contract logic changes require updated tests in
-   `contracts/escrow/tests/` before merge — payment logic bugs are not
-   "fix in a follow-up" territory.
+2. Contract logic changes require updated tests beside the affected
+   contract (`contracts/escrow/tests/` or
+   `contracts/releaser-account/tests/`) before merge — payment logic bugs
+   are not "fix in a follow-up" territory.
 3. SDK version bumps that change the public API are breaking changes —
    semver strictly, since `docforum-core` pins a version rather than
    tracking latest.
