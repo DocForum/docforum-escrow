@@ -4,5 +4,68 @@ import type { DeploymentsDocument } from "./deployments.js";
 
 export const KNOWN_DEPLOYMENTS: DeploymentsDocument = {
   "version": 1,
-  "deployments": []
+  "deployments": [
+    {
+      "network": "testnet",
+      "networkPassphrase": "Test SDF Network ; September 2015",
+      "rpcUrl": "https://soroban-testnet.stellar.org",
+      "contractId": "CDX2JEMA5SO7GZVXDNGDDB35GPV43J7BUTYYH77ALAT72S65GOW5KNEO",
+      "wasmHash": "909040fb5ebda62b6eecf4703f973606d1ea2272b40cd5c0475e4106b766bee8",
+      "gitSha": "eafe26743c255cd1e6b4c44a556aad080ad850a9",
+      "deployedAt": "2026-10-24T05:48:53.459Z",
+      "uploadTxHash": null,
+      "deployTxHash": "682d25dd0dea70884a91fcd1a6eb127f319b4febaff3e3b7c7343ba8f6720750",
+      "allowedTokens": [
+        "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+      ],
+      "verification": [
+        {
+          "case": "create",
+          "result": "Passed",
+          "escrowId": 0,
+          "txHash": "b1cf7c38308ded29a14e2abfb175df469b660dd235b69dcfb7c3997406abec1a",
+          "expected": "Funded"
+        },
+        {
+          "case": "release",
+          "result": "Passed",
+          "escrowId": 0,
+          "txHash": "ab1f074ae396b7f39bfecac152f0b0ce483a917314c06e0c1ec862bfc7625519",
+          "expected": "Released"
+        },
+        {
+          "case": "refund",
+          "result": "Passed",
+          "escrowId": 1,
+          "txHash": "b95fb80270c1b553da75c8cc9fcd27a39d3fa3b630715eeb7bb6c0ff852539b7",
+          "expected": "Refunded"
+        },
+        {
+          "case": "reject_stranger_release",
+          "result": "Passed",
+          "escrowId": 2,
+          "txHash": null,
+          "expected": "Error(Contract, #3) Unauthorized"
+        },
+        {
+          "case": "reject_double_release",
+          "result": "Passed",
+          "escrowId": 0,
+          "txHash": null,
+          "expected": "Error(Contract, #4) NotFunded"
+        },
+        {
+          "case": "reject_non_positive_amount",
+          "result": "Passed",
+          "escrowId": null,
+          "txHash": null,
+          "expected": "Error(Contract, #2) InvalidAmount"
+        }
+      ],
+      "explorer": {
+        "contract": "https://stellar.expert/explorer/testnet/contract/CDX2JEMA5SO7GZVXDNGDDB35GPV43J7BUTYYH77ALAT72S65GOW5KNEO",
+        "tx": "https://stellar.expert/explorer/testnet/tx/"
+      }
+    }
+  ]
 };
