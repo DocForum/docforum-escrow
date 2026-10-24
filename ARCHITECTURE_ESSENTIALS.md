@@ -114,6 +114,15 @@ only while the escrow is `Funded`. The payee-acceptance gate
 The contract decides **who** may call `release`/`refund`, never **why**:
 `condition_ref` is opaque to it (`docs/adr/0001`).
 
+`contracts/releaser-account/` provides an optional custom account to use as
+the per-escrow `releaser`: an immutable escrow target plus an M-of-N set of
+Ed25519 keys. Soroban authorization signatures cover the host-generated
+payload, including the nonce and invocation context. The account rejects
+authorization contexts other than one `release` or `refund` call on its
+configured escrow. Signer additions/removals and threshold changes use a
+separate signed management digest bound to the account and a monotonic
+management nonce. See [ADR 0005](docs/adr/0005-custom-releaser-account.md).
+
 ## TypeScript SDK surface (`sdk/`)
 ```ts
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
@@ -195,7 +204,11 @@ and diffs the result (`scripts/check-generated-bindings.sh`, issue #121). See
 `sdk/src/generated/README.md` for the regeneration steps.
 `sdk/src/index.ts` is the actual public surface (hand-written, ergonomic
 wrapper) — consumers import from the package root, never from
-`src/generated/` directly.`condition_ref` is an **opaque string/id** the contract does not interpret, bounded to 64 bytes at creation (error `ConditionRefTooLong = 7`; SDK constant `MAX_CONDITION_REF_LENGTH`) — it's the caller's job (e.g. `docforum-core`) to decide when release is warranted and call `release()`. `releaser` is the one address permitted
+`src/generated/` directly. Known contract ids per network come from the
+repo-root `deployments.json` (written by `scripts/deploy`), bundled as
+`src/deployments.generated.ts` and exposed as `knownContractId` /
+`knownNetworkConfig`; unknown networks and mainnet throw.
+`condition_ref` is an **opaque string/id** the contract does not interpret, bounded to 64 bytes at creation (error `ConditionRefTooLong = 7`; SDK constant `MAX_CONDITION_REF_LENGTH`) — it's the caller's job (e.g. `docforum-core`) to decide when release is warranted and call `release()`. `releaser` is the one address permitted
 to call `release`/`refund` for that specific escrow, set once at
 `create_escrow` time — see `docs/adr/0002` for why a per-escrow releaser
 was chosen over a single contract-level admin. The one exception is the
@@ -278,9 +291,10 @@ quickstart deployment.
 1. **No PHI, ever, anywhere in this repo.** Not in tests, not in example
    fixtures, not in comments. This repo should be safely public and
    understandable with zero healthcare context.
-2. Contract logic changes require updated tests in
-   `contracts/escrow/tests/` before merge — payment logic bugs are not
-   "fix in a follow-up" territory.
+2. Contract logic changes require updated tests beside the affected
+   contract (`contracts/escrow/tests/` or
+   `contracts/releaser-account/tests/`) before merge — payment logic bugs
+   are not "fix in a follow-up" territory.
 3. SDK version bumps that change the public API are breaking changes —
    semver strictly, since `docforum-core` pins a version rather than
    tracking latest.

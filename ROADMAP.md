@@ -131,6 +131,15 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E5 — Releaser custom account
+- [x] Optional M-of-N Soroban custom releaser account (issue #50):
+  `contracts/releaser-account/` verifies distinct Ed25519 signatures,
+  restricts authorization to one `release`/`refund` call on its configured
+  escrow, and requires the current threshold for nonce-bound signer and
+  threshold changes. Design is in `docs/adr/0005-custom-releaser-account.md`
+  and the T1 update in `docs/threat-model.md`. Not deployed to testnet; this
+  does not change the escrow contract or make mainnet use permissible.
+
 ## Phase E5 — Bound condition_ref length and validate it at creation
 - [x] Pick a maximum length (64 bytes) based on observed integrator usage
   (UUIDs, short labels; existing test refs far shorter), document the
@@ -310,6 +319,13 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `bigint` with strict validation (no floats/exponents, no excess fractional
   precision, no negatives, locale-independent). Property tests assert
   `format(parse(x)) == normalise(x)`. Used in the web demo and SDK docs.
+- [ ] SDK lifecycle amendments (issue #84). Done: `topUp`, `accept`,
+  `cancel` (now `EscrowSigner`), `createEscrow({ requiresAcceptance })`,
+  typed `EscrowPreconditionError` checks before submission, and a
+  `prepareLifecycleCall` → `signLifecycleCall` → `submitLifecycleCall` flow
+  for parties on different machines. SDK `0.7.0 → 0.8.0`. Waiting on the
+  contract: `extendRefundAfter` (#41) and `refundByPayee` (#40) need their
+  contract functions merged first.
 
 ## Phase E7 — Verification, testing & release engineering
 - [x] **Storage and resource optimisation guided by benchmarks (issue #98)** — `get_status` reads a dedicated persistent status value instead of decoding `EscrowData`. Benchmarks showed that moving `NextId` to persistent storage raised creation costs, so it remains in instance storage. The added status record improves `get_status` while adding writes to creation and settlement. Storage layout changed, so deploy as a new testnet contract ID under ADR 0005 and let existing escrows settle on their original contract.
@@ -365,6 +381,14 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   (`PROPTEST_CASES`); a nightly workflow runs a larger count. Closes
   issue #64.
 - [x] **TLA+ escrow state-machine model** (issue #112) — `spec/Escrow.tla` + `spec/Escrow.cfg` model the actual escrow lifecycle, status transitions, timeout refund behavior, payee acceptance, and same-ledger race windows while explicitly omitting unsupported disputes/milestone logic. TLC verification passed against the committed model.
+- [x] **Scripted, deterministic deployment with records** (issue #89) —
+  `scripts/deploy` builds or takes the WASM, checks its hash, uploads,
+  deploys with the constructor allowlist, confirms the on-chain WASM, runs
+  scripted live verification (create, release, refund, three rejection
+  cases) and records the result in `deployments.json`,
+  `docs/testnet-deployments.md` and the SDK (`knownContractId`,
+  `knownNetworkConfig`). Refuses a dirty tree and mainnet; `--dry-run`
+  targets a local quickstart.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
