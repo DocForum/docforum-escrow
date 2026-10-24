@@ -52,7 +52,29 @@ describe("get_escrow cross-version decoding", () => {
     expect(escrow.releaseNotBefore).toBeUndefined();
     expect(escrow.notifyPayee).toBe(false);
     expect(escrow.refundTo).toBe(payer);
+    expect(escrow.requiresAcceptance).toBe(false);
+    expect(escrow.acceptedAt).toBeUndefined();
     expect(escrow.status).toBe("Released");
+  });
+
+  it("decodes acceptance fields, and defaults them on records that predate the gate", () => {
+    const { record } = legacyEscrowRecord();
+    const entries = record.map()!.map((entry) => {
+      const key = entry.key().sym().toString();
+      if (key === "accepted_at") return field(key, nativeToScVal(1_700_000_000n, { type: "u64" }));
+      if (key === "requires_acceptance") return field(key, nativeToScVal(true, { type: "bool" }));
+      return entry;
+    });
+    const accepted = decodeEscrowDataFromScVal(xdr.ScVal.scvMap(entries));
+    expect(accepted.requiresAcceptance).toBe(true);
+    expect(accepted.acceptedAt).toBe(1_700_000_000n);
+
+    const withoutGate = xdr.ScVal.scvMap(
+      record.map()!.filter((entry) => !["accepted_at", "requires_acceptance"].includes(entry.key().sym().toString())),
+    );
+    const legacy = decodeEscrowDataFromScVal(withoutGate);
+    expect(legacy.requiresAcceptance).toBe(false);
+    expect(legacy.acceptedAt).toBeUndefined();
   });
 
   it("falls back to name-based decoding when the generated spec mis-aligns a legacy record", async () => {
