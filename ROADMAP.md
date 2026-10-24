@@ -305,6 +305,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   disabled path.
 
 ## Phase E7 — Verification, testing & release engineering
+- [x] **Coverage-guided contract fuzzing (issue #99)** — `contracts/escrow/fuzz/` runs randomized create/release/refund sequences with ledger timestamp jumps against the Soroban test environment and checks payout, status, and balance invariants after each operation. CI runs a short cargo-fuzz pass on pull requests and a longer nightly pass, uploading crash artifacts. The committed seed corpus starts the lifecycle and timeout paths. No contract or SDK behavior changed.
 - [x] **Reproducible WASM builds and deployment verification (issue #91)** ?
   Rust 1.96.0 and Stellar CLI 28.1.0 are pinned; the pinned
   `rust:1.96.0-bookworm` container compares release WASM hashes from two
