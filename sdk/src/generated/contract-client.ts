@@ -354,6 +354,23 @@ export interface Client {
   version: (options?: MethodOptions) => Promise<AssembledTransaction<string>>
 
   /**
+   * Construct and simulate a solvency transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Read-only solvency check for one token (issue #39): returns
+   * `(balance, liabilities)`, where `balance` is this contract's current
+   * balance of `token` and `liabilities` is the sum of `amount` over
+   * every escrow in `token` that is still `Funded` (pooled escrows count
+   * their funded total net of claimed refunds). The contract is solvent
+   * for `token` exactly when `balance >= liabilities`.
+   * 
+   * `liabilities` is maintained on-chain by every state change that
+   * moves value — creation, `top_up` and `contribute` add, and
+   * release/refund/cancel/`claim_refund` subtract — in the same
+   * invocation, so it can never drift from the escrows themselves.
+   * A token never used by this contract reports `0` liabilities.
+   */
+  solvency: ({token}: {token: string}, options?: MethodOptions) => Promise<AssembledTransaction<readonly [i128, i128]>>
+
+  /**
    * Construct and simulate a contribute transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Adds `amount` to a pooled escrow from `payer` (issue #113,
    * docs/adr/0011). Permissionless — anyone may fund — but every
@@ -582,6 +599,7 @@ export class Client extends ContractClient {
         "AAAAAAAAAHVBZGRzIGZ1bmRzIHRvIGEgZnVuZGVkIGVzY3JvdyB3aXRob3V0IGNoYW5naW5nIGl0cyBwYXJ0aWVzIG9yIGlkLgpPbmx5IGl0cyBvcmlnaW5hbCBwYXllciBtYXkgYXV0aG9yaXplIHRoZSB0cmFuc2Zlci4AAAAAAAAGdG9wX3VwAAAAAAADAAAAAAAAAAllc2Nyb3dfaWQAAAAAAAAGAAAAAAAAAAVwYXllcgAAAAAAABMAAAAAAAAABmFtb3VudAAAAAAACwAAAAEAAAPpAAAAAgAAAAM=",
         "AAAAAAAAAcxNb3ZlcyB0aGUgZXNjcm93ZWQgYGFtb3VudGAgdG8gYHBheWVlYC4gT25seSB0aGUgZXNjcm93J3MgcmVsZWFzZXIKbWF5IGNhbGwgdGhpcyDigJQgdGhlIGNvbnRyYWN0IGVuZm9yY2VzIFdITywgbmV2ZXIgV0hZIChBRFIgMDAwMSkuIE9uCmFuIE0tb2YtTiBlc2Nyb3cgdGhpcyBzaW5nbGUtY2FsbGVyIHBhdGggaXMgb25seSBhbGxvd2VkIHdoZW4gdGhlCnRocmVzaG9sZCBpcyAxOyBvdGhlcndpc2UgdXNlIGByZWxlYXNlX3dpdGhfYXBwcm92YWxzYC4KCkRlbGliZXJhdGVseSAqKm5vdCoqIGdhdGVkIGJ5IGByZWZ1bmRfYWZ0ZXJgIChkb2NzL2Fkci8wMDA0KTogYWZ0ZXIKdGhlIGRlYWRsaW5lIHRoZSByZWxlYXNlciBjYW4gc3RpbGwgcmVsZWFzZSwgcmFjaW5nIGFueSB0aW1lb3V0CnJlZnVuZCDigJQgd2hvZXZlciBsYW5kcyBmaXJzdCB3aW5zIGFuZCB0aGUgb3RoZXIgZmFpbHMgYE5vdEZ1bmRlZGAuAAAAB3JlbGVhc2UAAAAAAgAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAAAAAAGY2FsbGVyAAAAAAATAAAAAQAAA+kAAAACAAAAAw==",
         "AAAAAAAAAKdTZW1hbnRpYyB2ZXJzaW9uIG9mIHRoaXMgY29udHJhY3QgaW50ZXJmYWNlIGFuZCBiZWhhdmlvci4KQnVpbGQgcHJvdmVuYW5jZSBpcyBhdmFpbGFibGUgc2VwYXJhdGVseSBpbiB0aGUgV0FTTSBjb250cmFjdAptZXRhZGF0YSAoYGdpdF9zaGFgIGFuZCBgc29yb2Jhbl9zZGtfdmVyc2lvbmApLgAAAAAHdmVyc2lvbgAAAAAAAAAAAQAAABA=",
+        "AAAAAAAAArVSZWFkLW9ubHkgc29sdmVuY3kgY2hlY2sgZm9yIG9uZSB0b2tlbiAoaXNzdWUgIzM5KTogcmV0dXJucwpgKGJhbGFuY2UsIGxpYWJpbGl0aWVzKWAsIHdoZXJlIGBiYWxhbmNlYCBpcyB0aGlzIGNvbnRyYWN0J3MgY3VycmVudApiYWxhbmNlIG9mIGB0b2tlbmAgYW5kIGBsaWFiaWxpdGllc2AgaXMgdGhlIHN1bSBvZiBgYW1vdW50YCBvdmVyCmV2ZXJ5IGVzY3JvdyBpbiBgdG9rZW5gIHRoYXQgaXMgc3RpbGwgYEZ1bmRlZGAgKHBvb2xlZCBlc2Nyb3dzIGNvdW50CnRoZWlyIGZ1bmRlZCB0b3RhbCBuZXQgb2YgY2xhaW1lZCByZWZ1bmRzKS4gVGhlIGNvbnRyYWN0IGlzIHNvbHZlbnQKZm9yIGB0b2tlbmAgZXhhY3RseSB3aGVuIGBiYWxhbmNlID49IGxpYWJpbGl0aWVzYC4KCmBsaWFiaWxpdGllc2AgaXMgbWFpbnRhaW5lZCBvbi1jaGFpbiBieSBldmVyeSBzdGF0ZSBjaGFuZ2UgdGhhdAptb3ZlcyB2YWx1ZSDigJQgY3JlYXRpb24sIGB0b3BfdXBgIGFuZCBgY29udHJpYnV0ZWAgYWRkLCBhbmQKcmVsZWFzZS9yZWZ1bmQvY2FuY2VsL2BjbGFpbV9yZWZ1bmRgIHN1YnRyYWN0IOKAlCBpbiB0aGUgc2FtZQppbnZvY2F0aW9uLCBzbyBpdCBjYW4gbmV2ZXIgZHJpZnQgZnJvbSB0aGUgZXNjcm93cyB0aGVtc2VsdmVzLgpBIHRva2VuIG5ldmVyIHVzZWQgYnkgdGhpcyBjb250cmFjdCByZXBvcnRzIGAwYCBsaWFiaWxpdGllcy4AAAAAAAAIc29sdmVuY3kAAAABAAAAAAAAAAV0b2tlbgAAAAAAABMAAAABAAAD7QAAAAIAAAALAAAACw==",
         "AAAAAAAAA65BZGRzIGBhbW91bnRgIHRvIGEgcG9vbGVkIGVzY3JvdyBmcm9tIGBwYXllcmAgKGlzc3VlICMxMTMsCmRvY3MvYWRyLzAwMTEpLiBQZXJtaXNzaW9ubGVzcyDigJQgYW55b25lIG1heSBmdW5kIOKAlCBidXQgZXZlcnkKY29udHJpYnV0aW9uOgotIG11c3QgYmUgYSBwb3NpdGl2ZSBhbW91bnQgKGBJbnZhbGlkQW1vdW50YCk7Ci0gaXMgYWNjZXB0ZWQgb25seSB3aGlsZSB0aGUgZXNjcm93IGlzIGBGdW5kZWRgIGFuZCB0aGUgbGVkZ2VyCnRpbWVzdGFtcCBpcyBzdHJpY3RseSBiZWZvcmUgdGhlIGZ1bmRpbmcgZGVhZGxpbmUKKGBGdW5kaW5nRGVhZGxpbmVQYXNzZWRgIGFmdGVyIGl0IOKAlCBsYXRlIG1vbmV5IGNhbiBuZXZlciBjaGFuZ2UgYQpyb3VuZCdzIG91dGNvbWUpOwotIG1heSBub3QgcHVzaCB0aGUgcG9vbGVkIHRvdGFsIHBhc3QgdGhlIGZ1bmRpbmcgdGFyZ2V0CihgRnVuZGluZ1RhcmdldFJlYWNoZWRgIOKAlCBvdmVyZnVuZGluZyBpcyByZWplY3RlZCwgbm90IHJlZnVuZGVkKTsKLSBpcyBwdWxsZWQgZnJvbSBgcGF5ZXJgIHVuZGVyIGBwYXllci5yZXF1aXJlX2F1dGgoKWAgYW5kIHZlcmlmaWVkCndpdGggdGhlIHNhbWUgZXhhY3QgYmFsYW5jZS1kZWx0YSBjaGVjayBhcyBjcmVhdGlvbgooYEJhbGFuY2VNaXNtYXRjaGAgaWYgdGhlIGNvbnRyYWN0J3MgYmFsYW5jZSBkaWRuJ3QgcmlzZSBieQpleGFjdGx5IGBhbW91bnRgKTsKLSBpcyByZWNvcmRlZCBhZ2FpbnN0IGBwYXllcmAgb25seSwgYWNjdW11bGF0aW5nIGFjcm9zcyByZXBlYXRlZApjb250cmlidXRpb25zIGFuZCBuZXZlciB0b3VjaGluZyBvdGhlciBwYXllcnMnIHJlY29yZHMuCkFjY291bnRpbmcgaXMgdXBkYXRlZCBvbmx5IGFmdGVyIHRoZSB0cmFuc2ZlciBpcyB2ZXJpZmllZCwgc28gYQpmYWlsZWQgY29udHJpYnV0aW9uIHJlY29yZHMgbm90aGluZyAoaW52YXJpYW50IEk0KS4AAAAAAApjb250cmlidXRlAAAAAAADAAAAAAAAAAllc2Nyb3dfaWQAAAAAAAAGAAAAAAAAAAVwYXllcgAAAAAAABMAAAAAAAAABmFtb3VudAAAAAAACwAAAAEAAAPpAAAAAgAAAAM=",
         "AAAAAAAAAXFSZWFkLW9ubHkgYWNjZXNzb3IgZm9yIGV2ZXJ5dGhpbmcgc3RvcmVkIGFib3V0IGBlc2Nyb3dfaWRgIOKAlCBwYXllciwKcGF5ZWUsIHRva2VuLCBhbW91bnQsIGBjb25kaXRpb25fcmVmYCwgc3RhdHVzLCB0aGUgcmVsZWFzZXIgc2V0IHdpdGgKaXRzIHRocmVzaG9sZCwgYHJlZnVuZF9hZnRlcmAgYW5kIGByZWZ1bmRfdG9gLiBFeGlzdHMgc28gcGF5ZWVzIGFuZAppbnRlZ3JhdG9ycyBjYW4gY2hlY2sgd2hvIGNhbiBzZXR0bGUsIHdoZW4sIGFuZCB3aGVyZSBhIHJlZnVuZCBnb2VzCmJlZm9yZSByZWx5aW5nIG9uIGEgYEZ1bmRlZGAgZXNjcm93IChkb2NzL2Fkci8wMDA0LCB0aHJlYXQgbW9kZWwgVDgpLgpFcnJvcnMgb24gYW4gdW5rbm93biBpZC4AAAAAAAAKZ2V0X2VzY3JvdwAAAAAAAQAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAEAAAPpAAAH0AAAAApFc2Nyb3dEYXRhAAAAAAAD",
         "AAAAAAAAATdSZWFkLW9ubHk6IHRoZSBpbW11dGFibGUgZnVuZGluZyBjb25maWcgb2YgYSBwb29sZWQgZXNjcm93LiBUaGUKYWdncmVnYXRlIGZ1bmRlZCBhbW91bnQgaXMgdGhlIGVzY3JvdydzIGBhbW91bnRgIGZyb20gYGdldF9lc2Nyb3dgOwphIHJvdW5kIGlzIGZhaWxlZCB3aGVuIGBub3cgPj0gZnVuZGluZ19kZWFkbGluZWAgYW5kIGBhbW91bnQgPApmdW5kaW5nX3RhcmdldGAgKHRoZW4gYGNsYWltX3JlZnVuZGAgaXMgb3BlbiB0byBlYWNoIGNvbnRyaWJ1dG9yKS4KRXJyb3JzIGBOb3RQb29sZWRgIG9uIGEgbm9uLXBvb2xlZCBvciB1bmtub3duIGlkLgAAAAAKZ2V0X3Bvb2xlZAAAAAAAAQAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAEAAAPpAAAH0AAAAApQb29sZWREYXRhAAAAAAAD",
@@ -609,6 +627,7 @@ export class Client extends ContractClient {
         top_up: this.txFromJSON<Result<void>>,
         release: this.txFromJSON<Result<void>>,
         version: this.txFromJSON<string>,
+        solvency: this.txFromJSON<readonly [i128, i128]>,
         contribute: this.txFromJSON<Result<void>>,
         get_escrow: this.txFromJSON<Result<EscrowData>>,
         get_pooled: this.txFromJSON<Result<PooledData>>,
