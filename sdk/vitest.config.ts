@@ -2,9 +2,12 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    // Real testnet round trips (friendbot funding + transaction
-    // finalization) are slower than anything else in this org's test
-    // suites — see tests/testnet-integration.test.ts.
+    // The same integration suite runs against live testnet
+    // (`npm run test:integration`) and a local quickstart network
+    // (`npm run test:integration:local`, what CI runs): real transaction
+    // round trips and Friendbot funding are slower than the offline suites.
+    // The timeout-refund test overrides this with its own budget, since it
+    // waits on the network's ledger clock.
     testTimeout: 60_000,
     hookTimeout: 60_000,
   },

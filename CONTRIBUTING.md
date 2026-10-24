@@ -36,14 +36,27 @@ npm ci
 npm run typecheck
 npm run build
 npm run test:offline   # no network: event fixtures + quorum input validation
-npm test               # also runs the live-testnet suite — see below
+npm test               # also runs the real-network suite — see below
 ```
 
-`npm test` includes `tests/testnet-integration.test.ts`, which funds accounts
-through Friendbot and talks to the live testnet contract. CI deliberately runs
-only offline checks (`test:offline`, `test:runtime`, browser smoke) for the SDK;
-run `npm test` locally when your change touches network calls, and expect it to
-need a testnet deployment that actually has the methods you're testing.
+`npm test` includes `tests/integration.test.ts`, which funds accounts through
+Friendbot and talks to a real network. `npm run test:integration` points it at
+live testnet; `npm run test:integration:local` points it at a local
+`stellar/quickstart` network (the same thing CI runs on every PR). Local setup
+steps are in the README's "Running the integration suite locally" section.
+
+Run the suite when your change touches network calls. The testnet run needs a
+deployment built from the same source as the SDK: the contract id recorded in
+`docs/testnet-deployments.md` predates `notify_payee`, acceptance, quorum and
+`top_up`, so pointing the suite at it fails with `MismatchingParameterLen`.
+Deploy this checkout's WASM to testnet and pass its id (plus
+`TESTNET_QUORUM_SUPPORTED=true` to exercise the quorum case):
+
+```bash
+cd sdk
+ESCROW_TESTNET_CONTRACT_ID=<deployed-contract-id> TESTNET_QUORUM_SUPPORTED=true \
+  npm run test:integration
+```
 
 The SDK is published to npm as `@docforum/escrow-sdk` via an automated,
 provenance-signed release workflow — see [Releasing the SDK](#releasing-the-sdk)

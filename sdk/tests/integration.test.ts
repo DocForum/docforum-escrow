@@ -1,4 +1,4 @@
-// Real-network integration test -- per issue #4's DoD: "at least one test
+// Real-network integration test — per issue #4's DoD: "at least one test
 // exercising both [create_escrow/get_status] against a running/testnet
 // contract instance, not just the contract's own test suite." Now also
 // covers release/refund (Phase E2) and the `refund_after` deadline +
@@ -6,37 +6,32 @@
 // deployment + instance discovery coverage (deterministic address
 // prediction must match the on-chain deployment).
 //
-// Deliberately NOT wired into `npm test`/CI (see package.json -- thit
-// runs via `npm run test:integration` only): it depends on testnet
-// liveness and Friendbot's funding rate limits, a materially different
-// reliability profile than this org's other "integration" tests (e.g.
-// docforum-core's booking test spins up its own throwaway Postgres --
-// self-contained, no external service). A flaky external network
-// shouldn't block every contributor's PR here.
+// The suite is parameterised by network (tests/integration-network.ts):
+//   npm run test:integration        → live testnet (default, unchanged)
+//   npm run test:integration:local  → a local `stellar/quickstart` network
+// The local run is what CI executes on every PR, so a regression in a
+// network call fails the PR instead of waiting for the nightly soak. The
+// factory suite stays gated on TESTNET_FACTORY_ID: CI's local network
+// deploys no factory.
 //
-// Fresh keypairs are generated and Friendbot-funded per run -- never
-// commit a real secret key, even a testnet one, into a repo.
+// Fresh keypairs are generated and Friendbot-funded per run — never
+// commit a real secret key, even a testnet or local one, into a repo.
 import { describe, expect, it } from "vitest";
 import {
   Account,
   Address,
   Asset,
   BASE_FEE,
-  Keypair,
   Operation,
   TransactionBuilder,
   nativeToScVal,
 } from "@stellar/stellar-sdk";
 import { EscrowClient, FactoryClient, predictInstanceAddress } from "../src/index.js";
+import { fundedKeypair, network, networkNow } from "./integration-network.js";
 
-// Current upstream-main testnet deployment, including BalanceMismatch
-// and opt-in payee acceptance -- see docs/testnet-deployments.md.
-// Public contract addresses, not secrets.
-const CONTRACT_ID = "CAFIQ5OTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR";
-const NATIVE_XLM_SAC = "CDLZFC3SYJYDZT7K67ZV75HPJVIEUVNIXF47ZG2FB2RMQVVU2HHGCYSC";
-// Phase E6 factory contract deployed on testnet alongside the
-// instance contract above. Overridable via env for forks that deploy
-// their own factory. Public contract address, not a secret.
+// Phase E6 factory contract deployed on testnet alongside the instance
+// contract. Overridable via env for forks that deploy their own factory.
+// Public contract address, not a secret.
 // A factory contract id must be provided to run the live factory suite. The
 // fallback is only a syntactically valid contract id so the file still loads.
 const FACTORY_ID = process.env.TESTNET_FACTORY_ID ?? "CBCYSOQ3HKYQDHLSHTFNIAA7X2NUGJVYOCN24DCVT46VG4YI6DMNARMD";
@@ -44,40 +39,41 @@ const FACTORY_ID = process.env.TESTNET_FACTORY_ID ?? "CBCYSOQ3HKYQDHLSHTFNIAA7X2
 // a factory is actually deployed and TESTNET_FACTORY_ID points at it.
 const describeFactory = process.env.TESTNET_FACTORY_ID ? describe : describe.skip;
 
-async function fundedKeypair(): Promise<Keypair> {
-  const kp = Keypair.random();
-  const url = `https://friendbot.stellar.org?addr=${encodeURIComponent(kp.publicKey())}`;
-  // Friendbot is rate-limited independently of the test assertions. Retry
-  // only transient funding/network failures; transaction and assertion
-  // failures are never retried.
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      const res = await fetch(url);
-      if (res.ok) return kp;
-      const detail = await res.text();
-      if (res.status < 500 && res.status !== 429) {
-        throw new Error(`Friendbot funding failed: ${res.status} ${detail}`);
-      }
-      if (attempt === 4) throw new Error(`Friendbot funding failed after retries: ${res.status} ${detail}`);
-    } catch (error) {
-      if (attempt === 4 || (error instanceof Error && error.message.startsWith("Friendbot funding failed:"))) {
-        throw new Error(`Friendbot funding failed for ${kp.publicKey()}: ${String(error)}`);
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1_000 * 2 ** attempt));
-  }
-  throw new Error("Friendbot funding failed after retries");
+function newClient(): EscrowClient {
+  return new EscrowClient({
+    contractId: network.contractId,
+    rpcUrl: network.rpcUrl,
+    networkPassphrase: network.networkPassphrase,
+    allowHttp: network.allowHttp,
+  });
 }
 
-describe("EscrowClient against live testnet", () => {
+/**
+ * Wait until the network's ledger clock has moved past `deadline`. The
+ * contract compares against the ledger timestamp, not wall-clock time, so
+ * sleeping for a fixed duration is not enough (and would drift on a local
+ * network whose genesis time differs from the runner's clock).
+ */
+async function waitForLedgerAfter(deadline: bigint): Promise<void> {
+  const started = Date.now();
+  for (;;) {
+    if ((await networkNow()) > Number(deadline) + 6) return;
+    if (Date.now() - started > 120_000) {
+      throw new Error(`Ledger clock did not pass ${deadline} within 120s.`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+}
+
+describe(`EscrowClient against ${network.label}`, () => {
   it("creates, funds, and releases an escrow end-to-end", async () => {
     const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
-    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const client = newClient();
 
     const { escrowId, txHash } = await client.createEscrow({
       payer,
       payee: payee.publicKey(),
-      token: NATIVE_XLM_SAC,
+      token: network.nativeTokenId,
       amount: 1_000_000n, // 0.1 XLM
       conditionRef: "sdk-integration-test-release",
       releaser: releaser.publicKey(),
@@ -95,11 +91,11 @@ describe("EscrowClient against live testnet", () => {
     const [payer, payee, releaser, relayer] = await Promise.all([
       fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(),
     ]);
-    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const client = newClient();
     const releaseEscrow = await client.createEscrow({
       payer,
       payee: payee.publicKey(),
-      token: NATIVE_XLM_SAC,
+      token: network.nativeTokenId,
       amount: 1_000_000n,
       conditionRef: "sdk-integration-test-relayed-release",
       releaser: releaser.publicKey(),
@@ -116,7 +112,7 @@ describe("EscrowClient against live testnet", () => {
     const refundEscrow = await client.createEscrow({
       payer,
       payee: payee.publicKey(),
-      token: NATIVE_XLM_SAC,
+      token: network.nativeTokenId,
       amount: 1_000_000n,
       conditionRef: "sdk-integration-test-relayed-refund",
       releaser: releaser.publicKey(),
@@ -130,19 +126,20 @@ describe("EscrowClient against live testnet", () => {
     expect(await client.getStatus(refundEscrow.escrowId)).toBe("Refunded");
   });
 
-  // This extra quorum case is opt-in to limit Friendbot funding during
-  // ordinary integration runs; the current contract supports quorum.
-  it.skipIf(process.env.TESTNET_QUORUM_SUPPORTED !== "true")("settles a 2-of-3 quorum escrow with two approvers", async () => {
+  // The documented live testnet deployment predates the quorum contract
+  // entry points; a local run deploys the current WASM, so it exercises
+  // these for real (see integration-network.ts).
+  it.skipIf(!network.quorumSupported)("settles a 2-of-3 quorum escrow with two approvers", async () => {
     const [payer, payee, first, second, third] = await Promise.all([
       fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(),
     ]);
-    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const client = newClient();
     const releasers = [first.publicKey(), second.publicKey(), third.publicKey()];
 
     const { escrowId } = await client.createQuorumEscrow({
       payer,
       payee: payee.publicKey(),
-      token: NATIVE_XLM_SAC,
+      token: network.nativeTokenId,
       amount: 1_000_000n,
       conditionRef: "sdk-integration-test-quorum",
       releasers,
@@ -162,16 +159,17 @@ describe("EscrowClient against live testnet", () => {
 
   it("creates, funds, and refunds an escrow end-to-end", async () => {
     const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
-    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const client = newClient();
 
     const { escrowId, txHash } = await client.createEscrow({
       payer,
       payee: payee.publicKey(),
-      token: NATIVE_XLM_SAC,
+      token: network.nativeTokenId,
       amount: 1_000_000n,
       conditionRef: "sdk-integration-test-refund",
       releaser: releaser.publicKey(),
     });
+    expect(txHash).toBeTruthy();
 
     expect(await client.getStatus(escrowId)).toBe("Funded");
 
@@ -182,12 +180,12 @@ describe("EscrowClient against live testnet", () => {
 
   it("rejects release from a caller that isn't the escrow's releaser", async () => {
     const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
-    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const client = newClient();
 
-    const { escrowId, txHash } = await client.createEscrow({
+    const { escrowId } = await client.createEscrow({
       payer,
       payee: payee.publicKey(),
-      token: NATIVE_XLM_SAC,
+      token: network.nativeTokenId,
       amount: 1_000_000n,
       conditionRef: "sdk-integration-test-unauthorized",
       releaser: releaser.publicKey(),
@@ -199,14 +197,17 @@ describe("EscrowClient against live testnet", () => {
 
   it("surfaces refundAfter via getEscrow, and rejects a deadline already in the past", async () => {
     const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
-    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const client = newClient();
 
+    // Relative to the network's ledger clock, not the runner's: on a local
+    // network the genesis time can differ from wall-clock time.
+    const now = await networkNow();
     // Far enough in the future to survive the round trip: 1 hour.
-    const refundAfter = BigInt(Math.floor(Date.now() / 1000) + 3_600);
+    const refundAfter = BigInt(now + 3_600);
     const { escrowId } = await client.createEscrow({
       payer,
       payee: payee.publicKey(),
-      token: NATIVE_XLM_SAC,
+      token: network.nativeTokenId,
       amount: 1_000_000n,
       conditionRef: "sdk-integration-test-deadline",
       releaser: releaser.publicKey(),
@@ -220,14 +221,14 @@ describe("EscrowClient against live testnet", () => {
     expect(escrow.threshold).toBe(1);
 
     // A deadline that has already passed must be rejected at creation
-    // (Error::InvalidRefundAfter) -- it would let anyone refund the escrow
+    // (Error::InvalidRefundAfter) — it would let anyone refund the escrow
     // before the releaser could ever act on it.
-    const past = BigInt(Math.floor(Date.now() / 1000) - 60);
+    const past = BigInt(now - 60);
     await expect(
       client.createEscrow({
         payer,
         payee: payee.publicKey(),
-        token: NATIVE_XLM_SAC,
+        token: network.nativeTokenId,
         amount: 1_000_000n,
         conditionRef: "sdk-integration-test-past-deadline",
         releaser: releaser.publicKey(),
@@ -238,12 +239,12 @@ describe("EscrowClient against live testnet", () => {
 
   it("reports no deadline for an escrow created without refundAfter", async () => {
     const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
-    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const client = newClient();
 
     const { escrowId } = await client.createEscrow({
       payer,
       payee: payee.publicKey(),
-      token: NATIVE_XLM_SAC,
+      token: network.nativeTokenId,
       amount: 1_000_000n,
       conditionRef: "sdk-integration-test-no-deadline",
       releaser: releaser.publicKey(),
@@ -258,17 +259,17 @@ describe("EscrowClient against live testnet", () => {
     const [payer, payee, releaser, sponsor] = await Promise.all([
       fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(),
     ]);
-    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const client = newClient();
     const { escrowId } = await client.createEscrow({
       payer,
       payee: payee.publicKey(),
-      token: NATIVE_XLM_SAC,
+      token: network.nativeTokenId,
       amount: 1_000_000n,
       conditionRef: "sdk-integration-test-fees",
       releaser: releaser.publicKey(),
     });
 
-    // Simulate the release the releaser is about to send -- the estimate must be
+    // Simulate the release the releaser is about to send — the estimate must be
     // internally consistent and non-zero.
     const estimate = await client.estimate({
       source: payer,
@@ -283,7 +284,7 @@ describe("EscrowClient against live testnet", () => {
     // the fee-bump helper still wraps it for an explicitly willing sponsor.
     const payment = new TransactionBuilder(new Account(payer.publicKey(), "1"), {
       fee: BASE_FEE,
-      networkPassphrase: "Test DFN Network ; September 2015",
+      networkPassphrase: network.networkPassphrase,
     })
       .addOperation(
         Operation.payment({ destination: payee.publicKey(), asset: Asset.native(), amount: "1" }),
@@ -295,7 +296,34 @@ describe("EscrowClient against live testnet", () => {
     const guard = client.guardSponsorship(payment.toXDR());
     expect(guard.ok).toBe(false);
     expect(guard.reasons[0]).toContain("is not a contract invocation");
+
+    const bumped = client.feeBump(payment.toXDR(), sponsor, { maxFee: 1_000n });
+    expect(bumped.fee).toBeLessThanOrEqual(1_000n);
+    expect(bumped.innerTxHash).toBe(payment.hash().toString("hex"));
   });
+
+  it("allows a fresh stranger to refund after a short timeout", async () => {
+    const [payer, payee, releaser, stranger] = await Promise.all([
+      fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(),
+    ]);
+    const client = newClient();
+    const refundAfter = BigInt((await networkNow()) + 25);
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: network.nativeTokenId,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-timeout-refund",
+      releaser: releaser.publicKey(),
+      refundAfter,
+    });
+
+    // The contract checks the ledger timestamp, so wait on the network's
+    // clock rather than assuming wall-clock time matches it.
+    await waitForLedgerAfter(refundAfter);
+    await client.refund({ escrowId, caller: stranger });
+    expect(await client.getStatus(escrowId)).toBe("Refunded");
+  }, 150_000);
 });
 
 describeFactory("FactoryClient against live testnet", () => {
@@ -345,7 +373,7 @@ describeFactory("FactoryClient against live testnet", () => {
     const { escrowId } = await client.createEscrow({
       payer,
       payee: payee.publicKey(),
-      token: NATIVE_XLM_SAC,
+      token: network.nativeTokenId,
       amount: 1_000_000n,
       conditionRef: "sdk-integration-test-factory-lifecycle",
       releaser: releaser.publicKey(),
