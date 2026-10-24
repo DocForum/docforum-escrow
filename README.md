@@ -50,7 +50,11 @@ allowlist is fixed at deploy time. Pooled escrows — one agreement funded
 by many payers, with per-payer contribution records and pull-based
 pro-rata refunds — are a separate creation entry point
 (`create_pooled_escrow`, see [ADR 0011](docs/adr/0011-pooled-escrow-funding.md)
-and the contract surface list).
+and the contract surface list). A read-only `solvency(token)` view returns
+the contract's balance of a token next to the total it owes across every
+`Funded` escrow in that token (SDK: `client.getSolvency(token)`), so
+monitors can check `balance >= liabilities` in one call — see
+[threat model → Solvency monitoring](docs/threat-model.md#solvency-monitoring-issue-39).
 
 **The full function list, signatures and rules are in
 [`ARCHITECTURE_ESSENTIALS.md` → Contract surface](ARCHITECTURE_ESSENTIALS.md#contract-surface).**
