@@ -120,6 +120,15 @@ value. **Reviewers should challenge these ratings.**
   it is unavailable if the payer cannot authorize. The timeout refund
   path remains the fallback for escrows whose releaser is unavailable.
 - **Mitigations to consider:**
+  - [x] Use the optional custom account in `contracts/releaser-account/`
+    for M-of-N Ed25519 control. Its `__check_auth` verifies the host's
+    nonce- and context-bound payload, requires distinct registered signers
+    to meet the threshold, and only permits one `release` or `refund` call
+    on the configured escrow. Management changes require the current
+    threshold over an account- and nonce-bound digest. See ADR 0005.
+    This narrows the account's authority but cannot decide whether a
+    permitted release or refund is the correct outcome; secure signer
+    devices and off-chain quorum coordination remain operational duties.
   - [x] Allow the current releaser and payer to rotate the releaser on a
     funded escrow (issue #23, ADR 0009); the payer's consent prevents
     compromised releaser key alone from redirecting future control.

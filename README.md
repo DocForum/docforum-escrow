@@ -287,6 +287,31 @@ paths produce identical bytes, run
 the pinned `rust:1.96.0-bookworm` container. No `stellar contract optimize`
 step is used.
 
+### Deploying with `scripts/deploy`
+
+`scripts/deploy` is the one command for deploy, verify and record. From a
+clean checkout it builds the WASM, checks its SHA-256 (optionally against
+`--expected-wasm-hash`), uploads and deploys it with the constructor
+allowlist (default: the network's native XLM contract), and confirms the
+on-chain WASM matches. Then it runs a scripted live check: create,
+release, refund, and three rejections (stranger release, double release,
+zero amount). The record goes to `deployments.json`,
+`docs/testnet-deployments.md` and the SDK's bundled deployments module.
+
+```bash
+# Against a local quickstart (writes nothing tracked):
+docker run --rm -d -p 8000:8000 stellar/quickstart --local
+scripts/deploy --dry-run
+
+# Against testnet (accounts are generated and friendbot-funded unless
+# DEPLOY_SOURCE_SECRET is set):
+scripts/deploy
+```
+
+It refuses a dirty git tree and any network other than testnet or the local
+quickstart. The SDK resolves recorded ids with `knownContractId("testnet")`
+or `knownNetworkConfig("testnet")`.
+
 An escrow created with `createQuorumEscrow` settles with M-of-N approvals;
 each supplied keypair signs only the contract auth entry for that one call, and
 the first pays the fee:
@@ -298,6 +323,36 @@ const { escrowId } = await client.createQuorumEscrow({
   threshold: 2,
 });
 await client.releaseWithApprovals({ escrowId, approvers: [a, c] });
+```
+
+### Lifecycle amendments
+
+Top up a funded escrow, accept as the payee, or cancel as the payer before
+the payee accepts. Each call reads the escrow first and throws
+`EscrowPreconditionError` (with a `code` such as `"AlreadyAccepted"`) instead
+of sending a transaction the contract would reject:
+
+```ts
+await client.topUp({ escrowId, payer, amount: 500_000n });
+
+const { escrowId: gated } = await client.createEscrow({ ...params, requiresAcceptance: true });
+await client.accept({ escrowId: gated, payee });   // payer can no longer cancel
+// before acceptance: await client.cancel({ escrowId: gated, payer });
+```
+
+When the signer and the submitter are on different machines, pass the call
+between them as JSON:
+
+```ts
+// Machine A (submitter, pays the fee)
+const prepared = await client.prepareLifecycleCall({
+  call: { method: "top_up", escrowId, payer: payerAddress, amount: 500_000n },
+  source: relayerAddress,
+});
+// Machine B (each address in prepared.pendingSigners)
+const signed = await client.signLifecycleCall(prepared, payer);
+// Machine A
+await client.submitLifecycleCall(signed, relayer, "top_up");
 ```
 
 ### Fee estimation and fee-bump sponsorship
