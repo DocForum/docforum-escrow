@@ -154,6 +154,7 @@ pub struct CreateItem {
 enum DataKey {
     Escrow(u64),
     NextId,
+    Status(u64),
     AllowedTokens,
     /// Pooled escrows only (issue #113): immutable funding config.
     /// Soroban encodes enum variants by name, so appending these two
@@ -485,12 +486,11 @@ impl EscrowContract {
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
     pub fn get_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, Error> {
-        let data: EscrowData = env
+        env
             .storage()
             .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)?;
-        Ok(data.status)
+            .get(&DataKey::Status(escrow_id))
+            .ok_or(Error::NotFound)
     }
 
     /// Read-only accessor for everything stored about `escrow_id` — payer,
@@ -579,6 +579,7 @@ impl EscrowContract {
             release_not_before: None,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        env.storage().persistent().set(&DataKey::Status(id), &data.status);
         env.storage().persistent().set(
             &DataKey::Pooled(id),
             &PooledData {
@@ -1066,6 +1067,7 @@ impl EscrowContract {
             release_not_before,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        env.storage().persistent().set(&DataKey::Status(id), &data.status);
         Self::publish_state(env, symbol_short!("created"), id, &data);
         Ok(id)
     }
@@ -1171,6 +1173,9 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(escrow_id), &data.status);
 
         let token_client = token::Client::new(env, &data.token);
         token_client.transfer(&env.current_contract_address(), &destination, &data.amount);
