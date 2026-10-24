@@ -95,6 +95,8 @@ contracts/escrow/
   tests/                 Integration tests (soroban-sdk testutils) — required for any contract change
   test_snapshots/        Committed Soroban snapshots (events/auth/storage) per test — issue #120
   Cargo.toml
+certora/
+  escrow.spec            Property list for invariants I1–I3 and the timeout rule (see docs/formal-verification.md)
 sdk/
   src/index.ts           @docforum/escrow-sdk — hand-written public surface
   src/generated/         Machine-generated contract bindings — never hand-edit (issue #121)
@@ -289,6 +291,31 @@ paths produce identical bytes, run
 the pinned `rust:1.96.0-bookworm` container. No `stellar contract optimize`
 step is used.
 
+### Deploying with `scripts/deploy`
+
+`scripts/deploy` is the one command for deploy, verify and record. From a
+clean checkout it builds the WASM, checks its SHA-256 (optionally against
+`--expected-wasm-hash`), uploads and deploys it with the constructor
+allowlist (default: the network's native XLM contract), and confirms the
+on-chain WASM matches. Then it runs a scripted live check: create,
+release, refund, and three rejections (stranger release, double release,
+zero amount). The record goes to `deployments.json`,
+`docs/testnet-deployments.md` and the SDK's bundled deployments module.
+
+```bash
+# Against a local quickstart (writes nothing tracked):
+docker run --rm -d -p 8000:8000 stellar/quickstart --local
+scripts/deploy --dry-run
+
+# Against testnet (accounts are generated and friendbot-funded unless
+# DEPLOY_SOURCE_SECRET is set):
+scripts/deploy
+```
+
+It refuses a dirty git tree and any network other than testnet or the local
+quickstart. The SDK resolves recorded ids with `knownContractId("testnet")`
+or `knownNetworkConfig("testnet")`.
+
 An escrow created with `createQuorumEscrow` settles with M-of-N approvals;
 each supplied keypair signs only the contract auth entry for that one call, and
 the first pays the fee:
@@ -300,6 +327,36 @@ const { escrowId } = await client.createQuorumEscrow({
   threshold: 2,
 });
 await client.releaseWithApprovals({ escrowId, approvers: [a, c] });
+```
+
+### Lifecycle amendments
+
+Top up a funded escrow, accept as the payee, or cancel as the payer before
+the payee accepts. Each call reads the escrow first and throws
+`EscrowPreconditionError` (with a `code` such as `"AlreadyAccepted"`) instead
+of sending a transaction the contract would reject:
+
+```ts
+await client.topUp({ escrowId, payer, amount: 500_000n });
+
+const { escrowId: gated } = await client.createEscrow({ ...params, requiresAcceptance: true });
+await client.accept({ escrowId: gated, payee });   // payer can no longer cancel
+// before acceptance: await client.cancel({ escrowId: gated, payer });
+```
+
+When the signer and the submitter are on different machines, pass the call
+between them as JSON:
+
+```ts
+// Machine A (submitter, pays the fee)
+const prepared = await client.prepareLifecycleCall({
+  call: { method: "top_up", escrowId, payer: payerAddress, amount: 500_000n },
+  source: relayerAddress,
+});
+// Machine B (each address in prepared.pendingSigners)
+const signed = await client.signLifecycleCall(prepared, payer);
+// Machine A
+await client.submitLifecycleCall(signed, relayer, "top_up");
 ```
 
 ### Fee estimation and fee-bump sponsorship
@@ -416,6 +473,7 @@ typed contract errors and `big.Int` i128 amounts. See
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
 | [`ROADMAP.md`](ROADMAP.md) | Phase breakdown and current status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
+| [`docs/formal-verification.md`](docs/formal-verification.md) | Formal-verification spike for invariants I1–I3: what `certora/escrow.spec` covers, the assumptions it relies on, and its current status (specified, not yet machine-checked). |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
 
 ## Project status
