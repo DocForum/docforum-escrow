@@ -6,6 +6,35 @@
 > and the `Futurenet compatibility checks` workflow
 > (`.github/workflows/futurenet-compatibility.yml`).
 
+New records are written by `scripts/deploy`, newest first, and mirrored in the
+machine-readable `/deployments.json`. Older records were written by hand.
+
+<!-- scripts/deploy inserts new records below this line -->
+
+## `docforum_escrow` — 2026-10-24 (`eafe267`, recorded by `scripts/deploy`)
+
+| | |
+|---|---|
+| Network | testnet (`Test SDF Network ; September 2015`) |
+| Contract ID | `CDX2JEMA5SO7GZVXDNGDDB35GPV43J7BUTYYH77ALAT72S65GOW5KNEO` |
+| Explorer | https://stellar.expert/explorer/testnet/contract/CDX2JEMA5SO7GZVXDNGDDB35GPV43J7BUTYYH77ALAT72S65GOW5KNEO |
+| WASM hash | `909040fb5ebda62b6eecf4703f973606d1ea2272b40cd5c0475e4106b766bee8` |
+| WASM upload tx | none (WASM was already on the network) |
+| Deploy tx | https://stellar.expert/explorer/testnet/tx/682d25dd0dea70884a91fcd1a6eb127f319b4febaff3e3b7c7343ba8f6720750 |
+| Source commit | `eafe267` (`eafe26743c255cd1e6b4c44a556aad080ad850a9`) |
+| Constructor `allowed_tokens` | `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` |
+
+### Scripted live verification
+
+The on-chain WASM was fetched after deployment and matched the hash above.
+
+- `create` escrow 0: Passed, expected Funded; [transaction](https://stellar.expert/explorer/testnet/tx/b1cf7c38308ded29a14e2abfb175df469b660dd235b69dcfb7c3997406abec1a).
+- `release` escrow 0: Passed, expected Released; [transaction](https://stellar.expert/explorer/testnet/tx/ab1f074ae396b7f39bfecac152f0b0ce483a917314c06e0c1ec862bfc7625519).
+- `refund` escrow 1: Passed, expected Refunded; [transaction](https://stellar.expert/explorer/testnet/tx/b95fb80270c1b553da75c8cc9fcd27a39d3fa3b630715eeb7bb6c0ff852539b7).
+- `reject_stranger_release` escrow 2: Passed, expected Error(Contract, #3) Unauthorized; rejected in simulation, not submitted.
+- `reject_double_release` escrow 0: Passed, expected Error(Contract, #4) NotFunded; rejected in simulation, not submitted.
+- `reject_non_positive_amount`: Passed, expected Error(Contract, #2) InvalidAmount; rejected in simulation, not submitted.
+
 ## `docforum_escrow` — 2026-10-20 (latest upstream main at `80ce157`, issue #109)
 
 | | |
