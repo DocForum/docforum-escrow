@@ -243,6 +243,19 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   (scenarios A–M) + 3 malicious-token contribution tests; existing
   suites and snapshots unchanged. SDK `0.7.0 → 0.8.0` (additive).
   **Not yet on testnet** — the live deployment predates it.
+- [x] **Reclaim storage for settled escrows** (issue #48) —
+  `docs/adr/0012`: tombstone chosen over delete / keep-everything. Every
+  terminal transition of an ordinary escrow goes through `settle()`, which
+  removes the persistent `EscrowData`, writes a one-field `SettledEscrow`
+  status, then publishes the existing `ESCROW` state event. `get_status`
+  answers for settled ids (`NotFound` now means \"never created\"),
+  `get_escrow` is funded-only, and mutating calls on a settled id still return
+  `NotFunded`. Measured: 628 bytes -> 56 bytes per settled escrow. Pooled
+  escrows are not reclaimed (ADR 0011 reads their record after settlement).
+  Known gap: the state event omits `refund_to` and `release_not_before`;
+  widening it breaks the indexer's fixed 12-field decoder, so it is a
+  separate change. SDK minor, `getEscrow()` breaking for settled ids.
+  **Not yet on testnet** — needs a redeploy.
 ## Phase E6 — SDK & integrator tooling
 - [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),

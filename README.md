@@ -45,7 +45,7 @@ Creation options: a single releaser or an M-of-N releaser quorum, an
 optional payee-acceptance gate, an optional `refund_after` timeout that
 lets anyone trigger the refund, an optional `refund_to`, and an optional
 release callback to a contract payee. Funded escrows can be topped up by
-the original payer, and `get_status`/`get_escrow` are read-only. A token
+the original payer, and `get_status`/`get_escrow` are read-only (`get_escrow` is for funded escrows; a settled escrow's record is reclaimed, so use `get_status` and the state event: [ADR 0012](docs/adr/0012-reclaim-storage-for-settled-escrows.md)). A token
 allowlist is fixed at deploy time. Pooled escrows — one agreement funded
 by many payers, with per-payer contribution records and pull-based
 pro-rata refunds — are a separate creation entry point

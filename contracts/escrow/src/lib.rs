@@ -10,6 +10,8 @@
 // Phase E5 (issue #28): optional `refund_to` — a refund destination that
 // differs from the funder (`payer`), fixed at creation with the funder's
 // auth and used by every refund path; see docs/adr/0009.
+// Phase E5 (issue #48): settled escrows are reclaimed to a one-field
+// tombstone; the settlement event is the audit record — see docs/adr/0012.
 // Phase E5 (issue #119): an escrow can instead be created with an M-of-N
 // releaser set (`create_escrow_with_releasers`) — see docs/adr/0007.
 // Single-releaser escrows are stored as a one-address set with threshold 1
@@ -140,9 +142,19 @@ pub struct CreateItem {
     pub refund_after: Option<u64>,
 }
 
+/// The only state kept for a settled escrow (docs/adr/0012). Its parties,
+/// token, amount and releasers live in the settlement event
+/// (`publish_state`), not in persistent storage.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettledEscrow {
+    pub status: EscrowStatus,
+}
+
 #[contracttype]
 enum DataKey {
     Escrow(u64),
+    SettledEscrow(u64),
     NextId,
     AllowedTokens,
     /// Pooled escrows only (issue #113): immutable funding config.
@@ -368,11 +380,7 @@ impl EscrowContract {
     /// Records the payee's acceptance for an opted-in funded escrow.
     pub fn accept(env: Env, escrow_id: u64, payee: Address) -> Result<(), Error> {
         payee.require_auth();
-        let mut data: EscrowData = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)?;
+        let mut data = Self::load(&env, escrow_id)?;
         if data.payee != payee {
             return Err(Error::Unauthorized);
         }
@@ -473,14 +481,23 @@ impl EscrowContract {
         Ok(ids)
     }
 
-    /// Read-only status query. Errors if `escrow_id` doesn't exist.
+
+    /// Read-only status query. Answers for settled escrows too, from the
+    /// tombstone left on settlement (docs/adr/0012), so `NotFound` means
+    /// exactly one thing: this id was never created.
     pub fn get_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, Error> {
-        let data: EscrowData = env
+        if let Some(data) = env
             .storage()
             .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)?;
-        Ok(data.status)
+            .get::<_, EscrowData>(&DataKey::Escrow(escrow_id))
+        {
+            return Ok(data.status);
+        }
+        env.storage()
+            .persistent()
+            .get::<_, SettledEscrow>(&DataKey::SettledEscrow(escrow_id))
+            .map(|tombstone| tombstone.status)
+            .ok_or(Error::NotFound)
     }
 
     /// Read-only accessor for everything stored about `escrow_id` — payer,
@@ -488,7 +505,9 @@ impl EscrowContract {
     /// its threshold, `refund_after` and `refund_to`. Exists so payees and
     /// integrators can check who can settle, when, and where a refund goes
     /// before relying on a `Funded` escrow (docs/adr/0004, threat model T8).
-    /// Errors on an unknown id.
+    /// Only `Funded` escrows have a full record: once settled it is reclaimed
+    /// (docs/adr/0012) and this returns `NotFound` — use `get_status` for a
+    /// settled id and the settlement event for its history.
     pub fn get_escrow(env: Env, escrow_id: u64) -> Result<EscrowData, Error> {
         env.storage()
             .persistent()
@@ -752,11 +771,7 @@ impl EscrowContract {
         new_releaser: Address,
     ) -> Result<(), Error> {
         caller.require_auth();
-        let mut data: EscrowData = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)?;
+        let mut data = Self::load(&env, escrow_id)?;
 
         if data.threshold != 1 {
             return Err(Error::ThresholdNotMet);
@@ -793,11 +808,7 @@ impl EscrowContract {
             return Err(Error::InvalidAmount);
         }
         payer.require_auth();
-        let mut data: EscrowData = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)?;
+        let mut data = Self::load(&env, escrow_id)?;
         // A pooled escrow grows only through `contribute`, which records
         // the payer and verifies the received amount (docs/adr/0011).
         // A bare top-up would raise `data.amount` without a contribution
@@ -1158,9 +1169,29 @@ impl EscrowContract {
             return Err(Error::AcceptanceRequired);
         }
         data.status = settled;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), data);
+        if env.storage().persistent().has(&DataKey::Pooled(escrow_id)) {
+            // Pooled escrows keep their full record: contributions, pull-based
+            // refunds and `get_pooled` all read it after settlement, so
+            // reclaiming it would change those reads (docs/adr/0012).
+            env.storage()
+                .persistent()
+                .set(&DataKey::Escrow(escrow_id), data);
+        } else {
+            // Reclaim storage (docs/adr/0012): the full record is published by
+            // `publish_state` below and then replaced by a one-field
+            // tombstone. Written before the transfer (docs/adr/0006); a failed
+            // payout or callback rolls the whole invocation back, tombstone
+            // included.
+            env.storage()
+                .persistent()
+                .remove(&DataKey::Escrow(escrow_id));
+            env.storage().persistent().set(
+                &DataKey::SettledEscrow(escrow_id),
+                &SettledEscrow {
+                    status: data.status.clone(),
+                },
+            );
+        }
 
         let token_client = token::Client::new(env, &data.token);
         token_client.transfer(&env.current_contract_address(), &destination, &data.amount);
@@ -1214,11 +1245,21 @@ impl EscrowContract {
         );
     }
 
+    /// Loads the full record of a funded escrow. A settled id answers
+    /// `NotFunded` — what it returned before the record was reclaimed
+    /// (docs/adr/0011) — and only a never-created id is `NotFound`.
     fn load(env: &Env, escrow_id: u64) -> Result<EscrowData, Error> {
-        env.storage()
+        if let Some(data) = env.storage().persistent().get(&DataKey::Escrow(escrow_id)) {
+            return Ok(data);
+        }
+        if env
+            .storage()
             .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)
+            .has(&DataKey::SettledEscrow(escrow_id))
+        {
+            return Err(Error::NotFunded);
+        }
+        Err(Error::NotFound)
     }
 
     fn check_funded(data: &EscrowData) -> Result<(), Error> {
