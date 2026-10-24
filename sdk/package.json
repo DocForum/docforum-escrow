@@ -32,6 +32,7 @@
     "typecheck": "tsc --noEmit",
     "test:runtime": "node tests/runtime-smoke.mjs",
     "test:browser": "node tests/browser-smoke.mjs",
+    "test:futurenet": "vitest run --config vitest.futurenet.config.ts",
     "test:factory": "vitest run tests/factory.test.ts",
     "test:lifecycle": "vitest run tests/lifecycle.test.ts"
   },
