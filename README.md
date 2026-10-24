@@ -287,6 +287,31 @@ paths produce identical bytes, run
 the pinned `rust:1.96.0-bookworm` container. No `stellar contract optimize`
 step is used.
 
+### Deploying with `scripts/deploy`
+
+`scripts/deploy` is the one command for deploy, verify and record. From a
+clean checkout it builds the WASM, checks its SHA-256 (optionally against
+`--expected-wasm-hash`), uploads and deploys it with the constructor
+allowlist (default: the network's native XLM contract), and confirms the
+on-chain WASM matches. Then it runs a scripted live check: create,
+release, refund, and three rejections (stranger release, double release,
+zero amount). The record goes to `deployments.json`,
+`docs/testnet-deployments.md` and the SDK's bundled deployments module.
+
+```bash
+# Against a local quickstart (writes nothing tracked):
+docker run --rm -d -p 8000:8000 stellar/quickstart --local
+scripts/deploy --dry-run
+
+# Against testnet (accounts are generated and friendbot-funded unless
+# DEPLOY_SOURCE_SECRET is set):
+scripts/deploy
+```
+
+It refuses a dirty git tree and any network other than testnet or the local
+quickstart. The SDK resolves recorded ids with `knownContractId("testnet")`
+or `knownNetworkConfig("testnet")`.
+
 An escrow created with `createQuorumEscrow` settles with M-of-N approvals;
 each supplied keypair signs only the contract auth entry for that one call, and
 the first pays the fee:
