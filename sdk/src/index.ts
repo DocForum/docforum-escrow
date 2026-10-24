@@ -178,6 +178,19 @@ export interface Escrow {
   refundAfter?: bigint;
   /** Earliest ledger timestamp at which release is allowed. Omit for immediate release. */
   releaseNotBefore?: bigint;
+  /**
+   * Optional protocol-fee recipient, fixed at creation (docs/adr/0010).
+   * Set together with `feeBps`; at release `feeBps` basis points of the
+   * escrowed amount go here and the remainder to the payee. Refunds never
+   * take a fee. `undefined` means no fee.
+   */
+  feeRecipient?: string;
+  /**
+   * Optional protocol-fee rate in basis points of the escrowed amount,
+   * capped at 1 000 (10 %) and floored at release (docs/adr/0010). Must be
+   * set together with `feeRecipient`.
+   */
+  feeBps?: number;
   /** Whether to call the contract payee's on_escrow_released hook. Defaults to false. */
   notifyPayee: boolean;
   /**
@@ -212,6 +225,15 @@ export class MilestoneScheduleError extends Error {
     this.reason = reason;
   }
 }
+
+/**
+ * Maximum protocol-fee rate in basis points of the escrowed amount — must
+ * match the contract's `MAX_FEE_BPS` (1 000 = 10 %, see docs/adr/0010).
+ * Validated client-side so callers fail fast instead of paying network
+ * fees for a rejected transaction. Keep in sync with the contract; a
+ * change is an SDK semver event (hard rule 3).
+ */
+export const MAX_FEE_BPS = 1_000;
 
 /**
  * `amount` must be positive, the schedule non-empty, every tranche positive,
@@ -366,6 +388,15 @@ export interface CreateEscrowParams {
   refundTo?: string;
   /** Earliest ledger timestamp at which release is allowed; omit for immediate release. */
   releaseNotBefore?: bigint;
+  /**
+   * Optional protocol fee, fixed at creation and taken at release
+   * (docs/adr/0010). `feeRecipient` and `feeBps` are one atomic pair: give
+   * both or neither, and `feeBps` may not exceed 1 000 (10 %). Omit both
+   * for no fee — the payee then receives the full amount, as before.
+   */
+  feeRecipient?: string;
+  /** Fee rate in basis points of the escrowed amount; see `feeRecipient`. */
+  feeBps?: number;
 }
 
 export interface CreateMilestoneEscrowParams extends Omit<CreateEscrowParams, "amount"> {
@@ -790,6 +821,12 @@ export class EscrowClient {
         `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
       );
     }
+    if ((params.feeRecipient === undefined) !== (params.feeBps === undefined)) {
+      throw new TypeError("feeRecipient and feeBps must be given together, or both omitted");
+    }
+    if (params.feeBps !== undefined && (!Number.isInteger(params.feeBps) || params.feeBps < 0 || params.feeBps > MAX_FEE_BPS)) {
+      throw new RangeError(`feeBps must be an integer between 0 and ${MAX_FEE_BPS} (10 %)`);
+    }
     const client = this.contractClient(params.payer);
     const createParams = {
       payer: signerAddress(params.payer),
@@ -801,6 +838,8 @@ export class EscrowClient {
       refund_after: params.refundAfter,
       notify_payee: params.notifyPayee ?? false,
       refund_to: params.refundTo,
+      fee_recipient: params.feeRecipient,
+      fee_bps: params.feeBps,
     };
     const sent = await this.invoke(
       "create_escrow",
@@ -930,6 +969,8 @@ export class EscrowClient {
       notifyPayee: data.notify_payee,
       refundTo: data.refund_to,
       releaseNotBefore: data.release_not_before ?? undefined,
+      feeRecipient: data.fee_recipient ?? undefined,
+      feeBps: data.fee_bps ?? undefined,
       status: data.status.tag,
     };
   }

@@ -84,7 +84,9 @@
                 "void",
                 {
                   "u64": "1100"
-                }
+                },
+                "void",
+                "void"
               ]
             }
           },
@@ -291,6 +293,18 @@
                     "val": {
                       "string": "opaque-condition-ref"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {

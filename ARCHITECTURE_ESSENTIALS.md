@@ -11,13 +11,14 @@
 ## Contract surface
 ```
 __constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
-create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009); deployed on testnet
+create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to, fee_recipient, fee_bps) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009) + optional protocol fee (ADR 0010); the fee is not yet on testnet
+create_escrow_release_time(..., fee_recipient, fee_bps) -> escrow_id   // single-releaser creation with an earliest release time; accepts the same optional fee pair
 create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id   // optional payee acceptance gate; deployed on testnet
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
 cancel(escrow_id, payer) -> ()   // payer-authorized, only while Funded + requires_acceptance + not yet accepted; funds to refund_to, status Cancelled (ADR 0010); not deployed yet
 create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, deployed on testnet
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded | Cancelled — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
-get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after, refund_to — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
+get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after, refund_to, fee_recipient, fee_bps — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
 release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser, threshold must be 1, only while Funded
 release_with_approvals(escrow_id, approvers) -> result   // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — >= threshold distinct releasers, each authorizing this invocation
 refund(escrow_id, caller) -> result    // IMPLEMENTED (Phase E2 + E4) — a releaser when threshold is 1; anyone too, once refund_after has passed, and then still only to the stored `refund_to` (= payer unless set at creation, ADR 0009)
@@ -65,7 +66,7 @@ current testnet deployment includes the native XLM SAC and the
 BalanceMismatch test token in its immutable allowlist; see
 `docs/testnet-deployments.md`.
 
-`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to)`.
+`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to, fee_recipient, fee_bps)`.
 `notify_payee` opts a contract payee into `on_escrow_released(escrow_id,
 amount)`; when true, the payee must authorize creation as well as the payer.
 The quorum creation entry point has the same final callback flag. The SDK
@@ -105,6 +106,21 @@ may not be the contract itself (`InvalidRefundTo`); omitted, it equals
 destination can hold the token: if the transfer to it fails, so does the
 refund.
 
+The optional protocol fee (`fee_recipient`/`fee_bps`, `docs/adr/0010`):
+set once at creation, taken **off the top** at `release` —
+`⌊amount × fee_bps ÷ 10 000⌋` to `fee_recipient`, the exact remainder to
+`payee` — and never on `refund`, which always returns the full `amount`
+to `refund_to`. `fee_bps` is capped at `MAX_FEE_BPS` = 1 000 (10 %) with
+floor rounding; `fee_recipient` must not be the contract itself; both
+params must be given together or both omitted, or creation fails with
+`InvalidFee` (error 35). `create_escrow` and `create_escrow_release_time`
+take the pair; the acceptance and M-of-N entry points record no fee. A
+`top_up` grows the stored `amount`, so it grows the bps fee (the fee math
+is re-checked before the top-up transfer). Both fields are readable from
+`get_escrow`, and the `ESCROW` event snapshot appends them as one nested
+`(fee_recipient, fee_bps)` pair, so payer and payee can check the exact
+deal before relying on the escrow.
+
 `release_with_approvals`/`refund_with_approvals` check that at least
 `threshold` distinct releasers each authorized this exact invocation.
 Approvals are never stored, so nothing can be replayed, and both work
@@ -119,7 +135,7 @@ The contract decides **who** may call `release`/`refund`, never **why**:
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
 
 const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
-const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter, notifyPayee: true, refundTo });
+const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter, notifyPayee: true, refundTo, feeRecipient, feeBps });
 await client.createQuorumEscrow({ payer, payee, token, amount, conditionRef, releasers, threshold, refundAfter, notifyPayee: true, refundTo }); // M-of-N, ADR 0007
 await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
 await client.getEscrow(escrowId);            // full stored record — incl. releasers + threshold + refundAfter, refundTo, so a payee can check the deal (docs/adr/0004/0007/0009, threat model T8)
@@ -152,6 +168,13 @@ tranches already funded so the caller can release or refund them.
 
 `refundTo` on `createEscrow` and `createQuorumEscrow` is optional too (default: the payer) and
 `getEscrow` returns it as `refundTo`.
+`feeRecipient`/`feeBps` on `createEscrow` are optional as one atomic pair
+(both or neither; `feeBps` is an integer `0..=MAX_FEE_BPS`, i.e. at most
+10 %), validated client-side before any transaction is built. At release
+the floored bps share goes to `feeRecipient` and the remainder to the
+payee; refunds never take a fee. `getEscrow` returns
+`feeRecipient`/`feeBps` (`undefined` = no fee), and `MAX_FEE_BPS` mirrors
+the contract's cap (docs/adr/0010).
 
 `estimate` never signs or submits; it simulates against the client's RPC
 and reports stroops. `guardSponsorship` is the pre-sponsorship check for
