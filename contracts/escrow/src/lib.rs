@@ -20,16 +20,24 @@
 // per-payer contributions); `EscrowData` and every pre-existing entry
 // point keep their exact meaning.
 //
+// Phase E6: the shared types (`EscrowData`, `EscrowStatus`, `Error`) and the
+// cross-contract client live in the `escrow-interface` crate. This contract
+// depends on that crate for the types so the two can never drift.
+//
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
 // never interprets it. Keep it that way; domain logic belongs in the
 // consuming application (docforum-core), never here.
 #![no_std]
 
+use escrow_interface::{Error, EscrowData, EscrowStatus};
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
-    IntoVal, String, Vec,
+    contract, contractimpl, contracttype, symbol_short, token, Address, Env, IntoVal, String, Vec,
 };
+
+// The shared types are re-exported so existing consumers of this crate
+// (and the contract impl below) keep working unchanged.
+pub use escrow_interface::{Error, EscrowData, EscrowStatus};
 
 /// Largest allowed releaser set for one escrow. Ten covers every
 /// real-world multisig shape this primitive is meant to replace
@@ -46,58 +54,6 @@ pub const MAX_CONDITION_REF_LEN: u32 = 64;
 /// inputs — see docs/adr/0005.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum EscrowStatus {
-    Funded,
-    Released,
-    Refunded,
-    /// The payer withdrew the funds before the payee accepted — see
-    /// docs/adr/0010. Terminal, like `Released` and `Refunded`.
-    Cancelled,
-}
-
-#[contracttype]
-#[derive(Clone)]
-pub struct EscrowData {
-    /// The funder: authorises and pays for the escrow at creation. Also
-    /// the refund destination unless `refund_to` says otherwise.
-    pub payer: Address,
-    pub payee: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub condition_ref: String,
-    pub status: EscrowStatus,
-    /// Addresses permitted to settle this escrow — see docs/adr/0002 for the
-    /// per-escrow releaser, and docs/adr/0007 for M-of-N sets. A plain
-    /// single-releaser escrow stores exactly one entry here.
-    pub releasers: Vec<Address>,
-    /// How many *distinct* addresses from `releasers` must authorize one
-    /// settlement. Always `>= 1` and `<= releasers.len()`; `1` means any
-    /// single releaser can settle (the pre-quorum behaviour).
-    pub threshold: u32,
-    /// Optional deadline (unix seconds) after which `refund` opens to
-    /// anyone — still only to `refund_to`. `None` means no timeout,
-    /// behaviour identical to before this field existed — see docs/adr/0004.
-    pub refund_after: Option<u64>,
-    /// If true, invoke the contract payee's `on_escrow_released` hook after
-    /// the payout transfer. A failed callback reverts the whole release.
-    pub notify_payee: bool,
-    /// Whether release requires the payee's explicit acceptance.
-    pub requires_acceptance: bool,
-    /// Ledger timestamp at which the payee accepted, if any.
-    pub accepted_at: Option<u64>,
-    /// Where **every** refund path (releaser, timeout) sends the funds.
-    /// Fixed at creation under the funder's auth and never chosen at
-    /// payout, so invariant I1 holds; defaults to `payer` when omitted at
-    /// creation — see docs/adr/0009.
-    pub refund_to: Address,
-    /// Earliest ledger timestamp at which release is allowed.
-    pub release_not_before: Option<u64>,
-}
-
-/// One entry of a `create_escrows` batch. Mirrors the single-escrow
-/// creation parameters minus the batch-wide `payer`.
 /// Immutable funding configuration of a pooled escrow (issue #113,
 /// docs/adr/0011). Existence of this record under `DataKey::Pooled(id)` is
 /// what makes an escrow "pooled"; the aggregate funded amount lives in
@@ -140,6 +96,8 @@ pub struct CreateItem {
     pub refund_after: Option<u64>,
 }
 
+// Internal storage keys are an implementation detail of this contract
+// and deliberately not part of the published interface.
 #[contracttype]
 enum DataKey {
     Escrow(u64),
@@ -151,94 +109,6 @@ enum DataKey {
     Pooled(u64),
     /// Pooled escrows only (issue #113): one record per contributor.
     Contribution(u64, Address),
-}
-
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
-pub enum Error {
-    NotFound = 1,
-    InvalidAmount = 2,
-    Unauthorized = 3,
-    NotFunded = 4,
-    /// `refund_after` was not strictly in the future at creation — see
-    /// docs/adr/0004: a deadline that has already passed would let
-    /// anyone refund the escrow before the releaser could ever act.
-    InvalidRefundAfter = 5,
-    /// The contract's token balance didn't rise by exactly `amount`
-    /// across `create_escrow`'s transfer (a lying or short-delivering
-    /// token) — see docs/threat-model.md T5.
-    BalanceMismatch = 6,
-    /// `condition_ref` exceeded the maximum allowed length (currently
-    /// 64 bytes) — see docs/threat-model.md T10 and ROADMAP.md Phase E5.
-    /// Bounded to keep storage and event costs predictable; reject at
-    /// creation so no on-chain storage is wasted on an oversized ref.
-    ConditionRefTooLong = 7,
-    /// `token` is not in the immutable deploy-time allowlist.
-    DisallowedToken = 8,
-    /// The opted-in payee callback returned an error or could not be
-    /// invoked. The release transaction (including its transfer) rolls back.
-    CallbackFailed = 9,
-    Overflow = 12,
-    /// The releaser set is empty, or `threshold` is 0 or larger than the
-    /// number of releasers — see docs/adr/0007.
-    InvalidThreshold = 13,
-    /// More than `MAX_RELEASERS` (10) addresses were supplied at creation.
-    TooManyReleasers = 14,
-    /// Fewer distinct approvals were supplied than the escrow's threshold,
-    /// or a single releaser tried to settle a quorum escrow through the
-    /// single-caller entry point.
-    ThresholdNotMet = 15,
-    /// The same address appeared twice in one approval list. Duplicates
-    /// never count twice toward the threshold.
-    DuplicateApprover = 16,
-    /// The same address appeared twice in the releaser set at creation.
-    DuplicateReleaser = 17,
-    AcceptanceRequired = 18,
-    AcceptanceNotConfigured = 19,
-    AlreadyAccepted = 20,
-    /// The new releaser cannot be the escrow contract or payee.
-    InvalidReleaser = 24,
-    /// `refund_to` was the escrow contract's own address — funds sent
-    /// there on refund could never be moved again (docs/adr/0009).
-    InvalidRefundTo = 21,
-    /// The configured release time is in the past or after the refund time.
-    InvalidReleaseNotBefore = 22,
-    /// Release was attempted before the configured time.
-    ReleaseTooEarly = 23,
-    /// A batch call was passed more than `MAX_BATCH_SIZE` items — see
-    /// docs/adr/0005. Callers must chunk. Appended at the end so existing
-    /// discriminants keep their on-chain values.
-    BatchTooLarge = 25,
-    /// `contribute`/`claim_refund`/`get_contribution` on a non-pooled
-    /// escrow, or `get_pooled` on a non-pooled/unknown id — see
-    /// docs/adr/0011.
-    NotPooled = 26,
-    /// A contribution arrived after the pooled escrow's funding deadline.
-    /// Late contributions can never be accepted: the round's outcome
-    /// (release vs per-contributor refunds) is fixed at the deadline.
-    FundingDeadlinePassed = 27,
-    /// A contribution would push the pooled total past the funding target
-    /// (overfunding is rejected, not accepted), the target is already met,
-    /// or a refund was claimed on a fully funded pooled escrow.
-    FundingTargetReached = 28,
-    /// `release` on a pooled escrow whose funded total is below the
-    /// funding target — partial funding is never releasable.
-    FundingIncomplete = 29,
-    /// `claim_refund` before the funding deadline passed on a round that
-    /// is still (or now fully) funded. Claims open only for a failed round.
-    RefundNotOpen = 30,
-    /// The same contributor tried to claim a refund twice.
-    AlreadyRefunded = 31,
-    /// `claim_refund` by an address with no recorded contribution.
-    NoContribution = 32,
-    /// `refund`/`refund_with_approvals`/`cancel`/`top_up` on a pooled
-    /// escrow: pushing the whole pooled total to one address would violate
-    /// per-contributor accounting. Pooled refunds are pull-based
-    /// (`claim_refund`); pooled funding is `contribute`-only.
-    NotSupportedForPooled = 33,
-    /// The funding deadline was not strictly in the future at creation.
-    InvalidFundingDeadline = 34,
 }
 
 #[contract]
@@ -827,9 +697,14 @@ impl EscrowContract {
     /// an M-of-N escrow this single-caller path is only allowed when the
     /// threshold is 1; otherwise use `release_with_approvals`.
     ///
-    /// Deliberately **not** gated by `refund_after` (docs/adr/0004): after
-    /// the deadline the releaser can still release, racing any timeout
+    /// Deliberately **not** gated by `refund_after` (docs/adr/0004): after the
+    /// deadline the releaser can still release, racing any timeout
     /// refund — whoever lands first wins and the other fails `NotFunded`.
+    ///
+    /// For contract-to-contract calls, the calling contract must be the
+    /// escrow's `releaser` and must pass its own address as `caller`; its
+    /// auth is satisfied by the invocation chain (it is the immediate
+    /// authority for its own address).
     pub fn release(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 

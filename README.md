@@ -22,6 +22,7 @@ application, not here.
 - [Why this repo exists](#why-this-repo-exists-honestly)
 - [Contract surface](#contract-surface)
 - [How it's used](#how-its-used)
+- [Cross-contract integration](#cross-contract-integration)
 - [Repo layout](#repo-layout)
 - [Getting started](#getting-started)
 - [Documentation](#documentation)
@@ -85,14 +86,50 @@ sequenceDiagram
 — it never calls this contract as a running network service, and this
 repo never crosses back into `docforum-core`'s database or domain model.
 
+## Cross-contract integration
+
+Soroban contracts (upgrades, vaults, marketplaces) that want to create or settle an escrow from their own logic should depend on the published interface crate instead of copying the WASM and using `contractimport!` adhoc.
+
+`crates/escrow_interface/` exposes a contractclient-generated client and the shared types (`EscrowData`, `EscrowStatus`, `Error`). The escrow contract itself depends on the shared types, so the two can't drift. A working example contract lives in `contracts/examples/`.
+
+Add the dependency and use the client:
+
+```toml
+[dependencies]
+escrow-interface = { path = "../../crates/escrow-interface" }
+```
+
+```rust
+use escrow_interface::{EscrowClient, EscrowData, EscrowStatus, Error};
+
+let client = EscrowClient::new(&env.deployer(), &escrow_id);
+let id = client.create_escrow(&payer, &payee, &token, &amount, &condition_ref, &releaser, &refund_after);
+let data: EscrowData = client.get_escrow(&id);
+```
+
+### Auth requirements for contract-to-contract calls
+
+When a contract calls the escrow, the authorization is on the **calling contract**, not an end user key:
+
+- **Creating an escrow.** The calling contract must be the `payer` or must be authorized by the `payer`. Since `payer` is the address whose tokens are pulled, the calling contract must either hold the funds itself (`payer = contract address`) or obtain a sub-invocation auth from the payer before calling `create_escrow`. The contract calls `payer.require_auth()`, so a contract that is not the payer will fail unless the payer authorized the invocation chain.
+- **Releasing an escrow.** The calling contract must be the escrow's designated `releaser` (or authorized by it). Set the calling contract's address as `releaser` at creation time if it will settle the escrow. The contract calls `releaser.require_auth()` on `release`.
+- **Refunding.** Same as release — the calling contract must be the `releaser`, or the `refund_after` deadline must have passed (after which anyone may refund).
+
+The example contract in `contracts/examples/` demonstrates this flow end-to-end with tests.
+
 ## Repo layout
 
 ```
+crates/escrow-interface/
+  src/lib.rs    Shared types + contractclient-generated client for cross-contract calls
 contracts/escrow/
-  src/lib.rs             Contract implementation
-  tests/                 Integration tests (soroban-sdk testutils) — required for any contract change
+  src/lib.rs
+    Contract implementation (depends on escrow-interface for shared types)
+  tests/            Integration tests (soroban-sdk testutils) — required for any contract change
   test_snapshots/        Committed Soroban snapshots (events/auth/storage) per test — issue #120
   Cargo.toml
+contracts/examples/
+  Example contract that creates and releases an escrow cross-contract, with tests
 sdk/
   src/index.ts           @docforum/escrow-sdk — hand-written public surface
   src/generated/         Machine-generated contract bindings — never hand-edit (issue #121)
@@ -412,7 +449,7 @@ typed contract errors and `big.Int` i128 amounts. See
 | Doc | Purpose |
 |---|---|
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
-| [`ROADMAP.md`](ROADMAP.md) | Phase breakdown and current status. |
+| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E6 breakdown and current status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
 
@@ -420,8 +457,8 @@ typed contract errors and `big.Int` i128 amounts. See
 
 **Phase E1 (contract skeleton): done.** `create_escrow` and `get_status`
 are implemented, tested, and deployed live on testnet — not just locally
-tested. Phases E2 (release/refund), E3 (TypeScript SDK), and E4 (security
-review, blocking for any mainnet use) are tracked as open issues. Phase E5
+tested. Phases E2 (release/refund), E3 (TypeScript SDK), E4 (security
+review, blocking for any mainnet use), and E6 (Rust interface crate for cross-contract calls) are tracked as open issues. Phase E5
 now also includes an optional in-contract M-of-N releaser quorum
 ([ADR 0007](docs/adr/0007-in-contract-m-of-n-releaser-quorum.md)) and a
 documented decision **not** to adopt OpenZeppelin's pause/upgradeable/access
@@ -439,6 +476,7 @@ generated SDK bindings match the contract WASM (issue #121):
 | [#4 SDK: wrap `create_escrow`/`get_status`](https://github.com/DocForum/docforum-escrow/issues/4) | E3 | Medium |
 | [#5 ADR: npm vs GitHub Packages](https://github.com/DocForum/docforum-escrow/issues/5) | E3 | Trivial |
 | [#6 Threat model + external security review](https://github.com/DocForum/docforum-escrow/issues/6) | E4 | High |
+| Rust interface crate for cross-contract calls | E6 | High |
 
 Full breakdown: [`ROADMAP.md`](ROADMAP.md).
 
