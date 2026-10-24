@@ -6,7 +6,7 @@
 // deployment + instance discovery coverage (deterministic address
 // prediction must match the on-chain deployment).
 //
-// Deliberately NOT wired into `npm test`/CI (see package.json -- thit
+// Deliberately NOT wired into `npm test`/CI (see package.json -- this
 // runs via `npm run test:integration` only): it depends on testnet
 // liveness and Friendbot's funding rate limits, a materially different
 // reliability profile than this org's other "integration" tests (e.g.

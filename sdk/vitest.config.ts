@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { defineConfig, defaultExclude } from "vitest/config";
 
 export default defineConfig({
   test: {
@@ -7,5 +7,8 @@ export default defineConfig({
     // suites — see tests/testnet-integration.test.ts.
     testTimeout: 60_000,
     hookTimeout: 60_000,
+    // Network-dependent integration tests are opt-in (SDK_TESTNET=1)
+    // and excluded from the default CI run.
+    exclude: [...defaultExclude, "tests/testnet-integration.test.ts"],
   },
 });
