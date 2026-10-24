@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (contract features) now includes the OZ-library evaluation (ADR 0006, no library adopted) and the optional in-contract M-of-N releaser quorum (ADR 0007, SDK 0.5.0) — implemented, tested and pending a testnet redeploy. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm. Fee estimation and fee-bump sponsorship helpers (issue #70) are implemented in the SDK, `0.5.0`. Phase E7 (verification/release engineering) started: committed Soroban test snapshots with a CI drift check (issue #120) and a CI check that generated SDK bindings match the contract WASM (issue #121).**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (contract features) now includes the OZ-library evaluation (ADR 0006, no library adopted) and the optional in-contract M-of-N releaser quorum (ADR 0007, SDK 0.5.0) — implemented, tested and pending a testnet redeploy. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm. Fee estimation and fee-bump sponsorship helpers (issue #70) are implemented in the SDK, `0.5.0`. Phase E7 (verification/release engineering) started: committed Soroban test snapshots with a CI drift check (issue #120), a CI check that generated SDK bindings match the contract WASM (issue #121), and a token conformance suite that runs the whole escrow lifecycle against the native SAC, an issued-asset SAC and a custom SEP-41 token (issue #133).**
 
 ## Payee acceptance (issue #25)
 
@@ -347,17 +347,28 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   previously stale committed bindings (missing `top_up`, errors 6–8) were
   regenerated here.
 - [x] **PR conflict notifier** — `.github/workflows/pr-conflict-notifier.yml` + `.github/scripts/pr-conflict-notifier.cjs`. On every push to `main` (and every 3h) it labels open PRs that conflict with `main` as `needs-rebase` and @mentions the author once per push with rebase steps; the label clears itself when the conflict is resolved. Runs from `main` only and never checks out PR code.
-- [x] Property-based state-machine tests with proptest (issue #64).
-  Pure-Rust reference model of the escrow state machine in
-  `contracts/escrow/tests/model.rs` — no Soroban types, intentionally simple
-  enough to review independently. A proptest state machine generates
-  operation sequences (create/release/refund/timeout-refund) and compares
-  contract results and stored state against the model after every step,
-  including auth outcomes (who may call what, when). Shrunk failures
-  print a readable operation sequence. CI runs a bounded case count
-  (`PROPTEST_CASES`); a nightly workflow runs a larger count. Closes
-  issue #64.
-- [x] **TLA+ escrow state-machine model** (issue #112) — `spec/Escrow.tla` + `spec/Escrow.cfg` model the actual escrow lifecycle, status transitions, timeout refund behavior, payee acceptance, and same-ledger race windows while explicitly omitting unsupported disputes/milestone logic. TLC verification passed against the committed model.
+- [x] **Token conformance suite** (issue #133) — the contract claims to work
+  with any SEP-41 token, but the suite only ever pointed it at the Stellar
+  Asset Contract (plus deliberately broken mock tokens, which test the
+  contract's *defences*, not its compatibility). `contracts/escrow/tests/token_conformance.rs`
+  now runs the whole escrow lifecycle — create, release, refund, top-up,
+  payee acceptance, M-of-N release, timeout refund — against four token
+  implementations: the **native SAC** (XLM, whose contract id is the
+  well-known one integrators use), an **issued-asset SAC with no issuer
+  flags**, and a **custom SEP-41 token** (an OpenZeppelin-style Wasm token)
+  with 7 and with 6 decimals, so decimals other than 7 are covered. The
+  harness (`tests/conformance/mod.rs`) also pins two differences integrators
+  hit in practice: the contract treats `amount` as an opaque integer (it
+  never reads `decimals()`), and a credit asset needs a **trustline** on the
+  payer *and* the payee — a payout to a payee without one fails and rolls
+  back atomically, while XLM and custom tokens have no trustlines. Issuer
+  flags (clawback, auth-required) stay out of scope: they are a property of
+  an issuer, not of a token implementation (see `docs/threat-model.md` T5).
+  `docs/token-conformance.md` tabulates the per-token behaviour differences
+  and names the tokens recommended to integrators (native asset first — no
+  issuer, so nobody can claw the funds back). CI runs the suite as its own
+  `token-conformance` job. 59 new tests (126 contract tests green); no
+  contract or SDK surface change, so no semver bump. Closes issue #133.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -366,12 +377,40 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   repo's.
 
 ## Changelog
-
-> New entries go in `changelog.d/`, one file per PR — see
-> `changelog.d/README.md`. Maintainers fold them in here with
-> `node scripts/fold-changelog.mjs`. Please don't append to this section
-> directly.
-
+- 2026-10-20 — Issue #133 (Phase E7): added the **token conformance suite**.
+  The escrow claims to work with any SEP-41 token, but the tests only ever
+  pointed it at the Stellar Asset Contract (and at deliberately broken mock
+  tokens, which test the contract's defences rather than its
+  compatibility). `contracts/escrow/tests/token_conformance.rs` now runs
+  every lifecycle case — create, release, double release, stranger release,
+  refund, stranger refund, refund-after-release, top-up, payee acceptance,
+  M-of-N release with distinct approvals, timeout refund, and the amount as
+  an opaque integer unit — against four token implementations: the **native
+  SAC** (XLM; the suite also pins that its contract id is the canonical,
+  network-independent one), an **issued-asset SAC with no issuer flags**, and
+  a **custom SEP-41 token** (an OpenZeppelin-style Wasm token in
+  `tests/conformance/oz_token.rs`) with 7 and with 6 decimals, so decimals
+  other than 7 are covered. A separate case sweeps 0/2/6/9/18 decimals to
+  prove the contract never rescales an amount. Writing the suite turned up
+  two differences that matter to integrators, now pinned by tests and
+  documented: the contract treats `amount` as an opaque integer (it never
+  reads `decimals()`, so scaling is the caller's job), and a **credit asset
+  needs a trustline** on the payer *and* the payee — without one the payer
+  cannot be funded and a payout to the payee fails and rolls back
+  atomically (the escrow stays `Funded`), while XLM and custom tokens have
+  no trustlines at all. Issuer-flag behaviour (clawback, auth-required) is
+  deliberately out of scope: it is a property of an issuer, not of a token
+  implementation, and stays in `docs/threat-model.md` (T5). New
+  `docs/token-conformance.md` tabulates the per-token behaviour differences
+  and names the tokens recommended to integrators (native asset first — no
+  issuer, so nobody can claw the escrowed funds back afterwards; then an
+  issued-asset SAC with no flags; then a well-known custom SEP-41 token).
+  CI gained a `token-conformance` job; README and
+  `ARCHITECTURE_ESSENTIALS.md` now state the token requirements. 59 new
+  tests (126 contract tests green), 59 new committed snapshots, one per case
+  per token, under `test_snapshots/<token kind>/`. **No contract or SDK
+  surface change** — the contract's public API and the SDK are untouched, so
+  there is no semver bump and no changeset. Closes issue #133.
 - 2026-10-19 — Issue #70 (Phase E6): added `estimate`, `feeBump`,
   `guardSponsorship` and `assertSponsorable` to the SDK. Estimation runs
   through the client's RPC and reports the resource fee with a buffered

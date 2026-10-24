@@ -117,6 +117,28 @@ path stays visible in a diff.
 `Address::generate`, so a second `cargo test` must produce a byte-identical
 snapshot. CI's snapshot step catches both drift and nondeterminism.
 
+## Token conformance suite
+
+`contracts/escrow/tests/token_conformance.rs` runs the whole escrow
+lifecycle against every kind of SEP-41 token implementation: the native SAC
+(XLM), an issued-asset SAC with no issuer flags, and a custom SEP-41 token
+(an OpenZeppelin-style Wasm token) with 7 and with 6 decimals.
+
+```bash
+cd contracts/escrow
+cargo test --test token_conformance
+```
+
+- The harness lives in `contracts/escrow/tests/conformance/` — add a new
+  lifecycle case there and it runs against every token kind automatically
+  (the test file generates one module per token kind).
+- The committed snapshots for this suite are under
+  `test_snapshots/<token kind>/`, so the per-token behaviour differences
+  are visible in the diff. Run `cargo test` and commit them like any other
+  snapshot.
+- `docs/token-conformance.md` holds the behaviour table and the tokens
+  recommended to integrators; update it when the matrix changes.
+
 ## Generated SDK bindings
 
 `sdk/src/generated/contract-client.ts` is machine-generated from the compiled

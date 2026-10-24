@@ -114,6 +114,28 @@ only while the escrow is `Funded`. The payee-acceptance gate
 The contract decides **who** may call `release`/`refund`, never **why**:
 `condition_ref` is opaque to it (`docs/adr/0001`).
 
+## Token support
+The contract talks to `token` through the generic SEP-41 client
+(`soroban_sdk::token::Client`) and calls exactly two functions on it:
+`balance` (the funding delta check — threat model T5) and `transfer`.
+Everything else — `approve`, `burn`, admin functions, issuer flags — is
+never used, so any SEP-41 token works.
+
+`contracts/escrow/tests/token_conformance.rs` runs the whole escrow
+lifecycle against each kind of token implementation — the native SAC (XLM),
+an issued-asset SAC with no issuer flags, and a custom SEP-41 token (which
+also covers decimals other than 7) — and
+`docs/token-conformance.md` records the per-token behaviour differences
+and the tokens recommended to integrators. Issuer-flag behaviour
+(clawback, auth-required) is deliberately *outside* that suite: it is a
+property of an issuer, not of a token contract, and it is tracked in
+`docs/threat-model.md` (T5).
+
+Two consequences integrators must handle themselves: the contract treats
+`amount` as an opaque integer (it never reads `decimals()` and never
+rescales), and a credit asset needs a trustline on the payer *and* the
+payee before the escrow can be funded or paid.
+
 ## TypeScript SDK surface (`sdk/`)
 ```ts
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
