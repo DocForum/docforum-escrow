@@ -53,6 +53,17 @@ export {
 export { EscrowIndexerClient } from "./indexer-client.js";
 export type { EscrowIndexerClientConfig, EscrowPage, IndexedEscrow } from "./indexer-client.js";
 export { FactoryClient, predictInstanceAddress } from "./factory.js";
+export {
+  KNOWN_DEPLOYMENTS,
+  UnknownDeploymentError,
+  knownContractId,
+  knownNetworkConfig,
+  latestDeployment,
+  parseDeployments,
+  type DeploymentRecord,
+  type DeploymentVerificationCase,
+  type DeploymentsDocument,
+} from "./deployments.js";
 export type { FactoryClientConfig, DeployInstanceParams, DeployInstanceResult, FactoryInstance } from "./factory.js";
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Cancelled";

@@ -1,5 +1,10 @@
 # Testnet deployments
 
+New records are written by `scripts/deploy`, newest first, and mirrored in the
+machine-readable `/deployments.json`. Older records were written by hand.
+
+<!-- scripts/deploy inserts new records below this line -->
+
 ## `docforum_escrow` — 2026-10-20 (latest upstream main at `80ce157`, issue #109)
 
 | | |
