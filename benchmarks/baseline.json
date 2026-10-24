@@ -1,0 +1,58 @@
+{
+  "format": 1,
+  "threshold_percent": 20,
+  "functions": {
+    "create_escrow": {
+      "source_bytes": 0,
+      "storage_entries": 0
+    },
+    "create_escrow_release_time": {
+      "source_bytes": 0,
+      "storage_entries": 0
+    },
+    "create_escrow_with_acceptance": {
+      "source_bytes": 0,
+      "storage_entries": 0
+    },
+    "create_escrow_with_releasers": {
+      "source_bytes": 0,
+      "storage_entries": 0
+    },
+    "accept": {
+      "source_bytes": 0,
+      "storage_entries": 0
+    },
+    "get_status": {
+      "source_bytes": 0,
+      "storage_entries": 0
+    },
+    "get_escrow": {
+      "source_bytes": 0,
+      "storage_entries": 0
+    },
+    "rotate_releaser": {
+      "source_bytes": 0,
+      "storage_entries": 0
+    },
+    "top_up": {
+      "source_bytes": 0,
+      "storage_entries": 0
+    },
+    "release": {
+      "source_bytes": 0,
+      "storage_entries": 0
+    },
+    "release_with_approvals": {
+      "source_bytes": 0,
+      "storage_entries": 0
+    },
+    "refund": {
+      "source_bytes": 0,
+      "storage_entries": 0
+    },
+    "refund_with_approvals": {
+      "source_bytes": 0,
+      "storage_entries": 0
+    }
+  }
+}
