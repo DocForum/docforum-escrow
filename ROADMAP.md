@@ -131,6 +131,15 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E5 — Releaser custom account
+- [x] Optional M-of-N Soroban custom releaser account (issue #50):
+  `contracts/releaser-account/` verifies distinct Ed25519 signatures,
+  restricts authorization to one `release`/`refund` call on its configured
+  escrow, and requires the current threshold for nonce-bound signer and
+  threshold changes. Design is in `docs/adr/0005-custom-releaser-account.md`
+  and the T1 update in `docs/threat-model.md`. Not deployed to testnet; this
+  does not change the escrow contract or make mainnet use permissible.
+
 ## Phase E5 — Bound condition_ref length and validate it at creation
 - [x] Pick a maximum length (64 bytes) based on observed integrator usage
   (UUIDs, short labels; existing test refs far shorter), document the
