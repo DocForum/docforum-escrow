@@ -113,6 +113,29 @@ value. **Reviewers should challenge these ratings.**
   its ADR 0004) uses **one** `PLATFORM_RELEASER_SECRET` as the releaser of
   every escrow it creates. So today one leaked key affects every open
   escrow. The scoping benefit is available, but nobody uses it.
+- **Response: race the attacker with `settle_many` (issue #29, ADR 0012).**
+  Settle every still-`Funded` escrow of the leaked key correctly before
+  the attacker does, up to `MAX_SETTLE_OPS` (20) escrows per transaction
+  instead of one:
+  1. List the key's `Funded` escrows from your index and decide each
+     one's correct outcome (`Release` or `Refund`).
+  2. Submit them as `settle_many(releaser, [(id, action), ...])` batches
+     of at most 20, highest value first. Submit batches in parallel from
+     separate source accounts; each batch is independent.
+  3. Read each batch's per-op results. `Ok` = settled by you. `NotFunded`
+     = already settled (possibly by the attacker): check its
+     `get_status` and the events to see which outcome landed. Any other
+     `Err` = rejected and untouched (wrong releaser, quorum escrow,
+     time lock, acceptance, pooled rules); handle it on its own path.
+  4. Escrows with an opted-in payee callback (`notify_payee`): a failing
+     callback aborts the **whole** batch (the transfer already happened,
+     so it can't be reported per-op). Put those in their own batch, or
+     release them singly.
+  - A batch never widens the key's reach: each op is checked against that
+    escrow's own stored releaser set, exactly like `release`/`refund`, and
+    funds still only go to the stored `payee`/`refund_to` (I1).
+  - The attacker gets the same tool. It doesn't change what they can do,
+    only how fast; speed is why the defender should batch first.
 - **Recovery:** a funded escrow can rotate its releaser when both the
   current releaser and payer authorize the change (issue #23, ADR 0009).
   Possession of the releaser key alone is insufficient to appoint an
@@ -560,7 +583,7 @@ behave like SEP-41.
 
 | Threat | Test coverage | Status |
 |---|---|---|
-| T1 — `releaser` key leaked or stolen | `cancel.rs::only_the_stored_payer_may_cancel`, `cancel.rs::cancel_requires_the_payers_signature`, `releaser_rotation.rs::rotation_rejects_wrong_releaser_and_non_funded_escrows` | Covered |
+| T1 — `releaser` key leaked or stolen | `cancel.rs::only_the_stored_payer_may_cancel`, `cancel.rs::cancel_requires_the_payers_signature`, `releaser_rotation.rs::rotation_rejects_wrong_releaser_and_non_funded_escrows`; batch response: `settle_many.rs::another_releasers_escrow_is_never_settled`, `::same_escrow_twice_second_op_fails_not_funded`, `::max_batch_fits_mainnet_limits` | Covered |
 | T2 — `releaser` key lost | `timeout_refund.rs`, `cancel.rs::cancel_still_works_after_refund_after_has_passed_if_still_funded`, `cancel.rs::cancel_after_timeout_refund_is_rejected` | Covered |
 | T3 — Double‑spend / double payout | `tests/release_refund.rs` (double‑release, release‑after‑refund, refund‑after‑release) | Covered |
 | T4 — Reentrancy | `tests/malicious_token.rs` (failed payout leaves escrow funded), `tests/release_callback.rs` | Covered |
