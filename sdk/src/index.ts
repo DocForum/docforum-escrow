@@ -24,6 +24,8 @@ import {
   Client as EscrowContractClient,
   type EscrowData as GeneratedEscrowData,
   type EscrowStatus as GeneratedEscrowStatus,
+  type PooledData as GeneratedPooledData,
+  type Contribution as GeneratedContribution,
 } from "./generated/contract-client.js";
 import { decodeEscrowDataFromScVal } from "./escrow-data.js";
 import {
@@ -33,6 +35,7 @@ import {
   type EscrowSpanAttributes,
   type InstrumentationOptions,
 } from "./instrumentation.js";
+import type { FactoryClient as FactoryClientType } from "./factory.js";
 import { signerAddress, type EscrowSigner } from "./signers/types.js";
 
 export { Keypair };
@@ -49,6 +52,8 @@ export {
 } from "./instrumentation.js";
 export { EscrowIndexerClient } from "./indexer-client.js";
 export type { EscrowIndexerClientConfig, EscrowPage, IndexedEscrow } from "./indexer-client.js";
+export { FactoryClient, predictInstanceAddress } from "./factory.js";
+export type { FactoryClientConfig, DeployInstanceParams, DeployInstanceResult, FactoryInstance } from "./factory.js";
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Cancelled";
 
@@ -305,83 +310,6 @@ export const MAX_CONDITION_REF_LENGTH = 64;
  */
 export const MAX_RELEASERS = 10;
 
-/**
- * Maximum number of items in one batched call — must match the contract's
- * `MAX_BATCH_SIZE` (currently 50, see docs/adr/0005). `createEscrows` and
- * `settleMany` chunk larger inputs automatically. Keep in sync with the
- * contract; a change is an SDK semver event (hard rule 3).
- */
-export const MAX_BATCH_SIZE = 50;
-
-/** One escrow to create in a batched `createEscrows` call. */
-export interface BatchCreateItem extends CreateEscrowParams {}
-
-/** One operation in a batched `settleMany` call. */
-export interface BatchSettleOperation {
-  escrowId: bigint;
-  /** `release` pays the escrow's payee; `refund` returns the funds to `refundTo`. */
-  kind: "release" | "refund";
-  /** Must be the escrow's `releaser` (docs/adr/0002). */
-  caller: EscrowSigner;
-}
-
-/** Outcome of one batched item; `index` is always the input's position. */
-export interface BatchItemResult<T> {
-  /** Index into the caller-supplied input array. */
-  index: number;
-  /** The original input this result corresponds to. */
-  item: T;
-  ok: boolean;
-  /** Set when `ok`: the transaction hash that carried the operation. */
-  txHash?: string;
-  /** Set when `ok` and the operation created an escrow. */
-  escrowId?: bigint;
-  /** Set when the operation failed: the reason the call threw. */
-  error?: string;
-  /** True when the item was carried over from `resumeFrom` instead of re-sent. */
-  skipped?: boolean;
-}
-
-export interface BatchOptions<T> {
-  /**
-   * Operations attempted per chunk. Defaults to `MAX_BATCH_SIZE` and is
-   * clamped to it, because the contract rejects anything larger.
-   */
-  chunkSize?: number;
-  /**
-   * Results from a previous partial run. Items that already succeeded are
-   * carried over (with `skipped: true`) instead of being sent again, so a
-   * retry after `BatchPartialFailureError` never double-creates or
-   * double-settles anything.
-   */
-  resumeFrom?: BatchItemResult<T>[];
-}
-
-/**
- * Thrown by `createEscrows`/`settleMany` when at least one item failed.
- * `results` covers the whole input in order, so items that were already
- * committed (or settled) before the failure are visible and retryable
- * through `resumeFrom`.
- */
-export class BatchPartialFailureError<T> extends Error {
-  readonly name = "BatchPartialFailureError";
-  readonly results: BatchItemResult<T>[];
-  readonly failedIndices: number[];
-
-  constructor(results: BatchItemResult<T>[]) {
-    const failedIndices = results.filter((result) => !result.ok).map((result) => result.index);
-    super(
-      `batch failed for ${failedIndices.length} of ${results.length} item(s) at index ${failedIndices.join(", ")}`,
-    );
-    this.results = results;
-    this.failedIndices = failedIndices;
-  }
-}
-
-function batchErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /** Shared placeholder used on the uninstrumented path (no per-call allocation). */
 const EMPTY_SPAN_ATTRIBUTES = {} as EscrowSpanAttributes;
 
@@ -465,6 +393,62 @@ export interface CancelParams {
   escrowId: bigint;
   /** The escrow's payer; signs the cancellation. */
   payer: Keypair;
+}
+
+/**
+ * Creation parameters for a pooled escrow (issue #113, docs/adr/0011): one
+ * agreement funded by many payers. Creation funds nothing — `contribute`
+ * does, before `fundingDeadline`, up to `fundingTarget`.
+ */
+export interface CreatePooledEscrowParams {
+  /** Signs and pays for creation; funds nothing at this step. */
+  creator: EscrowSigner;
+  payee: string;
+  token: string;
+  /**
+   * Raw token units the contributors must reach before `release` becomes
+   * possible. Must be positive; fixed at creation, never changed.
+   */
+  fundingTarget: bigint;
+  conditionRef: string;
+  /** The address permitted to `release` the fully funded pool (docs/adr/0002). */
+  releaser: string;
+  /**
+   * Unix seconds after which contributions are rejected forever and, if
+   * the target was missed, `claimRefund` opens to every contributor.
+   * Must be strictly in the future (contract error
+   * `InvalidFundingDeadline`, 34).
+   */
+  fundingDeadline: bigint;
+}
+
+export interface ContributeParams {
+  escrowId: bigint;
+  /** Signs the transfer; the funds come from this account. */
+  payer: EscrowSigner;
+  /** Raw token units; positive, and only while the pool is under target. */
+  amount: bigint;
+}
+
+/** Pull-based refund params — the contributor claims their own record. */
+export interface ClaimRefundParams {
+  escrowId: bigint;
+  /** Must be the recorded contributor; signs the claim (docs/adr/0011). */
+  contributor: EscrowSigner;
+}
+
+/** Read-only funding config of a pooled escrow (`getPooled`). */
+export interface PooledEscrow {
+  fundingTarget: bigint;
+  fundingDeadline: bigint;
+}
+
+/** One contributor's record on a pooled escrow (`getContribution`). */
+export interface ContributionRecord {
+  /** Total accepted contributions from this address — claimable if not `refunded`. */
+  amount: bigint;
+  /** True once `claimRefund` has paid this record; a second claim fails. */
+  refunded: boolean;
 }
 
 export interface ReleaseOrRefundParams {
@@ -666,7 +650,8 @@ function contractAddressOf(scAddress: xdr.ScAddress): string | undefined {
  * TypeScript types and no manual XDR/signing plumbing.
  */
 export class EscrowClient {
-  private readonly contractId: string;
+  /** Contract id of the escrow instance this client talks to. */
+  readonly contractId: string;
   private readonly rpcUrl: string;
   private readonly networkPassphrase: string;
   private readonly rpc: RpcServer;
@@ -684,6 +669,26 @@ export class EscrowClient {
       : config.instrumentation;
     this.archivalBehavior = config.archivalBehavior ?? "error";
     this.restoreSigner = config.restoreSigner;
+  }
+
+  /**
+   * Builds an `EscrowClient` for the instance owned by `integrator`, looked up
+   * through `factoryClient`. Throws if the integrator has no deployed instance
+   * yet — deploy one with `FactoryClient.deployInstance` first.
+   */
+  static async forIntegrator(
+    factoryClient: FactoryClientType,
+    integrator: string,
+  ): Promise<EscrowClient> {
+    const instance = await factoryClient.getInstance(integrator);
+    if (!instance) {
+      throw new Error(`No escrow instance is deployed for integrator ${integrator}.`);
+    }
+    return new EscrowClient({
+      contractId: instance.contractId,
+      rpcUrl: factoryClient.rpcUrl,
+      networkPassphrase: factoryClient.networkPassphrase,
+    });
   }
 
   private contractClient(signer?: EscrowSigner): EscrowContractClient {
@@ -1052,6 +1057,145 @@ export class EscrowClient {
   }
 
   /**
+   * Creates a pooled escrow (issue #113, docs/adr/0011): one agreement
+   * that many payers fund with `contribute`. Creation moves no tokens —
+   * the pool starts at 0 and grows to `fundingTarget`. Release becomes
+   * possible only at exactly the target; if `fundingDeadline` passes
+   * first, the round failed and each contributor pulls their own record
+   * back with `claimRefund`. Returns the new escrow id and tx hash.
+   */
+  async createPooledEscrow(
+    params: CreatePooledEscrowParams
+  ): Promise<{ escrowId: bigint; txHash: string }> {
+    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+      throw new Error(
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+      );
+    }
+    if (params.fundingTarget <= 0n) {
+      throw new Error(`fundingTarget must be a positive raw amount, got ${params.fundingTarget}`);
+    }
+    if (params.fundingDeadline <= 0n) {
+      throw new Error(
+        `fundingDeadline must be a positive unix timestamp in seconds, got ${params.fundingDeadline}`
+      );
+    }
+    const client = this.contractClient(params.creator);
+    const sent = await this.invoke(
+      "create_pooled_escrow",
+      undefined,
+      () =>
+        client.create_pooled_escrow({
+          creator: signerAddress(params.creator),
+          payee: params.payee,
+          token: params.token,
+          funding_target: params.fundingTarget,
+          condition_ref: params.conditionRef,
+          releaser: params.releaser,
+          funding_deadline: params.fundingDeadline,
+        }),
+      { address: signerAddress(params.creator) },
+    );
+    return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Contributes `amount` to a pooled escrow from `payer` (docs/adr/0011).
+   * Accepted only before the funding deadline and only while the pool
+   * stays at or under its target; the contract verifies the received
+   * amount with a balance-delta check and records it against `payer`,
+   * accumulating across repeat contributions. Returns the tx hash.
+   */
+  async contribute(params: ContributeParams): Promise<{ txHash: string }> {
+    if (params.amount <= 0n) {
+      throw new Error(`amount must be a positive raw amount, got ${params.amount}`);
+    }
+    const client = this.contractClient(params.payer);
+    const sent = await this.invoke(
+      "contribute",
+      params.escrowId,
+      () =>
+        client.contribute({
+          escrow_id: params.escrowId,
+          payer: signerAddress(params.payer),
+          amount: params.amount,
+        }),
+      { address: signerAddress(params.payer) },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Pull-based refund of a failed funding round (docs/adr/0011): pays
+   * `contributor` exactly their recorded amount, once. Only available
+   * after the funding deadline passed below the target, and never after
+   * a release. The contributor signs their own claim; anyone else's
+   * claim of this record is impossible. Returns the tx hash.
+   */
+  async claimRefund(params: ClaimRefundParams): Promise<{ txHash: string }> {
+    const client = this.contractClient(params.contributor);
+    const sent = await this.invoke(
+      "claim_refund",
+      params.escrowId,
+      () =>
+        client.claim_refund({
+          escrow_id: params.escrowId,
+          contributor: signerAddress(params.contributor),
+        }),
+      { address: signerAddress(params.contributor) },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Read-only: a pooled escrow's immutable funding config. Combine with
+   * `getEscrow().amount` and the current ledger time to classify the
+   * round: `amount === fundingTarget` succeeded (releasable at any time);
+   * `now >= fundingDeadline && amount < fundingTarget` failed
+   * (`claimRefund` is open). A failed round still reads `"Funded"` from
+   * `getStatus` — status describes settlement, not funding. Throws
+   * `NotPooled` (error 26) on a non-pooled or unknown id.
+   */
+  async getPooled(escrowId: bigint): Promise<PooledEscrow> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("get_pooled", escrowId),
+      () => client.get_pooled({ escrow_id: escrowId }),
+    );
+    const data: GeneratedPooledData = tx.result.unwrap();
+    return {
+      fundingTarget: data.funding_target,
+      fundingDeadline: data.funding_deadline,
+    };
+  }
+
+  /**
+   * Read-only: one contributor's record on a pooled escrow — the exact
+   * amount they can claim from a failed round and whether it is already
+   * claimed. `undefined` means the address never contributed. Throws
+   * `NotFound` (1) on an unknown id, `NotPooled` (26) on a non-pooled one.
+   */
+  async getContribution(
+    escrowId: bigint,
+    contributor: string
+  ): Promise<ContributionRecord | undefined> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("get_contribution", escrowId, contributor),
+      () => client.get_contribution({ escrow_id: escrowId, contributor }),
+    );
+    const record: GeneratedContribution | undefined = tx.result.unwrap();
+    if (record == null) return undefined;
+    return { amount: record.amount, refunded: record.refunded };
+  }
+
+  /**
    * Returns the escrow's funds to its `refundTo` (the payer unless a
    * sponsored escrow set another destination, docs/adr/0009). Normally `caller` must be
    * the escrow's `releaser`; once `refundAfter` has passed, anyone may
@@ -1069,116 +1213,6 @@ export class EscrowClient {
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
   }
-
-  /** The contract's limit on items per batched call (docs/adr/0005). */
-  get maxBatchSize(): number {
-    return MAX_BATCH_SIZE;
-  }
-
-  /**
-   * Creates several escrows, chunked to the contract's max batch size and
-   * mapped back to the caller's input order. Each item goes through the
-   * normal single-escrow `create_escrow` path, so validation, auth and
-   * events are identical to `createEscrow`.
-   *
-   * A failure never stops later chunks: every item is attempted, then a
-   * `BatchPartialFailureError` carrying all per-item results is thrown if
-   * any failed. Retry with `{ resumeFrom: error.results }` to send only the
-   * failures.
-   */
-  async createEscrows(
-    items: BatchCreateItem[],
-    options: BatchOptions<BatchCreateItem> = {},
-  ): Promise<BatchItemResult<BatchCreateItem>[]> {
-    const results = this.batchResults(items, options.resumeFrom);
-    const chunkSize = this.resolveChunkSize(options.chunkSize);
-
-    for (let start = 0; start < items.length; start += chunkSize) {
-      const end = Math.min(start + chunkSize, items.length);
-      for (let index = start; index < end; index++) {
-        if (results[index].ok) continue;
-        try {
-          const created = await this.createEscrow(items[index]);
-          results[index] = { index, item: items[index], ok: true, skipped: false, ...created };
-        } catch (error) {
-          results[index] = {
-            index,
-            item: items[index],
-            ok: false,
-            skipped: false,
-            error: batchErrorMessage(error),
-          };
-        }
-      }
-    }
-
-    this.throwOnBatchFailure(results);
-    return results;
-  }
-
-  /**
-   * Settles several escrows (`release` or `refund`), chunked to the
-   * contract's max batch size and mapped back to the caller's input order.
-   * Each operation goes through the existing single-op `release`/`refund`
-   * path, so auth and state rules are unchanged.
-   *
-   * A failure never stops later chunks: every operation is attempted, then
-   * a `BatchPartialFailureError` carrying all per-op results is thrown if
-   * any failed. Retry with `{ resumeFrom: error.results }` to send only the
-   * failures — already settled escrows are then skipped, never re-sent.
-   */
-  async settleMany(
-    ops: BatchSettleOperation[],
-    options: BatchOptions<BatchSettleOperation> = {},
-  ): Promise<BatchItemResult<BatchSettleOperation>[]> {
-    const results = this.batchResults(ops, options.resumeFrom);
-    const chunkSize = this.resolveChunkSize(options.chunkSize);
-
-    for (let start = 0; start < ops.length; start += chunkSize) {
-      const end = Math.min(start + chunkSize, ops.length);
-      for (let index = start; index < end; index++) {
-        if (results[index].ok) continue;
-        const op = ops[index];
-        try {
-          const settled = op.kind === "release"
-            ? await this.release({ escrowId: op.escrowId, caller: op.caller })
-            : await this.refund({ escrowId: op.escrowId, caller: op.caller });
-          results[index] = { index, item: op, ok: true, skipped: false, ...settled };
-        } catch (error) {
-          results[index] = { index, item: op, ok: false, skipped: false, error: batchErrorMessage(error) };
-        }
-      }
-    }
-
-    this.throwOnBatchFailure(results);
-    return results;
-  }
-
-  /** One not-yet-successful result per input, pre-filled from `resumeFrom`. */
-  private batchResults<T>(items: T[], resumeFrom?: BatchItemResult<T>[]): BatchItemResult<T>[] {
-    const results: BatchItemResult<T>[] = items.map((item, index) => ({
-      index,
-      item,
-      ok: false,
-      skipped: false,
-    }));
-    for (const prior of resumeFrom ?? []) {
-      if (!prior.ok || prior.index < 0 || prior.index >= results.length) continue;
-      results[prior.index] = { ...prior, item: items[prior.index], skipped: true };
-    }
-    return results;
-  }
-
-  private throwOnBatchFailure<T>(results: BatchItemResult<T>[]): void {
-    if (results.some((result) => !result.ok)) throw new BatchPartialFailureError(results);
-  }
-
-  /** Clamp a caller-supplied chunk size to the contract's max batch size. */
-  private resolveChunkSize(requested?: number): number {
-    if (requested === undefined || !Number.isFinite(requested) || requested < 1) return MAX_BATCH_SIZE;
-    return Math.min(Math.floor(requested), MAX_BATCH_SIZE);
-  }
-
 
   /**
    * Simulates a `release`, has the releaser sign only its short-lived contract
