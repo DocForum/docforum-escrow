@@ -53,6 +53,17 @@ export {
 export { EscrowIndexerClient } from "./indexer-client.js";
 export type { EscrowIndexerClientConfig, EscrowPage, IndexedEscrow } from "./indexer-client.js";
 export { FactoryClient, predictInstanceAddress } from "./factory.js";
+export {
+  KNOWN_DEPLOYMENTS,
+  UnknownDeploymentError,
+  knownContractId,
+  knownNetworkConfig,
+  latestDeployment,
+  parseDeployments,
+  type DeploymentRecord,
+  type DeploymentVerificationCase,
+  type DeploymentsDocument,
+} from "./deployments.js";
 export type { FactoryClientConfig, DeployInstanceParams, DeployInstanceResult, FactoryInstance } from "./factory.js";
 
 // Multisig releaser account helpers (T1 mitigation). Client-side only: they
@@ -217,6 +228,10 @@ export interface Escrow {
    * reversal would pay.
    */
   refundTo: string;
+  /** Whether release waits for the payee's `accept` (issue #25). */
+  requiresAcceptance: boolean;
+  /** Ledger timestamp of the payee's acceptance; `undefined` until `accept`. */
+  acceptedAt?: bigint;
   status: EscrowStatus;
 }
 
@@ -396,6 +411,12 @@ export interface CreateEscrowParams {
   refundTo?: string;
   /** Earliest ledger timestamp at which release is allowed; omit for immediate release. */
   releaseNotBefore?: bigint;
+  /**
+   * Require the payee to `accept` before release (issue #25). Until they
+   * do, the payer may `cancel`. Cannot be combined with `notifyPayee` or
+   * `releaseNotBefore` (the contract has no such creation entry point).
+   */
+  requiresAcceptance?: boolean;
 }
 
 export interface CreateMilestoneEscrowParams extends Omit<CreateEscrowParams, "amount"> {
@@ -422,8 +443,106 @@ export interface MilestoneEscrow {
 export interface CancelParams {
   escrowId: bigint;
   /** The escrow's payer; signs the cancellation. */
-  payer: Keypair;
+  payer: EscrowSigner;
+  /** See `LifecycleCallOptions.checkPreconditions`. Default `true`. */
+  checkPreconditions?: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Lifecycle amendments (issue #84): top-up, payee acceptance, payer cancel,
+// plus a prepare → collect auth → submit flow for calls signed by parties
+// on different machines.
+// ---------------------------------------------------------------------------
+
+/** Options shared by the lifecycle amendment methods. */
+export interface LifecycleCallOptions {
+  /**
+   * Read the escrow first and throw `EscrowPreconditionError` when the call
+   * would certainly fail (wrong signer, not `Funded`, no acceptance gate,
+   * already accepted). Costs one read-only simulation, saves a failed
+   * transaction fee. The contract enforces the same rules either way.
+   * Default `true`.
+   */
+  checkPreconditions?: boolean;
+}
+
+export interface TopUpParams extends LifecycleCallOptions {
+  escrowId: bigint;
+  /** The escrow's original payer; signs the transfer and pays the fee. */
+  payer: EscrowSigner;
+  /** Raw token units to add; must be positive. */
+  amount: bigint;
+}
+
+export interface AcceptParams extends LifecycleCallOptions {
+  escrowId: bigint;
+  /** The escrow's payee; signs the acceptance and pays the fee. */
+  payee: EscrowSigner;
+}
+
+/**
+ * Why a lifecycle call was refused before submission. Each maps to the
+ * contract error the transaction would otherwise fail with.
+ */
+export type EscrowPreconditionCode =
+  | "InvalidAmount"
+  | "NotFunded"
+  | "Unauthorized"
+  | "AcceptanceNotConfigured"
+  | "AlreadyAccepted";
+
+/** Thrown before any transaction is built when a client-side check fails. */
+export class EscrowPreconditionError extends Error {
+  readonly name = "EscrowPreconditionError";
+  readonly code: EscrowPreconditionCode;
+  readonly method: LifecycleMethod;
+  constructor(method: LifecycleMethod, code: EscrowPreconditionCode, message: string) {
+    super(`${method}: ${message}`);
+    this.method = method;
+    this.code = code;
+  }
+}
+
+/** Contract functions the prepare/submit flow can carry. */
+export type LifecycleMethod = "top_up" | "accept" | "cancel";
+
+/** One lifecycle call, described without any signer. */
+export type LifecycleCall =
+  | { method: "top_up"; escrowId: bigint; payer: string; amount: bigint }
+  | { method: "accept"; escrowId: bigint; payee: string }
+  | { method: "cancel"; escrowId: bigint; payer: string };
+
+/**
+ * A simulated lifecycle transaction in transit between signers. Plain JSON
+ * strings and numbers only, so it can be passed between processes or
+ * machines as-is (for example over HTTP or a queue).
+ */
+export interface PreparedLifecycleCall {
+  method: LifecycleMethod;
+  /** `AssembledTransaction.toJSON()` output; not a base64 envelope. */
+  transaction: string;
+  /** The transaction source: signs the envelope and pays the fee at submit. */
+  source: string;
+  /** Addresses whose contract auth entry is still unsigned. */
+  pendingSigners: string[];
+  /** Ledger after which every collected auth entry expires. */
+  expiresAtLedger: number;
+}
+
+export interface PrepareLifecycleParams extends LifecycleCallOptions {
+  call: LifecycleCall;
+  /**
+   * Address that will submit the transaction (envelope signer and fee
+   * payer). Its own auth is covered by the envelope signature, so it never
+   * appears in `pendingSigners`. Defaults to the call's own signer.
+   */
+  source?: string;
+  /** How long collected auth entries stay valid. Default `PREPARED_AUTH_TTL_LEDGERS`. */
+  ttlLedgers?: number;
+}
+
+/** Default lifetime of auth entries collected by `prepareLifecycleCall`, in ledgers (~5 minutes). */
+export const PREPARED_AUTH_TTL_LEDGERS = 60;
 
 /**
  * Creation parameters for a pooled escrow (issue #113, docs/adr/0011): one
@@ -679,6 +798,17 @@ function contractAddressOf(scAddress: xdr.ScAddress): string | undefined {
  * `create_escrow`/`get_status`/`get_escrow`/`release`/`refund` with plain
  * TypeScript types and no manual XDR/signing plumbing.
  */
+function assertPositiveAmount(call: { method: LifecycleMethod; amount: bigint }): void {
+  if (call.amount <= 0n) {
+    throw new EscrowPreconditionError(call.method, "InvalidAmount", `amount must be positive, got ${call.amount}.`);
+  }
+}
+
+/** The party whose signature a lifecycle call needs. */
+function lifecycleCallSigner(call: LifecycleCall): string {
+  return call.method === "accept" ? call.payee : call.payer;
+}
+
 export class EscrowClient {
   /** Contract id of the escrow instance this client talks to. */
   readonly contractId: string;
@@ -832,10 +962,25 @@ export class EscrowClient {
       notify_payee: params.notifyPayee ?? false,
       refund_to: params.refundTo,
     };
+    if (params.requiresAcceptance && (params.notifyPayee || params.releaseNotBefore !== undefined)) {
+      throw new Error("requiresAcceptance cannot be combined with notifyPayee or releaseNotBefore.");
+    }
     const sent = await this.invoke(
       "create_escrow",
       undefined,
-      () => params.releaseNotBefore === undefined
+      () => params.requiresAcceptance
+        ? client.create_escrow_with_acceptance({
+            payer: createParams.payer,
+            payee: createParams.payee,
+            token: createParams.token,
+            amount: createParams.amount,
+            condition_ref: createParams.condition_ref,
+            releaser: createParams.releaser,
+            refund_after: createParams.refund_after,
+            requires_acceptance: true,
+            refund_to: createParams.refund_to,
+          })
+        : params.releaseNotBefore === undefined
         ? client.create_escrow(createParams)
         : client.create_escrow_release_time({
             ...createParams,
@@ -960,6 +1105,8 @@ export class EscrowClient {
       notifyPayee: data.notify_payee,
       refundTo: data.refund_to,
       releaseNotBefore: data.release_not_before ?? undefined,
+      requiresAcceptance: data.requires_acceptance,
+      acceptedAt: data.accepted_at ?? undefined,
       status: data.status.tag,
     };
   }
@@ -1079,11 +1226,199 @@ export class EscrowClient {
    * transaction's hash.
    */
   async cancel(params: CancelParams): Promise<{ txHash: string }> {
+    const payer = signerAddress(params.payer);
+    const call: LifecycleCall = { method: "cancel", escrowId: params.escrowId, payer };
+    if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
     const client = this.contractClient(params.payer);
-    const tx = await client.cancel({ escrow_id: params.escrowId, payer: params.payer.publicKey() });
+    const sent = await this.invoke(
+      "cancel",
+      params.escrowId,
+      () => client.cancel({ escrow_id: params.escrowId, payer }),
+      { address: payer },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Adds `amount` to a `Funded` escrow without changing its parties or id
+   * (issue #26). Only the escrow's original payer may top up; pooled
+   * escrows grow through `contribute` instead and are rejected by the
+   * contract (`NotSupportedForPooled`). Returns the transaction's hash.
+   */
+  async topUp(params: TopUpParams): Promise<{ txHash: string }> {
+    const payer = signerAddress(params.payer);
+    const call: LifecycleCall = { method: "top_up", escrowId: params.escrowId, payer, amount: params.amount };
+    assertPositiveAmount(call);
+    if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
+    const client = this.contractClient(params.payer);
+    const sent = await this.invoke(
+      "top_up",
+      params.escrowId,
+      () => client.top_up({ escrow_id: params.escrowId, payer, amount: params.amount }),
+      { address: payer },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Records the payee's acceptance on an escrow created with the
+   * acceptance gate (issue #25). Once accepted, the payer can no longer
+   * `cancel`. One-time and only while `Funded`. Returns the transaction's
+   * hash.
+   */
+  async accept(params: AcceptParams): Promise<{ txHash: string }> {
+    const payee = signerAddress(params.payee);
+    const call: LifecycleCall = { method: "accept", escrowId: params.escrowId, payee };
+    if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
+    const client = this.contractClient(params.payee);
+    const sent = await this.invoke(
+      "accept",
+      params.escrowId,
+      () => client.accept({ escrow_id: params.escrowId, payee }),
+      { address: payee },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Step 1 of the multi-party flow: simulates `call` with `source` as the
+   * transaction source and returns it as portable JSON, listing every other
+   * party whose contract authorization is still needed. Pass the result to
+   * each of them for `signLifecycleCall`, then to the source for
+   * `submitLifecycleCall`. Nothing is signed here.
+   */
+  async prepareLifecycleCall(params: PrepareLifecycleParams): Promise<PreparedLifecycleCall> {
+    const { call } = params;
+    if (call.method === "top_up") assertPositiveAmount(call);
+    if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
+    const source = params.source ?? lifecycleCallSigner(call);
+    const client = this.contractClientForAddress(source);
+    const tx = await this.buildLifecycleCall(client, call);
+    if (tx.isReadCall) {
+      throw new Error(`${call.method} was simulated as a read call; no transaction was assembled.`);
+    }
+    const latestLedger = await this.rpc.getLatestLedger();
+    return {
+      method: call.method,
+      transaction: tx.toJSON(),
+      source,
+      pendingSigners: tx.needsNonInvokerSigningBy(),
+      expiresAtLedger: latestLedger.sequence + (params.ttlLedgers ?? PREPARED_AUTH_TTL_LEDGERS),
+    };
+  }
+
+  /**
+   * Step 2: signs `signer`'s contract auth entry in a prepared call and
+   * returns the updated call with `signer` removed from `pendingSigners`.
+   * Safe to run in a separate process from `prepareLifecycleCall`; the
+   * signer never sees or signs the envelope.
+   */
+  async signLifecycleCall(
+    prepared: PreparedLifecycleCall,
+    signer: EscrowSigner,
+  ): Promise<PreparedLifecycleCall> {
+    const address = signerAddress(signer);
+    if (!prepared.pendingSigners.includes(address)) {
+      throw new Error(`${address} has no pending authorization in this ${prepared.method} call.`);
+    }
+    const client = this.contractClientForAddress(prepared.source);
+    const tx = client.txFromJSON<Result<void>>(prepared.transaction);
+    await tx.signAuthEntries({ signAuthEntry: signer, expiration: prepared.expiresAtLedger });
+    return {
+      ...prepared,
+      transaction: tx.toJSON(),
+      pendingSigners: tx.needsNonInvokerSigningBy(),
+    };
+  }
+
+  /**
+   * Step 3: the source signs the envelope and submits. Refuses to submit
+   * while any party's authorization is still missing, or when `expectedMethod`
+   * does not match, so a call meant for one function cannot be passed off as
+   * another. Returns the transaction's hash.
+   */
+  async submitLifecycleCall(
+    prepared: PreparedLifecycleCall,
+    source: EscrowSigner,
+    expectedMethod?: LifecycleMethod,
+  ): Promise<{ txHash: string }> {
+    let method: unknown;
+    try {
+      method = (JSON.parse(prepared.transaction) as { method?: unknown }).method;
+    } catch (error) {
+      throw new TypeError(`Prepared call is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (method !== prepared.method || (expectedMethod && method !== expectedMethod)) {
+      throw new TypeError(
+        `Prepared call is for ${String(method) || "an unknown method"}, not ${expectedMethod ?? prepared.method}.`
+      );
+    }
+    if (signerAddress(source) !== prepared.source) {
+      throw new Error(`Prepared call must be submitted by its source ${prepared.source}.`);
+    }
+    const client = this.contractClient(source);
+    const tx = client.txFromJSON<Result<void>>(prepared.transaction);
+    const missing = tx.needsNonInvokerSigningBy();
+    if (missing.length > 0) {
+      throw new Error(`Still waiting for authorization from: ${missing.join(", ")}.`);
+    }
     const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /** A contract client that simulates as `address` without being able to sign. */
+  private contractClientForAddress(address: string): EscrowContractClient {
+    return new EscrowContractClient({
+      contractId: this.contractId,
+      rpcUrl: this.rpcUrl,
+      networkPassphrase: this.networkPassphrase,
+      publicKey: address,
+    });
+  }
+
+  private buildLifecycleCall(
+    client: EscrowContractClient,
+    call: LifecycleCall,
+  ): Promise<AssembledTransaction<Result<void>>> {
+    switch (call.method) {
+      case "top_up":
+        return client.top_up({ escrow_id: call.escrowId, payer: call.payer, amount: call.amount });
+      case "accept":
+        return client.accept({ escrow_id: call.escrowId, payee: call.payee });
+      case "cancel":
+        return client.cancel({ escrow_id: call.escrowId, payer: call.payer });
+    }
+  }
+
+  /**
+   * Client-side precondition check: reads the escrow once and throws
+   * `EscrowPreconditionError` for anything the contract would certainly
+   * reject. Rules mirror `contracts/escrow/src/lib.rs`.
+   */
+  private async checkLifecycleCall(call: LifecycleCall): Promise<void> {
+    const escrow = await this.getEscrow(call.escrowId);
+    const fail = (code: EscrowPreconditionCode, message: string): never => {
+      throw new EscrowPreconditionError(call.method, code, message);
+    };
+    // Same order as the contract, so the error matches what it would return.
+    const [party, expected] = call.method === "accept"
+      ? ["payee", escrow.payee] as const
+      : ["payer", escrow.payer] as const;
+    if (lifecycleCallSigner(call) !== expected) {
+      fail("Unauthorized", `only the escrow's ${party} can call ${call.method}.`);
+    }
+    if (escrow.status !== "Funded") {
+      fail("NotFunded", `escrow ${call.escrowId} is ${escrow.status}, not Funded.`);
+    }
+    if (call.method === "top_up") return;
+    if (!escrow.requiresAcceptance) {
+      fail("AcceptanceNotConfigured", "the escrow was created without the acceptance gate.");
+    }
+    if (escrow.acceptedAt !== undefined) fail("AlreadyAccepted", "the payee has already accepted.");
   }
 
   /**
