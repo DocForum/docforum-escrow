@@ -365,6 +365,14 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   (`PROPTEST_CASES`); a nightly workflow runs a larger count. Closes
   issue #64.
 - [x] **TLA+ escrow state-machine model** (issue #112) — `spec/Escrow.tla` + `spec/Escrow.cfg` model the actual escrow lifecycle, status transitions, timeout refund behavior, payee acceptance, and same-ledger race windows while explicitly omitting unsupported disputes/milestone logic. TLC verification passed against the committed model.
+- [x] **Scripted, deterministic deployment with records** (issue #89) —
+  `scripts/deploy` builds or takes the WASM, checks its hash, uploads,
+  deploys with the constructor allowlist, confirms the on-chain WASM, runs
+  scripted live verification (create, release, refund, three rejection
+  cases) and records the result in `deployments.json`,
+  `docs/testnet-deployments.md` and the SDK (`knownContractId`,
+  `knownNetworkConfig`). Refuses a dirty tree and mainnet; `--dry-run`
+  targets a local quickstart.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
