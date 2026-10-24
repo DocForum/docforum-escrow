@@ -239,6 +239,8 @@ pub enum Error {
     NotSupportedForPooled = 33,
     /// The funding deadline was not strictly in the future at creation.
     InvalidFundingDeadline = 34,
+    /// An outbound token transfer was rejected; the escrow remains funded and retryable.
+    Undeliverable = 35,
 }
 
 #[contract]
@@ -1157,13 +1159,24 @@ impl EscrowContract {
         {
             return Err(Error::AcceptanceRequired);
         }
-        data.status = settled;
+        data.status = settled.clone();
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), data);
 
         let token_client = token::Client::new(env, &data.token);
-        token_client.transfer(&env.current_contract_address(), &destination, &data.amount);
+        if settled == EscrowStatus::Released {
+            let transfer = token_client.try_transfer(
+                &env.current_contract_address(),
+                &destination,
+                &data.amount,
+            );
+            if !matches!(transfer, Ok(Ok(()))) {
+                return Err(Error::Undeliverable);
+            }
+        } else {
+            token_client.transfer(&env.current_contract_address(), &destination, &data.amount);
+        }
         if notify_payee {
             let args = (escrow_id, data.amount).into_val(env);
             let callback = env.try_invoke_contract::<(), soroban_sdk::Error>(
