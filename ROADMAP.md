@@ -223,6 +223,26 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   on failure. Re-entry tests cover release/refund/create attempts. ADR 0005
   and threat-model T11 document the decision. Deployed on testnet
   2026-10-20.
+- [x] **Pooled escrows funded by multiple payers** (issue #113) —
+  `docs/adr/0011`: open contributions until an explicit
+  `funding_target` (fixed contributor list rejected — see ADR table),
+  bounded by a `funding_deadline`. New entry points
+  `create_pooled_escrow` / `contribute` / `claim_refund` / `get_pooled` /
+  `get_contribution`; `EscrowData` and all existing entry points
+  unchanged (pooled records live under two appended storage keys).
+  `contribute` is permissionless before the deadline, delta-verified via
+  the existing `transfer_in_exact`, recorded per payer (repeats
+  accumulate), and rejects overfunding. `release` additionally requires
+  `funded == target`, so partial pools never release. A missed deadline
+  opens **pull-based** refunds: each contributor claims their exact
+  recorded amount once, independently — no contributor iteration
+  anywhere, no contributor cap by design (ADR 0011 "Resource limits").
+  Push `refund`/`refund_with_approvals`/`cancel`/`top_up` reject pooled
+  escrows (append-only errors 26–34). Threat model: I1–I4 generalized,
+  new T16–T19 + traceability rows. Tests: 18 in `tests/pooled.rs`
+  (scenarios A–M) + 3 malicious-token contribution tests; existing
+  suites and snapshots unchanged. SDK `0.7.0 → 0.8.0` (additive).
+  **Not yet on testnet** — the live deployment predates it.
 ## Phase E6 — SDK & integrator tooling
 - [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
@@ -283,8 +303,16 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   transaction hash and retry count; addresses are opt-in only
   (`includeAddresses: true`). 7 offline tests assert span production and the
   disabled path.
+- [ ] SDK lifecycle amendments (issue #84). Done: `topUp`, `accept`,
+  `cancel` (now `EscrowSigner`), `createEscrow({ requiresAcceptance })`,
+  typed `EscrowPreconditionError` checks before submission, and a
+  `prepareLifecycleCall` → `signLifecycleCall` → `submitLifecycleCall` flow
+  for parties on different machines. SDK `0.7.0 → 0.8.0`. Waiting on the
+  contract: `extendRefundAfter` (#41) and `refundByPayee` (#40) need their
+  contract functions merged first.
 
 ## Phase E7 — Verification, testing & release engineering
+- [x] **Storage and resource optimisation guided by benchmarks (issue #98)** — `get_status` reads a dedicated persistent status value instead of decoding `EscrowData`. Benchmarks showed that moving `NextId` to persistent storage raised creation costs, so it remains in instance storage. The added status record improves `get_status` while adding writes to creation and settlement. Storage layout changed, so deploy as a new testnet contract ID under ADR 0005 and let existing escrows settle on their original contract.
 - [x] **Reproducible WASM builds and deployment verification (issue #91)** ?
   Rust 1.96.0 and Stellar CLI 28.1.0 are pinned; the pinned
   `rust:1.96.0-bookworm` container compares release WASM hashes from two
@@ -326,15 +354,25 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   previously stale committed bindings (missing `top_up`, errors 6–8) were
   regenerated here.
 - [x] **PR conflict notifier** — `.github/workflows/pr-conflict-notifier.yml` + `.github/scripts/pr-conflict-notifier.cjs`. On every push to `main` (and every 3h) it labels open PRs that conflict with `main` as `needs-rebase` and @mentions the author once per push with rebase steps; the label clears itself when the conflict is resolved. Runs from `main` only and never checks out PR code.
+- [x] Property-based state-machine tests with proptest (issue #64).
+  Pure-Rust reference model of the escrow state machine in
+  `contracts/escrow/tests/model.rs` — no Soroban types, intentionally simple
+  enough to review independently. A proptest state machine generates
+  operation sequences (create/release/refund/timeout-refund) and compares
+  contract results and stored state against the model after every step,
+  including auth outcomes (who may call what, when). Shrunk failures
+  print a readable operation sequence. CI runs a bounded case count
+  (`PROPTEST_CASES`); a nightly workflow runs a larger count. Closes
+  issue #64.
 - [x] **TLA+ escrow state-machine model** (issue #112) — `spec/Escrow.tla` + `spec/Escrow.cfg` model the actual escrow lifecycle, status transitions, timeout refund behavior, payee acceptance, and same-ledger race windows while explicitly omitting unsupported disputes/milestone logic. TLC verification passed against the committed model.
-- [x] **Manually dispatched testnet deploy workflow** —
-  `.github/workflows/deploy-testnet.yml` runs `scripts/deploy-testnet.sh`
-  from a selected ref via `workflow_dispatch`, using a dedicated deployer
-  secret scoped to a `testnet` environment with required reviewers. On
-  success it opens a PR updating `docs/testnet-deployments.md` and
-  `deployments.json`. Fails clearly if Friendbot or RPC is unavailable.
-  Minimal `permissions:`, SHA-pinned actions, and a `concurrency` group so
-  two deploys can't run at once.
+- [x] **Scripted, deterministic deployment with records** (issue #89) —
+  `scripts/deploy` builds or takes the WASM, checks its hash, uploads,
+  deploys with the constructor allowlist, confirms the on-chain WASM, runs
+  scripted live verification (create, release, refund, three rejection
+  cases) and records the result in `deployments.json`,
+  `docs/testnet-deployments.md` and the SDK (`knownContractId`,
+  `knownNetworkConfig`). Refuses a dirty tree and mainnet; `--dry-run`
+  targets a local quickstart.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -433,7 +471,12 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   resume, retention errors, and stopping. Bumped the additive SDK surface
   from 0.3.0 to 0.4.0. SDK typecheck/build and contract tests/build pass;
   lifecycle events remain unavailable until issue #9 changes the contract.
-
+- 2026-10-18 — Phase E7 (issue #64): added a pure-Rust reference
+  model of the escrow state machine (`contracts/escrow/tests/model.rs`)
+  and proptest state-machine tests comparing contract results and stored
+  state against the model after every generated operation, including
+  auth outcomes. CI runs a bounded case count; a nightly workflow runs
+  a larger one.
 - 2026-09-09 — Repo created as part of the DocForum 3-repo org split.
 - 2026-10-09 — Phase E6 started: added `.github/workflows/release-sdk.yml`
   (tag-triggered `sdk-v*` build/test/`npm publish --provenance` + GitHub
