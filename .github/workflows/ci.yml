@@ -161,6 +161,12 @@ jobs:
 
       - run: npm run build
 
+      # Type-check the runnable examples against the freshly built dist.
+      # NOT executed here: they fund accounts via Friendbot and talk to the
+      # live testnet contract (see sdk/examples/README.md) — running them is a
+      # manual, testnet-only step, like the SDK's own live suite.
+      - run: npm run typecheck:examples
+
       # Offline only: events fixture decoding plus quorum input validation.
       # Never the live testnet suite (see the note at the end of this file).
       - run: npm run test:offline
@@ -170,6 +176,26 @@ jobs:
       - run: npm run test:unit
 
       - run: npm run test:runtime
+
+  sdk-docs:
+    name: SDK API reference (TypeDoc + missing-doc lint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+      - run: npm ci
+      # Fails if any exported symbol lacks a doc comment, if a doc link is
+      # broken, or if a referenced type is unexpectedly not exported — the
+      # "missing-doc lint" (typedoc.json treats these validation warnings as
+      # errors). Also proves the reference builds.
+      - run: npm run docs
 
   sdk-bun:
     name: TypeScript SDK (Bun)

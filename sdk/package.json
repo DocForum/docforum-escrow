@@ -30,6 +30,9 @@
     "test:instrumentation": "vitest run tests/instrumentation.test.ts",
     "test:offline": "vitest run tests/events.test.ts tests/quorum-validation.test.ts tests/pooled-validation.test.ts tests/instrumentation.test.ts tests/signers.test.ts tests/relayed.test.ts tests/escrow-data.test.ts tests/factory.test.ts",
     "typecheck": "tsc --noEmit",
+    "typecheck:examples": "tsc --noEmit -p examples/tsconfig.json",
+    "docs": "typedoc",
+    "docs:check": "typedoc --emit none",
     "test:runtime": "node tests/runtime-smoke.mjs",
     "test:browser": "node tests/browser-smoke.mjs",
     "test:factory": "vitest run tests/factory.test.ts"
@@ -51,6 +54,8 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
+    "@types/node": "^22.20.5",
+    "typedoc": "^0.28.20",
     "typescript": "^5.6.2",
     "vite": "^8.3.4",
     "vitest": "^4.1.11"

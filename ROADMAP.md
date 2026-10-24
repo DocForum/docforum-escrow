@@ -303,6 +303,16 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   transaction hash and retry count; addresses are opt-in only
   (`includeAddresses: true`). 7 offline tests assert span production and the
   disabled path.
+- [x] Published API reference (TypeDoc) and runnable examples (issue #79).
+  `sdk/typedoc.json` generates an HTML reference for every exported symbol and
+  enforces a missing-doc lint (undocumented exports, broken doc links and
+  unexpected non-exported types fail `npm run docs`); a new `sdk/examples/`
+  directory has one runnable, secret-free script per major flow
+  (create/release, timeout refund, M-of-N quorum, and the estimate →
+  prepare/sign → guard → fee-bump → submit sponsorship flow). CI type-checks
+  the examples and builds the reference; a `docs` workflow publishes it to
+  GitHub Pages (Pages enablement is a one-time human step). Docs-only — no
+  contract or SDK API change, so bindings and the SDK version are unchanged.
 
 ## Phase E7 — Verification, testing & release engineering
 - [x] **Reproducible WASM builds and deployment verification (issue #91)** ?

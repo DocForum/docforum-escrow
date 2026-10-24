@@ -49,6 +49,18 @@ The SDK is published to npm as `@docforum/escrow-sdk` via an automated,
 provenance-signed release workflow — see [Releasing the SDK](#releasing-the-sdk)
 below. The GitHub Release tarball is still attached for existing consumers.
 
+An HTML API reference is generated from the SDK's doc comments with
+`npm run docs` in `sdk/` (TypeDoc, config in `sdk/typedoc.json`). It also acts
+as a missing-doc lint: every exported symbol must have a doc comment, or the
+command fails — so document new exports as you add them. CI builds the
+reference on every PR and publishes it to GitHub Pages from `main`
+(`.github/workflows/docs.yml`); enabling Pages is a one-time maintainer step,
+documented in that workflow. Runnable examples live in `sdk/examples/`
+(from `sdk/`: `npm run build && node examples/<flow>.ts`) and run against
+testnet with runtime-generated, Friendbot-funded keys — never a committed
+secret; CI type-checks them (`npm run typecheck:examples`) but does not run
+them.
+
 ## 2. Find something to work on
 
 Open issues are scoped, real, and tagged with a complexity/point value
