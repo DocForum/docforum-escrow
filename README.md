@@ -46,6 +46,32 @@ optional payee-acceptance gate, an optional `refund_after` timeout that
 lets anyone trigger the refund, an optional `refund_to`, and an optional
 release callback to a contract payee. Funded escrows can be topped up by
 the original payer, and `get_status`/`get_escrow` are read-only. A token
+allowlist and an optional emergency-pause custodian are fixed at deploy
+time; the custodian can only block **new** deposits, never touch escrowed
+funds (see [Emergency pause](#emergency-pause)).
+
+### Emergency pause
+
+If a bug turns up after mainnet, the alternative to a pause is asking every
+integrator to stop calling the contract. Since issue #35 there is a narrow
+on-chain lever instead: one `pause_admin` address, fixed at deployment by
+the contract's constructor, can flip a flag that makes every deposit path
+fail with `Paused` (error 35).
+
+Nothing else changes. `release`, `refund`, and the timeout refund never read
+the flag, so **a pause can never lock funds that are already escrowed** —
+paused means "no new business", never "your money is stuck". The pause has
+no timelock, no second role, and no power over existing escrows; unpausing
+is the same custodian calling `unpause`. See
+[ADR 0011](docs/adr/0011-emergency-pause-for-new-deposits-only.md) for the
+design, the rejected alternatives (permissionless pause, auto-expiring
+pause), and threat model T12 for the residual liveness risk.
+
+For mainnet, pass a Stellar multisig account as `pause_admin` — no contract
+change needed, since `require_auth` honours that account's own signer
+thresholds. **Note:** this changes deployment (the constructor now takes
+both the allowlist and the custodian), so the current testnet deployment
+predates it and cannot pause; a redeploy is the follow-up step.
 allowlist is fixed at deploy time. Pooled escrows — one agreement funded
 by many payers, with per-payer contribution records and pull-based
 pro-rata refunds — are a separate creation entry point

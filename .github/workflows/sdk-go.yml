@@ -162,14 +162,16 @@ jobs:
             --alias native-token
           token_id=$(stellar contract alias show native-token --network escrow-local)
 
-          # __constructor(allowed_tokens: Vec<Address>) — empty list keeps the
-          # legacy open-token behavior, which is fine for an ephemeral local net.
+          # __constructor(allowed_tokens: Vec<Address>, pause_admin: Address) —
+          # empty list keeps the legacy open-token behavior, which is fine for
+          # an ephemeral local net; the deployer doubles as the pause
+          # custodian (docs/adr/0011).
           stellar contract deploy \
             --wasm "$wasm" \
             --source-account deployer \
             --network escrow-local \
             --alias escrow \
-            -- --allowed_tokens '[]'
+            -- --allowed_tokens '[]' --pause_admin "$(stellar keys public-key deployer)"
           contract_id=$(stellar contract alias show escrow --network escrow-local)
 
           echo "token_id=$token_id"

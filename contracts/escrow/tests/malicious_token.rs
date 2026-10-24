@@ -198,7 +198,10 @@ fn create_escrow_rejects_lying_transfer() {
 
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_create_escrow(
@@ -234,7 +237,10 @@ fn create_escrow_rejects_short_delivery() {
 
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_create_escrow(
@@ -274,7 +280,10 @@ fn failed_payout_leaves_the_escrow_funded() {
 
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let escrow_id = client.create_escrow(
@@ -310,7 +319,10 @@ fn reentrant_transfer_cannot_double_release() {
 
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Creating with this token is fine: the transfer in is honest, and
@@ -379,18 +391,13 @@ fn contribute_rejects_lying_transfer() {
     let creator = Address::generate(&env);
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let escrow_id = pooled_id(
-        &client,
-        &env,
-        &token_id,
-        &creator,
-        &payee,
-        &releaser,
-        300,
-    );
+    let escrow_id = pooled_id(&client, &env, &token_id, &creator, &payee, &releaser, 300);
 
     let result = client.try_contribute(&escrow_id, &payer, &100);
 
@@ -417,18 +424,13 @@ fn contribute_rejects_short_delivery() {
     let creator = Address::generate(&env);
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let escrow_id = pooled_id(
-        &client,
-        &env,
-        &token_id,
-        &creator,
-        &payee,
-        &releaser,
-        300,
-    );
+    let escrow_id = pooled_id(&client, &env, &token_id, &creator, &payee, &releaser, 300);
 
     let result = client.try_contribute(&escrow_id, &payer, &100);
 
@@ -456,18 +458,13 @@ fn failed_claim_leaves_the_contribution_intact() {
     let creator = Address::generate(&env);
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let escrow_id = pooled_id(
-        &client,
-        &env,
-        &token_id,
-        &creator,
-        &payee,
-        &releaser,
-        300,
-    );
+    let escrow_id = pooled_id(&client, &env, &token_id, &creator, &payee, &releaser, 300);
     // Honest funding in; only the outbound payout leg is armed later.
     client.contribute(&escrow_id, &payer, &300);
     token.arm();

@@ -36,7 +36,13 @@ fn setup<'a>(env: &Env, release_at: Option<u64>, refund_at: Option<u64>) -> Fixt
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (soroban_sdk::Vec::<Address>::new(env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            soroban_sdk::Vec::<Address>::new(env),
+            Address::generate(env),
+        ),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
     let escrow_id = client.create_escrow_release_time(
         &payer,
@@ -107,7 +113,13 @@ fn creation_rejects_release_time_in_the_past_or_after_refund_deadline() {
     let releaser = Address::generate(&env);
     let asset = StellarAssetClient::new(&env, &token_id);
     asset.mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, (soroban_sdk::Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            soroban_sdk::Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let past = client.try_create_escrow_release_time(

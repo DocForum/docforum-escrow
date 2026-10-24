@@ -10,7 +10,11 @@
 
 ## Contract surface
 ```
-__constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
+__constructor(allowed_tokens: Vec<Address>, pause_admin: Address)    // immutable token allowlist (empty = allow all) + the one pause custodian; no setter, no upgrade
+pause(caller) -> result                // IMPLEMENTED (Phase E5, ADR 0011) — custodian only; blocks every deposit path, never release/refund
+unpause(caller) -> result              // IMPLEMENTED (Phase E5, ADR 0011) — custodian only; re-opens new deposits
+is_paused() -> bool                    // IMPLEMENTED (Phase E5, ADR 0011) — read-only pause flag
+get_pause_admin() -> Option<Address>   // IMPLEMENTED (Phase E5, ADR 0011) — read-only custodian address
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009); deployed on testnet
 create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id   // optional payee acceptance gate; deployed on testnet
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
@@ -32,6 +36,26 @@ rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue
 ```
 
 No new contract-level role came in with the M-of-N work: `releasers` is
+escrow data chosen by the payer at creation and immutable afterwards. There is
+still no admin over funds, no owner and no upgrade path — OpenZeppelin's
+upgradeable/access modules were evaluated and rejected in `docs/adr/0006`
+precisely because they would add one. The one contract-level role is the
+emergency-pause custodian (`pause_admin`, ADR 0011), whose only power is
+refusing **new** deposits; it cannot release, refund, edit an escrow,
+rotate a releaser or upgrade anything, and it never gates an outbound path.
+
+**Emergency pause (Phase E5, `docs/adr/0011`):** one address fixed at
+deployment by `__constructor` may set a flag that makes every deposit path
+(`create_escrow` and its variants, plus `top_up`) fail with `Paused`
+(error 26). That is its *only* power. `release`, `refund` (both the
+releaser and timeout paths), `get_status` and `get_escrow` do not read the
+flag, so a pause can never lock funds that are already escrowed — the
+contract-side tests state that explicitly
+(`contracts/escrow/tests/pause.rs`). `pause`/`unpause` require the
+custodian's signature, are not idempotent (`AlreadyPaused`/`NotPaused`),
+and emit `Paused`/`Unpaused` events. There is no timelock on either
+direction and no unpause backdoor. Any future deposit path **must** apply
+the same check in the same PR.
 escrow data chosen by the payer at creation and immutable afterwards.There is still no admin, no owner, no pause and no upgrade path — OpenZeppelin's
 pausable/upgradeable/access modules were evaluated and rejected in
 `docs/adr/0006` precisely because they would add one.
@@ -126,6 +150,10 @@ await client.getEscrow(escrowId);            // full stored record — incl. rel
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair or SEP-43 Signer, must be a releaser and threshold must be 1
 await client.releaseWithApprovals({ escrowId, approvers }); // { txHash } — one Keypair/Signer per approver (>= threshold, distinct)
 await client.refund({ escrowId, caller });   // { txHash } — releaser when threshold is 1; anyone after refundAfter has passed
+await client.isPaused();                     // boolean — are new deposits blocked? release/refund are unaffected
+await client.getPauseAdmin();                // custodian address set at deploy (docs/adr/0011)
+await client.pause(caller);                  // { txHash } — caller: Keypair/Signer, must be the pause custodian
+await client.unpause(caller);                // { txHash } — same authority; re-opens new deposits
 await client.refundWithApprovals({ escrowId, approvers });  // { txHash } — M-of-N refund
 await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
 const stop = client.subscribe(handler, { cursor, pollIntervalMs }); // serial polling; await handler for back-pressure
@@ -176,6 +204,16 @@ param existed.
 bounds client-side so callers fail fast. `getEscrow()` returns
 `releasers: string[]` and `threshold: number` (`releaser: string` was replaced
 in SDK 0.5.0 when the contract's `EscrowData` changed).
+On the pause custodian: it is the one contract-level role in the design, and
+it is deliberately weaker than the contract-level admin ADR 0002 rejected —
+it cannot release, refund, edit an escrow, rotate a releaser, or upgrade
+anything, so its worst case is "no new deposits on this contract id"
+(threat model T12), never "someone's money is stuck". For mainnet, pass a
+Stellar multisig account (e.g. 2-of-3) as `pause_admin`; `require_auth`
+honours that account's own thresholds, so no contract change is needed.
+Because the constructor is the only place the address is set, changing
+custodians means deploying a new contract id.
+
 `sdk/src/generated/contract-client.ts` is machine-generated
 (`stellar contract bindings typescript --wasm ...`) — never hand-edit it;
 regenerate it whenever the contract's public signatures/types change. CI now
