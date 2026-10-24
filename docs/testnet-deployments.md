@@ -1,5 +1,11 @@
 # Testnet deployments
 
+> This file tracks **testnet** deployments of `docforum_escrow`. For futurenet
+> protocol-compatibility checks (Phase E7) see the per-protocol reports under
+> [`docs/futurenet-compatibility-reports/`](./futurenet-compatibility-reports/)
+> and the `Futurenet compatibility checks` workflow
+> (`.github/workflows/futurenet-compatibility.yml`).
+
 New records are written by `scripts/deploy`, newest first, and mirrored in the
 machine-readable `/deployments.json`. Older records were written by hand.
 
