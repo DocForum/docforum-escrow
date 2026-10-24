@@ -15,6 +15,10 @@ docforum-escrow-interface = { path = "../../crates/escrow-interface" }
 soroban-sdk = { version = "27.0.6", features = ["testutils"] }
 proptest = "1.5"
 
+[[bench]]
+name = "resource_profile"
+harness = false
+
 [profile.release]
 opt-level = "z"
 overflow-checks = true
