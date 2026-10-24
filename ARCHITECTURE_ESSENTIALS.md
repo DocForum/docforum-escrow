@@ -114,6 +114,25 @@ only while the escrow is `Funded`. The payee-acceptance gate
 The contract decides **who** may call `release`/`refund`, never **why**:
 `condition_ref` is opaque to it (`docs/adr/0001`).
 
+### Persistent storage layout policy
+
+Escrow entries are stored as a version-tagged `StoredEscrowData` enum;
+never add fields to a versioned record struct. Add a new struct and enum
+variant, decode each explicitly supported variant, and write the newest
+version on the next state-changing operation. The loader also recognizes
+three exact pre-version `ScVal::Map` layouts: seven named fields from
+before ADR 0004, eight fields before releaser sets, and twelve fields in
+the unversioned M-of-N/callback/acceptance layout. The current 14-field
+schema includes `refund_to` and `release_not_before` and is stored as V4. It does not default missing values in arbitrary maps;
+unknown or malformed values fail with `UnsupportedStorageVersion`.
+
+This policy prepares data decoding for a future code upgrade, but does not
+make the deployed contract upgradeable. There is currently no upgrade
+function or accepted upgrade ADR. Existing immutable contract instances
+cannot run this migration; a future upgrade mechanism requires a separate
+security-reviewed decision (including authorization and rollback policy).
+The resource cost of version dispatch has not been measured yet.
+
 ## TypeScript SDK surface (`sdk/`)
 ```ts
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
