@@ -24,6 +24,16 @@
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
 // never interprets it. Keep it that way; domain logic belongs in the
 // consuming application (docforum-core), never here.
+//
+// Formal verification (issue #101): invariants I1 (funds only leave to the
+// stored `payee`, or to the stored `refund_to` on refund/cancel), I2 (only
+// releasers settle — `threshold` distinct ones on a quorum escrow, and payee
+// acceptance when configured — or anyone after `refund_after`) and I3 (at
+// most one payout) are specified in `certora/escrow.spec`. The spec names the
+// entry points and `Error` discriminants below, and
+// `docs/formal-verification.md` records the scope, the assumptions and the
+// current status. The properties have not been machine-checked yet: do not
+// describe them as proven.
 #![no_std]
 
 use soroban_sdk::{
@@ -152,6 +162,7 @@ enum DataKey {
     Escrow(u64),
     Dependency(u64),
     NextId,
+    Status(u64),
     AllowedTokens,
     /// Pooled escrows only (issue #113): immutable funding config.
     /// Soroban encodes enum variants by name, so appending these two
@@ -590,12 +601,11 @@ impl EscrowContract {
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
     pub fn get_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, Error> {
-        let data: EscrowData = env
+        env
             .storage()
             .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)?;
-        Ok(data.status)
+            .get(&DataKey::Status(escrow_id))
+            .ok_or(Error::NotFound)
     }
 
     /// Read-only accessor for everything stored about `escrow_id` — payer,
@@ -684,6 +694,7 @@ impl EscrowContract {
             release_not_before: None,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        env.storage().persistent().set(&DataKey::Status(id), &data.status);
         env.storage().persistent().set(
             &DataKey::Pooled(id),
             &PooledData {
@@ -1186,11 +1197,7 @@ impl EscrowContract {
             release_not_before,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        if let Some(dependency) = depends_on {
-            env.storage()
-                .persistent()
-                .set(&DataKey::Dependency(id), &dependency);
-        }
+        env.storage().persistent().set(&DataKey::Status(id), &data.status);
         Self::publish_state(env, symbol_short!("created"), id, &data);
         Ok(id)
     }
@@ -1296,6 +1303,9 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(escrow_id), &data.status);
 
         let token_client = token::Client::new(env, &data.token);
         token_client.transfer(&env.current_contract_address(), &destination, &data.amount);
