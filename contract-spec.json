@@ -67,6 +67,11 @@
       "return": "Result<(), Error>"
     },
     {
+      "name": "cancel",
+      "args": "env: Env, escrow_id: u64, payer: Address",
+      "return": "Result<(), Error>"
+    },
+    {
       "name": "refund_with_approvals",
       "args": "env: Env, escrow_id: u64, approvers: Vec<Address>,",
       "return": "Result<(), Error>"
