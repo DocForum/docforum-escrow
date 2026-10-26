@@ -1,4 +1,4 @@
-# ADR 0008: Linear vesting streams
+# ADR 0012: Linear vesting streams
 
 **Status:** accepted for streamed escrows
 
@@ -27,7 +27,8 @@ the escrow's fixed amount.
 
 If `refund` is called before the stream settles, it pays the currently
 vested but unwithdrawn amount to the payee and returns only the unvested
-remainder to the payer. This closes the stream in one transaction and
+remainder to the stored `refund_to` (the payer unless set at
+creation, ADR 0009). This closes the stream in one transaction and
 avoids leaving a second party dependent on a future caller. After a
 successful stream refund, `get_vesting` reports zero claimable amount.
 The normal releaser-authorized `release` remains an early close path that

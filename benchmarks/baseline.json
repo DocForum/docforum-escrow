@@ -1,0 +1,176 @@
+{
+  "format": 2,
+  "threshold_percent": 20,
+  "functions": {
+    "create_escrow": {
+      "source_bytes": 720,
+      "profile": {
+        "before": {
+          "cpu_instructions": 469580,
+          "memory_bytes": 154508
+        },
+        "after": {
+          "cpu_instructions": 494344,
+          "memory_bytes": 167118
+        }
+      }
+    },
+    "create_escrow_release_time": {
+      "source_bytes": 788,
+      "profile": {
+        "before": {
+          "cpu_instructions": 469819,
+          "memory_bytes": 154790
+        },
+        "after": {
+          "cpu_instructions": 494583,
+          "memory_bytes": 167400
+        }
+      }
+    },
+    "create_escrow_with_acceptance": {
+      "source_bytes": 750,
+      "profile": {
+        "before": {
+          "cpu_instructions": 469584,
+          "memory_bytes": 154508
+        },
+        "after": {
+          "cpu_instructions": 494348,
+          "memory_bytes": 167118
+        }
+      }
+    },
+    "create_escrow_with_releasers": {
+      "source_bytes": 690,
+      "profile": {
+        "before": {
+          "cpu_instructions": 467876,
+          "memory_bytes": 154340
+        },
+        "after": {
+          "cpu_instructions": 492640,
+          "memory_bytes": 166950
+        }
+      }
+    },
+    "accept": {
+      "source_bytes": 358,
+      "profile": {
+        "before": {
+          "cpu_instructions": 144234,
+          "memory_bytes": 65558
+        },
+        "after": {
+          "cpu_instructions": 143415,
+          "memory_bytes": 65898
+        }
+      }
+    },
+    "get_status": {
+      "source_bytes": 219,
+      "profile": {
+        "before": {
+          "cpu_instructions": 81998,
+          "memory_bytes": 48080
+        },
+        "after": {
+          "cpu_instructions": 48289,
+          "memory_bytes": 22907
+        }
+      }
+    },
+    "get_escrow": {
+      "source_bytes": 204,
+      "profile": {
+        "before": {
+          "cpu_instructions": 92687,
+          "memory_bytes": 49173
+        },
+        "after": {
+          "cpu_instructions": 92353,
+          "memory_bytes": 49241
+        }
+      }
+    },
+    "rotate_releaser": {
+      "source_bytes": 435,
+      "profile": {
+        "before": {
+          "cpu_instructions": 168515,
+          "memory_bytes": 74366
+        },
+        "after": {
+          "cpu_instructions": 169965,
+          "memory_bytes": 74842
+        }
+      }
+    },
+    "top_up": {
+      "source_bytes": 163,
+      "profile": {
+        "before": {
+          "cpu_instructions": 499982,
+          "memory_bytes": 157977
+        },
+        "after": {
+          "cpu_instructions": 506300,
+          "memory_bytes": 158657
+        }
+      }
+    },
+    "release": {
+      "source_bytes": 393,
+      "profile": {
+        "before": {
+          "cpu_instructions": 371696,
+          "memory_bytes": 146414
+        },
+        "after": {
+          "cpu_instructions": 406599,
+          "memory_bytes": 158865
+        }
+      }
+    },
+    "release_with_approvals": {
+      "source_bytes": 420,
+      "profile": {
+        "before": {
+          "cpu_instructions": 373763,
+          "memory_bytes": 146623
+        },
+        "after": {
+          "cpu_instructions": 409566,
+          "memory_bytes": 159074
+        }
+      }
+    },
+    "refund": {
+      "source_bytes": 633,
+      "profile": {
+        "before": {
+          "cpu_instructions": 374162,
+          "memory_bytes": 140489
+        },
+        "after": {
+          "cpu_instructions": 402326,
+          "memory_bytes": 152779
+        }
+      }
+    },
+    "refund_with_approvals": {
+      "source_bytes": 476,
+      "profile": {
+        "before": {
+          "cpu_instructions": 377529,
+          "memory_bytes": 140791
+        },
+        "after": {
+          "cpu_instructions": 405382,
+          "memory_bytes": 153081
+        }
+      }
+    }
+  },
+  "profile_method": "Soroban native budget; one successful call per fresh environment; setup excluded"
+}

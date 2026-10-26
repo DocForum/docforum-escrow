@@ -46,7 +46,11 @@ optional payee-acceptance gate, an optional `refund_after` timeout that
 lets anyone trigger the refund, an optional `refund_to`, and an optional
 release callback to a contract payee. Funded escrows can be topped up by
 the original payer, and `get_status`/`get_escrow` are read-only. A token
-allowlist is fixed at deploy time.
+allowlist is fixed at deploy time. Pooled escrows — one agreement funded
+by many payers, with per-payer contribution records and pull-based
+pro-rata refunds — are a separate creation entry point
+(`create_pooled_escrow`, see [ADR 0011](docs/adr/0011-pooled-escrow-funding.md)
+and the contract surface list).
 
 **The full function list, signatures and rules are in
 [`ARCHITECTURE_ESSENTIALS.md` → Contract surface](ARCHITECTURE_ESSENTIALS.md#contract-surface).**
@@ -89,6 +93,8 @@ contracts/escrow/
   tests/                 Integration tests (soroban-sdk testutils) — required for any contract change
   test_snapshots/        Committed Soroban snapshots (events/auth/storage) per test — issue #120
   Cargo.toml
+certora/
+  escrow.spec            Property list for invariants I1–I3 and the timeout rule (see docs/formal-verification.md)
 sdk/
   src/index.ts           @docforum/escrow-sdk — hand-written public surface
   src/generated/         Machine-generated contract bindings — never hand-edit (issue #121)
@@ -144,6 +150,107 @@ const { txHash } = await client.submitRelayed("release", authorization, relayer)
 Keep the serialized authorization private until submission and do not
 retry it after its expiration ledger.
 
+### Milestone escrows
+
+A milestone escrow pays out in fixed tranches instead of one lump sum.
+The deployed contract is single-tranche, so the SDK models a schedule as a
+**group of escrows** — one per tranche — created by `createMilestoneEscrow`.
+No contract change is involved, and every per-escrow guarantee (releaser
+auth, refund deadline, `Funded`/`Released` state) applies to each tranche:
+
+```ts
+const group = await client.createMilestoneEscrow({
+  payer,
+  payee,
+  token,
+  amount: 1_000_000n,             // must equal the sum of `milestones`
+  conditionRef: "milestone-schedule",
+  releaser,
+  milestones: [600_000n, 400_000n],
+});
+group.escrowIds;    // [101n, 102n] — one single-tranche escrow per tranche
+
+await client.releaseMilestone({ escrow: group, milestoneIndex: 0, caller: releaser }); // 600_000 to payee
+await client.getMilestones(group); // [{ index: 0, … status: "released" }, { index: 1, … status: "unreleased" }]
+await client.refundMilestone({ escrow: group, milestoneIndex: 1, caller: releaser });
+```
+
+The schedule is validated before the first transaction: entries must be
+positive and sum exactly to `amount`, otherwise `createMilestoneEscrow`
+rejects with `MilestoneScheduleError` and spends nothing. Each tranche's
+`conditionRef` is tagged `<conditionRef>#m<i+1>/<n>` so a tranche stays
+traceable on-chain, and a tag that would exceed the contract's 64-byte
+`condition_ref` limit is rejected up front.
+
+Two consequences of "one escrow per tranche" are worth knowing:
+
+- A group costs one transaction per tranche, and creation is not atomic. If
+  tranche *k* fails, the earlier escrows are already funded; the thrown
+  `MilestoneEscrowPartialError` carries their ids so you can release or
+  refund them instead of paying twice.
+- Each tranche settles independently: refunding tranche 1 does not touch
+  tranche 2, and released tranches are final.
+
+### Pooled escrows
+
+A pooled escrow funds **one agreement from many payers** (group purchase,
+shared cost, crowdfunded work) while keeping every contribution on-chain
+and refunding each payer exactly what they put in (issue #113,
+[ADR 0011](docs/adr/0011-pooled-escrow-funding.md)). It is a distinct
+creation entry point; single-payer escrows are untouched. All amounts are
+raw token units.
+
+```ts
+// 1. Anyone creates the pool: target 1_000_000, funding closes at a deadline.
+const { escrowId } = await client.createPooledEscrow({
+  creator, payee, token,
+  fundingTarget: 1_000_000n,
+  conditionRef: "group-order-42",
+  releaser,
+  fundingDeadline: 1_760_000_000n, // unix seconds, must be in the future
+});
+
+// 2. Contributors fund it — accepted only before the deadline and only
+//    while the total stays within the target (overfunding is rejected).
+await client.contribute({ escrowId, payer: alice, amount: 400_000n });
+await client.contribute({ escrowId, payer: bob,   amount: 350_000n });
+await client.contribute({ escrowId, payer: alice, amount: 250_000n }); // accumulates: alice = 650_000
+
+// 3a. Target reached (1_000_000): the releaser releases the pooled total.
+await client.release({ escrowId, caller: releaser }); // 1_000_000 to payee
+
+// 3b. Deadline passed below target: the round failed — release is blocked
+//     (`FundingIncomplete`), late contributions are rejected, and every
+//     contributor pulls back their own exact record, in any order.
+await client.claimRefund({ escrowId, contributor: alice }); // 650_000 back to alice
+await client.claimRefund({ escrowId, contributor: bob });   // 350_000 back to bob
+```
+
+Rules worth knowing before integrating:
+
+- **Release needs the full target.** A partially funded pool can never
+  be released; once the target is met, the deadline no longer matters —
+  the round succeeded and the ordinary releaser rules apply.
+- **The deadline is the only early exit.** Contributors cannot withdraw
+  before it. After it passes with the target unmet, contributions are
+  frozen forever and `claim_refund` opens to each contributor, once each
+  (`AlreadyRefunded` afterwards), payable at any later time.
+- **Refunds are pull-based and order-independent:** each claim pays only
+  the calling contributor's recorded amount under their own signature —
+  no one can claim anyone else's (`NoContribution`), and no entry point
+  ever loops over contributors, so there is no contributor cap to hit.
+- **Push refunds and `top_up` do not exist for pooled escrows**
+  (`NotSupportedForPooled`): they would route the pool to one address or
+  grow it without a per-payer record. Pooled escrows have no
+  `refund_after` either — a *failed* round is the only refund window.
+- **Read funding state with `getPooled`:** `getStatus` still returns
+  `"Funded"` for a failed round (status describes settlement), so poll
+  `getPooled()` (`fundingTarget`, `fundingDeadline`) plus the escrow's
+  `amount` to tell open / succeeded / failed apart.
+- The live testnet deployment predates these entry points; pooled
+  functions work locally until the next redeploy
+  ([`docs/testnet-deployments.md`](docs/testnet-deployments.md)).
+
 ## Verify this deployment
 
 Contract WASM releases attach `docforum_escrow.wasm` and its
@@ -182,6 +289,31 @@ paths produce identical bytes, run
 the pinned `rust:1.96.0-bookworm` container. No `stellar contract optimize`
 step is used.
 
+### Deploying with `scripts/deploy`
+
+`scripts/deploy` is the one command for deploy, verify and record. From a
+clean checkout it builds the WASM, checks its SHA-256 (optionally against
+`--expected-wasm-hash`), uploads and deploys it with the constructor
+allowlist (default: the network's native XLM contract), and confirms the
+on-chain WASM matches. Then it runs a scripted live check: create,
+release, refund, and three rejections (stranger release, double release,
+zero amount). The record goes to `deployments.json`,
+`docs/testnet-deployments.md` and the SDK's bundled deployments module.
+
+```bash
+# Against a local quickstart (writes nothing tracked):
+docker run --rm -d -p 8000:8000 stellar/quickstart --local
+scripts/deploy --dry-run
+
+# Against testnet (accounts are generated and friendbot-funded unless
+# DEPLOY_SOURCE_SECRET is set):
+scripts/deploy
+```
+
+It refuses a dirty git tree and any network other than testnet or the local
+quickstart. The SDK resolves recorded ids with `knownContractId("testnet")`
+or `knownNetworkConfig("testnet")`.
+
 An escrow created with `createQuorumEscrow` settles with M-of-N approvals;
 each supplied keypair signs only the contract auth entry for that one call, and
 the first pays the fee:
@@ -193,6 +325,36 @@ const { escrowId } = await client.createQuorumEscrow({
   threshold: 2,
 });
 await client.releaseWithApprovals({ escrowId, approvers: [a, c] });
+```
+
+### Lifecycle amendments
+
+Top up a funded escrow, accept as the payee, or cancel as the payer before
+the payee accepts. Each call reads the escrow first and throws
+`EscrowPreconditionError` (with a `code` such as `"AlreadyAccepted"`) instead
+of sending a transaction the contract would reject:
+
+```ts
+await client.topUp({ escrowId, payer, amount: 500_000n });
+
+const { escrowId: gated } = await client.createEscrow({ ...params, requiresAcceptance: true });
+await client.accept({ escrowId: gated, payee });   // payer can no longer cancel
+// before acceptance: await client.cancel({ escrowId: gated, payer });
+```
+
+When the signer and the submitter are on different machines, pass the call
+between them as JSON:
+
+```ts
+// Machine A (submitter, pays the fee)
+const prepared = await client.prepareLifecycleCall({
+  call: { method: "top_up", escrowId, payer: payerAddress, amount: 500_000n },
+  source: relayerAddress,
+});
+// Machine B (each address in prepared.pendingSigners)
+const signed = await client.signLifecycleCall(prepared, payer);
+// Machine A
+await client.submitLifecycleCall(signed, relayer, "top_up");
 ```
 
 ### Fee estimation and fee-bump sponsorship
@@ -309,6 +471,7 @@ typed contract errors and `big.Int` i128 amounts. See
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
 | [`ROADMAP.md`](ROADMAP.md) | Phase breakdown and current status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
+| [`docs/formal-verification.md`](docs/formal-verification.md) | Formal-verification spike for invariants I1–I3: what `certora/escrow.spec` covers, the assumptions it relies on, and its current status (specified, not yet machine-checked). |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
 
 ## Project status

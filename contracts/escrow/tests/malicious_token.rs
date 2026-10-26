@@ -16,7 +16,9 @@
 
 use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
-    contract, contractimpl, contracttype, testutils::Address as _, Address, Env, String, Vec,
+    contract, contractimpl, contracttype,
+    testutils::{Address as _, Ledger as _},
+    Address, Env, String, Vec,
 };
 
 #[contracttype]
@@ -337,4 +339,149 @@ fn reentrant_transfer_cannot_double_release() {
     // (The mock propagates the inner failure rather than swallowing
     // it; a swallowing token would only spare itself the DoS.)
     client.release(&escrow_id, &releaser);
+}
+
+// --- pooled contributions face the same balance-delta check (issue #113) ---
+
+fn pooled_id(
+    client: &EscrowContractClient,
+    env: &Env,
+    token_id: &Address,
+    creator: &Address,
+    payee: &Address,
+    releaser: &Address,
+    target: i128,
+) -> u64 {
+    client.create_pooled_escrow(
+        creator,
+        payee,
+        token_id,
+        &target,
+        &String::from_str(env, "pooled-malicious-token"),
+        releaser,
+        &(env.ledger().timestamp() + 1_000),
+    )
+}
+
+#[test]
+fn contribute_rejects_lying_transfer() {
+    // A lying token funds a pooled escrow's creation happily (nothing is
+    // transferred there), but `contribute` verifies the balance delta and
+    // must record nothing when the tokens never arrive (invariant I4).
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let token_id = env.register(LyingToken, ());
+    let token = LyingTokenClient::new(&env, &token_id);
+    let payer = Address::generate(&env);
+    token.set_balance(&payer, &1_000);
+
+    let creator = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let escrow_id = pooled_id(
+        &client,
+        &env,
+        &token_id,
+        &creator,
+        &payee,
+        &releaser,
+        300,
+    );
+
+    let result = client.try_contribute(&escrow_id, &payer, &100);
+
+    assert_eq!(result, Err(Ok(Error::BalanceMismatch)));
+    assert_eq!(token.balance(&payer), 1_000);
+    assert_eq!(token.balance(&contract_id), 0);
+    assert!(client.get_contribution(&escrow_id, &payer).is_none());
+    assert_eq!(client.get_escrow(&escrow_id).amount, 0);
+}
+
+#[test]
+fn contribute_rejects_short_delivery() {
+    // Fee-on-transfer shape: 100 debited, only 90 delivered. The
+    // contribution must fail entirely — the escrow cannot owe more than
+    // it holds — and the token's own debit rolls back with it.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let token_id = env.register(FeeOnTransferToken, ());
+    let token = FeeOnTransferTokenClient::new(&env, &token_id);
+    let payer = Address::generate(&env);
+    token.set_balance(&payer, &1_000);
+
+    let creator = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let escrow_id = pooled_id(
+        &client,
+        &env,
+        &token_id,
+        &creator,
+        &payee,
+        &releaser,
+        300,
+    );
+
+    let result = client.try_contribute(&escrow_id, &payer, &100);
+
+    assert_eq!(result, Err(Ok(Error::BalanceMismatch)));
+    assert_eq!(token.balance(&payer), 1_000);
+    assert_eq!(token.balance(&contract_id), 0);
+    assert!(client.get_contribution(&escrow_id, &payer).is_none());
+    assert_eq!(client.get_escrow(&escrow_id).amount, 0);
+}
+
+#[test]
+fn failed_claim_leaves_the_contribution_intact() {
+    // Checks-effects-interactions on the pull-refund path (issue #113):
+    // a claim whose outbound transfer panics must roll back the
+    // `refunded` flag and the pooled total, never marking a contribution
+    // spent while its tokens never moved.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let token_id = env.register(FailingPayoutToken, ());
+    let token = FailingPayoutTokenClient::new(&env, &token_id);
+    let payer = Address::generate(&env);
+    token.set_balance(&payer, &1_000);
+
+    let creator = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let escrow_id = pooled_id(
+        &client,
+        &env,
+        &token_id,
+        &creator,
+        &payee,
+        &releaser,
+        300,
+    );
+    // Honest funding in; only the outbound payout leg is armed later.
+    client.contribute(&escrow_id, &payer, &300);
+    token.arm();
+
+    // Miss the funding target's window: the round failed and claims open.
+    env.ledger().set_timestamp(env.ledger().timestamp() + 2_000);
+
+    assert!(client.try_claim_refund(&escrow_id, &payer).is_err());
+
+    // Accounting untouched: still unclaimed, still fully held.
+    assert_eq!(client.get_status(&escrow_id), EscrowStatus::Funded);
+    assert_eq!(client.get_escrow(&escrow_id).amount, 300);
+    assert_eq!(token.balance(&contract_id), 300);
+    assert_eq!(token.balance(&payer), 700);
+    let record = client.get_contribution(&escrow_id, &payer).unwrap();
+    assert!(!record.refunded);
 }
