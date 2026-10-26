@@ -101,6 +101,10 @@ async function run(): Promise<void> {
         amount: BigInt(required(options, "amount")), condition_ref: required(options, "condition-ref"),
         releaser: options.values.releaser ?? payer.publicKey(),
         refund_after: options.values["refund-after"] ? BigInt(options.values["refund-after"]) : undefined,
+        // The operator CLI only drives plain escrows; the payee-callback and
+        // sponsored-refund options stay on the programmatic SDK surface.
+        notify_payee: false,
+        refund_to: undefined,
       });
       const simulatedId = tx.result.unwrap();
       if (dryRun) result = { simulated: true, escrowId: simulatedId };

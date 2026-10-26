@@ -1,0 +1,10 @@
+# Only mutate the production contract. Test-only token mocks and fixtures are
+# kept under tests/ and must never inflate the mutation denominator.
+examine_globs = ["src/lib.rs"]
+exclude_globs = ["tests/**/*.rs"]
+
+# Keep individual mutant runs bounded while allowing Soroban's slower host
+# test harness to initialize.
+minimum_test_timeout = 120.0
+timeout_multiplier = 3.0
+build_timeout_multiplier = 3.0

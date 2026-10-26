@@ -1,0 +1,130 @@
+name: Futurenet compatibility checks
+
+# Phase E7 -- deploys the current WASM to Stellar futurenet and runs the
+# SDK integration suite against it. Manual / scheduled only: this workflow
+# must not block PRs. Futurenet is reset often, so every step that touches
+# on-chain state is tolerant of missing state.
+#
+# Run it from the Actions tab ("Futurenet compatibility checks" -> "Run
+# workflow"): it deploys the current WASM to futurenet and runs the SDK
+# integration suite against that deployment.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly on Monday at 06:00 UTC, ahead of the typical Stellar release cadence.
+    - cron: "0 6 * * 1"
+  push:
+    branches:
+      - futurenet-prerelease
+    paths:
+      - "contracts/escrow/**"
+      - "sdk/**"
+      - ".github/workflows/futurenet-compatibility.yml"
+
+concurrency:
+  group: futurenet-compatibility
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERMINAL_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  futurenet:
+    name: Deploy to futurenet and run SDK integration suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Futurenet's passphrase is read from its own RPC (`getNetwork`) by the
+      # integration suite, so it is deliberately not hardcoded here.
+      STELLAR_RPC: https://rpc-futurenet.stellar.org
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          targets: wasm32v1-none
+
+      - name: Build contract WASM
+        working-directory: contracts/escrow
+        run: cargo build --target wasm32v1-none --release
+
+      - name: Install pinned Stellar CLI
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version=//p' scripts/stellar-cli-version)
+          checksum=$(sed -n 's/^linux-x86_64-sha256=//p' scripts/stellar-cli-version)
+          url="https://github.com/stellar/stellar-cli/releases/download/v${version}/stellar-cli-${version}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o /tmp/stellar-cli.tar.gz "$url"
+          echo "${checksum}  /tmp/stellar-cli.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf /tmp/stellar-cli.tar.gz -C "$HOME/.local/bin"
+          "$HOME/.local/bin/stellar" --version
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Generate and fund a futurenet identity
+        # Futurenet is reset often, so the friendbot can fail if the network
+        # is mid-reset. Retry a few times before giving up.
+        run: |
+          set -euxo pipefail
+          for attempt in 1 2 3 4 5; do
+            if stellar keys generate --network futurenet --fund ci-futurenet; then
+              echo "Funded ci-futurenet on attempt $attempt"
+              exit 0
+            fi
+            echo "fund attempt $attempt failed; retrying in 10s"
+            sleep 10
+          done
+          echo "::warning::Could not fund a futurenet identity; futurenet may be mid-reset"
+          exit 1
+
+      - name: Deploy contract to futurenet
+        id: deploy
+        run: |
+          set -euxo pipefail
+          CONTRACT_ID=$(stellar contract deploy \
+            --wasm contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm \
+            --source ci-futurenet \
+            --network futurenet)
+          echo "contract_id=$CONTRACT_ID" >> "$GITHUB_OUTPUT"
+          echo "Deployed contract $CONTRACT_ID"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+
+      - name: Install SDK dependencies
+        working-directory: sdk
+        run: npm ci
+
+      - name: Typecheck and build SDK
+        working-directory: sdk
+        run: |
+          npm run typecheck
+          npm run build
+
+      - name: Run futurenet integration suite
+        working-directory: sdk
+        env:
+          FUTURENET_CONTRACT_ID: ${{ steps.deploy.outputs.contract_id }}
+        run: npm run test:futurenet
+
+      - name: Write report summary
+        if: always()
+        run: |
+          {
+            echo "# Futurenet compatibility run"
+            echo ""
+            echo "- Contract ID: ${{ steps.deploy.outputs.contract_id }}"
+            echo "- Run at: $(date -u)"
+          } >> "$GITHUB_STEP_SUMMARY"
