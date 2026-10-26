@@ -330,6 +330,13 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   transaction hash and retry count; addresses are opt-in only
   (`includeAddresses: true`). 7 offline tests assert span production and the
   disabled path.
+- [x] Token-aware amount parsing and formatting (issue #81) —
+  `sdk/src/amounts.ts`: `getTokenInfo(token)` reads `decimals`, `symbol` and
+  `name` from the SEP-41 token contract (cached per contract address);
+  `parseAmount` and `formatAmount` convert between human strings and raw
+  `bigint` with strict validation (no floats/exponents, no excess fractional
+  precision, no negatives, locale-independent). Property tests assert
+  `format(parse(x)) == normalise(x)`. Used in the web demo and SDK docs.
 - [ ] SDK lifecycle amendments (issue #84). Done: `topUp`, `accept`,
   `cancel` (now `EscrowSigner`), `createEscrow({ requiresAcceptance })`,
   typed `EscrowPreconditionError` checks before submission, and a
@@ -340,6 +347,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 
 ## Phase E7 — Verification, testing & release engineering
 - [x] **Storage and resource optimisation guided by benchmarks (issue #98)** — `get_status` reads a dedicated persistent status value instead of decoding `EscrowData`. Benchmarks showed that moving `NextId` to persistent storage raised creation costs, so it remains in instance storage. The added status record improves `get_status` while adding writes to creation and settlement. Storage layout changed, so deploy as a new testnet contract ID under ADR 0005 and let existing escrows settle on their original contract.
+- [x] **Coverage-guided contract fuzzing (issue #99)** — `contracts/escrow/fuzz/` runs randomized create/release/refund sequences with ledger timestamp jumps against the Soroban test environment and checks payout, status, and balance invariants after each operation. CI runs a short cargo-fuzz pass on pull requests and a longer nightly pass, uploading crash artifacts. The committed seed corpus starts the lifecycle and timeout paths. No contract or SDK behavior changed.
 - [x] **Reproducible WASM builds and deployment verification (issue #91)** ?
   Rust 1.96.0 and Stellar CLI 28.1.0 are pinned; the pinned
   `rust:1.96.0-bookworm` container compares release WASM hashes from two
