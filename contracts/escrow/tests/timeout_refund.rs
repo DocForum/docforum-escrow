@@ -14,7 +14,7 @@ use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, Map, String,
+    Address, Env, String, Vec,
 };
 
 /// Ledger close time at escrow creation.
@@ -28,12 +28,6 @@ fn setup<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
     let token = TokenClient::new(env, &contract_id.address());
     let asset = StellarAssetClient::new(env, &contract_id.address());
     (contract_id.address(), token, asset)
-}
-
-fn register_escrow(env: &Env, token: &Address) -> Address {
-    let mut maximum_amounts = Map::new(env);
-    maximum_amounts.set(token.clone(), 1_000);
-    env.register(EscrowContract, (maximum_amounts,))
 }
 
 struct Fixture<'a> {
@@ -55,7 +49,7 @@ fn fund_escrow(env: &Env, refund_after: Option<u64>) -> Fixture<'_> {
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = register_escrow(env, &token_id);
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env), soroban_sdk::Map::<soroban_sdk::Address, i128>::new(env)));
     let client = EscrowContractClient::new(env, &contract_id);
 
     let escrow_id = client.create_escrow(
@@ -66,9 +60,19 @@ fn fund_escrow(env: &Env, refund_after: Option<u64>) -> Fixture<'_> {
         &String::from_str(env, "opaque-condition-ref"),
         &releaser,
         &refund_after,
+        &false,
+        &None,
     );
 
-    Fixture { client, token, contract_id, payer, payee, releaser, escrow_id }
+    Fixture {
+        client,
+        token,
+        contract_id,
+        payer,
+        payee,
+        releaser,
+        escrow_id,
+    }
 }
 
 // --- no refund_after: behaviour identical to before the timeout existed ---
@@ -116,16 +120,30 @@ fn create_escrow_rejects_deadline_already_passed_or_now() {
     asset.mint(&payer, &1_000);
     env.ledger().set_timestamp(CREATED_AT);
 
-    let contract_id = register_escrow(&env, &token_id);
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env)));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let now = client.try_create_escrow(
-        &payer, &payee, &token_id, &300,
-        &String::from_str(&env, "ref-now"), &releaser, &Some(CREATED_AT),
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(&env, "ref-now"),
+        &releaser,
+        &Some(CREATED_AT),
+        &false,
+        &None,
     );
     let past = client.try_create_escrow(
-        &payer, &payee, &token_id, &300,
-        &String::from_str(&env, "ref-past"), &releaser, &Some(CREATED_AT - 1),
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(&env, "ref-past"),
+        &releaser,
+        &Some(CREATED_AT - 1),
+        &false,
+        &None,
     );
 
     assert!(now.is_err());
@@ -337,7 +355,11 @@ fn get_escrow_exposes_the_stored_parties_and_deadline() {
     assert_eq!(data.payer, f.payer);
     assert_eq!(data.payee, f.payee);
     assert_eq!(data.amount, 300);
-    assert_eq!(data.releaser, f.releaser);
+    // A single-releaser escrow is stored as a one-address set with a
+    // threshold of 1 (docs/adr/0007) — same authority, same behaviour.
+    assert_eq!(data.releasers.len(), 1);
+    assert_eq!(data.releasers.get(0).unwrap(), f.releaser);
+    assert_eq!(data.threshold, 1);
     assert_eq!(data.refund_after, Some(DEADLINE));
     assert_eq!(data.status, EscrowStatus::Funded);
 }
@@ -359,7 +381,7 @@ fn get_escrow_errors_for_unknown_escrow() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register(EscrowContract, (Map::<Address, i128>::new(&env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env)));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_get_escrow(&999);

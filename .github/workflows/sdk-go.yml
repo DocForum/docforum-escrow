@@ -1,0 +1,188 @@
+name: Go SDK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sdk-go/**'
+      - '.github/workflows/sdk-go.yml'
+  pull_request:
+    paths:
+      - 'sdk-go/**'
+      - '.github/workflows/sdk-go.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Go SDK unit tests (offline)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk-go
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sdk-go/go.mod
+          cache: true
+          cache-dependency-path: sdk-go/go.sum
+
+      - name: gofmt check
+        run: |
+          set -eu
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed for:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (offline)
+        run: go test ./...
+
+  integration:
+    name: Go SDK integration (local quickstart)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      stellar:
+        # Quickstart's local mode is an ephemeral single-node network with
+        # Soroban RPC. NETWORK=local is the documented env-var equivalent of
+        # `stellar/quickstart --local`; RPC is exposed at /rpc on port 8000.
+        image: stellar/quickstart:latest
+        env:
+          NETWORK: local
+          ENABLE_SOROBAN_RPC: "true"
+        ports:
+          - 8000:8000
+    defaults:
+      run:
+        working-directory: sdk-go
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sdk-go/go.mod
+          cache: true
+          cache-dependency-path: sdk-go/go.sum
+
+      - name: Install Rust toolchain (wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+
+      - name: Build escrow contract WASM
+        working-directory: contracts/escrow
+        run: cargo build --target wasm32v1-none --release
+
+      - name: Install pinned Stellar CLI
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version=//p' ../scripts/stellar-cli-version)
+          checksum=$(sed -n 's/^linux-x86_64-sha256=//p' ../scripts/stellar-cli-version)
+          url="https://github.com/stellar/stellar-cli/releases/download/v${version}/stellar-cli-${version}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o /tmp/stellar-cli.tar.gz "$url"
+          echo "${checksum}  /tmp/stellar-cli.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf /tmp/stellar-cli.tar.gz -C "$HOME/.local/bin"
+          "$HOME/.local/bin/stellar" --version
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Wait for local quickstart RPC
+        run: |
+          set -euo pipefail
+          rpc_url="http://localhost:8000/rpc"
+          for attempt in $(seq 1 90); do
+            if curl -fsS -X POST "$rpc_url" \
+              -H 'Content-Type: application/json' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' >/dev/null; then
+              echo "RPC is healthy after ${attempt} attempt(s)."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::local quickstart RPC did not become healthy"
+          docker logs "${{ job.services.stellar.id }}" || true
+          exit 1
+
+      - name: Configure local network
+        run: |
+          set -euo pipefail
+          # "local" is already a built-in CLI network, so use a distinct name.
+          stellar network add escrow-local \
+            --rpc-url "http://localhost:8000/rpc" \
+            --network-passphrase "Standalone Network ; February 2017"
+
+      - name: Generate and fund deployer identity
+        run: |
+          set -euo pipefail
+          stellar keys generate deployer --network escrow-local --overwrite
+          # RPC health can be ready before quickstart finishes starting Horizon
+          # and friendbot, so retry the faucet instead of racing startup.
+          for attempt in $(seq 1 60); do
+            if stellar keys fund deployer --network escrow-local; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "::error::friendbot did not fund deployer"
+              exit 1
+            fi
+            sleep 2
+          done
+          stellar keys public-key deployer
+
+      - name: Deploy native asset SAC and escrow contract
+        id: deploy
+        run: |
+          set -euo pipefail
+          wasm="../contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm"
+          test -f "$wasm"
+
+          stellar contract asset deploy \
+            --asset native \
+            --source-account deployer \
+            --network escrow-local \
+            --alias native-token
+          token_id=$(stellar contract alias show native-token --network escrow-local)
+
+          # __constructor(allowed_tokens: Vec<Address>, maximum_amounts:
+          # Map<Address, i128>) — an empty list and an empty map keep the
+          # legacy open-token, uncapped behavior, fine for an ephemeral local net.
+          stellar contract deploy \
+            --wasm "$wasm" \
+            --source-account deployer \
+            --network escrow-local \
+            --alias escrow \
+            -- --allowed_tokens '[]' --maximum_amounts '{}'
+          contract_id=$(stellar contract alias show escrow --network escrow-local)
+
+          echo "token_id=$token_id"
+          echo "contract_id=$contract_id"
+          {
+            echo "STELLAR_RPC_URL=http://localhost:8000/rpc"
+            echo "STELLAR_NETWORK_PASSPHRASE=Standalone Network ; February 2017"
+            echo "STELLAR_SECRET_KEY=$(stellar keys secret deployer)"
+            echo "ESCROW_CONTRACT_ID=$contract_id"
+            echo "ESCROW_TOKEN_ID=$token_id"
+            echo "ESCROW_INTEGRATION=1"
+          } >> "$GITHUB_ENV"
+
+      - name: go test (integration)
+        run: go test -tags=integration -v ./...
