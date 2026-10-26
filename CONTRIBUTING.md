@@ -68,7 +68,16 @@ verification/release-engineering tracks.
   covering unauthorized-caller and double-release/refund attempts, not
   just the happy path — this is a funds-moving contract.
 - If your change starts, completes, or blocks a roadmap-tracked item,
-  update `ROADMAP.md` in the same PR.
+  tick or update that item's line in `ROADMAP.md` and add a changelog
+  entry as a new file in `changelog.d/`, in the same PR. Don't append to
+  the end of `ROADMAP.md`; that is what made every PR conflict. See
+  `changelog.d/README.md`.
+- Changes to escrow lifecycle semantics must also update the TLA+
+  specification under `spec/` and rerun TLC. That includes changes to
+  settlement auth, status transitions, timeouts, payee acceptance,
+  release/refund rules, or quorum behavior.
+- Keep doc edits to your own lines: add rows and lines, don't rewrite
+  other people's paragraphs. See `AGENTS.md` → "Shared docs".
 - Run `cargo test` and `cargo build --target wasm32v1-none --release`
   locally — this is exactly what CI checks.
 - `cargo test` also rewrites `contracts/escrow/test_snapshots/`. Review that
@@ -83,6 +92,9 @@ verification/release-engineering tracks.
 - Any change to the SDK's public surface is a contract change and needs
   tests and a `changeset` entry (see [Releasing the SDK](#releasing-the-sdk)).
   Strict semver applies to the SDK.
+- If your change touches a file listed as in scope in
+  [`docs/audit/README.md`](docs/audit/README.md), say so in the PR so it can
+  get a delta review instead of silently changing the reviewed surface.
 
 ## Test snapshots
 
@@ -172,6 +184,27 @@ Before the first automated release, a maintainer must do the following once:
 The release process itself is documented in `docs/adr/0005` (npm publishing),
 which supersedes ADR 0003 (tarball-only releases). Note: that ADR file is
 referenced by `ROADMAP.md` Phase E6 but is not present in this tree.
+
+## Security reports and the audit package
+
+`docs/audit/` holds what an independent reviewer needs: the reviewed commit,
+the files in and out of scope, and reproducible test and build results.
+[`SECURITY.md`](SECURITY.md) is the reporting path; the threat model is
+`docs/threat-model.md`.
+
+What this means for contributors:
+
+- **Report privately.** A suspected vulnerability goes through `SECURITY.md`,
+  never a public issue or PR. Do not describe it in `docs/audit/`, in a test
+  name, or in a commit message; reference the private advisory ID instead.
+- **Respect the reviewed scope.** `docs/audit/README.md` names the commit
+  under review and the in-scope files. A change to one of those files after
+  the freeze needs a delta note in `docs/audit/` (a new `delta-<n>.md`), not
+  an edit to the frozen documents.
+- **Keep the threat model current.** If you change contract behaviour that
+  the threat model covers, update `docs/threat-model.md` in the same PR.
+  Planned-but-unimplemented features belong in its "planned" section, marked
+  as such — do not describe them as current behaviour.
 
 ## Found a bug instead?
 
