@@ -9,13 +9,13 @@ on:
     - cron: '0 3 * * *'
 
 jobs:
-  resource-baseline:
-    name: Resource cost baseline
+  contract-interface:
+    name: Contract interface snapshot
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check public function baseline
-        run: python3 scripts/check-resource-baseline.py
+      - name: Verify interface and append-only error codes
+        run: ./scripts/check-contract-interface.sh
 
   contract:
     name: Soroban contract (test + wasm build)
