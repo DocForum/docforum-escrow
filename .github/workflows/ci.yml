@@ -9,6 +9,51 @@ on:
     - cron: '0 3 * * *'
 
 jobs:
+  contract-fuzz:
+    name: Contract cargo-fuzz (${{ github.event_name == 'schedule' && 'nightly' || 'PR' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, llvm-tools-preview
+
+      - name: Cache fuzz build and corpus
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/fuzz/target
+          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('contracts/escrow/Cargo.lock', 'contracts/escrow/fuzz/Cargo.toml', 'contracts/escrow/fuzz/Cargo.lock') }}
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Build lifecycle fuzzer
+        working-directory: contracts/escrow
+        run: cargo +nightly fuzz build lifecycle
+
+      - name: Run lifecycle fuzzer
+        working-directory: contracts/escrow
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            cargo +nightly fuzz run lifecycle -- -max_total_time=600 -timeout=30
+          else
+            cargo +nightly fuzz run lifecycle -- -max_total_time=30 -timeout=30
+          fi
+
+      - name: Upload crash artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-fuzz-artifacts-${{ github.run_id }}
+          path: contracts/escrow/fuzz/artifacts
+          if-no-files-found: ignore
+
   resource-baseline:
     name: Resource cost baseline
     runs-on: ubuntu-latest

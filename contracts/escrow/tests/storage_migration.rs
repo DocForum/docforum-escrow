@@ -13,6 +13,7 @@ use soroban_sdk::{
 enum DataKeyFixture {
     Escrow(u64),
     NextId,
+    Status(u64),
 }
 
 #[contracttype]
@@ -268,4 +269,73 @@ fn tagged_v2_variant_is_upgraded_to_tagged_v4_on_write() {
     });
     f.client.release(&0, &f.releaser);
     assert_written_as_v4(&env, &f, EscrowStatus::Released);
+}
+
+#[test]
+fn legacy_record_without_status_key_reports_status_from_the_escrow_body() {
+    let env = Env::default();
+    let f = setup(&env);
+    let old = EscrowDataV1Fixture {
+        payer: f.payer.clone(),
+        payee: f.payee.clone(),
+        token: f.token_id.clone(),
+        amount: 300,
+        condition_ref: String::from_str(&env, "legacy-status"),
+        status: EscrowStatus::Funded,
+        releaser: f.releaser.clone(),
+    };
+    env.as_contract(&f.contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKeyFixture::Escrow(0), &old);
+        assert!(!env.storage().persistent().has(&DataKeyFixture::Status(0)));
+    });
+
+    assert_eq!(f.client.get_status(&0), EscrowStatus::Funded);
+    f.client.release(&0, &f.releaser);
+    assert_eq!(f.client.get_status(&0), EscrowStatus::Released);
+    env.as_contract(&f.contract_id, || {
+        let status: EscrowStatus = env
+            .storage()
+            .persistent()
+            .get(&DataKeyFixture::Status(0))
+            .expect("settlement writes the status read key");
+        assert_eq!(status, EscrowStatus::Released);
+    });
+    assert_written_as_v4(&env, &f, EscrowStatus::Released);
+}
+
+#[test]
+fn pooled_escrow_body_is_written_as_tagged_v4() {
+    let env = Env::default();
+    let f = setup(&env);
+    let contributor = Address::generate(&env);
+    StellarAssetClient::new(&env, &f.token_id).mint(&contributor, &40);
+    let id = f.client.create_pooled_escrow(
+        &f.payer,
+        &f.payee,
+        &f.token_id,
+        &100,
+        &String::from_str(&env, "pooled-v4"),
+        &f.releaser,
+        &1_000,
+    );
+    f.client.contribute(&id, &contributor, &40);
+
+    assert_eq!(f.client.get_status(&id), EscrowStatus::Funded);
+    env.as_contract(&f.contract_id, || {
+        let stored: StoredEscrowDataFixture = env
+            .storage()
+            .persistent()
+            .get(&DataKeyFixture::Escrow(id))
+            .expect("pooled escrow body is stored under the escrow key");
+        match stored {
+            StoredEscrowDataFixture::V4(v4) => {
+                assert_eq!(v4.status, EscrowStatus::Funded);
+                assert_eq!(v4.amount, 40);
+                assert_eq!(v4.refund_to, f.payer);
+            }
+            _ => panic!("pooled escrow body was not written as tagged V4"),
+        }
+    });
 }
