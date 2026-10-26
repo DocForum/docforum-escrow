@@ -122,6 +122,10 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   refund, timeout-refund, and `BalanceMismatch` verification (issue #109).
   The current contract ID and transaction links are in
   `docs/testnet-deployments.md`; prior deployment records remain as history.
+- [ ] Releaser-key compromise runbook and race-to-settle tooling (issue #94).
+  `docs/runbooks/releaser-compromise.md` (linked from threat model T1) and the
+  resumable `scripts/settle-outcomes.py` are in; the 50+ escrow testnet drill
+  has not been run or recorded yet.
 - [ ] Rest of the `docs/threat-model.md` §6 pre-mainnet checklist, scoped
   into issues: [#8](https://github.com/DocForum/docforum-escrow/issues/8) write status before transfer + reject
   contract-self addresses (Trivial), [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium),
