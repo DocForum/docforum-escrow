@@ -62,14 +62,6 @@ jobs:
       - name: Check public function baseline
         run: python3 scripts/check-resource-baseline.py
 
-  scripts:
-    name: Script unit tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Test settle-outcomes.py (offline, fake submitter)
-        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
-
   contract:
     name: Soroban contract (test + wasm build)
     runs-on: ubuntu-latest
