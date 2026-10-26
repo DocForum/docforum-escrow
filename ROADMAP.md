@@ -319,6 +319,16 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `bigint` with strict validation (no floats/exponents, no excess fractional
   precision, no negatives, locale-independent). Property tests assert
   `format(parse(x)) == normalise(x)`. Used in the web demo and SDK docs.
+- [x] Network presets with an explicit mainnet opt-in guard (issue #67) —
+  `networks.testnet`, `networks.futurenet`, `networks.local` presets carry
+  an RPC URL, network passphrase and known contract ids. Constructing a
+  client with the mainnet passphrase throws unless `allowMainnet: true` is
+  passed; custom networks (private quickstart) remain possible. With a
+  preset (or `verifyNetwork: true`) the RPC's `getNetwork` passphrase is
+  verified lazily, once, before the first network call (never in the
+  constructor, cached per client), so a custom `rpcUrl` cannot bypass the
+  guard. Offline unit tests cover each guard. Additive SDK surface (minor
+  changeset).
 - [ ] SDK lifecycle amendments (issue #84). Done: `topUp`, `accept`,
   `cancel` (now `EscrowSigner`), `createEscrow({ requiresAcceptance })`,
   typed `EscrowPreconditionError` checks before submission, and a

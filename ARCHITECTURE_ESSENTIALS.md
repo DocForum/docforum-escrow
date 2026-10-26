@@ -128,6 +128,13 @@ management nonce. See [ADR 0005](docs/adr/0005-custom-releaser-account.md).
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
 
 const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
+const client2 = new EscrowClient({ contractId, network: networks.testnet }); // named preset: RPC URL + passphrase + known contract ids
+// networks.futurenet and networks.local are also available; custom networks (private quickstart) still work
+// by passing explicit rpcUrl + networkPassphrase. Constructing with the mainnet passphrase throws
+// unless allowMainnet: true is passed. With a preset (or verifyNetwork: true) the RPC's getNetwork
+// passphrase is verified lazily and once (cached) before the first network call, never in the
+// constructor; pass verifyNetwork: true with a custom rpcUrl so it cannot silently point at mainnet
+// (verifyNetwork: false turns the check off). Plain-HTTP RPC needs allowHttp (networks.local sets it).
 const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter, notifyPayee: true, refundTo });
 await client.createQuorumEscrow({ payer, payee, token, amount, conditionRef, releasers, threshold, refundAfter, notifyPayee: true, refundTo }); // M-of-N, ADR 0007
 await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
