@@ -464,6 +464,14 @@ count. Account addresses are **omitted by default** and only included with
 typed contract errors and `big.Int` i128 amounts. See
 [`sdk-go/README.md`](sdk-go/README.md).
 
+The TypeScript SDK (`sdk/`) wraps the contract and is distributed as a tagged
+GitHub Release tarball; see [issue #4](https://github.com/DocForum/docforum-escrow/issues/4)
+and [ADR 0003](docs/adr/0003-sdk-distribution.md).
+
+SDK errors are typed by contract error code and common RPC failure category.
+See [`docs/sdk-errors.md`](docs/sdk-errors.md) for the error classes and a
+consumer migration example.
+
 ## Documentation
 
 | Doc | Purpose |

@@ -177,6 +177,14 @@ their event type and escrow id; unrecognized topics are returned as
 last handled event's cursor to resume; an expired RPC history cursor throws
 `EventCursorExpiredError`. These helpers require the contract lifecycle
 events tracked by issue #9; the current deployment does not emit them.
+
+SDK failures are exposed as typed `EscrowError` subclasses. Contract
+rejections include their numeric `code` and a named class (`NotFoundError`,
+`UnauthorizedError`, `NotFundedError`, and others); future unknown contract
+codes remain a generic `ContractError`. Simulation, submission, timeout,
+and network-passphrase mismatch failures have separate classes. Original
+exceptions are retained as `cause`. See `docs/sdk-errors.md` for migration
+examples.
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
 for no timeout, which behaves exactly as this contract did before the

@@ -157,6 +157,12 @@ jobs:
 
       - run: npm ci
 
+      - name: Check generated contract error mapping
+        run: node scripts/check-contract-errors.mjs --check
+
+      - name: Run SDK error unit tests
+        run: npx vitest run tests/errors.test.ts
+
       - run: npm run typecheck
 
       - run: npm run build

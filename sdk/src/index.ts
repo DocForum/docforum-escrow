@@ -37,9 +37,26 @@ import {
 } from "./instrumentation.js";
 import type { FactoryClient as FactoryClientType } from "./factory.js";
 import { signerAddress, type EscrowSigner } from "./signers/types.js";
+import { toEscrowError } from "./errors.js";
 
 export { Keypair };
 export { signerAddress, type EscrowSigner } from "./signers/types.js";
+export {
+  BalanceMismatchError,
+  ContractError,
+  EscrowError,
+  InvalidAmountError,
+  InvalidRefundAfterError,
+  NetworkMismatchError,
+  NotFoundError,
+  NotFundedError,
+  RequestTimeoutError,
+  SimulationFailure,
+  SubmissionFailure,
+  UnauthorizedError,
+  contractErrorName,
+  toEscrowError,
+} from "./errors.js";
 export {
   otelTracer,
   spanName,
@@ -863,7 +880,12 @@ export class EscrowClient {
     hooks: { beforeSign?: (tx: AssembledTransaction<T>) => Promise<void>; address?: string } = {},
   ): Promise<SentTransaction<T>> {
     const attributes = this.spanAttributesIfEnabled(method, escrowId, hooks.address);
-    const tx = await tracePhase(this.instrumentation, "simulate", attributes, build);
+    let tx: AssembledTransaction<T>;
+    try {
+      tx = await tracePhase(this.instrumentation, "simulate", attributes, build);
+    } catch (error) {
+      throw toEscrowError(error, "simulation");
+    }
     if (tx.isReadCall) {
       throw new Error(`${method} was simulated as a read call; no transaction was sent.`);
     }
@@ -873,7 +895,11 @@ export class EscrowClient {
     });
 
     if (!this.instrumentation?.tracer && !this.instrumentation?.onEvent) {
-      return tx.send();
+      try {
+        return await tx.send();
+      } catch (error) {
+        throw toEscrowError(error, "submission");
+      }
     }
 
     const submitSpan = beginPhase(this.instrumentation, "submit", attributes);
@@ -909,7 +935,7 @@ export class EscrowClient {
     } catch (error) {
       if (!submitted) submitSpan.end(error);
       confirmSpan.end(error);
-      throw error;
+      throw toEscrowError(error, "submission");
     }
   }
 
@@ -963,14 +989,19 @@ export class EscrowClient {
 
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
   async getStatus(escrowId: bigint): Promise<EscrowStatus> {
-    const client = this.contractClient();
-    const tx = await tracePhase(
-      this.instrumentation,
-      "simulate",
-      this.spanAttributesIfEnabled("get_status", escrowId),
-      () => client.get_status({ escrow_id: escrowId }),    );
-    const status: GeneratedEscrowStatus = tx.result.unwrap();
-    return status.tag;
+    try {
+      const client = this.contractClient();
+      const tx = await tracePhase(
+        this.instrumentation,
+        "simulate",
+        this.spanAttributesIfEnabled("get_status", escrowId),
+        () => client.get_status({ escrow_id: escrowId }),
+      );
+      const status: GeneratedEscrowStatus = tx.result.unwrap();
+      return status.tag;
+    } catch (error) {
+      throw toEscrowError(error);
+    }
   }
 
   /**
@@ -1036,12 +1067,17 @@ export class EscrowClient {
    */
   async getEscrow(escrowId: bigint): Promise<Escrow> {
     const client = this.contractClient();
-    const tx = await tracePhase(
-      this.instrumentation,
-      "simulate",
-      this.spanAttributesIfEnabled("get_escrow", escrowId),
-      () => client.get_escrow({ escrow_id: escrowId }),
-    );
+    let tx: Awaited<ReturnType<EscrowContractClient["get_escrow"]>>;
+    try {
+      tx = await tracePhase(
+        this.instrumentation,
+        "simulate",
+        this.spanAttributesIfEnabled("get_escrow", escrowId),
+        () => client.get_escrow({ escrow_id: escrowId }),
+      );
+    } catch (error) {
+      throw toEscrowError(error);
+    }
     let data: GeneratedEscrowData;
     try {
       data = tx.result.unwrap();

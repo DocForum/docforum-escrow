@@ -253,6 +253,12 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   suites and snapshots unchanged. SDK `0.7.0 → 0.8.0` (additive).
   **Not yet on testnet** — the live deployment predates it.
 ## Phase E6 — SDK & integrator tooling
+- [x] Typed SDK errors mapped from the contract error enum (issue #61):
+  named classes for each current contract error and distinct simulation,
+  submission, timeout, and network mismatch errors. The generated mapping
+  is checked in CI against `contracts/escrow/src/lib.rs`; unknown future
+  codes remain generic `ContractError` instances and causes are preserved.
+  Consumer migration guidance: `docs/sdk-errors.md`.
 - [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
   triggered by an `sdk-v*` tag: builds, typechecks, tests, runs
