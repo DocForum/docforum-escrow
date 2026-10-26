@@ -312,6 +312,13 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   transaction hash and retry count; addresses are opt-in only
   (`includeAddresses: true`). 7 offline tests assert span production and the
   disabled path.
+- [x] Token-aware amount parsing and formatting (issue #81) —
+  `sdk/src/amounts.ts`: `getTokenInfo(token)` reads `decimals`, `symbol` and
+  `name` from the SEP-41 token contract (cached per contract address);
+  `parseAmount` and `formatAmount` convert between human strings and raw
+  `bigint` with strict validation (no floats/exponents, no excess fractional
+  precision, no negatives, locale-independent). Property tests assert
+  `format(parse(x)) == normalise(x)`. Used in the web demo and SDK docs.
 - [ ] SDK lifecycle amendments (issue #84). Done: `topUp`, `accept`,
   `cancel` (now `EscrowSigner`), `createEscrow({ requiresAcceptance })`,
   typed `EscrowPreconditionError` checks before submission, and a
