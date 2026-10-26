@@ -114,6 +114,15 @@ only while the escrow is `Funded`. The payee-acceptance gate
 The contract decides **who** may call `release`/`refund`, never **why**:
 `condition_ref` is opaque to it (`docs/adr/0001`).
 
+`contracts/releaser-account/` provides an optional custom account to use as
+the per-escrow `releaser`: an immutable escrow target plus an M-of-N set of
+Ed25519 keys. Soroban authorization signatures cover the host-generated
+payload, including the nonce and invocation context. The account rejects
+authorization contexts other than one `release` or `refund` call on its
+configured escrow. Signer additions/removals and threshold changes use a
+separate signed management digest bound to the account and a monotonic
+management nonce. See [ADR 0005](docs/adr/0005-custom-releaser-account.md).
+
 ## TypeScript SDK surface (`sdk/`)
 ```ts
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
@@ -127,6 +136,7 @@ await client.release({ escrowId, caller });  // { txHash } — caller: Keypair o
 await client.releaseWithApprovals({ escrowId, approvers }); // { txHash } — one Keypair/Signer per approver (>= threshold, distinct)
 await client.refund({ escrowId, caller });   // { txHash } — releaser when threshold is 1; anyone after refundAfter has passed
 await client.refundWithApprovals({ escrowId, approvers });  // { txHash } — M-of-N refund
+await client.getTokenInfo(token);           // { decimals, symbol, name } — cached token metadata read from the SEP-41 contract
 await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
 const stop = client.subscribe(handler, { cursor, pollIntervalMs }); // serial polling; await handler for back-pressure
 await client.createMilestoneEscrow({ payer, payee, token, amount, conditionRef, releaser, milestones }); // milestones: bigint[] tranches, validated client-side (sum == amount, all > 0); one escrow per tranche
@@ -152,6 +162,15 @@ tranches already funded so the caller can release or refund them.
 
 `refundTo` on `createEscrow` and `createQuorumEscrow` is optional too (default: the payer) and
 `getEscrow` returns it as `refundTo`.
+
+Amounts are raw `bigint` in the token's smallest unit. `sdk/src/amounts.ts`
+exports `parseAmount(value, decimals)` and `formatAmount(amount, decimals)`
+plus `getTokenInfo(token)` (cached `decimals`/`symbol`/`name` read from the
+token contract). Parsing is locale-independent and strict: no floats, no
+exponent notation, no thousands separators, no negatives, and more
+fractional digits than `decimals` is rejected rather than rounded. Never
+assume 7 decimals — read them from the token, since arbitrary SEP-41 tokens
+may differ.
 
 `estimate` never signs or submits; it simulates against the client's RPC
 and reports stroops. `guardSponsorship` is the pre-sponsorship check for
@@ -185,7 +204,11 @@ and diffs the result (`scripts/check-generated-bindings.sh`, issue #121). See
 `sdk/src/generated/README.md` for the regeneration steps.
 `sdk/src/index.ts` is the actual public surface (hand-written, ergonomic
 wrapper) — consumers import from the package root, never from
-`src/generated/` directly.`condition_ref` is an **opaque string/id** the contract does not interpret, bounded to 64 bytes at creation (error `ConditionRefTooLong = 7`; SDK constant `MAX_CONDITION_REF_LENGTH`) — it's the caller's job (e.g. `docforum-core`) to decide when release is warranted and call `release()`. `releaser` is the one address permitted
+`src/generated/` directly. Known contract ids per network come from the
+repo-root `deployments.json` (written by `scripts/deploy`), bundled as
+`src/deployments.generated.ts` and exposed as `knownContractId` /
+`knownNetworkConfig`; unknown networks and mainnet throw.
+`condition_ref` is an **opaque string/id** the contract does not interpret, bounded to 64 bytes at creation (error `ConditionRefTooLong = 7`; SDK constant `MAX_CONDITION_REF_LENGTH`) — it's the caller's job (e.g. `docforum-core`) to decide when release is warranted and call `release()`. `releaser` is the one address permitted
 to call `release`/`refund` for that specific escrow, set once at
 `create_escrow` time — see `docs/adr/0002` for why a per-escrow releaser
 was chosen over a single contract-level admin. The one exception is the
@@ -268,9 +291,10 @@ quickstart deployment.
 1. **No PHI, ever, anywhere in this repo.** Not in tests, not in example
    fixtures, not in comments. This repo should be safely public and
    understandable with zero healthcare context.
-2. Contract logic changes require updated tests in
-   `contracts/escrow/tests/` before merge — payment logic bugs are not
-   "fix in a follow-up" territory.
+2. Contract logic changes require updated tests beside the affected
+   contract (`contracts/escrow/tests/` or
+   `contracts/releaser-account/tests/`) before merge — payment logic bugs
+   are not "fix in a follow-up" territory.
 3. SDK version bumps that change the public API are breaking changes —
    semver strictly, since `docforum-core` pins a version rather than
    tracking latest.

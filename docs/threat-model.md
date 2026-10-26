@@ -1,6 +1,8 @@
 # Threat model — `docforum_escrow` contract + `@docforum/escrow-sdk`
 
 Status: **Draft, self-written. Not a review.** Part of issue #6 (Phase E4).
+The audit package built from this document for reviewers is in
+`docs/audit/` (issue #111).
 Written by the contract's implementer, so per issue #6 it does **not**
 satisfy the "external or community review" half of E4. Its job is to give
 an independent reviewer a map of where to look and what the author
@@ -12,6 +14,9 @@ pattern (custodial, as `docforum-core` uses it today). The live testnet
 deployment is listed in `docs/testnet-deployments.md`.
 Updated 2026-10-07 for the issue #12 balance-delta check and
 mock-token tests (§1 I4, T4, T5, §6).
+Updated 2026-10-22 for the formal-verification spike (issue #101): §1 I1–I3
+now link to their properties in `certora/escrow.spec`. The properties are
+specified but not yet machine-checked — see `docs/formal-verification.md`.
 
 *Updated 2026-10-20 for issues #118/#119: §1 I2 and §2 now describe the
 releaser set with a threshold instead of a single address; T1 and T2 record
@@ -73,6 +78,7 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 | `contributor` (pooled escrows, issue #113) | `contribute` its own funds to any open pooled escrow before its funding deadline; after a missed deadline, `claim_refund` back its own exact recorded amount | Nothing. Contributions are self-funding (you can only send your own tokens) and claims can only reach the caller's own record. |
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |
 | Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds to that escrow's stored `refund_to` | Nothing. |
+| `attester` (**planned**, not implemented) | Would publish signed attestations referenced by an escrow's `condition_ref` | Nothing on-chain; the contract never reads attestations. See T12. |
 
 There is **no admin, no upgrade function, and no pause.** The deployed
 WASM is immutable. Nobody, including the deployer, can change an
@@ -119,7 +125,18 @@ value. **Reviewers should challenge these ratings.**
   attacker. Rotation cannot undo a settlement that already landed, and
   it is unavailable if the payer cannot authorize. The timeout refund
   path remains the fallback for escrows whose releaser is unavailable.
+- **Incident response:** the race-to-settle procedure and its resumable
+  tooling are in [the releaser compromise runbook](runbooks/releaser-compromise.md).
 - **Mitigations to consider:**
+  - [x] Use the optional custom account in `contracts/releaser-account/`
+    for M-of-N Ed25519 control. Its `__check_auth` verifies the host's
+    nonce- and context-bound payload, requires distinct registered signers
+    to meet the threshold, and only permits one `release` or `refund` call
+    on the configured escrow. Management changes require the current
+    threshold over an account- and nonce-bound digest. See ADR 0005.
+    This narrows the account's authority but cannot decide whether a
+    permitted release or refund is the correct outcome; secure signer
+    devices and off-chain quorum coordination remain operational duties.
   - [x] Allow the current releaser and payer to rotate the releaser on a
     funded escrow (issue #23, ADR 0009); the payer's consent prevents
     compromised releaser key alone from redirecting future control.
@@ -397,6 +414,36 @@ behave like SEP-41.
 - **Residual risk:** none that I1 doesn't already cover — no one but the
   funder chooses the address, and only at creation.
 
+### T12 — Planned Phase E5 features would change the trust model · **Medium per feature, none implemented yet**
+
+**Nothing in this section is implemented in the reviewed commit.** It exists
+so the analysis is ready when a feature is proposed, and so a reviewer knows
+which questions to ask then. Milestones, disputes, splits and per-escrow
+attestations are *not* part of the reviewed scope; if one lands, it needs its
+own threat, tests, and a delta review recorded in `docs/audit/`.
+
+- **Milestones (STRIDE: Tampering, Elevation).** Partial releases would turn
+  I3 into "each milestone pays at most once, and the sum never exceeds
+  `amount`." Reviewer must confirm a per-milestone settled flag and the
+  running-total bound, and that a milestone cannot be replayed after refund.
+- **Disputes (STRIDE: Spoofing, Repudiation).** A resolver would be a new
+  trusted role, subject to T1/T2 (leak and loss). Reviewer must confirm the
+  resolver cannot direct funds anywhere but the stored `payee`/`refund_to`
+  (I1), and that a disputed escrow cannot be settled by the ordinary
+  releaser path.
+- **Splits (STRIDE: Tampering, Information disclosure).** Multiple payees
+  would relax I1 to "funds leave only to the escrow's declared payees."
+  Reviewer must confirm the split set is fixed at creation, sums to `amount`,
+  and cannot be extended after funding.
+- **Attestations (STRIDE: Spoofing, Tampering).** Attestations would stay
+  off-chain or in a separate contract; I5 must extend to them, and no escrow
+  path may read attestation data.
+
+Were these implemented, the invariants added to §1 would be: milestone
+payouts bounded by `amount`; a disputed escrow settled only by its resolver;
+immutable split set and payee list; and no attestation read anywhere in the
+escrow.
+
 ### T12 — Front-running `cancel` against `accept` · **High**
 - **What an attacker can do:** if the payee and payer both act on the same
   ledger, an attacker observing the escrow state could attempt to `cancel`
@@ -661,9 +708,6 @@ Most useful to the project, in order:
 Leave findings as comments on the PR that adds this file, or on issue #6.
 A review only counts toward E4 if the reviewer is not the implementer
 (see issue #6).
-
-
-For the key-compromise response and resumable settlement tooling, see [the releaser compromise runbook](runbooks/releaser-compromise.md).
 
 ## T4 intermediate-contract re-entry regression coverage
 
