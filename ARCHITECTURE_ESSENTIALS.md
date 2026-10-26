@@ -129,10 +129,11 @@ Escrow entries are stored as a version-tagged `StoredEscrowData` enum;
 never add fields to a versioned record struct. Add a new struct and enum
 variant, decode each explicitly supported variant, and write the newest
 version on the next state-changing operation. The loader also recognizes
-three exact pre-version `ScVal::Map` layouts: seven named fields from
-before ADR 0004, eight fields before releaser sets, and twelve fields in
-the unversioned M-of-N/callback/acceptance layout. The current 14-field
-schema includes `refund_to` and `release_not_before` and is stored as V4.
+four exact pre-version `ScVal::Map` layouts: seven named fields from
+before ADR 0004, eight fields before releaser sets, twelve fields in the
+M-of-N/callback/acceptance layout, and the bare (untagged) 14-field map
+that adds `refund_to` and `release_not_before`. Every one of these
+migrates to the tagged V4 record on the next successful write.
 It does not default missing values in arbitrary maps; unknown or malformed
 values fail with `UnsupportedStorageVersion`. Pooled escrows store their
 body as V4 too; their `Pooled` and `Contribution` records have no older
