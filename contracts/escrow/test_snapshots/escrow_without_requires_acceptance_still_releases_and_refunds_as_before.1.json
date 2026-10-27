@@ -659,6 +659,18 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "MaximumAmounts"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "map": []
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "NextId"
                           }
                         ]
@@ -973,6 +985,18 @@
                       },
                       "val": {
                         "vec": []
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "MaximumAmounts"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "map": []
                       }
                     },
                     {

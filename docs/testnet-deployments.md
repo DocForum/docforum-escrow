@@ -24,6 +24,9 @@ machine-readable `/deployments.json`. Older records were written by hand.
 | Source commit | `eafe267` (`eafe26743c255cd1e6b4c44a556aad080ad850a9`) |
 | Constructor `allowed_tokens` | `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` |
 
+This deployment predates the per-token cap constructor argument (issue #56,
+ADR 0013) and has no caps; it is not a capped beta deployment.
+
 ### Scripted live verification
 
 The on-chain WASM was fetched after deployment and matched the hash above.
@@ -211,6 +214,11 @@ signature changed (added `refund_after: Option<u64>`) and `EscrowData`'s
 layout changed, so the old contract ID is no longer signature- or
 layout-compatible with the current contract source. The prior entries
 are kept as accurate history, not deleted.
+
+This 2026-10-08 deployment predates issue #56's constructor cap map and
+`top_up`; it has no per-token maximum. It must not be treated as a capped
+beta deployment. A new deployment with an explicit cap map and regenerated
+bindings is required before using the capped contract surface.
 
 ### Verified live, on this deployment
 

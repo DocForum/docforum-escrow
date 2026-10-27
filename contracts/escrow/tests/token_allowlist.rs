@@ -50,7 +50,13 @@ fn configured_allowlist_accepts_listed_token_and_rejects_unlisted_token() {
 
     let mut allowlist = Vec::new(&env);
     allowlist.push_back(allowed_token.clone());
-    let contract_id = env.register(EscrowContract, (allowlist,));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            allowlist,
+            soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env),
+        ),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     assert_eq!(create_escrow(&env, &client, &allowed_token, &payer), 0);
@@ -79,7 +85,13 @@ fn empty_allowlist_preserves_open_token_behavior() {
     let payer = Address::generate(&env);
     asset.mint(&payer, &100);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(&env),
+            soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env),
+        ),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     assert_eq!(create_escrow(&env, &client, &token, &payer), 0);

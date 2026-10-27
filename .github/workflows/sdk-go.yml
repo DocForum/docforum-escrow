@@ -162,14 +162,15 @@ jobs:
             --alias native-token
           token_id=$(stellar contract alias show native-token --network escrow-local)
 
-          # __constructor(allowed_tokens: Vec<Address>) — empty list keeps the
-          # legacy open-token behavior, which is fine for an ephemeral local net.
+          # __constructor(allowed_tokens: Vec<Address>, maximum_amounts:
+          # Map<Address, i128>) — an empty list and an empty map keep the
+          # legacy open-token, uncapped behavior, fine for an ephemeral local net.
           stellar contract deploy \
             --wasm "$wasm" \
             --source-account deployer \
             --network escrow-local \
             --alias escrow \
-            -- --allowed_tokens '[]'
+            -- --allowed_tokens '[]' --maximum_amounts '{}'
           contract_id=$(stellar contract alias show escrow --network escrow-local)
 
           echo "token_id=$token_id"

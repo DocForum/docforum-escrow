@@ -37,7 +37,13 @@ fn fund_escrow(env: &Env, amount: i128) -> Fixture<'_> {
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(env),
+            soroban_sdk::Map::<soroban_sdk::Address, i128>::new(env),
+        ),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
 
     let escrow_id = client.create_escrow(

@@ -8,7 +8,8 @@
 #
 # Usage:
 #   scripts/deploy [--network testnet] [--wasm PATH] [--expected-wasm-hash HEX]
-#                  [--allowed-tokens C...,C...] [--no-record]
+#                  [--allowed-tokens C...,C...]
+#                  [--maximum-amounts C...=AMOUNT,...] [--no-record]
 #   scripts/deploy --dry-run        # same flow against a local quickstart
 #
 # Options:
@@ -24,6 +25,10 @@
 #   --allowed-tokens LIST    Comma-separated constructor allowlist. Default:
 #                            the network's native XLM asset contract. Pass an
 #                            empty string to allow any token.
+#   --maximum-amounts LIST   Comma-separated TOKEN=AMOUNT per-token escrow caps
+#                            in the token's smallest unit (issue #56,
+#                            docs/adr/0013). Default: none (no caps). When
+#                            set, tokens without an entry cannot be escrowed.
 #   --no-record              Deploy and verify, but write no record.
 #   -h, --help               Show this help.
 #
@@ -53,6 +58,7 @@ wasm_path=""
 expected_hash=""
 allowed_tokens_set=false
 allowed_tokens=""
+maximum_amounts=""
 record=true
 
 while [[ $# -gt 0 ]]; do
@@ -62,6 +68,7 @@ while [[ $# -gt 0 ]]; do
     --wasm) wasm_path="${2:?--wasm needs a path}"; shift 2 ;;
     --expected-wasm-hash) expected_hash="${2:?--expected-wasm-hash needs a value}"; shift 2 ;;
     --allowed-tokens) allowed_tokens="${2-}"; allowed_tokens_set=true; shift 2 ;;
+    --maximum-amounts) maximum_amounts="${2-}"; shift 2 ;;
     --no-record) record=false; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; die "unknown argument: $1" ;;
@@ -201,6 +208,19 @@ if [[ "$allowed_tokens_set" == false ]]; then
   allowed_tokens="$native_token"
 fi
 allowed_json="$(node -e 'const l=process.argv[1].split(",").map(s=>s.trim()).filter(Boolean);console.log(JSON.stringify(l))' "$allowed_tokens")"
+# Map<Address, i128> as JSON: {"C...": "amount"}; i128 values stay strings.
+maximum_json="$(node -e '
+const out = {};
+for (const pair of process.argv[1].split(",").map((s) => s.trim()).filter(Boolean)) {
+  const [token, amount] = pair.split("=").map((s) => s.trim());
+  if (!/^C[A-Z2-7]{55}$/.test(token || "") || !/^[1-9][0-9]*$/.test(amount || "")) {
+    console.error(`deploy: bad --maximum-amounts entry "${pair}" (want C...=POSITIVE_INTEGER)`);
+    process.exit(1);
+  }
+  out[token] = amount;
+}
+console.log(JSON.stringify(out));
+' "$maximum_amounts")" || die "invalid --maximum-amounts"
 
 # --- Upload + deploy -------------------------------------------------------------
 log "Uploading WASM to $network"
@@ -209,9 +229,9 @@ upload_tx="$(tx_of_last)"
 [[ "$uploaded_hash" == "$wasm_hash" ]] ||
   die "uploaded WASM hash $uploaded_hash does not match local $wasm_hash."
 
-log "Deploying with allowed_tokens=$allowed_json"
+log "Deploying with allowed_tokens=$allowed_json maximum_amounts=$maximum_json"
 contract_id="$(submit contract deploy --wasm-hash "$wasm_hash" --source deployer "${net_args[@]}" \
-  -- --allowed_tokens "$allowed_json" | tail -n 1)"
+  -- --allowed_tokens "$allowed_json" --maximum_amounts "$maximum_json" | tail -n 1)"
 deploy_tx="$(tx_of_last)"
 [[ "$contract_id" =~ ^C[A-Z2-7]{55}$ ]] || die "unexpected contract id: $contract_id"
 log "Contract $contract_id"
@@ -274,18 +294,18 @@ pass reject_non_positive_amount Passed "" "" "Error(Contract, #2) InvalidAmount"
 record_json="$work_dir/record.json"
 node -e '
 const fs = require("fs");
-const [net, pass, rpc, cid, hash, sha, upTx, depTx, allowed, results, txBase, contractBase] = process.argv.slice(1);
+const [net, pass, rpc, cid, hash, sha, upTx, depTx, allowed, maximums, results, txBase, contractBase] = process.argv.slice(1);
 const verification = fs.readFileSync(results, "utf8").trim().split("\n").map((l) => JSON.parse(l));
 const record = {
   network: net, networkPassphrase: pass, rpcUrl: rpc, contractId: cid, wasmHash: hash,
   gitSha: sha, deployedAt: new Date().toISOString(),
   uploadTxHash: upTx || null, deployTxHash: depTx,
-  allowedTokens: JSON.parse(allowed), verification,
+  allowedTokens: JSON.parse(allowed), maximumAmounts: JSON.parse(maximums), verification,
 };
 if (txBase) record.explorer = { contract: contractBase + cid, tx: txBase };
-fs.writeFileSync(process.argv[13], JSON.stringify(record, null, 2) + "\n");
+fs.writeFileSync(process.argv[14], JSON.stringify(record, null, 2) + "\n");
 ' "$network" "$network_passphrase" "$rpc_url" "$contract_id" "$wasm_hash" "$git_sha" \
-  "$upload_tx" "$deploy_tx" "$allowed_json" "$results" "$explorer_tx" "$explorer_contract" "$record_json"
+  "$upload_tx" "$deploy_tx" "$allowed_json" "$maximum_json" "$results" "$explorer_tx" "$explorer_contract" "$record_json"
 
 if [[ "$dry_run" == true ]]; then
   log "Dry run: tracked files not changed. Record:"

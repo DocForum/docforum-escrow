@@ -105,6 +105,18 @@
                       "val": {
                         "vec": []
                       }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "MaximumAmounts"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "map": []
+                      }
                     }
                   ]
                 }

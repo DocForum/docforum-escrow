@@ -50,6 +50,9 @@ export function renderDocsSection(r) {
     `| Deploy tx | ${tx(r.deployTxHash)} |`,
     `| Source commit | \`${short}\` (\`${r.gitSha}\`) |`,
     `| Constructor \`allowed_tokens\` | ${r.allowedTokens.length ? r.allowedTokens.map((t) => `\`${t}\``).join(", ") : "empty (any token)"} |`,
+    ...(r.maximumAmounts
+      ? [`| Constructor \`maximum_amounts\` | ${Object.keys(r.maximumAmounts).length ? Object.entries(r.maximumAmounts).map(([t, a]) => `\`${t}\` ≤ ${a}`).join(", ") : "empty (no caps)"} |`]
+      : []),
   ];
   const cases = r.verification.map((v) => {
     const where = v.txHash ? `[transaction](${tx(v.txHash)})` : "rejected in simulation, not submitted";

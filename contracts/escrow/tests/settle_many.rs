@@ -14,7 +14,7 @@ use soroban_sdk::{
     contract, contracterror, contractimpl,
     testutils::{Address as _, Events as _, Ledger as _},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String, Vec,
+    Address, Env, Map, String, Vec,
 };
 
 const CREATED_AT: u64 = 1_000;
@@ -56,7 +56,10 @@ fn fixture(env: &Env) -> Fixture<'_> {
         .address();
     let payer = Address::generate(env);
     StellarAssetClient::new(env, &token_id).mint(&payer, &1_000_000);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Map::<Address, i128>::new(env)),
+    );
     Fixture {
         env,
         client: EscrowContractClient::new(env, &contract_id),

@@ -1055,6 +1055,18 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "MaximumAmounts"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "map": []
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "NextId"
                           }
                         ]

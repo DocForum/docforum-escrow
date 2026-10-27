@@ -23,7 +23,7 @@ use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus,
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String, Vec,
+    Address, Env, Map, String, Vec,
 };
 
 const CREATED_AT: u64 = 1_000;
@@ -40,7 +40,10 @@ fn setup<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
 }
 
 fn deploy(env: &Env) -> (Address, EscrowContractClient<'_>) {
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Map::<Address, i128>::new(env)),
+    );
     (
         contract_id.clone(),
         EscrowContractClient::new(env, &contract_id),

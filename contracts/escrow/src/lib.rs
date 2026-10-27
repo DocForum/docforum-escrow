@@ -46,12 +46,12 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
-    Address, Env, IntoVal, String, Vec,
+    Address, Env, IntoVal, Map, String, Vec,
 };
 
 // Bump this value whenever a contract interface or behavior change is made.
 // CI checks this constant against the base branch when this file changes.
-pub const CONTRACT_VERSION: &str = "2.2.0";
+pub const CONTRACT_VERSION: &str = "2.5.0";
 
 include!(concat!(env!("OUT_DIR"), "/contract_metadata.rs"));
 
@@ -223,6 +223,8 @@ enum DataKey {
     /// of `amount` over every escrow in that token whose status is
     /// `Funded`. Appended last, so existing entries keep their encoding.
     Liability(Address),
+    /// Immutable per-token maximum funded amount (issue #56, ADR 0013).
+    MaximumAmounts,
 }
 
 #[contracterror]
@@ -316,6 +318,10 @@ pub enum Error {
     /// contract itself, or an amount that would overflow the fee math —
     /// see docs/adr/0010.
     InvalidFee = 35,
+    /// A token has no configured amount cap when cap enforcement is enabled.
+    TokenCapNotConfigured = 36,
+    /// An escrow amount, top-up total, or pooled target exceeds its token cap.
+    AmountCapExceeded = 37,
 }
 
 #[contract]
@@ -325,10 +331,23 @@ pub struct EscrowContract;
 impl EscrowContract {
     /// Sets the immutable token allowlist at deployment. An empty list
     /// preserves the legacy behavior and allows any token address.
-    pub fn __constructor(env: Env, allowed_tokens: Vec<Address>) {
+    pub fn __constructor(
+        env: Env,
+        allowed_tokens: Vec<Address>,
+        maximum_amounts: Map<Address, i128>,
+    ) -> Result<(), Error> {
+        for (_, maximum) in maximum_amounts.iter() {
+            if maximum <= 0 {
+                return Err(Error::InvalidAmount);
+            }
+        }
         env.storage()
             .instance()
             .set(&DataKey::AllowedTokens, &allowed_tokens);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaximumAmounts, &maximum_amounts);
+        Ok(())
     }
 
     /// Semantic version of this contract interface and behavior.
@@ -579,8 +598,7 @@ impl EscrowContract {
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
     pub fn get_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, Error> {
-        env
-            .storage()
+        env.storage()
             .persistent()
             .get(&DataKey::Status(escrow_id))
             .ok_or(Error::NotFound)
@@ -638,6 +656,7 @@ impl EscrowContract {
         if funding_target <= 0 {
             return Err(Error::InvalidAmount);
         }
+        Self::check_token_cap(&env, &token, funding_target)?;
         if funding_deadline <= env.ledger().timestamp() {
             return Err(Error::InvalidFundingDeadline);
         }
@@ -679,7 +698,9 @@ impl EscrowContract {
             fee_bps: None,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        env.storage().persistent().set(&DataKey::Status(id), &data.status);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(id), &data.status);
         env.storage().persistent().set(
             &DataKey::Pooled(id),
             &PooledData {
@@ -942,6 +963,7 @@ impl EscrowContract {
             return Err(Error::NotFunded);
         }
         let updated_amount = data.amount.checked_add(amount).ok_or(Error::Overflow)?;
+        Self::check_token_cap(&env, &data.token, updated_amount)?;
         // The fee is a bps of the escrowed amount, so a top-up grows it; fail
         // now (before the transfer) if the larger amount would overflow the
         // fee math, rather than at release (docs/adr/0010).
@@ -1129,6 +1151,25 @@ impl EscrowContract {
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
     }
 
+    /// Enforces the immutable deployment-time cap for this token.
+    fn check_token_cap(env: &Env, token: &Address, amount: i128) -> Result<(), Error> {
+        let maximum_amounts: Map<Address, i128> = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaximumAmounts)
+            .unwrap_or(Map::new(env));
+        if maximum_amounts.is_empty() {
+            return Ok(());
+        }
+        let maximum = maximum_amounts
+            .get(token.clone())
+            .ok_or(Error::TokenCapNotConfigured)?;
+        if amount > maximum {
+            return Err(Error::AmountCapExceeded);
+        }
+        Ok(())
+    }
+
     fn create_escrow_inner(
         env: &Env,
         payer: Address,
@@ -1157,6 +1198,7 @@ impl EscrowContract {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
+        Self::check_token_cap(env, &token, amount)?;
         if let Some(deadline) = refund_after {
             if deadline <= env.ledger().timestamp() {
                 return Err(Error::InvalidRefundAfter);
@@ -1227,7 +1269,9 @@ impl EscrowContract {
             fee_bps,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        env.storage().persistent().set(&DataKey::Status(id), &data.status);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(id), &data.status);
         Self::publish_state(env, symbol_short!("created"), id, &data);
         Ok(id)
     }
