@@ -54,6 +54,7 @@ and contributor-resource exhaustion; §8 traceability gains matching rows.*
 | I4 | An escrow only exists, or grows, if the declared funds were actually transferred in — including every contribution to a pooled escrow. | `payer.require_auth()` + shared exact-balance-delta verification on create/top-up before storage is updated. `top_up` verified the transferred amount matches the top‑up amount before updating `data.amount`. `contribute` (issue #113) routes through the same `transfer_in_exact`, and updates both the per-payer record and the pooled total only after the delta is verified. |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
 | I6 | An escrow created with `requires_acceptance` cannot be settled (released/refunded/canceled) without the payee's explicit `accept` call first. | `release`/`refund`/`cancel` all check `data.accepted_at` — `AcceptanceRequired` if absent, `NotFunded` if already terminal. The accept/cancel race on one ledger state is resolved by ordering: first to commit wins. |
+| I7 | A declared fee takes exactly once per release: `⌊amount × fee_bps ÷ 10 000⌋` (≤ 10 %) to the `fee_recipient` fixed at creation, the remainder to `payee` — the two sum to exactly `amount` — and no fee ever moves on the refund path. | Fee is validated before funds are locked at creation (`InvalidFee` for a half-set pair, `bps` > 1 000 or a self-recipient; overflow rejected via checked math), computed with floor rounding at release (`fee_amount`), re-checked on `top_up` (which grows `amount`, and therefore the fee), and `refund` never reads the fee fields (ADR 0010, issue #30). Split-payout features (if any land later) must divide the fee-free net, not re-charge the bps. |
 
 I1 is the most important property in this design. A full compromise of the
 `releaser` key lets an attacker pick the **wrong outcome** (release when it
@@ -119,12 +120,37 @@ value. **Reviewers should challenge these ratings.**
   its ADR 0004) uses **one** `PLATFORM_RELEASER_SECRET` as the releaser of
   every escrow it creates. So today one leaked key affects every open
   escrow. The scoping benefit is available, but nobody uses it.
+- **Response: race the attacker with `settle_many` (issue #29, ADR 0012).**
+  Settle every still-`Funded` escrow of the leaked key correctly before
+  the attacker does, up to `MAX_SETTLE_OPS` (20) escrows per transaction
+  instead of one:
+  1. List the key's `Funded` escrows from your index and decide each
+     one's correct outcome (`Release` or `Refund`).
+  2. Submit them as `settle_many(releaser, [(id, action), ...])` batches
+     of at most 20, highest value first. Submit batches in parallel from
+     separate source accounts; each batch is independent.
+  3. Read each batch's per-op results. `Ok` = settled by you. `NotFunded`
+     = already settled (possibly by the attacker): check its
+     `get_status` and the events to see which outcome landed. Any other
+     `Err` = rejected and untouched (wrong releaser, quorum escrow,
+     time lock, acceptance, pooled rules); handle it on its own path.
+  4. Escrows with an opted-in payee callback (`notify_payee`): a failing
+     callback aborts the **whole** batch (the transfer already happened,
+     so it can't be reported per-op). Put those in their own batch, or
+     release them singly.
+  - A batch never widens the key's reach: each op is checked against that
+    escrow's own stored releaser set, exactly like `release`/`refund`, and
+    funds still only go to the stored `payee`/`refund_to` (I1).
+  - The attacker gets the same tool. It doesn't change what they can do,
+    only how fast; speed is why the defender should batch first.
 - **Recovery:** a funded escrow can rotate its releaser when both the
   current releaser and payer authorize the change (issue #23, ADR 0009).
   Possession of the releaser key alone is insufficient to appoint an
   attacker. Rotation cannot undo a settlement that already landed, and
   it is unavailable if the payer cannot authorize. The timeout refund
   path remains the fallback for escrows whose releaser is unavailable.
+- **Incident response:** the race-to-settle procedure and its resumable
+  tooling are in [the releaser compromise runbook](runbooks/releaser-compromise.md).
 - **Mitigations to consider:**
   - [x] Use the optional custom account in `contracts/releaser-account/`
     for M-of-N Ed25519 control. Its `__check_auth` verifies the host's
@@ -141,6 +167,16 @@ value. **Reviewers should challenge these ratings.**
   - Make the `releaser` a Stellar multisig account (e.g. 2-of-3 signers).
     This works with no contract change, because `require_auth` on an
     account address checks that account's own signer thresholds.
+    **SDK helper (`sdk/src/multisig.ts`):** `buildMultisigSetup({ account,
+    signers, threshold })` returns one atomic `setOptions` transaction —
+    the new thresholds, one operation per signer, and the master key
+    weight change last — and refuses any configuration whose remaining
+    signer weight is below the high threshold (lock-out).
+    `dryRunMultisigSetup` reports the resulting thresholds and weights
+    without building anything, and `verifyMultisig(policy, { server })`
+    reads the account's live thresholds and signer weights from Horizon
+    and lists any difference from the intended policy. Client-side only:
+    the escrow contract still sees a single account address.
   - **In-contract M-of-N (implemented, issue #119 / ADR 0007):** create the
     escrow with `create_escrow_with_releasers(releasers, threshold)`. A
     single leaked key is then insufficient at `threshold > 1`; the attacker
@@ -182,6 +218,9 @@ value. **Reviewers should challenge these ratings.**
   - [ ] Operationally: back up the releaser key, or use a multisig as in
     T1, which also covers loss of one signer. Callers should pass a
     `refund_after` sized to their longest plausible fulfilment window.
+    `verifyMultisig` (see T1) reports whether the on-chain signer set
+    still meets its thresholds, so a lost signer shows up as a known,
+    checked condition rather than a surprise at settlement time.
   - [x] **M-of-N in the contract (issue #119 / ADR 0007):** a lost member
     no longer locks the escrow *if* the remaining set can still reach the
     threshold; if it cannot, the escrow behaves like a lost releaser and
@@ -292,6 +331,53 @@ behave like SEP-41.
     consumer uses one configured token (`escrowTokenId`), which is good.
   - Document that payees must check the escrow's `token`, not just its
     status.
+  - **Observable shared-pool risk (issue #39):** `solvency(token)` now
+    returns `(balance, liabilities)`, so a clawback, rebase or any other
+    post-creation shortfall shows up as `balance < liabilities` in one
+    read instead of an off-chain sum over every escrow. It detects the
+    shortfall; it does not prevent it. See *Solvency monitoring* below.
+
+#### Solvency monitoring (issue #39)
+
+What the view guarantees: `liabilities` is the sum of `amount` over every
+escrow in that token whose status is `Funded` (pooled escrows count their
+funded total net of claimed refunds). The counter (`Liability(token)`,
+persistent storage) is changed only inside the invocations that change an
+escrow's funded amount or status: `+amount` after the balance-delta check
+in `create_escrow*`/`create_escrows`, `top_up` and `contribute`; `−amount`
+in `settle()` (every release, refund and cancel path, including
+`settle_many` and the approval variants) and in `claim_refund`. A failed
+call reverts the counter with everything else, so it cannot drift. It
+never goes negative: an update that would is rejected (`Overflow`).
+Property test: `tests/liabilities.rs::liabilities_equal_sum_of_funded_amounts`.
+
+What to watch, per allowlisted token:
+
+- **`balance < liabilities` → page immediately.** The contract owes more
+  than it holds. Expected causes: issuer clawback against the contract
+  address, a rebasing or fee-charging token that slipped past the
+  allowlist, or a bug. Until it's resolved, the escrows settled last in
+  that token are the ones that will fail (T5 shared pool). Stop creating
+  new escrows in that token.
+- **`balance > liabilities` → informational.** Someone sent tokens to the
+  contract directly. That surplus belongs to no escrow and nothing in the
+  contract can move it. Not a safety problem; alert only if it grows
+  unexpectedly.
+- **Sudden drops in `liabilities` without matching `released`/`refunded`/
+  `cancelled`/`claimed` events → investigate.** The counter only moves
+  with those events, so a mismatch means the indexer or the contract is
+  wrong.
+- Suggested cadence: poll every ledger close or at least every few
+  minutes for tokens with live escrows. The call is a free simulation
+  (read-only, no signature).
+
+Archival (T6, issue #10): every write to `Liability(token)` re-extends its
+TTL to `LIABILITY_TTL_EXTEND_TO` (2,073,600 ledgers, about 120 days at
+5 s per ledger, capped at the network maximum) once it has dropped below
+`LIABILITY_TTL_THRESHOLD` (518,400 ledgers, about 30 days). A token that
+sees no create/settle activity for longer than that needs a restore
+before `solvency` reads it. The escrow entries themselves are still not
+TTL-extended (see T6), so the counter can outlive the escrows it sums.
 
 ### T6 — Storage TTL / state archival · **Medium (operational)**
 - The contract never calls `extend_ttl`. Escrow entries (persistent
@@ -605,11 +691,11 @@ escrow.
 
 | Threat | Test coverage | Status |
 |---|---|---|
-| T1 — `releaser` key leaked or stolen | `cancel.rs::only_the_stored_payer_may_cancel`, `cancel.rs::cancel_requires_the_payers_signature`, `releaser_rotation.rs::rotation_rejects_wrong_releaser_and_non_funded_escrows` | Covered |
+| T1 — `releaser` key leaked or stolen | `cancel.rs::only_the_stored_payer_may_cancel`, `cancel.rs::cancel_requires_the_payers_signature`, `releaser_rotation.rs::rotation_rejects_wrong_releaser_and_non_funded_escrows`; batch response: `settle_many.rs::another_releasers_escrow_is_never_settled`, `::same_escrow_twice_second_op_fails_not_funded`, `::max_batch_fits_mainnet_limits` | Covered |
 | T2 — `releaser` key lost | `timeout_refund.rs`, `cancel.rs::cancel_still_works_after_refund_after_has_passed_if_still_funded`, `cancel.rs::cancel_after_timeout_refund_is_rejected` | Covered |
 | T3 — Double‑spend / double payout | `tests/release_refund.rs` (double‑release, release‑after‑refund, refund‑after‑release) | Covered |
 | T4 — Reentrancy | `tests/malicious_token.rs` (failed payout leaves escrow funded), `tests/release_callback.rs` | Covered |
-| T5 — Malicious / non‑standard `token` | `tests/malicious_token.rs` (lying transfer, short delivery, re‑entry attempt) | Covered |
+| T5 — Malicious / non‑standard `token` | `tests/malicious_token.rs` (lying transfer, short delivery, re‑entry attempt); shared-pool shortfall made observable by `solvency(token)` — `tests/liabilities.rs` | Covered (post-creation clawback: detected, not prevented) |
 | T6 — Storage TTL / state archival | — | **Uncovered**: no test extends or checks TTL; mitigation is operational (TTL sized to expected duration) |
 | T7 — No events emitted | — | **Residual risk: accepted (design choice)**: contract deliberately emits no events; consumer monitoring recommended |
 | T8 — Payee has no protection against the releaser | — | **Residual risk: accepted (by design, ADR 0001)**: payee must read `releasers` + `threshold` + `refundAfter` + `refundBefore`; not a contract bug |
@@ -639,6 +725,13 @@ escrow.
   the WASM hash in `docs/testnet-deployments.md`.
 - **Keys are held in process memory as `Keypair`s.** The SDK never logs
   or persists them. Protecting them is the consumer's job (see T1).
+- **Multisig releaser helpers** (`sdk/src/multisig.ts`): `buildMultisigSetup`,
+  `dryRunMultisigSetup` and `verifyMultisig` build and check the classic
+  `setOptions` transactions that put the releaser account itself under an
+  M-of-N signer set. They are validation-heavy on purpose: the builder
+  refuses lock-out configurations and emits a single atomic transaction.
+  They make no RPC call except `verifyMultisig`'s `loadAccount`, send no
+  transaction, and do not change the contract surface.
 
 ## 5. Consumer integration notes (custodial pattern)
 
@@ -690,6 +783,9 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
       delivery, re-entry attempt (T4, T5) — issue #12,
       `tests/malicious_token.rs`
 - [ ] Releaser held as multisig or in a KMS, not a plain env var (T1, T2)
+      — the SDK now builds and verifies the multisig setup
+      (`sdk/src/multisig.ts`, offline tests in `sdk/tests/multisig.test.ts`),
+      but adopting it operationally is still open.
 - [ ] Consumer funding flow made idempotent + reconcile job (§5)
 - [x] **Traceability table added to threat model** (T1‑T15 mapped to tests
       or residual risk) — this issue

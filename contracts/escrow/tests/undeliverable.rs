@@ -33,6 +33,8 @@ fn unauthorized_sac_payee_leaves_escrow_funded_and_can_be_retried() {
         &None,
         &false,
         &None,
+        &None,
+        &None,
     );
 
     // This uses the SAC's actual authorization flag, rather than a mock
@@ -143,6 +145,8 @@ fn rejecting_contract_payee_returns_dedicated_error_without_settling() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
 
