@@ -6,6 +6,7 @@ CONSTANTS
   Actors,
   Payer,
   Payee,
+  PayeeSet,
   Releaser,
   Stranger,
   RefundTo,
@@ -25,7 +26,9 @@ VARIABLES
   releaseNotBefore,
   refundToVar,
   requiresAcceptance,
-  accepted
+  accepted,
+  payeeSet,
+  paidTo
 
 StatusSet == {"None", "Funded", "Released", "Refunded"}
 NoDeadline == -1
@@ -43,6 +46,8 @@ TypeOK ==
   /\ refundToVar \in Actors
   /\ requiresAcceptance \in BOOLEAN
   /\ accepted \in BOOLEAN
+  /\ payeeSet \subseteq Actors
+  /\ paidTo \subseteq Actors
 
 Init ==
   /\ state = "None"
@@ -57,12 +62,17 @@ Init ==
   /\ refundToVar = RefundTo
   /\ requiresAcceptance = FALSE
   /\ accepted = FALSE
+  /\ payeeSet = {}
+  /\ paidTo = {}
 
 CreateEscrow ==
   /\ state = "None"
   /\ amount' \in 1..MaxAmount
   /\ payerVar' = Payer
   /\ payeeVar' = Payee
+  /\ Payee \in PayeeSet
+  /\ payeeSet' = PayeeSet
+  /\ paidTo' = {}
   /\ releaserSet' = {Releaser}
   /\ threshold' = 1
   /\ refundToVar' = RefundTo
@@ -77,7 +87,7 @@ CreateEscrow ==
 AdvanceLedger ==
   /\ ledgerTime < MaxTime
   /\ ledgerTime' = ledgerTime + 1
-  /\ UNCHANGED <<state, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, accepted>>
+  /\ UNCHANGED <<state, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, accepted, payeeSet, paidTo>>
 
 ReleaseEscrow(caller) ==
   /\ state = "Funded"
@@ -86,7 +96,8 @@ ReleaseEscrow(caller) ==
   /\ (releaseNotBefore = NoDeadline \/ ledgerTime >= releaseNotBefore)
   /\ (requiresAcceptance => accepted)
   /\ state' = "Released"
-  /\ UNCHANGED <<ledgerTime, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, accepted>>
+  /\ paidTo' = payeeSet
+  /\ UNCHANGED <<ledgerTime, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, accepted, payeeSet>>
 
 RefundEscrow(caller) ==
   /\ state = "Funded"
@@ -94,7 +105,8 @@ RefundEscrow(caller) ==
   /\ threshold = 1
   /\ (refundAfter = NoDeadline \/ ledgerTime < refundAfter)
   /\ state' = "Refunded"
-  /\ UNCHANGED <<ledgerTime, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, accepted>>
+  /\ paidTo' = {refundToVar}
+  /\ UNCHANGED <<ledgerTime, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, accepted, payeeSet>>
 
 TimeoutRefund(caller) ==
   /\ state = "Funded"
@@ -102,7 +114,8 @@ TimeoutRefund(caller) ==
   /\ ledgerTime >= refundAfter
   /\ caller \in Actors
   /\ state' = "Refunded"
-  /\ UNCHANGED <<ledgerTime, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, accepted>>
+  /\ paidTo' = {refundToVar}
+  /\ UNCHANGED <<ledgerTime, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, accepted, payeeSet>>
 
 ReleaseWithApprovals(approvers) ==
   /\ state = "Funded"
@@ -112,7 +125,8 @@ ReleaseWithApprovals(approvers) ==
   /\ (releaseNotBefore = NoDeadline \/ ledgerTime >= releaseNotBefore)
   /\ (requiresAcceptance => accepted)
   /\ state' = "Released"
-  /\ UNCHANGED <<ledgerTime, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, accepted>>
+  /\ paidTo' = payeeSet
+  /\ UNCHANGED <<ledgerTime, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, accepted, payeeSet>>
 
 RefundWithApprovals(approvers) ==
   /\ state = "Funded"
@@ -120,7 +134,8 @@ RefundWithApprovals(approvers) ==
   /\ approvers \subseteq releaserSet
   /\ Cardinality(approvers) >= threshold
   /\ state' = "Refunded"
-  /\ UNCHANGED <<ledgerTime, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, accepted>>
+  /\ paidTo' = {refundToVar}
+  /\ UNCHANGED <<ledgerTime, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, accepted, payeeSet>>
 
 AcceptEscrow(caller) ==
   /\ state = "Funded"
@@ -129,7 +144,7 @@ AcceptEscrow(caller) ==
   /\ accepted = FALSE
   /\ accepted' = TRUE
   /\ state' = "Funded"
-  /\ UNCHANGED <<ledgerTime, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance>>
+  /\ UNCHANGED <<ledgerTime, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, payeeSet, paidTo>>
 
 ReleaseEnabled ==
   /\ state = "Funded"
@@ -162,6 +177,11 @@ FundConservation ==
   /\ amount >= 0
   /\ amount <= MaxAmount
 
+PayoutDestinationSafety ==
+  /\ (state = "Released" => paidTo \subseteq payeeSet)
+  /\ (state = "Refunded" => paidTo = {refundToVar})
+  /\ (state \in {"None", "Funded"} => paidTo = {})
+
 LedgerMonotonic ==
   /\ ledgerTime >= 0
 
@@ -170,6 +190,6 @@ TerminalStateConsistency ==
   /\ (state = "Released" => amount > 0)
   /\ (state = "Refunded" => amount > 0)
 
-Spec == Init /\ [][Next]_<<state, ledgerTime, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, accepted>>
+Spec == Init /\ [][Next]_<<state, ledgerTime, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, accepted, payeeSet, paidTo>>
 
 ====

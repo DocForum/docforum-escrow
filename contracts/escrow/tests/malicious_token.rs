@@ -390,15 +390,7 @@ fn contribute_rejects_lying_transfer() {
     let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let escrow_id = pooled_id(
-        &client,
-        &env,
-        &token_id,
-        &creator,
-        &payee,
-        &releaser,
-        300,
-    );
+    let escrow_id = pooled_id(&client, &env, &token_id, &creator, &payee, &releaser, 300);
 
     let result = client.try_contribute(&escrow_id, &payer, &100);
 
@@ -428,15 +420,7 @@ fn contribute_rejects_short_delivery() {
     let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let escrow_id = pooled_id(
-        &client,
-        &env,
-        &token_id,
-        &creator,
-        &payee,
-        &releaser,
-        300,
-    );
+    let escrow_id = pooled_id(&client, &env, &token_id, &creator, &payee, &releaser, 300);
 
     let result = client.try_contribute(&escrow_id, &payer, &100);
 
@@ -467,15 +451,7 @@ fn failed_claim_leaves_the_contribution_intact() {
     let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let escrow_id = pooled_id(
-        &client,
-        &env,
-        &token_id,
-        &creator,
-        &payee,
-        &releaser,
-        300,
-    );
+    let escrow_id = pooled_id(&client, &env, &token_id, &creator, &payee, &releaser, 300);
     // Honest funding in; only the outbound payout leg is armed later.
     client.contribute(&escrow_id, &payer, &300);
     token.arm();

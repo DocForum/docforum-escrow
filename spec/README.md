@@ -82,5 +82,7 @@ When the contract changes any of the following, update this spec and re-run TLC:
 - timeout conditions
 - acceptance gating
 - release/refund eligibility
+- payout recipient safety for single and split payees
 - quorum settlement
+| PayoutDestinationSafety | release and refund actions | contracts/escrow/src/lib.rs | Release destinations stay inside the fixed payee set; refunds use only refund_to |
 
