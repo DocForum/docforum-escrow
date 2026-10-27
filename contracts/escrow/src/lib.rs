@@ -555,14 +555,7 @@ impl EscrowContract {
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
     pub fn get_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, Error> {
-        // Fast path (#260): the status lives under its own key, so most
-        // reads skip decoding the full escrow body. Records written before
-        // that key existed fall back to the versioned loader.
-        if let Some(status) = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Status(escrow_id))
-        {
+        if let Some(status) = Self::stored_status(&env, escrow_id) {
             return Ok(status);
         }
         Ok(Self::load_escrow(&env, escrow_id)?.status)
@@ -1350,6 +1343,14 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Status(escrow_id), status);
+    }
+
+    /// Fast lookup for records with a dedicated status key. The public
+    /// query falls back to the versioned body for older layouts.
+    fn stored_status(env: &Env, escrow_id: u64) -> Option<EscrowStatus> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Status(escrow_id))
     }
 
     fn from_v1(env: &Env, v: EscrowDataV1) -> EscrowData {
