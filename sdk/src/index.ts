@@ -1934,3 +1934,13 @@ export class EscrowClient {
     return () => { stopped = true; };
   }
 }
+
+export {
+  FakeClock,
+  FakeEscrowClient,
+  FakeEscrowError,
+  type FakeEscrowErrorCode,
+  type FakeFailure,
+  type FakeFailureKind,
+  type FakeOperation,
+} from "./testing.js";

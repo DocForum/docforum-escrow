@@ -518,3 +518,5 @@ DocForum contributor chat on [Telegram](https://t.me/+J9eZoFker_E4Y2M8).
 ## License
 
 [Apache License 2.0](LICENSE)
+
+The SDK exports an in-memory `FakeEscrowClient` from `@docforum/escrow-sdk/testing` for consumer tests. It accepts a controllable clock for deterministic deadline and race scenarios.
