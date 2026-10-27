@@ -24,7 +24,7 @@ fn version_reports_the_contract_semver() {
     let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    assert_eq!(client.version(), String::from_str(&env, "2.0.0"));
+    assert_eq!(client.version(), String::from_str(&env, "2.1.0"));
 }
 
 #[test]
