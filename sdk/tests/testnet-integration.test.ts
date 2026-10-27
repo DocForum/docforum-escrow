@@ -33,8 +33,10 @@ import {
   FactoryClient,
   PreparedTransactionExpiredError,
   SignedTransactionMismatchError,
+  StaleSequenceError,
   predictInstanceAddress,
 } from "../src/index.js";
+import { Server as RpcServer } from "@stellar/stellar-sdk/rpc";
 
 // Current upstream-main testnet deployment, including BalanceMismatch
 // and opt-in payee acceptance -- see docs/testnet-deployments.md.
@@ -494,6 +496,110 @@ describe("Prepare / sign / submit against live testnet (issue #58)", () => {
 
     await expect(client.submitSigned(signedXdr)).rejects.toBeInstanceOf(PreparedTransactionExpiredError);
   }, 60_000);
+});
+
+describe("Offline release and refund against live testnet (issue #59)", () => {
+  const PASSPHRASE = "Test SDF Network ; September 2015";
+
+  /** A funded classic account whose three signers have weight 1 and thresholds of 2. */
+  async function twoOfThree(): Promise<{ account: Keypair; signers: Keypair[] }> {
+    const rpc = new RpcServer("https://soroban-testnet.stellar.org");
+    const account = await fundedKeypair();
+    const signers = [Keypair.random(), Keypair.random(), Keypair.random()];
+    let builder = new TransactionBuilder(await rpc.getAccount(account.publicKey()), {
+      fee: BASE_FEE,
+      networkPassphrase: PASSPHRASE,
+    }).setTimeout(60);
+    for (const signer of signers) {
+      builder = builder.addOperation(
+        Operation.setOptions({ signer: { ed25519PublicKey: signer.publicKey(), weight: 1 } }),
+      );
+    }
+    const tx = builder
+      .addOperation(Operation.setOptions({ masterWeight: 0, lowThreshold: 2, medThreshold: 2, highThreshold: 2 }))
+      .build();
+    tx.sign(account);
+    await rpc.sendTransaction(tx);
+    await rpc.pollTransaction(tx.hash().toString("hex"), { attempts: 30 });
+    return { account, signers };
+  }
+
+  function signCopy(unsignedXdr: string, signer: Keypair): string {
+    const tx = TransactionBuilder.fromXDR(unsignedXdr, PASSPHRASE);
+    tx.sign(signer);
+    return tx.toXDR();
+  }
+
+  it("releases with a 2-of-3 multisig releaser: prepare, sign separately, merge, submit", async () => {
+    const [payer, payee] = await Promise.all([fundedKeypair(), fundedKeypair()]);
+    const { account: multisig, signers } = await twoOfThree();
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-offline-release",
+      releaser: multisig.publicKey(),
+    });
+
+    const prepared = await client.prepareRelease({ escrowId, releaser: multisig.publicKey() });
+    // Two signers each sign their own copy; neither sees the other's.
+    const merged = client.mergeSignatures([signCopy(prepared.xdr, signers[0]!), signCopy(prepared.xdr, signers[2]!)]);
+    await client.submitSigned(merged, { expectedHash: prepared.hash });
+
+    expect(await client.getStatus(escrowId)).toBe("Released");
+  }, 120_000);
+
+  it("refunds offline with a single cold key", async () => {
+    const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-offline-refund",
+      releaser: releaser.publicKey(),
+    });
+
+    const prepared = await client.prepareRefund({ escrowId, releaser: releaser.publicKey() });
+    await client.submitSigned(signCopy(prepared.xdr, releaser), { expectedHash: prepared.hash });
+
+    expect(await client.getStatus(escrowId)).toBe("Refunded");
+  });
+
+  it("detects that the source sequence moved while signing offline", async () => {
+    const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-offline-stale",
+      releaser: releaser.publicKey(),
+    });
+    const prepared = await client.prepareRelease({ escrowId, releaser: releaser.publicKey() });
+    const signedXdr = signCopy(prepared.xdr, releaser);
+
+    // Any other transaction from the source account invalidates the prepared one.
+    const rpc = new RpcServer("https://soroban-testnet.stellar.org");
+    const bump = new TransactionBuilder(await rpc.getAccount(releaser.publicKey()), {
+      fee: BASE_FEE,
+      networkPassphrase: PASSPHRASE,
+    })
+      .addOperation(Operation.bumpSequence({ bumpTo: "0" }))
+      .setTimeout(60)
+      .build();
+    bump.sign(releaser);
+    await rpc.sendTransaction(bump);
+    await rpc.pollTransaction(bump.hash().toString("hex"), { attempts: 30 });
+
+    await expect(client.submitSigned(signedXdr, { expectedHash: prepared.hash })).rejects.toBeInstanceOf(
+      StaleSequenceError,
+    );
+  }, 120_000);
 });
 
 describeFactory("FactoryClient against live testnet", () => {

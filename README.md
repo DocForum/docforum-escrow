@@ -436,6 +436,37 @@ const { escrowId, txHash } = await client.submitSigned(signedXdr, {
 Migration: purely additive. `createEscrow` is unchanged; existing integrations
 need no changes.
 
+### Offline signing for release and refund
+
+Keeping the releaser key hot on a server is the risk the threat model warns about
+(T1). Prepare online, sign offline, submit from anywhere:
+
+```ts
+const prepared = await client.prepareRelease({ escrowId, releaser }); // or prepareRefund
+// Sign prepared.xdr on an air-gapped machine. For a classic multisig releaser,
+// each signer signs their own copy; then combine them:
+const merged = client.mergeSignatures([signedByA, signedByB]);
+await client.submitSigned(merged, { expectedHash: prepared.hash });
+```
+
+- **Cold key or multisig as the source.** By default the releaser is the
+  transaction source, so its envelope signature(s) authorize the call; no
+  separate auth entries exist. `mergeSignatures` rejects copies of a different
+  transaction and drops duplicates; the network checks the account's thresholds.
+- **Hot fee payer, cold releaser.** Set `source` to a hot account; the releaser
+  then appears in `authSigners`. Sign its auth entry first
+  (`signAuthEntries(xdr, keypair, { validUntilLedger })`, window set by
+  `authValidForLedgers`), then sign the envelope. The auth step changes the
+  hash, so use the hash it returns.
+- **Staleness.** An offline-signed transaction dies if the source account's
+  sequence moves or the window passes. `submitSigned` detects both before
+  sending (`StaleSequenceError`, `PreparedTransactionExpiredError`). The default
+  window is about a day (`OFFLINE_PREPARED_TX_TTL_LEDGERS`).
+- **Example.** `examples/offline-release/` has prepare / sign / submit scripts
+  and a 2-of-3 testnet setup.
+
+M-of-N quorum escrows settle through `releaseWithApprovals`, not this flow.
+
 ### Browser wallets (Stellar Wallets Kit)
 
 `WalletsKitSigner` adapts the selected Stellar Wallets Kit wallet to the SDK's

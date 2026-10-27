@@ -46,7 +46,9 @@ import {
   UnsignedTransactionError,
   authSignersOf,
   ledgerBoundsMax,
+  mergeSignatures as mergeSignedTransactions,
   setLedgerBounds,
+  signAuthEntriesInEnvelope,
   transactionHash,
   type PreparedTransaction,
 } from "./prepare.js";
@@ -859,6 +861,35 @@ export interface SubmitSignedResult {
   innerTxHash: string;
   /** The new escrow id, when the transaction was a `create_escrow`. */
   escrowId?: bigint;
+}
+
+// ---------------------------------------------------------------------------
+// Offline prepare for release / refund (issue #59)
+// ---------------------------------------------------------------------------
+
+/**
+ * Default lifetime of an offline-prepared settlement, in ledgers (about one
+ * day): air-gapped and multisig signing is slow. The longer the window, the
+ * more likely the escrow's state or the source account's sequence changes
+ * first; `submitSigned` detects both.
+ */
+export const OFFLINE_PREPARED_TX_TTL_LEDGERS = 17_280;
+
+export interface PrepareSettlementParams {
+  escrowId: bigint;
+  /** The escrow's releaser (a public key; may be a classic multisig account). */
+  releaser: string;
+  /**
+   * Transaction source. Defaults to `releaser`, so the releaser's envelope
+   * signature(s) authorize the call and the key never needs to be online.
+   * Set another account to pay the fee from a hot key; the releaser then
+   * appears in `authSigners` and signs its auth entry with `signAuthEntries`.
+   */
+  source?: string;
+  /** Ledgers the transaction stays valid. Default `OFFLINE_PREPARED_TX_TTL_LEDGERS`. */
+  validForLedgers?: number;
+  /** Ledgers a separately signed auth entry stays valid. Defaults to `validForLedgers`. */
+  authValidForLedgers?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1936,6 +1967,72 @@ export class EscrowClient {
           release_not_before: params.releaseNotBefore,
         });
     return this.finishPrepare(assembled, source, validForLedgers, authValidForLedgers, "create_escrow");
+  }
+
+  /**
+   * Builds and simulates a `release` for a releaser that signs offline (a cold
+   * key, a hardware signer, or a classic multisig account) and returns the
+   * unsigned envelope. Nothing is signed or submitted. Sign `xdr` on the
+   * offline machine; for a multisig releaser collect one signed copy per
+   * signer and combine them with `mergeSignatures`; then send the result
+   * through `submitSigned` from anywhere.
+   *
+   * The source account's sequence number is fixed when the transaction is
+   * prepared. If that account sends anything else first, the prepared
+   * transaction is dead: `submitSigned` detects it (`StaleSequenceError`) and
+   * you must prepare and sign again. Single-releaser escrows only; M-of-N
+   * quorum escrows settle through `releaseWithApprovals`.
+   */
+  async prepareRelease(params: PrepareSettlementParams): Promise<PreparedTransaction> {
+    return this.prepareSettlement("release", params);
+  }
+
+  /** Like `prepareRelease`, but for `refund`. */
+  async prepareRefund(params: PrepareSettlementParams): Promise<PreparedTransaction> {
+    return this.prepareSettlement("refund", params);
+  }
+
+  private async prepareSettlement(
+    method: "release" | "refund",
+    params: PrepareSettlementParams,
+  ): Promise<PreparedTransaction> {
+    const validForLedgers = params.validForLedgers ?? OFFLINE_PREPARED_TX_TTL_LEDGERS;
+    const authValidForLedgers = params.authValidForLedgers ?? validForLedgers;
+    assertLedgerWindow("validForLedgers", validForLedgers);
+    assertLedgerWindow("authValidForLedgers", authValidForLedgers);
+    const source = params.source ?? params.releaser;
+    const client = this.publicContractClient(source);
+    const args = { escrow_id: params.escrowId, caller: params.releaser };
+    const assembled = method === "release" ? await client.release(args) : await client.refund(args);
+    return this.finishPrepare(assembled, source, validForLedgers, authValidForLedgers, method);
+  }
+
+  /**
+   * Combines signed copies of one prepared transaction into a single envelope
+   * (see `mergeSignatures` in the offline-signing docs). Throws
+   * `SignedTransactionMismatchError` if any copy is a different transaction.
+   */
+  mergeSignatures(signedXdrs: string[]): string {
+    return mergeSignedTransactions(signedXdrs, this.networkPassphrase);
+  }
+
+  /**
+   * Signs the Soroban auth entries addressed to `signer` in a prepared
+   * transaction, for the case where `source` is a different account (see
+   * `PreparedTransaction.authSigners`). Returns the updated envelope and its
+   * new hash, so use the returned `hash` as `expectedHash` afterwards. Must run
+   * before the envelope is signed. `validUntilLedger` is the auth entry's
+   * expiration ledger (pass the prepared `authValidUntilLedger`); it defaults to
+   * about a day from the current ledger.
+   */
+  async signAuthEntries(
+    preparedXdr: string,
+    signer: Keypair,
+    options: { validUntilLedger?: number } = {},
+  ): Promise<{ xdr: string; hash: string; signedEntries: number }> {
+    const validUntilLedger = options.validUntilLedger
+      ?? (await this.rpc.getLatestLedger()).sequence + OFFLINE_PREPARED_TX_TTL_LEDGERS;
+    return signAuthEntriesInEnvelope(preparedXdr, signer, validUntilLedger, this.networkPassphrase);
   }
 
   /** Bounds a simulated transaction to a ledger window and describes it. */

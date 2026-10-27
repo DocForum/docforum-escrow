@@ -28,7 +28,7 @@
     "test:milestones": "vitest run tests/milestones.test.ts",
     "test:unit": "vitest run tests/fees.test.ts tests/signers.test.ts tests/amounts.test.ts tests/network-presets.test.ts",
     "test:instrumentation": "vitest run tests/instrumentation.test.ts",
-    "test:offline": "vitest run tests/events.test.ts tests/quorum-validation.test.ts tests/pooled-validation.test.ts tests/instrumentation.test.ts tests/signers.test.ts tests/relayed.test.ts tests/escrow-data.test.ts tests/factory.test.ts tests/deployments.test.ts tests/prepare-submit.test.ts",
+    "test:offline": "vitest run tests/events.test.ts tests/quorum-validation.test.ts tests/pooled-validation.test.ts tests/instrumentation.test.ts tests/signers.test.ts tests/relayed.test.ts tests/escrow-data.test.ts tests/factory.test.ts tests/deployments.test.ts tests/prepare-submit.test.ts tests/prepare-offline.test.ts",
     "typecheck": "tsc --noEmit",
     "test:runtime": "node tests/runtime-smoke.mjs",
     "test:browser": "node tests/browser-smoke.mjs",

@@ -156,6 +156,9 @@ client.guardSponsorship(signedXdr);          // { ok, reasons, invokedContracts 
 client.feeBump(signedXdr, sponsor, { maxFee, baseFee? }); // { xdr, fee, innerTxHash } — throws MaxFeeExceededError, never overshoots the cap
 client.prepareCreateEscrow({ payer: publicKey, ... });       // { xdr, hash, validUntilLedger, source, authSigners, authValidUntilLedger } — unsigned, no secret key (issue #58)
 client.submitSigned(signedXdr, { expectedHash?, feeBumpSigner?, maxFee? }); // { txHash, innerTxHash, escrowId? } — throws PreparedTransactionExpiredError / StaleSequenceError / SignedTransactionMismatchError
+client.prepareRelease({ escrowId, releaser }); client.prepareRefund(...);  // unsigned, for cold keys / multisig releasers; ~1 day window (issue #59)
+client.mergeSignatures([signedXdr, ...]);                         // one envelope from separately signed copies; rejects a different transaction
+client.signAuthEntries(preparedXdr, keypair, { validUntilLedger? }); // when source != releaser; returns { xdr, hash, signedEntries }
 ```
 
 Milestones are an SDK-level grouping, not a contract entry point: the
