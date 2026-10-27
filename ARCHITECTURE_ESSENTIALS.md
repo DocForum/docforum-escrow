@@ -24,6 +24,7 @@ release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser,
 release_with_approvals(escrow_id, approvers) -> result   // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — >= threshold distinct releasers, each authorizing this invocation
 refund(escrow_id, caller) -> result    // IMPLEMENTED (Phase E2 + E4) — a releaser when threshold is 1; anyone too, once refund_after has passed, and then still only to the stored `refund_to` (= payer unless set at creation, ADR 0009)
 refund_with_approvals(escrow_id, approvers) -> result    // IMPLEMENTED (Phase E5, issue #119) — same approval rules as release_with_approvals
+settle_many(caller, ops: Vec<(escrow_id, Release|Refund)>) -> Vec<Result<(), Error>> // IMPLEMENTED (Phase E5, issue #29, ADR 0012) — caller authorizes once; each op gets exactly the checks of release/refund against that escrow's own releasers; best-effort, one result per op in input order (Err = untouched; same escrow twice → second NotFunded); a post-transfer failure (payee callback) reverts the whole batch; at most MAX_SETTLE_OPS = 20 (BatchTooLarge); not deployed on testnet yet
 top_up(escrow_id, payer, amount) -> result // IMPLEMENTED (issue #26) — original payer only, funded state only; emits `top_up`
 transfer_payee(escrow_id, current_payee, new_payee) -> result // IMPLEMENTED (Phase E5, issue #45) — current payee only, funded state only; new_payee may not be contract address or payer; rotation tool, not key-loss recovery
 create_pooled_escrow(creator, payee, token, funding_target, condition_ref, releaser, funding_deadline) -> escrow_id // IMPLEMENTED (Phase E5, issue #113, ADR 0011) — pooled escrow; amount starts at 0, `funding_target` > 0 and a strictly-future `funding_deadline` are fixed at creation; not deployed on testnet yet
@@ -237,7 +238,9 @@ and diffs the result (`scripts/check-generated-bindings.sh`, issue #121). See
 `sdk/src/generated/README.md` for the regeneration steps.
 `sdk/src/index.ts` is the actual public surface (hand-written, ergonomic
 wrapper) — consumers import from the package root, never from
-`src/generated/` directly. Known contract ids per network come from the
+`src/generated/` directly. The package publishes ESM and CommonJS entry
+points with declarations for both; browser-aware bundlers use its ESM entry.
+Known contract ids per network come from the
 repo-root `deployments.json` (written by `scripts/deploy`), bundled as
 `src/deployments.generated.ts` and exposed as `knownContractId` /
 `knownNetworkConfig`; unknown networks and mainnet throw.

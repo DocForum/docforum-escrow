@@ -26,7 +26,9 @@
 //   cancel                         -> unit + property (Op::Cancel)
 //   claim_refund                   -> unit + property (Op::ClaimRefund)
 
-use docforum_escrow::{CreateItem, EscrowContract, EscrowContractClient, EscrowStatus};
+use docforum_escrow::{
+    CreateItem, EscrowContract, EscrowContractClient, EscrowStatus, SettleAction,
+};
 use proptest::prelude::*;
 use soroban_sdk::{
     testutils::{storage::Persistent as _, Address as _, Ledger as _},
@@ -327,9 +329,9 @@ fn settle_many_subtracts_each_release() {
     let b = f.create(0, 20);
     f.create(1, 30);
     // One id per call; see `creation_paths_add_to_liabilities` for why.
-    f.client.settle_many(&f.releaser, &soroban_sdk::vec![&env, a]);
+    f.client.settle_many(&f.releaser, &soroban_sdk::vec![&env, (a, SettleAction::Release)]);
     assert_eq!(f.liabilities(0), 20);
-    f.client.settle_many(&f.releaser, &soroban_sdk::vec![&env, b]);
+    f.client.settle_many(&f.releaser, &soroban_sdk::vec![&env, (b, SettleAction::Release)]);
     assert_eq!(f.liabilities(0), 0);
     assert_eq!(f.liabilities(1), 30);
     f.assert_invariant();
@@ -624,7 +626,7 @@ fn apply(f: &Fixture, op: Op) {
         }
         Op::SettleMany { pick } => {
             if let Some(id) = existing_id(f, pick) {
-                let _ = f.client.try_settle_many(&f.releaser, &soroban_sdk::vec![env, id]);
+                let _ = f.client.try_settle_many(&f.releaser, &soroban_sdk::vec![env, (id, SettleAction::Release)]);
             }
         }
         Op::Refund { pick, stranger } => {

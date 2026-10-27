@@ -120,6 +120,29 @@ value. **Reviewers should challenge these ratings.**
   its ADR 0004) uses **one** `PLATFORM_RELEASER_SECRET` as the releaser of
   every escrow it creates. So today one leaked key affects every open
   escrow. The scoping benefit is available, but nobody uses it.
+- **Response: race the attacker with `settle_many` (issue #29, ADR 0012).**
+  Settle every still-`Funded` escrow of the leaked key correctly before
+  the attacker does, up to `MAX_SETTLE_OPS` (20) escrows per transaction
+  instead of one:
+  1. List the key's `Funded` escrows from your index and decide each
+     one's correct outcome (`Release` or `Refund`).
+  2. Submit them as `settle_many(releaser, [(id, action), ...])` batches
+     of at most 20, highest value first. Submit batches in parallel from
+     separate source accounts; each batch is independent.
+  3. Read each batch's per-op results. `Ok` = settled by you. `NotFunded`
+     = already settled (possibly by the attacker): check its
+     `get_status` and the events to see which outcome landed. Any other
+     `Err` = rejected and untouched (wrong releaser, quorum escrow,
+     time lock, acceptance, pooled rules); handle it on its own path.
+  4. Escrows with an opted-in payee callback (`notify_payee`): a failing
+     callback aborts the **whole** batch (the transfer already happened,
+     so it can't be reported per-op). Put those in their own batch, or
+     release them singly.
+  - A batch never widens the key's reach: each op is checked against that
+    escrow's own stored releaser set, exactly like `release`/`refund`, and
+    funds still only go to the stored `payee`/`refund_to` (I1).
+  - The attacker gets the same tool. It doesn't change what they can do,
+    only how fast; speed is why the defender should batch first.
 - **Recovery:** a funded escrow can rotate its releaser when both the
   current releaser and payer authorize the change (issue #23, ADR 0009).
   Possession of the releaser key alone is insufficient to appoint an
@@ -144,6 +167,16 @@ value. **Reviewers should challenge these ratings.**
   - Make the `releaser` a Stellar multisig account (e.g. 2-of-3 signers).
     This works with no contract change, because `require_auth` on an
     account address checks that account's own signer thresholds.
+    **SDK helper (`sdk/src/multisig.ts`):** `buildMultisigSetup({ account,
+    signers, threshold })` returns one atomic `setOptions` transaction —
+    the new thresholds, one operation per signer, and the master key
+    weight change last — and refuses any configuration whose remaining
+    signer weight is below the high threshold (lock-out).
+    `dryRunMultisigSetup` reports the resulting thresholds and weights
+    without building anything, and `verifyMultisig(policy, { server })`
+    reads the account's live thresholds and signer weights from Horizon
+    and lists any difference from the intended policy. Client-side only:
+    the escrow contract still sees a single account address.
   - **In-contract M-of-N (implemented, issue #119 / ADR 0007):** create the
     escrow with `create_escrow_with_releasers(releasers, threshold)`. A
     single leaked key is then insufficient at `threshold > 1`; the attacker
@@ -185,6 +218,9 @@ value. **Reviewers should challenge these ratings.**
   - [ ] Operationally: back up the releaser key, or use a multisig as in
     T1, which also covers loss of one signer. Callers should pass a
     `refund_after` sized to their longest plausible fulfilment window.
+    `verifyMultisig` (see T1) reports whether the on-chain signer set
+    still meets its thresholds, so a lost signer shows up as a known,
+    checked condition rather than a surprise at settlement time.
   - [x] **M-of-N in the contract (issue #119 / ADR 0007):** a lost member
     no longer locks the escrow *if* the remaining set can still reach the
     threshold; if it cannot, the escrow behaves like a lost releaser and
@@ -692,7 +728,7 @@ escrow.
 
 | Threat | Test coverage | Status |
 |---|---|---|
-| T1 — `releaser` key leaked or stolen | `cancel.rs::only_the_stored_payer_may_cancel`, `cancel.rs::cancel_requires_the_payers_signature`, `releaser_rotation.rs::rotation_rejects_wrong_releaser_and_non_funded_escrows` | Covered |
+| T1 — `releaser` key leaked or stolen | `cancel.rs::only_the_stored_payer_may_cancel`, `cancel.rs::cancel_requires_the_payers_signature`, `releaser_rotation.rs::rotation_rejects_wrong_releaser_and_non_funded_escrows`; batch response: `settle_many.rs::another_releasers_escrow_is_never_settled`, `::same_escrow_twice_second_op_fails_not_funded`, `::max_batch_fits_mainnet_limits` | Covered |
 | T2 — `releaser` key lost | `timeout_refund.rs`, `cancel.rs::cancel_still_works_after_refund_after_has_passed_if_still_funded`, `cancel.rs::cancel_after_timeout_refund_is_rejected` | Covered |
 | T3 — Double‑spend / double payout | `tests/release_refund.rs` (double‑release, release‑after‑refund, refund‑after‑release) | Covered |
 | T4 — Reentrancy | `tests/malicious_token.rs` (failed payout leaves escrow funded), `tests/release_callback.rs` | Covered |
@@ -726,6 +762,13 @@ escrow.
   the WASM hash in `docs/testnet-deployments.md`.
 - **Keys are held in process memory as `Keypair`s.** The SDK never logs
   or persists them. Protecting them is the consumer's job (see T1).
+- **Multisig releaser helpers** (`sdk/src/multisig.ts`): `buildMultisigSetup`,
+  `dryRunMultisigSetup` and `verifyMultisig` build and check the classic
+  `setOptions` transactions that put the releaser account itself under an
+  M-of-N signer set. They are validation-heavy on purpose: the builder
+  refuses lock-out configurations and emits a single atomic transaction.
+  They make no RPC call except `verifyMultisig`'s `loadAccount`, send no
+  transaction, and do not change the contract surface.
 
 ## 5. Consumer integration notes (custodial pattern)
 
@@ -777,6 +820,9 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
       delivery, re-entry attempt (T4, T5) — issue #12,
       `tests/malicious_token.rs`
 - [ ] Releaser held as multisig or in a KMS, not a plain env var (T1, T2)
+      — the SDK now builds and verifies the multisig setup
+      (`sdk/src/multisig.ts`, offline tests in `sdk/tests/multisig.test.ts`),
+      but adopting it operationally is still open.
 - [ ] Consumer funding flow made idempotent + reconcile job (§5)
 - [x] **Traceability table added to threat model** (T1‑T15 mapped to tests
       or residual risk) — this issue

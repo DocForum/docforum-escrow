@@ -54,7 +54,10 @@ release callback to a contract payee. An optional protocol fee
 the top at release and never on a refund — see
 [ADR 0010](docs/adr/0010-protocol-fee-at-release.md). Funded escrows can be
 topped up by the original payer, and `get_status`/`get_escrow` are
-read-only. A token allowlist is fixed at deploy time. Pooled escrows — one agreement funded
+read-only. `settle_many` releases or refunds up to 20 escrows in one
+transaction with per-op results (the fast response to a leaked releaser
+key, see [ADR 0012](docs/adr/0012-batch-settlement-best-effort.md)). A
+token allowlist is fixed at deploy time. Pooled escrows — one agreement funded
 by many payers, with per-payer contribution records and pull-based
 pro-rata refunds — are a separate creation entry point
 (`create_pooled_escrow`, see [ADR 0011](docs/adr/0011-pooled-escrow-funding.md)
