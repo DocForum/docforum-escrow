@@ -122,6 +122,10 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   refund, timeout-refund, and `BalanceMismatch` verification (issue #109).
   The current contract ID and transaction links are in
   `docs/testnet-deployments.md`; prior deployment records remain as history.
+- [ ] Releaser-key compromise runbook and race-to-settle tooling (issue #94).
+  `docs/runbooks/releaser-compromise.md` (linked from threat model T1) and the
+  resumable `scripts/settle-outcomes.py` are in; the 50+ escrow testnet drill
+  has not been run or recorded yet.
 - [ ] Rest of the `docs/threat-model.md` §6 pre-mainnet checklist, scoped
   into issues: [#8](https://github.com/DocForum/docforum-escrow/issues/8) write status before transfer + reject
   contract-self addresses (Trivial), [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium),
@@ -313,6 +317,13 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   transaction hash and retry count; addresses are opt-in only
   (`includeAddresses: true`). 7 offline tests assert span production and the
   disabled path.
+- [x] Token-aware amount parsing and formatting (issue #81) —
+  `sdk/src/amounts.ts`: `getTokenInfo(token)` reads `decimals`, `symbol` and
+  `name` from the SEP-41 token contract (cached per contract address);
+  `parseAmount` and `formatAmount` convert between human strings and raw
+  `bigint` with strict validation (no floats/exponents, no excess fractional
+  precision, no negatives, locale-independent). Property tests assert
+  `format(parse(x)) == normalise(x)`. Used in the web demo and SDK docs.
 - [ ] SDK lifecycle amendments (issue #84). Done: `topUp`, `accept`,
   `cancel` (now `EscrowSigner`), `createEscrow({ requiresAcceptance })`,
   typed `EscrowPreconditionError` checks before submission, and a
@@ -322,7 +333,10 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   contract functions merged first.
 
 ## Phase E7 — Verification, testing & release engineering
+- [x] Contract version and reproducible build provenance exposed in the
+  contract interface and WASM metadata (issue #52).
 - [x] **Storage and resource optimisation guided by benchmarks (issue #98)** — `get_status` reads a dedicated persistent status value instead of decoding `EscrowData`. Benchmarks showed that moving `NextId` to persistent storage raised creation costs, so it remains in instance storage. The added status record improves `get_status` while adding writes to creation and settlement. Storage layout changed, so deploy as a new testnet contract ID under ADR 0005 and let existing escrows settle on their original contract.
+- [x] **Coverage-guided contract fuzzing (issue #99)** — `contracts/escrow/fuzz/` runs randomized create/release/refund sequences with ledger timestamp jumps against the Soroban test environment and checks payout, status, and balance invariants after each operation. CI runs a short cargo-fuzz pass on pull requests and a longer nightly pass, uploading crash artifacts. The committed seed corpus starts the lifecycle and timeout paths. No contract or SDK behavior changed.
 - [x] **Reproducible WASM builds and deployment verification (issue #91)** ?
   Rust 1.96.0 and Stellar CLI 28.1.0 are pinned; the pinned
   `rust:1.96.0-bookworm` container compares release WASM hashes from two

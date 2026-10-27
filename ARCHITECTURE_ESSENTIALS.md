@@ -11,6 +11,7 @@
 ## Contract surface
 ```
 __constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
+version() -> String    // semantic contract version; source revision and Soroban SDK version are embedded as WASM metadata
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009); deployed on testnet
 create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id   // optional payee acceptance gate; deployed on testnet
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
@@ -137,6 +138,7 @@ await client.release({ escrowId, caller });  // { txHash } — caller: Keypair o
 await client.releaseWithApprovals({ escrowId, approvers }); // { txHash } — one Keypair/Signer per approver (>= threshold, distinct)
 await client.refund({ escrowId, caller });   // { txHash } — releaser when threshold is 1; anyone after refundAfter has passed
 await client.refundWithApprovals({ escrowId, approvers });  // { txHash } — M-of-N refund
+await client.getTokenInfo(token);           // { decimals, symbol, name } — cached token metadata read from the SEP-41 contract
 await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
 const stop = client.subscribe(handler, { cursor, pollIntervalMs }); // serial polling; await handler for back-pressure
 await client.createMilestoneEscrow({ payer, payee, token, amount, conditionRef, releaser, milestones }); // milestones: bigint[] tranches, validated client-side (sum == amount, all > 0); one escrow per tranche
@@ -162,6 +164,15 @@ tranches already funded so the caller can release or refund them.
 
 `refundTo` on `createEscrow` and `createQuorumEscrow` is optional too (default: the payer) and
 `getEscrow` returns it as `refundTo`.
+
+Amounts are raw `bigint` in the token's smallest unit. `sdk/src/amounts.ts`
+exports `parseAmount(value, decimals)` and `formatAmount(amount, decimals)`
+plus `getTokenInfo(token)` (cached `decimals`/`symbol`/`name` read from the
+token contract). Parsing is locale-independent and strict: no floats, no
+exponent notation, no thousands separators, no negatives, and more
+fractional digits than `decimals` is rejected rather than rounded. Never
+assume 7 decimals — read them from the token, since arbitrary SEP-41 tokens
+may differ.
 
 `estimate` never signs or submits; it simulates against the client's RPC
 and reports stroops. `guardSponsorship` is the pre-sponsorship check for
