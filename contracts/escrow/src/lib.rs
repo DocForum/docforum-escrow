@@ -41,6 +41,12 @@ use soroban_sdk::{
     IntoVal, String, Vec,
 };
 
+// Bump this value whenever a contract interface or behavior change is made.
+// CI checks this constant against the base branch when this file changes.
+pub const CONTRACT_VERSION: &str = "1.0.0";
+
+include!(concat!(env!("OUT_DIR"), "/contract_metadata.rs"));
+
 /// Largest allowed releaser set for one escrow. Ten covers every
 /// real-world multisig shape this primitive is meant to replace
 /// (2-of-3, 3-of-5, ...) while keeping `create_escrow`'s validation,
@@ -268,6 +274,13 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::AllowedTokens, &allowed_tokens);
+    }
+
+    /// Semantic version of this contract interface and behavior.
+    /// Build provenance is available separately in the WASM contract
+    /// metadata (`git_sha` and `soroban_sdk_version`).
+    pub fn version(env: Env) -> String {
+        String::from_str(&env, CONTRACT_VERSION)
     }
 
     /// Locks `amount` of `token` pulled from `payer`, held for `payee`,
