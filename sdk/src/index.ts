@@ -39,6 +39,25 @@ import {
 import type { FactoryClient as FactoryClientType } from "./factory.js";
 import { signerAddress, type EscrowSigner } from "./signers/types.js";
 import { getTokenInfo as readTokenInfo, rpcTokenInfoSource, type TokenInfo } from "./amounts.js";
+import {
+  PreparedTransactionExpiredError,
+  SignedTransactionMismatchError,
+  StaleSequenceError,
+  UnsignedTransactionError,
+  authSignersOf,
+  ledgerBoundsMax,
+  setLedgerBounds,
+  transactionHash,
+  type PreparedTransaction,
+} from "./prepare.js";
+
+export {
+  PreparedTransactionExpiredError,
+  SignedTransactionMismatchError,
+  StaleSequenceError,
+  UnsignedTransactionError,
+  type PreparedTransaction,
+} from "./prepare.js";
 
 export { Keypair };
 export {
@@ -815,6 +834,65 @@ export interface RelayedAuthorization {
 export const RELAYED_AUTH_TTL_LEDGERS = 10;
 
 // ---------------------------------------------------------------------------
+// Prepare / sign / submit (issue #58)
+// ---------------------------------------------------------------------------
+
+/**
+ * Default lifetime of a prepared `create_escrow`, in ledgers (about ten
+ * minutes at five seconds a ledger): long enough for a person to approve it in
+ * a wallet, short enough that a forgotten prompt cannot be replayed later.
+ */
+export const PREPARED_TX_TTL_LEDGERS = 120;
+
+/** Default cap for the fee-bump `submitSigned` adds when given a `feeBumpSigner`: 1 XLM. */
+export const DEFAULT_SUBMIT_MAX_FEE = 10_000_000n;
+
+/** Like `CreateEscrowParams`, but the payer is just a public key: nothing here signs. */
+export interface PrepareCreateEscrowParams extends Omit<CreateEscrowParams, "payer"> {
+  /** The payer's public key. Funds are pulled from this account. */
+  payer: string;
+  /**
+   * Transaction source (fee payer and sequence provider). Defaults to `payer`,
+   * so a wallet that only signs the envelope is enough. Set it to a different
+   * account to have a backend pay the fee; the result then lists the payer in
+   * `authSigners` and the payer must sign its auth entry
+   * (`EscrowClient.signAuthEntries`) before the envelope is signed.
+   */
+  source?: string;
+  /** How many ledgers the prepared transaction stays valid. Default `PREPARED_TX_TTL_LEDGERS`. */
+  validForLedgers?: number;
+  /** How many ledgers a separately signed auth entry stays valid. Defaults to `validForLedgers`. */
+  authValidForLedgers?: number;
+}
+
+export interface SubmitSignedOptions {
+  /**
+   * The `hash` returned by `prepare*`. When given, the signed envelope must
+   * hash to exactly this, otherwise `SignedTransactionMismatchError` is thrown
+   * before anything is submitted. Recommended for any backend that prepares
+   * and submits in separate requests.
+   */
+  expectedHash?: string;
+  /** Wrap the signed transaction in a fee-bump paid by this account. */
+  feeBumpSigner?: Keypair;
+  /** Fee cap for the fee-bump, in stroops. Default `DEFAULT_SUBMIT_MAX_FEE`. */
+  maxFee?: bigint;
+  /** Base fee per operation for the fee-bump, in stroops. Default: the inner transaction's fee rate. */
+  baseFee?: bigint;
+  /** Status polls before giving up waiting for the result. Default 30. */
+  pollAttempts?: number;
+}
+
+export interface SubmitSignedResult {
+  /** Hash of the submitted transaction (the fee-bump's, when one was added). */
+  txHash: string;
+  /** Hash of the inner transaction that executed. Equals `txHash` without a fee-bump. */
+  innerTxHash: string;
+  /** The new escrow id, when the transaction was a `create_escrow`. */
+  escrowId?: bigint;
+}
+
+// ---------------------------------------------------------------------------
 // Fee estimation + sponsorship (issue #70)
 // ---------------------------------------------------------------------------
 
@@ -936,6 +1014,23 @@ function assertPositiveAmount(call: { method: LifecycleMethod; amount: bigint })
 /** The party whose signature a lifecycle call needs. */
 function lifecycleCallSigner(call: LifecycleCall): string {
   return call.method === "accept" ? call.payee : call.payer;
+}
+
+/** Throws unless `value` is a positive whole number of ledgers. */
+function assertLedgerWindow(name: string, value: number): void {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new RangeError(`${name} must be a positive whole number of ledgers.`);
+  }
+}
+
+/** The `TransactionResultCode` name from a rejected `sendTransaction`, if decodable. */
+function sendErrorName(sent: { errorResult?: unknown }): string | undefined {
+  try {
+    const result = (sent.errorResult as xdr.TransactionResult | undefined)?.result();
+    return result?.switch().name;
+  } catch {
+    return undefined;
+  }
 }
 
 export class EscrowClient {
@@ -1828,6 +1923,180 @@ export class EscrowClient {
    */
   async authorizeRefund(params: RelayedAuthorizationParams): Promise<RelayedAuthorization> {
     return this.authorizeSettlement("refund", params);
+  }
+
+  /** A contract client that can build and simulate for `publicKey` but cannot sign. */
+  private publicContractClient(publicKey: string): EscrowContractClient {
+    return new EscrowContractClient({
+      contractId: this.contractId,
+      rpcUrl: this.rpcUrl,
+      networkPassphrase: this.networkPassphrase,
+      publicKey,
+    });
+  }
+
+  /**
+   * Builds and simulates a `create_escrow` for a payer who signs elsewhere (a
+   * browser wallet, say) and returns the unsigned envelope. Nothing is signed
+   * or submitted, and no secret key is needed.
+   *
+   * By default the payer is also the transaction source, so the wallet only
+   * has to sign the envelope. Pass `source` to have another account pay the
+   * fee; the payer then has to sign its auth entry too (see `authSigners`).
+   *
+   * Hand the returned `xdr` to the signer, then pass the signed XDR and the
+   * `hash` to `submitSigned`. The transaction expires at `validUntilLedger`.
+   */
+  async prepareCreateEscrow(params: PrepareCreateEscrowParams): Promise<PreparedTransaction> {
+    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+      throw new Error(
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+      );
+    }
+    const validForLedgers = params.validForLedgers ?? PREPARED_TX_TTL_LEDGERS;
+    const authValidForLedgers = params.authValidForLedgers ?? validForLedgers;
+    assertLedgerWindow("validForLedgers", validForLedgers);
+    assertLedgerWindow("authValidForLedgers", authValidForLedgers);
+    const source = params.source ?? params.payer;
+    const client = this.publicContractClient(source);
+    const createParams = {
+      payer: params.payer,
+      payee: params.payee,
+      token: params.token,
+      amount: params.amount,
+      condition_ref: params.conditionRef,
+      releaser: params.releaser,
+      refund_after: params.refundAfter,
+      notify_payee: params.notifyPayee ?? false,
+      refund_to: params.refundTo,
+    };
+    const assembled = params.releaseNotBefore === undefined
+      ? await client.create_escrow(createParams)
+      : await client.create_escrow_release_time({
+          ...createParams,
+          release_not_before: params.releaseNotBefore,
+        });
+    return this.finishPrepare(assembled, source, validForLedgers, authValidForLedgers, "create_escrow");
+  }
+
+  /** Bounds a simulated transaction to a ledger window and describes it. */
+  private async finishPrepare(
+    assembled: AssembledTransaction<unknown>,
+    source: string,
+    validForLedgers: number,
+    authValidForLedgers: number,
+    label: string,
+  ): Promise<PreparedTransaction> {
+    if (assembled.isReadCall) {
+      throw new Error(`${label} was simulated as a read call; no transaction was assembled.`);
+    }
+    const latest = await this.rpc.getLatestLedger();
+    const validUntilLedger = latest.sequence + validForLedgers;
+    const bounded = setLedgerBounds(assembled.toXDR(), validUntilLedger);
+    const tx = TransactionBuilder.fromXDR(bounded, this.networkPassphrase) as Transaction;
+    return {
+      xdr: bounded,
+      hash: tx.hash().toString("hex"),
+      validUntilLedger,
+      source,
+      authSigners: authSignersOf(tx).filter((address) => address !== source),
+      authValidUntilLedger: latest.sequence + authValidForLedgers,
+    };
+  }
+
+  /**
+   * Submits a transaction that was prepared here and signed elsewhere, and
+   * waits for it to land.
+   *
+   * Before sending it checks, in order: that the envelope is signed, that its
+   * hash matches `expectedHash` (when given), that its ledger window has not
+   * passed (`PreparedTransactionExpiredError`), and that the source account's
+   * sequence number has not moved (`StaleSequenceError`). With a
+   * `feeBumpSigner` it first confirms the transaction only touches this
+   * escrow contract (`assertSponsorable`), then wraps it in a capped fee-bump.
+   * Returns the new escrow id when the transaction was a `create_escrow`.
+   */
+  async submitSigned(signedXdr: string, options: SubmitSignedOptions = {}): Promise<SubmitSignedResult> {
+    const parsed = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+    if (!(parsed instanceof Transaction)) {
+      throw new TypeError("submitSigned expects a regular signed transaction, not an already fee-bumped envelope.");
+    }
+    const hash = parsed.hash().toString("hex");
+    if (options.expectedHash !== undefined && options.expectedHash.toLowerCase() !== hash) {
+      throw new SignedTransactionMismatchError(options.expectedHash.toLowerCase(), hash);
+    }
+    if (parsed.signatures.length === 0) throw new UnsignedTransactionError();
+
+    const validUntilLedger = ledgerBoundsMax(parsed);
+    if (validUntilLedger !== undefined) {
+      const latest = await this.rpc.getLatestLedger();
+      if (latest.sequence > validUntilLedger) {
+        throw new PreparedTransactionExpiredError(validUntilLedger, latest.sequence);
+      }
+    }
+
+    const source = parsed.source;
+    const expectedSequence = BigInt(parsed.sequence) - 1n;
+    const onChainSequence = BigInt((await this.rpc.getAccount(source)).sequenceNumber());
+    if (onChainSequence !== expectedSequence) {
+      throw new StaleSequenceError(source, expectedSequence, onChainSequence);
+    }
+
+    let toSend: Transaction | FeeBumpTransaction = parsed;
+    if (options.feeBumpSigner) {
+      this.assertSponsorable(signedXdr);
+      // A fee-bump's base fee must be at least the inner transaction's fee
+      // rate, and a Soroban transaction's fee includes its resource fee, so
+      // the network-minimum default would be rejected. Default to the inner
+      // rate (rounded up); `maxFee` still caps what the sponsor can pay.
+      const innerRate = (BigInt(parsed.fee) + BigInt(parsed.operations.length) - 1n) / BigInt(parsed.operations.length);
+      const bumped = this.feeBump(signedXdr, options.feeBumpSigner, {
+        maxFee: options.maxFee ?? DEFAULT_SUBMIT_MAX_FEE,
+        baseFee: options.baseFee ?? innerRate,
+      });
+      toSend = TransactionBuilder.fromXDR(bumped.xdr, this.networkPassphrase) as FeeBumpTransaction;
+      // `feeBump` caps baseFee x (ops + 1); stellar-base then adds the Soroban
+      // resource fee on top. Hold the sponsor to the fee actually charged.
+      const maxFee = options.maxFee ?? DEFAULT_SUBMIT_MAX_FEE;
+      const charged = BigInt(toSend.fee);
+      if (charged > maxFee) throw new MaxFeeExceededError(charged, maxFee);
+    }
+
+    const sent = await this.rpc.sendTransaction(toSend);
+    if (sent.status === "ERROR") {
+      const reason = sendErrorName(sent);
+      if (reason === "txTooLate") {
+        throw new PreparedTransactionExpiredError(validUntilLedger ?? 0, (await this.rpc.getLatestLedger()).sequence);
+      }
+      if (reason === "txBadSeq") {
+        throw new StaleSequenceError(source, expectedSequence, onChainSequence);
+      }
+      throw new Error(`Transaction ${sent.hash} was rejected${reason ? `: ${reason}` : ""}.`);
+    }
+    if (sent.status === "TRY_AGAIN_LATER") {
+      throw new Error(`The RPC node asked to try again later; transaction ${sent.hash} was not accepted.`);
+    }
+
+    const final = await this.rpc.pollTransaction(sent.hash, { attempts: options.pollAttempts ?? 30 });
+    if (final.status === Api.GetTransactionStatus.FAILED) {
+      throw new Error(`Transaction ${sent.hash} failed on-chain.`);
+    }
+    if (final.status !== Api.GetTransactionStatus.SUCCESS) {
+      throw new Error(
+        `Transaction ${sent.hash} was not confirmed after ${options.pollAttempts ?? 30} polls; ` +
+          `it may still land, so check its hash before retrying.`
+      );
+    }
+
+    const returnValue = final.returnValue;
+    const escrowId = returnValue && returnValue.switch().name === "scvU64"
+      ? BigInt(scValToNative(returnValue) as bigint | number | string)
+      : undefined;
+    return {
+      txHash: sent.hash,
+      innerTxHash: hash,
+      ...(escrowId !== undefined ? { escrowId } : {}),
+    };
   }
 
   private async authorizeSettlement(

@@ -1,0 +1,1 @@
+Issue #58 (Phase E6): the SDK can split signing from building and submitting. `prepareCreateEscrow` builds and simulates an unsigned `create_escrow` for a public key, bounded by ledger bounds; `submitSigned` verifies the hash, expiry and source sequence, optionally fee-bumps under a hard cap, and polls to completion. SDK minor; no contract change.

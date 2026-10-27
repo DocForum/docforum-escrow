@@ -401,6 +401,44 @@ exceed `maxFee` — the cap is never silently overshot:
 const { xdr, fee } = client.feeBump(signedXdr, sponsor, { maxFee: 10_000n });
 ```
 
+### Prepare, sign elsewhere, submit
+
+`EscrowClient` normally signs with a key it holds. When the payer signs in a
+browser wallet and a backend builds and submits, split the steps:
+
+```ts
+// 1. Backend: build + simulate for a public key. Nothing is signed.
+const prepared = await client.prepareCreateEscrow({
+  payer: payerPublicKey, payee, token, amount, conditionRef, releaser,
+});
+// { xdr, hash, validUntilLedger, source, authSigners, authValidUntilLedger }
+
+// 2. Wallet (Freighter, Stellar Lab, the CLI, ...): sign prepared.xdr.
+
+// 3. Backend: verify, submit and wait.
+const { escrowId, txHash } = await client.submitSigned(signedXdr, {
+  expectedHash: prepared.hash,        // reject a different transaction
+  feeBumpSigner: sponsorKeypair,      // optional: sponsor pays the fee
+  maxFee: 50_000_000n,                // hard cap on what the sponsor pays
+});
+```
+
+- **Envelope signing (default).** The payer is the transaction source, so the
+  wallet only signs the envelope. To have a backend account pay the fee instead,
+  pass `source`; `authSigners` then lists the payer, who must sign a Soroban auth
+  entry (`signAuthEntries`) before the envelope.
+- **Expiry.** The transaction is valid until `validUntilLedger` (default about
+  ten minutes, `validForLedgers` to change it). After that `submitSigned` throws
+  `PreparedTransactionExpiredError`; prepare again.
+- **Stale sequence.** If another transaction from the source account lands first,
+  `submitSigned` throws `StaleSequenceError` before sending.
+- **Fee-bump cap.** The cap is checked against the fee actually charged,
+  including the Soroban resource fee, and the bump's base fee defaults to the
+  inner transaction's fee rate.
+
+Migration: purely additive. `createEscrow` is unchanged; existing integrations
+need no changes.
+
 ### Browser wallets (Stellar Wallets Kit)
 
 `WalletsKitSigner` adapts the selected Stellar Wallets Kit wallet to the SDK's

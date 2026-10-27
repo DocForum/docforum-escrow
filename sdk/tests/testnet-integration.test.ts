@@ -27,7 +27,14 @@ import {
   TransactionBuilder,
   nativeToScVal,
 } from "@stellar/stellar-sdk";
-import { EscrowClient, EscrowPreconditionError, FactoryClient, predictInstanceAddress } from "../src/index.js";
+import {
+  EscrowClient,
+  EscrowPreconditionError,
+  FactoryClient,
+  PreparedTransactionExpiredError,
+  SignedTransactionMismatchError,
+  predictInstanceAddress,
+} from "../src/index.js";
 
 // Current upstream-main testnet deployment, including BalanceMismatch
 // and opt-in payee acceptance -- see docs/testnet-deployments.md.
@@ -390,6 +397,103 @@ describe("EscrowClient against live testnet", () => {
     expect(guard.ok).toBe(false);
     expect(guard.reasons[0]).toContain("is not a contract invocation");
   });
+});
+
+describe("Prepare / sign / submit against live testnet (issue #58)", () => {
+  // The "wallet" is a keypair this test never hands to the SDK: the client only
+  // ever sees the payer's public key and a signed XDR string, exactly as with a
+  // browser wallet.
+  function walletSign(unsignedXdr: string, wallet: Keypair): string {
+    const tx = TransactionBuilder.fromXDR(unsignedXdr, "Test SDF Network ; September 2015");
+    tx.sign(wallet);
+    return tx.toXDR();
+  }
+
+  it("prepares for a public key, signs with a separate wallet, and submits", async () => {
+    const [wallet, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+
+    const prepared = await client.prepareCreateEscrow({
+      payer: wallet.publicKey(),
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-prepared-create",
+      releaser: releaser.publicKey(),
+    });
+    expect(prepared.authSigners).toEqual([]);
+    expect(prepared.validUntilLedger).toBeGreaterThan(0);
+
+    const { escrowId, txHash } = await client.submitSigned(walletSign(prepared.xdr, wallet), {
+      expectedHash: prepared.hash,
+    });
+
+    expect(txHash).toBeTruthy();
+    expect(escrowId).toBeDefined();
+    expect(await client.getStatus(escrowId!)).toBe("Funded");
+  });
+
+  it("lets a sponsor fee-bump a wallet-signed create", async () => {
+    const [wallet, payee, releaser, sponsor] = await Promise.all([
+      fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(),
+    ]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const prepared = await client.prepareCreateEscrow({
+      payer: wallet.publicKey(),
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-prepared-sponsored",
+      releaser: releaser.publicKey(),
+    });
+
+    const { escrowId, txHash, innerTxHash } = await client.submitSigned(walletSign(prepared.xdr, wallet), {
+      expectedHash: prepared.hash,
+      feeBumpSigner: sponsor,
+      maxFee: 50_000_000n,
+    });
+
+    expect(txHash).not.toBe(innerTxHash);
+    expect(await client.getStatus(escrowId!)).toBe("Funded");
+  });
+
+  it("rejects a different transaction than the one that was prepared", async () => {
+    const [wallet, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const params = {
+      payer: wallet.publicKey(),
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      releaser: releaser.publicKey(),
+    };
+    const prepared = await client.prepareCreateEscrow({ ...params, conditionRef: "sdk-integration-prepared-a" });
+    const other = await client.prepareCreateEscrow({ ...params, conditionRef: "sdk-integration-prepared-b" });
+
+    await expect(
+      client.submitSigned(walletSign(other.xdr, wallet), { expectedHash: prepared.hash }),
+    ).rejects.toBeInstanceOf(SignedTransactionMismatchError);
+  });
+
+  it("reports an expired prepared transaction with a typed error", async () => {
+    const [wallet, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const prepared = await client.prepareCreateEscrow({
+      payer: wallet.publicKey(),
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-prepared-expiry",
+      releaser: releaser.publicKey(),
+      validForLedgers: 1,
+    });
+    const signedXdr = walletSign(prepared.xdr, wallet);
+
+    // Wait out the one-ledger window (about five seconds a ledger).
+    await new Promise((resolve) => setTimeout(resolve, 20_000));
+
+    await expect(client.submitSigned(signedXdr)).rejects.toBeInstanceOf(PreparedTransactionExpiredError);
+  }, 60_000);
 });
 
 describeFactory("FactoryClient against live testnet", () => {
