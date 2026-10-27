@@ -79,6 +79,8 @@
                 {
                   "bool": false
                 },
+                "void",
+                "void",
                 "void"
               ]
             }
@@ -295,6 +297,18 @@
                     "val": {
                       "string": "batch-settle"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {

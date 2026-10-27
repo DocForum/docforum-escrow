@@ -79,6 +79,8 @@
                 {
                   "bool": false
                 },
+                "void",
+                "void",
                 "void"
               ]
             }
@@ -139,6 +141,8 @@
                 {
                   "bool": false
                 },
+                "void",
+                "void",
                 "void"
               ]
             }
@@ -380,6 +384,18 @@
                   },
                   {
                     "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "notify_payee"
                     },
                     "val": {
@@ -519,6 +535,18 @@
                     "val": {
                       "string": "batch-settle"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {

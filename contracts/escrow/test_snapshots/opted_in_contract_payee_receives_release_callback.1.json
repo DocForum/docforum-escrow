@@ -80,6 +80,8 @@
                 {
                   "bool": true
                 },
+                "void",
+                "void",
                 "void"
               ]
             }
@@ -138,6 +140,8 @@
                 {
                   "bool": true
                 },
+                "void",
+                "void",
                 "void"
               ]
             }
@@ -391,6 +395,18 @@
                     "val": {
                       "string": "callback-test"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {

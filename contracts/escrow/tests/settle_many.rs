@@ -85,6 +85,8 @@ impl<'a> Fixture<'a> {
             &None,
             &false,
             &None,
+            &None,
+            &None,
         )
     }
 
@@ -157,6 +159,8 @@ fn batch_refund_returns_funds_to_refund_to() {
         &None,
         &false,
         &Some(sponsor_dest.clone()),
+        &None,
+        &None,
     );
     let payer_before = f.token.balance(&f.payer);
 
@@ -282,6 +286,8 @@ fn per_op_rejections_leave_each_escrow_untouched() {
         &false,
         &None,
         &Some(CREATED_AT + 100),
+        &None,
+        &None,
     );
     // Payee acceptance not yet given.
     let unaccepted = f.client.create_escrow_with_acceptance(
@@ -359,6 +365,8 @@ fn timeout_refund_op_opens_to_anyone_only_after_the_deadline() {
         &f.releaser,
         &Some(CREATED_AT + 100),
         &false,
+        &None,
+        &None,
         &None,
     );
     let payer_before = f.token.balance(&f.payer);
@@ -456,6 +464,8 @@ fn failing_payee_callback_reverts_the_whole_batch() {
         &None,
         &true,
         &None,
+        &None,
+        &None,
     );
 
     let result = f.client.try_settle_many(
@@ -499,6 +509,8 @@ fn max_batch_fits_mainnet_limits() {
             &f.releaser,
             &None,
             &false,
+            &None,
+            &None,
             &None,
         );
         ops.push_back((id, SettleAction::Release));

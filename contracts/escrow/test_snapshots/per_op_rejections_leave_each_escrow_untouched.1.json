@@ -79,6 +79,8 @@
                 {
                   "bool": false
                 },
+                "void",
+                "void",
                 "void"
               ]
             }
@@ -234,7 +236,9 @@
                 "void",
                 {
                   "u64": "1100"
-                }
+                },
+                "void",
+                "void"
               ]
             }
           },
@@ -437,6 +441,8 @@
                 {
                   "bool": false
                 },
+                "void",
+                "void",
                 "void"
               ]
             }
@@ -924,6 +930,18 @@
                   },
                   {
                     "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "notify_payee"
                     },
                     "val": {
@@ -1063,6 +1081,18 @@
                     "val": {
                       "string": "batch-settle"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {
@@ -1211,6 +1241,18 @@
                   },
                   {
                     "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "notify_payee"
                     },
                     "val": {
@@ -1352,6 +1394,18 @@
                     "val": {
                       "string": "batch-settle"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {
@@ -1497,6 +1551,18 @@
                   },
                   {
                     "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "notify_payee"
                     },
                     "val": {
@@ -1636,6 +1702,18 @@
                     "val": {
                       "string": "batch-settle"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {
