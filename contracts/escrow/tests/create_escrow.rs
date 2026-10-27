@@ -25,6 +25,7 @@ fn version_reports_the_contract_semver() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     assert_eq!(client.version(), String::from_str(&env, "1.1.0"));
+    assert_eq!(client.version(), String::from_str(&env, "2.0.0"));
 }
 
 #[test]
@@ -50,6 +51,8 @@ fn create_escrow_locks_funds_and_reports_funded() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
 
@@ -91,6 +94,8 @@ fn create_escrow_assigns_sequential_ids() {
         &None,
         &false,
         &None,
+        &None,
+        &None,
     );
     let second = client.create_escrow(
         &payer,
@@ -101,6 +106,8 @@ fn create_escrow_assigns_sequential_ids() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
 
@@ -130,6 +137,8 @@ fn create_escrow_rejects_non_positive_amount() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
     assert!(result.is_err());
@@ -173,6 +182,8 @@ fn create_escrow_rejects_condition_ref_that_is_too_long() {
         &None,
         &false,
         &None,
+        &None,
+        &None,
     );
     assert!(result.is_ok());
 
@@ -187,6 +198,8 @@ fn create_escrow_rejects_condition_ref_that_is_too_long() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
     assert!(result.is_err());
@@ -241,6 +254,8 @@ fn callback_opt_in_requires_payee_authorization() {
             &releaser,
             &None,
             &true,
+            &None,
+            &None,
             &None,
         )
         .is_err());
