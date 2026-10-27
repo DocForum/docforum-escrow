@@ -1,4 +1,4 @@
-# ADR 0010: Split payouts from one escrow
+# ADR 0014: Split payouts from one escrow
 
 **Status:** Accepted for implementation in issue #22
 

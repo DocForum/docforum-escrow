@@ -1,4 +1,4 @@
-use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus, PayeeShare};
+use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus, PayeeShare};
 use soroban_sdk::{
     testutils::Address as _,
     token::{StellarAssetClient, TokenClient},
@@ -12,7 +12,7 @@ fn setup<'a>(env: &Env) -> (EscrowContractClient<'a>, TokenClient<'a>, Address, 
     let asset = StellarAssetClient::new(env, &token_id.address());
     let payer = Address::generate(env);
     asset.mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
     (
         EscrowContractClient::new(env, &contract_id),
         token,
@@ -50,6 +50,10 @@ fn split_release_assigns_rounding_dust_to_last_recipient_and_exposes_splits() {
         &String::from_str(&env, "order-1"),
         &releaser,
         &None,
+        &false,
+        &None,
+        &None,
+        &None,
     );
 
     let stored = client.get_escrow(&id);
@@ -81,6 +85,10 @@ fn one_payee_api_is_stored_as_a_full_share() {
         &String::from_str(&env, "order-2"),
         &releaser,
         &None,
+        &false,
+        &None,
+        &None,
+        &None,
     );
     let stored = client.get_escrow(&id);
     assert_eq!(stored.payees.len(), 1);
@@ -108,6 +116,10 @@ fn split_creation_rejects_invalid_totals_and_duplicate_recipients() {
             &String::from_str(&env, "bad-total"),
             &releaser,
             &None,
+            &false,
+            &None,
+            &None,
+            &None,
         )
         .is_err());
 
@@ -123,6 +135,71 @@ fn split_creation_rejects_invalid_totals_and_duplicate_recipients() {
             &String::from_str(&env, "duplicate"),
             &releaser,
             &None,
+            &false,
+            &None,
+            &None,
+            &None,
         )
         .is_err());
+}
+
+#[test]
+fn split_release_deducts_fee_before_distributing_the_net() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, token, token_id, payer) = setup(&env);
+    let releaser = Address::generate(&env);
+    let first = Address::generate(&env);
+    let second = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    let mut payees = Vec::new(&env);
+    payees.push_back(share(&env, &first, 5_000));
+    payees.push_back(share(&env, &second, 5_000));
+
+    let id = client.create_split_escrow(
+        &payer,
+        &payees,
+        &token_id,
+        &100,
+        &String::from_str(&env, "fee-split"),
+        &releaser,
+        &None,
+        &false,
+        &None,
+        &Some(fee_recipient.clone()),
+        &Some(1_000),
+    );
+    client.release(&id, &releaser);
+
+    assert_eq!(token.balance(&fee_recipient), 10);
+    assert_eq!(token.balance(&first), 45);
+    assert_eq!(token.balance(&second), 45);
+}
+
+#[test]
+fn split_creation_rejects_more_than_eight_recipients() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, token_id, payer) = setup(&env);
+    let releaser = Address::generate(&env);
+    let mut payees = Vec::new(&env);
+    for index in 0..9 {
+        let bps = if index == 8 { 1_112 } else { 1_111 };
+        payees.push_back(share(&env, &Address::generate(&env), bps));
+    }
+
+    let result = client.try_create_split_escrow(
+        &payer,
+        &payees,
+        &token_id,
+        &100,
+        &String::from_str(&env, "too-many-payees"),
+        &releaser,
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(Error::TooManyPayees)));
 }
