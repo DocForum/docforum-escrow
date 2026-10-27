@@ -274,6 +274,19 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   **Not yet on testnet** — the live deployment predates it.
 ## Phase E6 — SDK & integrator tooling
 - [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
+- [x] **Prepare / sign elsewhere / submit** (issue #58): `prepareCreateEscrow`
+  builds and simulates an unsigned `create_escrow` for a public key (no secret),
+  bounded by ledger bounds (`validUntilLedger`); `submitSigned` verifies the
+  hash, expiry and source sequence, optionally fee-bumps under a hard cap, and
+  polls to completion. Typed `PreparedTransactionExpiredError`,
+  `StaleSequenceError`, `SignedTransactionMismatchError`. SDK minor, additive.
+- [x] **Offline prepare / submit for release and refund** (issue #59):
+  `prepareRelease` / `prepareRefund` return an unsigned envelope for cold keys
+  and classic multisig releasers (about a one-day window); `mergeSignatures`
+  combines separately signed copies of one transaction; `signAuthEntries`
+  covers a hot fee payer with a cold releaser. `submitSigned` detects sequence
+  staleness and expiry. Air-gapped example in `examples/offline-release/`.
+  SDK minor, additive.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
   triggered by an `sdk-v*` tag: builds, typechecks, tests, runs
   `npm publish --provenance`, and attaches the tarball to the GitHub

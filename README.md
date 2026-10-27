@@ -401,6 +401,75 @@ exceed `maxFee` — the cap is never silently overshot:
 const { xdr, fee } = client.feeBump(signedXdr, sponsor, { maxFee: 10_000n });
 ```
 
+### Prepare, sign elsewhere, submit
+
+`EscrowClient` normally signs with a key it holds. When the payer signs in a
+browser wallet and a backend builds and submits, split the steps:
+
+```ts
+// 1. Backend: build + simulate for a public key. Nothing is signed.
+const prepared = await client.prepareCreateEscrow({
+  payer: payerPublicKey, payee, token, amount, conditionRef, releaser,
+});
+// { xdr, hash, validUntilLedger, source, authSigners, authValidUntilLedger }
+
+// 2. Wallet (Freighter, Stellar Lab, the CLI, ...): sign prepared.xdr.
+
+// 3. Backend: verify, submit and wait.
+const { escrowId, txHash } = await client.submitSigned(signedXdr, {
+  expectedHash: prepared.hash,        // reject a different transaction
+  feeBumpSigner: sponsorKeypair,      // optional: sponsor pays the fee
+  maxFee: 50_000_000n,                // hard cap on what the sponsor pays
+});
+```
+
+- **Envelope signing (default).** The payer is the transaction source, so the
+  wallet only signs the envelope. To have a backend account pay the fee instead,
+  pass `source`; `authSigners` then lists the payer, who must sign a Soroban auth
+  entry (`signAuthEntries`) before the envelope.
+- **Expiry.** The transaction is valid until `validUntilLedger` (default about
+  ten minutes, `validForLedgers` to change it). After that `submitSigned` throws
+  `PreparedTransactionExpiredError`; prepare again.
+- **Stale sequence.** If another transaction from the source account lands first,
+  `submitSigned` throws `StaleSequenceError` before sending.
+- **Fee-bump cap.** The cap is checked against the fee actually charged,
+  including the Soroban resource fee, and the bump's base fee defaults to the
+  inner transaction's fee rate.
+
+Migration: purely additive. `createEscrow` is unchanged; existing integrations
+need no changes.
+
+### Offline signing for release and refund
+
+Keeping the releaser key hot on a server is the risk the threat model warns about
+(T1). Prepare online, sign offline, submit from anywhere:
+
+```ts
+const prepared = await client.prepareRelease({ escrowId, releaser }); // or prepareRefund
+// Sign prepared.xdr on an air-gapped machine. For a classic multisig releaser,
+// each signer signs their own copy; then combine them:
+const merged = client.mergeSignatures([signedByA, signedByB]);
+await client.submitSigned(merged, { expectedHash: prepared.hash });
+```
+
+- **Cold key or multisig as the source.** By default the releaser is the
+  transaction source, so its envelope signature(s) authorize the call; no
+  separate auth entries exist. `mergeSignatures` rejects copies of a different
+  transaction and drops duplicates; the network checks the account's thresholds.
+- **Hot fee payer, cold releaser.** Set `source` to a hot account; the releaser
+  then appears in `authSigners`. Sign its auth entry first
+  (`signAuthEntries(xdr, keypair, { validUntilLedger })`, window set by
+  `authValidForLedgers`), then sign the envelope. The auth step changes the
+  hash, so use the hash it returns.
+- **Staleness.** An offline-signed transaction dies if the source account's
+  sequence moves or the window passes. `submitSigned` detects both before
+  sending (`StaleSequenceError`, `PreparedTransactionExpiredError`). The default
+  window is about a day (`OFFLINE_PREPARED_TX_TTL_LEDGERS`).
+- **Example.** `examples/offline-release/` has prepare / sign / submit scripts
+  and a 2-of-3 testnet setup.
+
+M-of-N quorum escrows settle through `releaseWithApprovals`, not this flow.
+
 ### Browser wallets (Stellar Wallets Kit)
 
 `WalletsKitSigner` adapts the selected Stellar Wallets Kit wallet to the SDK's
