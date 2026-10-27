@@ -125,6 +125,8 @@ value. **Reviewers should challenge these ratings.**
   attacker. Rotation cannot undo a settlement that already landed, and
   it is unavailable if the payer cannot authorize. The timeout refund
   path remains the fallback for escrows whose releaser is unavailable.
+- **Incident response:** the race-to-settle procedure and its resumable
+  tooling are in [the releaser compromise runbook](runbooks/releaser-compromise.md).
 - **Mitigations to consider:**
   - [x] Use the optional custom account in `contracts/releaser-account/`
     for M-of-N Ed25519 control. Its `__check_auth` verifies the host's
