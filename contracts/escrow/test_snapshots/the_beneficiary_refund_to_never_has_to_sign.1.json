@@ -81,7 +81,9 @@
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
-                }
+                },
+                "void",
+                "void"
               ]
             }
           },
@@ -243,6 +245,18 @@
                     "val": {
                       "string": "opaque-condition-ref"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {
@@ -758,6 +772,12 @@
                 "void",
                 {
                   "symbol": "Funded"
+                },
+                {
+                  "vec": [
+                    "void",
+                    "void"
+                  ]
                 }
               ]
             }

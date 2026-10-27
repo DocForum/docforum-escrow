@@ -279,6 +279,18 @@
                   },
                   {
                     "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "notify_payee"
                     },
                     "val": {
@@ -845,6 +857,12 @@
                 "void",
                 {
                   "symbol": "Funded"
+                },
+                {
+                  "vec": [
+                    "void",
+                    "void"
+                  ]
                 }
               ]
             }
