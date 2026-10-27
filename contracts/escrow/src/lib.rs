@@ -833,6 +833,9 @@ impl EscrowContract {
 
         data.status = EscrowStatus::Released;
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(escrow_id), &data.status);
         let token_client = token::Client::new(&env, &data.token);
         let contract_address = env.current_contract_address();
         if payee_amount > 0 {
