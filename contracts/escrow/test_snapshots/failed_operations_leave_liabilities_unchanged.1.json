@@ -361,6 +361,8 @@
                 {
                   "bool": false
                 },
+                "void",
+                "void",
                 "void"
               ]
             }
@@ -851,6 +853,18 @@
                     "val": {
                       "string": "liability-test"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {

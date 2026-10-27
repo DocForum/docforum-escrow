@@ -112,6 +112,8 @@ impl<'a> Fixture<'a> {
             &None,
             &false,
             &None,
+            &None,
+            &None,
         )
     }
 
@@ -203,6 +205,8 @@ fn creation_paths_add_to_liabilities() {
         &false,
         &None,
         &Some(CREATED_AT + 10),
+        &None,
+        &None,
     );
     f.client.create_escrow_with_acceptance(
         &f.payer, &f.payee, &f.tokens[0], &30, &f.cond(), &f.releaser, &None, &true, &None,
@@ -278,6 +282,8 @@ fn timeout_refund_subtracts_from_liabilities() {
         &f.releaser,
         &Some(CREATED_AT + 50),
         &false,
+        &None,
+        &None,
         &None,
     );
     env.ledger().set_timestamp(CREATED_AT + 50);
@@ -516,6 +522,8 @@ fn apply(f: &Fixture, op: Op) {
                 &refund_after,
                 &false,
                 &None,
+                &None,
+                &None,
             );
         }
         Op::CreateTimed { token, amount } => {
@@ -530,6 +538,8 @@ fn apply(f: &Fixture, op: Op) {
                 &false,
                 &None,
                 &Some(now + 50),
+                &None,
+                &None,
             );
         }
         Op::CreateAcceptance { token, amount } => {
