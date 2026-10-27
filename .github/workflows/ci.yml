@@ -227,6 +227,9 @@ jobs:
 
       - run: npm run build
 
+      - name: Verify CJS, ESM, and browser package entrypoints
+        run: npm run smoke
+
       # Offline only: events fixture decoding plus quorum input validation.
       # Never the live testnet suite (see the note at the end of this file).
       - run: npm run test:offline
@@ -308,7 +311,7 @@ jobs:
           cache-dependency-path: |
             sdk/package-lock.json
             packages/escrow-react/package-lock.json
-      # The hooks package resolves the SDK's types from `sdk/dist` via a
+      # The hooks package resolves the SDK's types from `sdk/dist/esm` via a
       # tsconfig path (the SDK is an optional peer), so build it first.
       - run: npm ci
         working-directory: sdk

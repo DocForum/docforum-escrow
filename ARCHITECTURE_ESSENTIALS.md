@@ -32,6 +32,7 @@ claim_refund(escrow_id, contributor) -> () // IMPLEMENTED (issue #113) — pull-
 get_pooled(escrow_id) -> PooledData  // read-only: funding_target, funding_deadline — errors NotPooled (26) on non-pooled ids
 get_contribution(escrow_id, contributor) -> Option<Contribution> // read-only: one contributor's record (amount, refunded); None if never contributed
 rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue #23) — single-releaser escrow only; current releaser and payer authorize; funded only
+solvency(token) -> (balance, liabilities) // IMPLEMENTED (Phase E5, issue #39) — read-only; liabilities = sum of `amount` over Funded escrows in `token`, kept in persistent `Liability(token)` (TTL re-extended on every write) and updated in the same invocation as every create/top_up/contribute (+) and release/refund/cancel/claim_refund (−); not deployed on testnet yet
 ```
 
 No new contract-level role came in with the M-of-N work: `releasers` is
@@ -236,7 +237,9 @@ and diffs the result (`scripts/check-generated-bindings.sh`, issue #121). See
 `sdk/src/generated/README.md` for the regeneration steps.
 `sdk/src/index.ts` is the actual public surface (hand-written, ergonomic
 wrapper) — consumers import from the package root, never from
-`src/generated/` directly. Known contract ids per network come from the
+`src/generated/` directly. The package publishes ESM and CommonJS entry
+points with declarations for both; browser-aware bundlers use its ESM entry.
+Known contract ids per network come from the
 repo-root `deployments.json` (written by `scripts/deploy`), bundled as
 `src/deployments.generated.ts` and exposed as `knownContractId` /
 `knownNetworkConfig`; unknown networks and mainnet throw.

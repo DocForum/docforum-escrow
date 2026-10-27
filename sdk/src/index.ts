@@ -721,6 +721,19 @@ export interface PooledEscrow {
   fundingDeadline: bigint;
 }
 
+/**
+ * Per-token solvency reading (`getSolvency`, issue #39). `liabilities` is
+ * the on-chain sum of `amount` over every `Funded` escrow in that token.
+ */
+export interface SolvencyReport {
+  /** The escrow contract's current balance of the token. */
+  balance: bigint;
+  /** Total the contract owes in that token across all `Funded` escrows. */
+  liabilities: bigint;
+  /** `balance >= liabilities`. */
+  solvent: boolean;
+}
+
 /** One contributor's record on a pooled escrow (`getContribution`). */
 export interface ContributionRecord {
   /** Total accepted contributions from this address — claimable if not `refunded`. */
@@ -1789,6 +1802,26 @@ export class EscrowClient {
     const record: GeneratedContribution | undefined = tx.result.unwrap();
     if (record == null) return undefined;
     return { amount: record.amount, refunded: record.refunded };
+  }
+
+  /**
+   * Read-only solvency check for one token (issue #39): the contract's
+   * balance of `token` and its total outstanding liability in it (the sum
+   * of `amount` over every `Funded` escrow, maintained on-chain in the
+   * same invocation as each state change). `solvent` is false only when
+   * the contract holds less than it owes, e.g. after an issuer clawback
+   * (threat model T5). A token never used reports zero liabilities.
+   */
+  async getSolvency(token: string): Promise<SolvencyReport> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("solvency"),
+      () => client.solvency({ token }),
+    );
+    const [balance, liabilities] = tx.result;
+    return { balance, liabilities, solvent: balance >= liabilities };
   }
 
   /**
