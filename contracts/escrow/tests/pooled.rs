@@ -58,7 +58,13 @@ fn setup(env: &Env, target: i128) -> Fixture<'_> {
     let payee = Address::generate(env);
     let releaser = Address::generate(env);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env), soroban_sdk::Map::<soroban_sdk::Address, i128>::new(env)));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(env),
+            soroban_sdk::Map::<soroban_sdk::Address, i128>::new(env),
+        ),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
     let id = client.create_pooled_escrow(
         &creator,
@@ -312,7 +318,11 @@ fn run_refund_order(order: [u8; 3]) -> [i128; 3] {
     }
 
     assert_eq!(f.token.balance(&f.contract_id), 0);
-    [f.token.balance(&a), f.token.balance(&b), f.token.balance(&c)]
+    [
+        f.token.balance(&a),
+        f.token.balance(&b),
+        f.token.balance(&c),
+    ]
 }
 
 #[test]
@@ -461,33 +471,63 @@ fn pooled_creation_validation() {
     let creator = Address::generate(&env);
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env)));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(&env),
+            soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env),
+        ),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
     let ref_str = String::from_str(&env, "pooled");
 
     // Non-positive targets.
     assert_eq!(
         client.try_create_pooled_escrow(
-            &creator, &payee, &token_id, &0, &ref_str, &releaser, &(DEADLINE)
+            &creator,
+            &payee,
+            &token_id,
+            &0,
+            &ref_str,
+            &releaser,
+            &(DEADLINE)
         ),
         Err(Ok(Error::InvalidAmount))
     );
     assert_eq!(
         client.try_create_pooled_escrow(
-            &creator, &payee, &token_id, &-1, &ref_str, &releaser, &(DEADLINE)
+            &creator,
+            &payee,
+            &token_id,
+            &-1,
+            &ref_str,
+            &releaser,
+            &(DEADLINE)
         ),
         Err(Ok(Error::InvalidAmount))
     );
     // A deadline that is not strictly in the future.
     assert_eq!(
         client.try_create_pooled_escrow(
-            &creator, &payee, &token_id, &100, &ref_str, &releaser, &CREATED_AT
+            &creator,
+            &payee,
+            &token_id,
+            &100,
+            &ref_str,
+            &releaser,
+            &CREATED_AT
         ),
         Err(Ok(Error::InvalidFundingDeadline))
     );
     assert_eq!(
         client.try_create_pooled_escrow(
-            &creator, &payee, &token_id, &100, &ref_str, &releaser, &(CREATED_AT - 1)
+            &creator,
+            &payee,
+            &token_id,
+            &100,
+            &ref_str,
+            &releaser,
+            &(CREATED_AT - 1)
         ),
         Err(Ok(Error::InvalidFundingDeadline))
     );
@@ -529,7 +569,13 @@ fn pooled_creation_respects_the_token_allowlist() {
 
     let mut allowlist = Vec::new(&env);
     allowlist.push_back(allowed.clone());
-    let contract_id = env.register(EscrowContract, (allowlist, soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env)));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            allowlist,
+            soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env),
+        ),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     assert_eq!(
@@ -719,7 +765,13 @@ fn ordinary_escrows_are_unaffected() {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env)));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(&env),
+            soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env),
+        ),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
     let id = client.create_escrow(
         &payer,
@@ -730,6 +782,8 @@ fn ordinary_escrows_are_unaffected() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
 
@@ -768,6 +822,8 @@ fn ordinary_escrows_are_unaffected() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
     client.refund(&id2, &releaser);
@@ -824,5 +880,3 @@ fn claim_refund_emits_an_event() {
         ]
     );
 }
-
-

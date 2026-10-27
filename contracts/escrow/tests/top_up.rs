@@ -27,7 +27,13 @@ fn setup(env: &Env) -> Fixture<'_> {
     let payee = Address::generate(env);
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env), soroban_sdk::Map::<soroban_sdk::Address, i128>::new(env)));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(env),
+            soroban_sdk::Map::<soroban_sdk::Address, i128>::new(env),
+        ),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
     let id = client.create_escrow(
         &payer,
@@ -38,6 +44,8 @@ fn setup(env: &Env) -> Fixture<'_> {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
     Fixture {

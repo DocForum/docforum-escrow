@@ -122,6 +122,10 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   refund, timeout-refund, and `BalanceMismatch` verification (issue #109).
   The current contract ID and transaction links are in
   `docs/testnet-deployments.md`; prior deployment records remain as history.
+- [ ] Releaser-key compromise runbook and race-to-settle tooling (issue #94).
+  `docs/runbooks/releaser-compromise.md` (linked from threat model T1) and the
+  resumable `scripts/settle-outcomes.py` are in; the 50+ escrow testnet drill
+  has not been run or recorded yet.
 - [ ] Rest of the `docs/threat-model.md` §6 pre-mainnet checklist, scoped
   into issues: [#8](https://github.com/DocForum/docforum-escrow/issues/8) write status before transfer + reject
   contract-self addresses (Trivial), [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium),
@@ -157,7 +161,9 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `docs/testnet-deployments.md`.
 ## Phase E5 — Contract features
 
-- [x] Immutable per-token escrow caps for a guarded mainnet beta (issue #56, ADR 0013): a second constructor argument maps tokens to positive maximums; an empty map means no caps, otherwise uncapped tokens are rejected. Every creation path (including each batch item), `top_up` (resulting total) and the pooled funding target are checked. Tests in `contracts/escrow/tests/token_caps.rs`; `scripts/deploy --maximum-amounts`. Not yet deployed to testnet.
+- [x] Immutable per-token escrow caps (issue #56, ADR 0013): constructor cap map enforced for creation, pooled targets, and top-ups before funds move. Tests: contracts/escrow/tests/token_caps.rs. Not yet on testnet.
+- [x] Batch release and refund (issue #29, `docs/adr/0012`): `settle_many(caller, ops: Vec<(escrow_id, Release|Refund)>)`, best-effort with one result per op, per-op auth against each escrow's own releasers, at most `MAX_SETTLE_OPS` = 20 (measured against the 16 KiB events budget). T1 response guidance updated. Tests: `contracts/escrow/tests/settle_many.rs`. **Not yet on testnet.**
+- [x] Per-token liability accounting and an on-chain solvency view (issue #39): `solvency(token) -> (balance, liabilities)`; the counter moves in the same invocation as every value-moving state change and its TTL is extended on each write. Property test: `contracts/escrow/tests/liabilities.rs`. Monitoring guidance in `docs/threat-model.md`. **Not yet on testnet.**
 - [x] Optional escrow-wide earliest release time (issue #43, ADR 0009); refund path remains independent.
 - [x] Two-party releaser rotation (issue #23): current releaser and payer authorize; only funded single-releaser escrows can rotate. Contract and payee addresses are rejected.
 
@@ -233,6 +239,22 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   on failure. Re-entry tests cover release/refund/create attempts. ADR 0005
   and threat-model T11 document the decision. Deployed on testnet
   2026-10-20.
+- [x] Optional protocol fee taken at release, with recipient and bps fixed
+  at creation — issue #30. `docs/adr/0010`: an optional
+  `fee_recipient`/`fee_bps` pair (atomic — a half-set pair is rejected),
+  capped at 10 % (`MAX_FEE_BPS = 1_000`), taken **off the top** at release
+  — `⌊amount × fee_bps ÷ 10 000⌋` to `fee_recipient`, the exact remainder
+  to `payee` (floor rounding, so fee + payout always equal the stored
+  `amount`) — and **never** on `refund`, which still returns the full
+  `amount`. `fee_recipient` may not be the escrow contract itself.
+  Both fields are readable from `get_escrow` before funds are locked.
+  `create_escrow` and `create_escrow_release_time` take the pair; the
+  acceptance and M-of-N entry points remain fee-free. `top_up` grows the
+  escrowed amount and therefore the bps fee, re-checking the fee math
+  before its transfer. New append-only `Error::InvalidFee = 35`, new
+  invariant I7, 17 tests in `tests/protocol_fee.rs`. Breaking read shape
+  and creation signature → SDK minor changeset and regenerated bindings.
+  **Not yet on testnet** — the live deployment predates the fee.
 - [x] **Pooled escrows funded by multiple payers** (issue #113) —
   `docs/adr/0011`: open contributions until an explicit
   `funding_target` (fixed contributor list rejected — see ADR table),
@@ -313,6 +335,23 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   transaction hash and retry count; addresses are opt-in only
   (`includeAddresses: true`). 7 offline tests assert span production and the
   disabled path.
+- [x] Token-aware amount parsing and formatting (issue #81) —
+  `sdk/src/amounts.ts`: `getTokenInfo(token)` reads `decimals`, `symbol` and
+  `name` from the SEP-41 token contract (cached per contract address);
+  `parseAmount` and `formatAmount` convert between human strings and raw
+  `bigint` with strict validation (no floats/exponents, no excess fractional
+  precision, no negatives, locale-independent). Property tests assert
+  `format(parse(x)) == normalise(x)`. Used in the web demo and SDK docs.
+- [x] Network presets with an explicit mainnet opt-in guard (issue #67) —
+  `networks.testnet`, `networks.futurenet`, `networks.local` presets carry
+  an RPC URL, network passphrase and known contract ids. Constructing a
+  client with the mainnet passphrase throws unless `allowMainnet: true` is
+  passed; custom networks (private quickstart) remain possible. With a
+  preset (or `verifyNetwork: true`) the RPC's `getNetwork` passphrase is
+  verified lazily, once, before the first network call (never in the
+  constructor, cached per client), so a custom `rpcUrl` cannot bypass the
+  guard. Offline unit tests cover each guard. Additive SDK surface (minor
+  changeset).
 - [ ] SDK lifecycle amendments (issue #84). Done: `topUp`, `accept`,
   `cancel` (now `EscrowSigner`), `createEscrow({ requiresAcceptance })`,
   typed `EscrowPreconditionError` checks before submission, and a
@@ -322,7 +361,10 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   contract functions merged first.
 
 ## Phase E7 — Verification, testing & release engineering
+- [x] Contract version and reproducible build provenance exposed in the
+  contract interface and WASM metadata (issue #52).
 - [x] **Storage and resource optimisation guided by benchmarks (issue #98)** — `get_status` reads a dedicated persistent status value instead of decoding `EscrowData`. Benchmarks showed that moving `NextId` to persistent storage raised creation costs, so it remains in instance storage. The added status record improves `get_status` while adding writes to creation and settlement. Storage layout changed, so deploy as a new testnet contract ID under ADR 0005 and let existing escrows settle on their original contract.
+- [x] **Coverage-guided contract fuzzing (issue #99)** — `contracts/escrow/fuzz/` runs randomized create/release/refund sequences with ledger timestamp jumps against the Soroban test environment and checks payout, status, and balance invariants after each operation. CI runs a short cargo-fuzz pass on pull requests and a longer nightly pass, uploading crash artifacts. The committed seed corpus starts the lifecycle and timeout paths. No contract or SDK behavior changed.
 - [x] **Reproducible WASM builds and deployment verification (issue #91)** ?
   Rust 1.96.0 and Stellar CLI 28.1.0 are pinned; the pinned
   `rust:1.96.0-bookworm` container compares release WASM hashes from two
@@ -674,3 +716,216 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   T2, T8, new T11 and §6 in the threat model, `README.md` and
   `ARCHITECTURE_ESSENTIALS.md` updated. **Not done:** testnet redeploy and
   the `sdk-v0.6.0` release tarball.
+- 2026-10-20 — Issue #109: deployed current upstream main to Stellar testnet and verified
+  create, release, refund, timeout refund, and a real `BalanceMismatch`
+  rejection using the fee-on-transfer test token. Updated the SDK testnet
+  contract ID and deployment documentation; previous deployment records remain
+  as history. The SDK 0.6.0 release tarball and notification to
+  `docforum-core` issue #32 still require authenticated release access.
+- 2026-10-20 — Contributing: changelog entries now go in `changelog.d/` (one new file per
+  PR) instead of being appended to this section, which used to put most open
+  PRs into merge conflict on every merge. Maintainers fold them in with
+  `node scripts/fold-changelog.mjs`. The contract surface now lives only in
+  `ARCHITECTURE_ESSENTIALS.md` (the `README.md` section is a summary that
+  links there), with the few README-only details moved across, and its
+  `refund_to` ADR reference and timeout-refund destination corrected. Also
+  dropped the hard-coded test count from the README, and documented the
+  "edit only your own lines" and "regenerate, don't hand-merge,
+  `contract-client.ts`" rules in `AGENTS.md` and `CONTRIBUTING.md`. The
+  conflict notifier now points authors at `changelog.d/`.
+- 2026-10-21 — Phase E6 integrator tooling (issues #126, #127, #128, #129).
+  #127: `EscrowClient` now accepts a SEP-43 `Signer` anywhere it accepted a `Keypair`; added `WalletsKitSigner` on the `@docforum/escrow-sdk/signers/wallets-kit` subpath with an injected, optional Wallets Kit peer and no runtime import of it. Wrong-network signing throws `WalletNetworkMismatchError`; user rejection is a normal SEP-43 `-4` outcome.
+  #129: optional `instrumentation`/`onEvent` with `simulate`/`sign`/`submit`/`confirm` spans and retry counts; addresses opt-in only; the disabled path does no timing work. SDK `0.5.0 → 0.6.0` (additive).
+  #126: new `@docforum/escrow-react` package with `useEscrow`, `useEscrowActions`, `useEscrowTimeline`, React Query caching and polling that stops at terminal statuses; 14 RTL tests and a CI job.
+  #128: new `sdk-go/` client with typed contract errors, `big.Int` i128 amounts, offline tests and an opt-in quickstart integration workflow.
+  Added `examples/web-demo/`, docs and roadmap entries. Closes #126, #127, #128, #129.
+  Go SDK: `GetEscrow` now decodes `refund_to` as the contract's `Address`
+  (`ScvAddress`) instead of a string, and the create helpers encode `RefundTo`
+  as an address-backed option. Fixes the quickstart integration job's
+  `expected string ScVal, got ScValTypeScvAddress` failure.
+- 2026-10-21 — Issue #27 (Phase E5): payer `cancel` before the payee accepts, ADR 0010.
+  `cancel(escrow_id, payer)` works only while `Funded`, on an escrow created with
+  the acceptance gate, and before `accept`; funds go to the stored `refund_to`.
+  New terminal `EscrowStatus::Cancelled`, no new error codes. SDK
+  `client.cancel()`, bindings regenerated, `@docforum/escrow-sdk` 0.6.0 → 0.7.0.
+  Not yet on testnet.
+- 2026-10-21 — Issue #91 (Phase E7): pinned Rust and Stellar CLI versions; added remapped WASM builds and a two-checkout-path CI check in a pinned Rust container; added `contract-v*` WASM and SHA-256 release assets, a testnet-only deployment verifier, and third-party verification instructions. Contract tests/build and two-path comparison pass locally; live testnet fetch returns the recorded older hash as expected.
+- 2026-10-21 — Malware scan: `.vue`, `.svelte`, `.astro`, `.less`, `.sass`, `.go`,
+  `go.mod` and `go.sum` files are now scanned as code. Before this, a Vue
+  single-file component was flagged HIGH as "disguised code" (JavaScript
+  inside a file with a non-code extension), which wrongly blocked
+  docforum-core #207. The same line rules still apply to these files.
+- 2026-10-21 — Malware scan: closed three gaps found in the malicious docforum-web #137,
+  which only had three of its nine problems flagged. Code pushed off-screen by
+  leading whitespace is now flagged (`api.js` hid its payload behind 315 tabs).
+  A `package.json` script such as `dev` or `build` that now also runs
+  `node <file>` (or bun, deno, sh, bash, python) alongside its original command
+  is flagged as `script-hijack`. The `global['!'] = …` marker of the loader used
+  in escrow #163 and web #137 is flagged as `known-payload`. The whole-line
+  heuristics no longer stop the per-line rules from running on the same file.
+- 2026-10-21 — Malware scan: TLA+ specifications (`.tla`) are now scanned as text, like
+  other source files. Before this, a TLA+ spec was flagged HIGH as "disguised
+  code", which wrongly blocked docforum-escrow #225. Every line rule still
+  applies to `.tla` files.
+- 2026-10-22 — ### Added
+  - `sdk/src/factory.ts`: `predictInstanceAddress(factoryId, salt, networkPassphrase?)`
+    derives the contract address a factory's `deploy_instance` will create,
+    offline, using the CAP-0046 preimage (deployer address + salt + network id).
+  - `FactoryClient` (`deployInstance`, `getInstance`, `forIntegrator`) for a
+    factory that exposes `deploy_instance(integrator, salt)` and
+    `get_instance(integrator)`, plus `randomSalt()`.
+  - `EscrowClient.forIntegrator(factoryClient, integrator)` builds a client bound
+    to an integrator's instance.
+  - `sdk/tests/factory.test.ts` pins a golden derivation vector, and the live
+    factory suites only run when `TESTNET_FACTORY_ID` points at a deployed
+    factory (none ships in this repo yet).
+  Closes #205.
+- 2026-10-22 — Issue #224: fixed the nightly testnet soak failures in the TypeScript SDK.
+  `authorizeRelease`, `authorizeRefund` and `submitRelayed` were documented in
+  the README but never implemented; they now simulate the settlement, collect
+  only the releaser's short-lived auth entry, and let a separate relayer sign the
+  envelope and submit it. `getEscrow` now falls back to decoding `get_escrow` by
+  field name when the generated positional decoder meets a testnet deployment
+  that predates a newer `EscrowData` field such as `release_not_before`. Added
+  offline coverage in `sdk/tests/relayed.test.ts` and
+  `sdk/tests/escrow-data.test.ts`, and wired both into `npm run test:offline`.
+  No contract change; the generated bindings are unchanged.
+- 2026-10-22 — Issue #71 (Phase E6): added a milestone (tranche) surface to the SDK —
+  `createMilestoneEscrow`, `releaseMilestone`, `refundMilestone`,
+  `getMilestones`, plus `validateMilestoneSchedule` / `MilestoneScheduleError`
+  and `MilestoneEscrowPartialError`.
+  The deployed contract is single-tranche and the native multi-tranche entry
+  point is still the Phase E5 contract work (issue #21), so a schedule is
+  modelled client-side as one ordinary escrow per tranche, tagged
+  `<conditionRef>#m<i+1>/<n>`. No contract change and no hand-edit of
+  `sdk/src/generated/contract-client.ts` — the generated bindings are
+  byte-identical to a fresh generation from the current WASM, which is what the
+  `SDK bindings match contract WASM` CI check verifies. `sdk/package.json`
+  gains `test:milestones`, run by CI; the schedule arithmetic, the ref tagging,
+  the per-tranche settlement calls and the partial-failure state are all
+  covered by offline tests.
+- 2026-10-22 — Issue #74 (Phase E5): added batched escrow creation and settlement. The
+  contract gains `create_escrows(payer, items)` (atomic, `items.len()` <=
+  `MAX_BATCH_SIZE` = 50) and `settle_many(caller, escrow_ids)` (per-op
+  `Result` in input order), and the `BatchTooLarge` error is appended at
+  discriminant 25 so every existing `Error` value keeps its on-chain number.
+  The SDK gains `createEscrows(items)` / `settleMany(ops)`: they chunk to
+  `MAX_BATCH_SIZE`, map results back to the caller's input order, throw a
+  `BatchPartialFailureError` carrying every per-item result when anything
+  fails, and accept `{ resumeFrom }` so a retry only sends what failed. The
+  batching is implemented in the wrapper by looping over the existing
+  singular `create_escrow` / `release` / `refund` calls, so no per-batch auth
+  or state semantics are introduced on the client. `sdk/src/generated/`
+  was regenerated with the pinned Stellar CLI 28.1.0.
+- 2026-10-22 — Added a contract test for `release_not_before` equal to the creation time (valid, and releasable straight away). The first nightly mutation-testing run found that replacing `<` with `<=` in that creation check (`src/lib.rs:594`) changed no test result. The new test fails on that mutant.
+- 2026-10-23 — Issue #113 (Phase E5): pooled escrows funded by multiple payers with
+  pull-based pro-rata refunds, decided in `docs/adr/0011` (open
+  contributions until an explicit funding target vs a fixed contributor
+  list — open contributions chosen). New contract entry points
+  `create_pooled_escrow`, `contribute`, `claim_refund`, `get_pooled`,
+  `get_contribution`; append-only errors 26–34; `EscrowData` and every
+  existing entry point unchanged, so single-payer behavior is untouched
+  and all pre-existing test snapshots are byte-identical. `release` now
+  requires `funded == target` on pooled escrows; push refund/cancel/top_up
+  are rejected for them (`NotSupportedForPooled`); a missed funding
+  deadline opens per-contributor `claim_refund` (exact recorded amounts,
+  once each, no contributor iteration — no cap by design). Threat model
+  I1–I4 generalized plus new T16–T19. SDK: additive wrappers
+  (`createPooledEscrow`/`contribute`/`claimRefund`/`getPooled`/
+  `getContribution`) and regenerated bindings, `0.7.0 → 0.8.0` (minor).
+  Not yet deployed to testnet — the live deployment predates it.
+- 2026-10-24 — Issue #101 (Phase E4): added the formal-verification spike for invariants
+  I1–I3 and the timeout rule. `certora/escrow.spec` states each property against
+  the current settlement entry points and `Error` discriminants, and
+  `docs/formal-verification.md` records the scope, assumptions, out-of-scope
+  areas and current status (specified, not yet machine-checked — Certora Sunbeam
+  needs a licensed toolchain, so there is no CI job). The threat model links
+  I1–I3 to their properties. No contract behaviour or SDK surface changed.
+- 2026-10-24 — Issue #110 (Phase E7): added the `Futurenet compatibility checks` workflow
+  (`.github/workflows/futurenet-compatibility.yml`) — manual `workflow_dispatch`
+  plus a weekly schedule, never on `pull_request`, so PRs are never blocked on
+  futurenet. It builds the current WASM, installs the Stellar CLI pinned in
+  `scripts/stellar-cli-version` (release tarball, sha256 verified), deploys to
+  futurenet with a generated identity, and runs the futurenet SDK integration
+  suite (`npm run test:futurenet`, scoped by `sdk/vitest.futurenet.config.ts`).
+  Futurenet resets are handled gracefully, and per-protocol reports live under
+  `docs/futurenet-compatibility-reports/`. No contract or SDK surface change.
+- 2026-10-24 — Issue #111 (Phase E4): added the audit-readiness material for external
+  reviewers. `SECURITY.md` documents private reporting, triage and disclosure;
+  `docs/audit/` records the reviewed commit, the in- and out-of-scope files, and
+  reproducible test/build results; `CONTRIBUTING.md` explains how contributors
+  report privately and respect the reviewed scope; the threat model gains a
+  clearly-labelled planned-features section (T12) and states that milestones,
+  disputes, splits and attestations are not implemented yet. No contract, SDK or
+  CI change.
+- 2026-10-24 — Issue #50 (Phase E5): documented the optional M-of-N custom releaser account in `ARCHITECTURE_ESSENTIALS.md`, `docs/threat-model.md` (T1) and `ROADMAP.md`. The account contract already on `main` (`contracts/releaser-account/`, ADR 0005) is unchanged; this PR resolves the duplicate add/add conflicts by keeping `main`'s newer implementation. No escrow contract change, so generated bindings are unaffected. Not deployed to testnet.
+- 2026-10-24 — Issue #84 (Phase E6): SDK `topUp`, `accept` and `createEscrow({ requiresAcceptance })`;
+  `cancel` now takes any `EscrowSigner`. All three check preconditions client-side
+  first and throw `EscrowPreconditionError` (`InvalidAmount`, `NotFunded`,
+  `Unauthorized`, `AcceptanceNotConfigured`, `AlreadyAccepted`); pass
+  `checkPreconditions: false` to skip the read. New `prepareLifecycleCall` /
+  `signLifecycleCall` / `submitLifecycleCall` pass a call between signers as JSON.
+  `getEscrow` now returns `requiresAcceptance` and `acceptedAt`. No contract
+  change, bindings unchanged. `@docforum/escrow-sdk` 0.7.0 → 0.8.0.
+  `extendRefundAfter` and `refundByPayee` follow once #41 and #40 land.
+- 2026-10-24 — Issue #89 (Phase E7): added `scripts/deploy`, one command for deploy → verify
+  → record. It builds or takes the WASM, checks its SHA-256, uploads and deploys
+  it with the constructor allowlist, confirms the on-chain WASM matches, runs a
+  scripted live verification (create, release, refund; stranger release, double
+  release and zero-amount rejections), and records the result in
+  `deployments.json`, `docs/testnet-deployments.md` and
+  `sdk/src/deployments.generated.ts`. It refuses a dirty git tree and any network
+  except testnet; `--dry-run` runs against a local quickstart without touching
+  tracked files. The SDK adds `knownContractId`, `knownNetworkConfig`,
+  `latestDeployment` and `parseDeployments` with no filesystem access, so it
+  still runs in browsers, Deno and Bun. No contract change.
+- 2026-10-24 — Issue #98 (Phase E7): added a Soroban resource profile for the 13 functions
+  in the resource baseline. A dedicated status record reduces `get_status`
+  CPU instructions by 41% and memory by 52% in the measured native test
+  environment, while increasing create and settlement costs due to the extra
+  persistent write. Moving `NextId` to persistent storage was rejected because
+  it raised create costs further. The status key changes storage layout and
+  requires redeployment under a new testnet contract ID per ADR 0005.
+- 2026-10-24 — Refreshed the TypeScript SDK's lockfile to clear high-severity advisories in its dependency tree: `@stellar/stellar-sdk` 16.3.0 → 16.4.1 (which pins axios 1.18.0 → 1.20.0, fixing the prototype-pollution, header-injection, ReDoS and SSRF advisories), `follow-redirects` 1.16.0 → 1.16.1 and `smol-toml` 1.8.0 → 1.9.1. Lockfile-only and within the existing ranges, so consumers of the published package already resolve these versions.
+- 2026-10-26 — Issue #81 (Phase E6): added token-aware amount helpers to the SDK
+  (`sdk/src/amounts.ts`). `getTokenInfo(token)` reads `decimals`, `symbol` and
+  `name` from the SEP-41 token contract and caches them per address;
+  `parseAmount('12.5', decimals)` and `formatAmount(bigint, decimals)` convert
+  with strict validation — floats/exponents (`1e3`), excess fractional
+  precision (`0.00000001` at 7 decimals), thousands separators and negatives
+  (including `-0`) are rejected rather than rounded. Property tests cover
+  `format(parse(x)) == normalise(x)` and run in CI via `npm run test:unit`.
+  Additive SDK surface, no contract change, so the generated bindings are
+  unchanged. The web demo now shows amounts via `formatAmount`.
+- 2026-10-26 — Issue #99 (Phase E7): added a cargo-fuzz lifecycle target for randomized
+  create, release, refund and ledger-time sequences, including malicious token
+  mocks, with invariant checks after each operation. CI runs short pull-request
+  fuzzing and a longer nightly pass, and uploads crash artifacts. No contract
+  or SDK behavior changed.
+- 2026-10-27 — The contract now exposes its semantic version and embeds the source revision and locked Soroban SDK version in WASM metadata. Reproducible builds use an explicit CI SHA and mark local builds unknown.
+- 2026-10-27 — Issue #67 (Phase E6): added SDK network presets (`networks.testnet`,
+  `networks.futurenet`, `networks.local`) carrying an RPC URL, network
+  passphrase and known contract ids, plus an explicit mainnet opt-in guard:
+  constructing an `EscrowClient` with the mainnet passphrase throws
+  `MainnetNotAllowedError` unless `allowMainnet: true`. When a preset is
+  selected (or `verifyNetwork: true` is passed) the client verifies the RPC's
+  `getNetwork` passphrase lazily, once, before its first network call, and
+  throws `NetworkMismatchError` on a mismatch; it never runs in the
+  constructor, the result is cached per client and a failed check is not
+  cached. With a preset only, an RPC without `getNetwork` (an offline test
+  double) is skipped; an explicit request makes that an error, and
+  `verifyNetwork: false` turns the check off. Clients without a preset make no
+  extra requests. Custom networks still work, and plain-HTTP RPC (local
+  quickstart) needs `allowHttp`, which `networks.local` sets. No contract
+  change, so the generated bindings are unchanged.
+- 2026-10-27 — Issue #94 (Phase E4): added `docs/runbooks/releaser-compromise.md`
+  (detection signals, decision tree, roles, race-to-settle steps), linked from
+  threat model T1, and `scripts/settle-outcomes.py`. The script validates the
+  integrator's outcome file, never chooses an outcome, runs the operator's own
+  submit command per escrow, and records each successful transaction hash in a
+  JSON-lines state file (`<outcomes>.state.jsonl`, rewritten atomically) so a
+  re-run after a crash, rate limit or fee spike skips settled escrows and
+  retries the rest. Stdlib only, Python 3.9+, with offline tests in
+  `scripts/test_settle_outcomes.py` run by a new CI job. The 50+ escrow testnet
+  drill is still to be run and recorded in the runbook. No contract or SDK
+  change.

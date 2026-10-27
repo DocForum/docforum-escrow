@@ -7,7 +7,7 @@ use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
     testutils::{Address as _, Events as _, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, IntoVal, String, Vec,
+    Address, Env, IntoVal, Map, String, Vec,
 };
 
 fn setup<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
@@ -16,6 +16,18 @@ fn setup<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
     let token = TokenClient::new(env, &contract_id.address());
     let asset = StellarAssetClient::new(env, &contract_id.address());
     (contract_id.address(), token, asset)
+}
+
+#[test]
+fn version_reports_the_contract_semver() {
+    let env = Env::default();
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Map::<Address, i128>::new(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert_eq!(client.version(), String::from_str(&env, "2.5.0"));
 }
 
 #[test]
@@ -29,7 +41,13 @@ fn create_escrow_locks_funds_and_reports_funded() {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env)));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(&env),
+            soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env),
+        ),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let escrow_id = client.create_escrow(
@@ -41,6 +59,8 @@ fn create_escrow_locks_funds_and_reports_funded() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
 
@@ -69,7 +89,13 @@ fn create_escrow_assigns_sequential_ids() {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env)));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(&env),
+            soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env),
+        ),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let first = client.create_escrow(
@@ -82,6 +108,8 @@ fn create_escrow_assigns_sequential_ids() {
         &None,
         &false,
         &None,
+        &None,
+        &None,
     );
     let second = client.create_escrow(
         &payer,
@@ -92,6 +120,8 @@ fn create_escrow_assigns_sequential_ids() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
 
@@ -109,7 +139,13 @@ fn create_escrow_rejects_non_positive_amount() {
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env)));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(&env),
+            soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env),
+        ),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_create_escrow(
@@ -122,6 +158,8 @@ fn create_escrow_rejects_non_positive_amount() {
         &None,
         &false,
         &None,
+        &None,
+        &None,
     );
     assert!(result.is_err());
 }
@@ -131,7 +169,13 @@ fn get_status_errors_for_unknown_escrow() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env)));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(&env),
+            soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env),
+        ),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_get_status(&999);
@@ -149,7 +193,13 @@ fn create_escrow_rejects_condition_ref_that_is_too_long() {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env)));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(&env),
+            soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env),
+        ),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // 64 bytes is accepted (the bound is inclusive).
@@ -163,6 +213,8 @@ fn create_escrow_rejects_condition_ref_that_is_too_long() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
     assert!(result.is_ok());
@@ -178,6 +230,8 @@ fn create_escrow_rejects_condition_ref_that_is_too_long() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
     assert!(result.is_err());
@@ -197,7 +251,13 @@ fn callback_opt_in_requires_payee_authorization() {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env)));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(&env),
+            soroban_sdk::Map::<soroban_sdk::Address, i128>::new(&env),
+        ),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
     let condition_ref = String::from_str(&env, "payee-opt-in-auth");
     let invoke = MockAuthInvoke {
@@ -232,6 +292,8 @@ fn callback_opt_in_requires_payee_authorization() {
             &releaser,
             &None,
             &true,
+            &None,
+            &None,
             &None,
         )
         .is_err());

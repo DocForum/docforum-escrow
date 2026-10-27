@@ -160,7 +160,11 @@ impl Model {
     }
 
     fn expected_payer_balance(&self) -> i128 {
-        let refunded = if self.phase == Phase::Refunded { self.amount } else { 0 };
+        let refunded = if self.phase == Phase::Refunded {
+            self.amount
+        } else {
+            0
+        };
         INITIAL_BALANCE - self.paid_in + refunded
     }
 }
@@ -208,7 +212,13 @@ fn fixture<'a>(env: &'a Env, amount: i128, refund_after: Option<u64>) -> Fixture
     let stranger = Address::generate(env);
     asset.mint(&payer, &INITIAL_BALANCE);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env), soroban_sdk::Map::<soroban_sdk::Address, i128>::new(env)));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(env),
+            soroban_sdk::Map::<soroban_sdk::Address, i128>::new(env),
+        ),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
     let escrow_id = client.create_escrow(
         &payer,
@@ -219,6 +229,8 @@ fn fixture<'a>(env: &'a Env, amount: i128, refund_after: Option<u64>) -> Fixture
         &releaser,
         &refund_after,
         &false,
+        &None,
+        &None,
         &None,
     );
 
@@ -262,7 +274,11 @@ fn call(env: &Env, f: &Fixture, op: Op) -> Predicted {
             other => panic!("top_up: unexpected result {other:?}"),
         },
         Op::Release { as_releaser } => {
-            let caller = if as_releaser { &f.releaser } else { &f.stranger };
+            let caller = if as_releaser {
+                &f.releaser
+            } else {
+                &f.stranger
+            };
             match f.client.try_release(&f.escrow_id, caller) {
                 Ok(Ok(())) => Ok(()),
                 Err(Ok(Error::NotFunded)) => Err(Failure::NotFunded),
@@ -271,7 +287,11 @@ fn call(env: &Env, f: &Fixture, op: Op) -> Predicted {
             }
         }
         Op::Refund { as_releaser } => {
-            let caller = if as_releaser { &f.releaser } else { &f.stranger };
+            let caller = if as_releaser {
+                &f.releaser
+            } else {
+                &f.stranger
+            };
             match f.client.try_refund(&f.escrow_id, caller) {
                 Ok(Ok(())) => Ok(()),
                 Err(Ok(Error::NotFunded)) => Err(Failure::NotFunded),
