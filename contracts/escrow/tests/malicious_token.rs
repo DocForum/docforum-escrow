@@ -184,6 +184,35 @@ impl FailingPayoutToken {
     }
 }
 
+// --- ClawbackToken: an issuer can remove funds after escrow creation ---
+
+#[contract]
+pub struct ClawbackToken;
+
+#[contractimpl]
+impl ClawbackToken {
+    pub fn set_balance(env: Env, id: Address, amount: i128) {
+        env.storage()
+            .persistent()
+            .set(&MockKey::Balance(id), &amount);
+    }
+
+    pub fn balance(env: Env, id: Address) -> i128 {
+        mock_balance(&env, &id)
+    }
+
+    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+        mock_debit_credit(&env, &from, &to, amount, amount);
+    }
+
+    pub fn clawback(env: Env, from: Address, amount: i128) {
+        let balance = mock_balance(&env, &from);
+        env.storage()
+            .persistent()
+            .set(&MockKey::Balance(from), &(balance - amount));
+    }
+}
+
 // --- tests ---
 
 #[test]
@@ -260,6 +289,56 @@ fn create_escrow_rejects_short_delivery() {
     // The whole invocation rolled back, including the token's own
     // internal state change.
     assert_eq!(token.balance(&payer), 1_000);
+}
+
+#[test]
+fn payout_returns_pool_insufficient_after_token_clawback() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let token_id = env.register(ClawbackToken, ());
+    let token = ClawbackTokenClient::new(&env, &token_id);
+    let payer = Address::generate(&env);
+    token.set_balance(&payer, &1_000);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let escrow_id = client.create_escrow(
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(&env, "clawback-test"),
+        &releaser,
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+    );
+    client.create_escrow(
+        &payer,
+        &Address::generate(&env),
+        &token_id,
+        &300,
+        &String::from_str(&env, "second-liability"),
+        &Address::generate(&env),
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+    );
+
+    // The pool still covers this escrow's 300 payout but not both funded
+    // escrows' 600 total liability.
+    token.clawback(&contract_id, &200);
+    let result = client.try_release(&escrow_id, &releaser);
+
+    assert_eq!(result, Err(Ok(Error::PoolInsufficient)));
+    assert_eq!(client.get_status(&escrow_id), EscrowStatus::Funded);
+    assert_eq!(token.balance(&payee), 0);
 }
 
 #[test]
@@ -390,15 +469,7 @@ fn contribute_rejects_lying_transfer() {
     let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let escrow_id = pooled_id(
-        &client,
-        &env,
-        &token_id,
-        &creator,
-        &payee,
-        &releaser,
-        300,
-    );
+    let escrow_id = pooled_id(&client, &env, &token_id, &creator, &payee, &releaser, 300);
 
     let result = client.try_contribute(&escrow_id, &payer, &100);
 
@@ -428,15 +499,7 @@ fn contribute_rejects_short_delivery() {
     let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let escrow_id = pooled_id(
-        &client,
-        &env,
-        &token_id,
-        &creator,
-        &payee,
-        &releaser,
-        300,
-    );
+    let escrow_id = pooled_id(&client, &env, &token_id, &creator, &payee, &releaser, 300);
 
     let result = client.try_contribute(&escrow_id, &payer, &100);
 
@@ -467,15 +530,7 @@ fn failed_claim_leaves_the_contribution_intact() {
     let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let escrow_id = pooled_id(
-        &client,
-        &env,
-        &token_id,
-        &creator,
-        &payee,
-        &releaser,
-        300,
-    );
+    let escrow_id = pooled_id(&client, &env, &token_id, &creator, &payee, &releaser, 300);
     // Honest funding in; only the outbound payout leg is armed later.
     client.contribute(&escrow_id, &payer, &300);
     token.arm();

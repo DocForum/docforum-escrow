@@ -51,7 +51,7 @@ use soroban_sdk::{
 
 // Bump this value whenever a contract interface or behavior change is made.
 // CI checks this constant against the base branch when this file changes.
-pub const CONTRACT_VERSION: &str = "2.2.0";
+pub const CONTRACT_VERSION: &str = "2.6.0";
 
 include!(concat!(env!("OUT_DIR"), "/contract_metadata.rs"));
 
@@ -316,6 +316,8 @@ pub enum Error {
     /// contract itself, or an amount that would overflow the fee math —
     /// see docs/adr/0010.
     InvalidFee = 35,
+    /// The token balance is below the total outstanding liability at payout.
+    PoolInsufficient = 38,
 }
 
 #[contract]
@@ -579,8 +581,7 @@ impl EscrowContract {
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
     pub fn get_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, Error> {
-        env
-            .storage()
+        env.storage()
             .persistent()
             .get(&DataKey::Status(escrow_id))
             .ok_or(Error::NotFound)
@@ -679,7 +680,9 @@ impl EscrowContract {
             fee_bps: None,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        env.storage().persistent().set(&DataKey::Status(id), &data.status);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(id), &data.status);
         env.storage().persistent().set(
             &DataKey::Pooled(id),
             &PooledData {
@@ -1227,7 +1230,9 @@ impl EscrowContract {
             fee_bps,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        env.storage().persistent().set(&DataKey::Status(id), &data.status);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(id), &data.status);
         Self::publish_state(env, symbol_short!("created"), id, &data);
         Ok(id)
     }
@@ -1348,6 +1353,14 @@ impl EscrowContract {
         };
         let payout = data.amount - fee;
 
+        // Refuse every payout while the token pool is below the total owed to
+        // funded escrows. This protects later escrows as well as this payout.
+        let token_client = token::Client::new(env, &data.token);
+        let contract_address = env.current_contract_address();
+        if token_client.balance(&contract_address) < Self::liability(env, &data.token) {
+            return Err(Error::PoolInsufficient);
+        }
+
         // Effects before interactions: the state write lands before any
         // token call, so a re-entrant token cannot see a still-`Funded`
         // escrow (threat model T4).
@@ -1362,13 +1375,12 @@ impl EscrowContract {
         // amount stops being owed here too.
         Self::sub_liability(env, &data.token, data.amount)?;
 
-        let token_client = token::Client::new(env, &data.token);
         if let Some(recipient) = fee_recipient {
             if fee > 0 {
-                token_client.transfer(&env.current_contract_address(), &recipient, &fee);
+                token_client.transfer(&contract_address, &recipient, &fee);
             }
         }
-        token_client.transfer(&env.current_contract_address(), &destination, &payout);
+        token_client.transfer(&contract_address, &destination, &payout);
         if notify_payee {
             // The callback reports what the payee actually received — gross
             // minus any protocol fee — not the gross escrowed amount.

@@ -60,7 +60,7 @@ and the contract surface list). A read-only `solvency(token)` view returns
 the contract's balance of a token next to the total it owes across every
 `Funded` escrow in that token (SDK: `client.getSolvency(token)`), so
 monitors can check `balance >= liabilities` in one call — see
-[threat model → Solvency monitoring](docs/threat-model.md#solvency-monitoring-issue-39).
+[threat model → Solvency monitoring](docs/threat-model.md#solvency-monitoring-issue-39). Payouts are rejected with PoolInsufficient while the token balance is below total funded liabilities.
 
 **The full function list, signatures and rules are in
 [`ARCHITECTURE_ESSENTIALS.md` → Contract surface](ARCHITECTURE_ESSENTIALS.md#contract-surface).**
