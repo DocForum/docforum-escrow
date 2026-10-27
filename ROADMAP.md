@@ -340,6 +340,16 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   for parties on different machines. SDK `0.7.0 → 0.8.0`. Waiting on the
   contract: `extendRefundAfter` (#41) and `refundByPayee` (#40) need their
   contract functions merged first.
+- [x] Published API reference (TypeDoc) and runnable examples (issue #79).
+  `sdk/typedoc.json` generates an HTML reference for every exported symbol and
+  enforces a missing-doc lint (undocumented exports, broken doc links and
+  unexpected non-exported types fail `npm run docs`); a new `sdk/examples/`
+  directory has one runnable, secret-free script per major flow
+  (create/release, timeout refund, M-of-N quorum, and the estimate →
+  prepare/sign → guard → fee-bump → submit sponsorship flow). CI type-checks
+  the examples and builds the reference; a `docs` workflow publishes it to
+  GitHub Pages (Pages enablement is a one-time human step). Docs-only — no
+  contract or SDK API change, so bindings and the SDK version are unchanged.
 
 ## Phase E7 — Verification, testing & release engineering
 - [x] Contract version and reproducible build provenance exposed in the

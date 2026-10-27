@@ -1,0 +1,28 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["src/index.ts"],
+  "out": "docs-api",
+  "readme": "none",
+  "name": "@docforum/escrow-sdk",
+  "includeVersion": true,
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "excludeExternals": true,
+  "githubPages": false,
+  "intentionallyNotExported": ["EscrowEventBase", "FactoryInstanceConfig", "FactoryDeployResult"],
+  "validation": {
+    "notExported": true,
+    "invalidLink": true,
+    "notDocumented": true
+  },
+  "requiredToBeDocumented": [
+    "Enum",
+    "Variable",
+    "Function",
+    "Class",
+    "Interface",
+    "Method",
+    "TypeAlias"
+  ],
+  "treatValidationWarningsAsErrors": true
+}

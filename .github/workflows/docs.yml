@@ -1,0 +1,54 @@
+name: API reference
+
+# Builds the generated TypeDoc API reference for @docforum/escrow-sdk and
+# publishes it to GitHub Pages on every push to main.
+#
+# One-time human step (same category as the npm trusted-publishing setup in
+# CONTRIBUTING.md): a maintainer must enable Pages for the repo with
+# "GitHub Actions" as the source (Settings → Pages → Build and deployment →
+# Source: GitHub Actions). Until then this workflow still builds the reference
+# and fails only at the deploy step, so a broken reference is caught either way.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Allow one concurrent deployment; let an in-progress run finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build reference
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+      - run: npm ci
+      - run: npm run docs
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: sdk/docs-api
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
