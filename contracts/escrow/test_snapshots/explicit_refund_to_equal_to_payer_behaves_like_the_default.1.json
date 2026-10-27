@@ -81,7 +81,9 @@
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                }
+                },
+                "void",
+                "void"
               ]
             }
           },
@@ -286,6 +288,18 @@
                     "val": {
                       "string": "ref"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {
