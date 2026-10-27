@@ -14,6 +14,9 @@
 // releaser set (`create_escrow_with_releasers`) — see docs/adr/0007.
 // Single-releaser escrows are stored as a one-address set with threshold 1
 // and behave exactly as before.
+// Phase E5 (issue #30): optional protocol fee (`fee_recipient` +
+// `fee_bps`, one off-the-top cut), fixed at creation and taken at
+// release — see docs/adr/0010. Never taken on refund.
 // Phase E5 (issue #113): pooled escrows funded by multiple payers —
 // `create_pooled_escrow` + `contribute` + pull-based `claim_refund`, see
 // docs/adr/0011. Pooled escrows add two storage records (funding config,
@@ -41,6 +44,12 @@ use soroban_sdk::{
     IntoVal, String, Vec,
 };
 
+// Bump this value whenever a contract interface or behavior change is made.
+// CI checks this constant against the base branch when this file changes.
+pub const CONTRACT_VERSION: &str = "2.1.0";
+
+include!(concat!(env!("OUT_DIR"), "/contract_metadata.rs"));
+
 /// Largest allowed releaser set for one escrow. Ten covers every
 /// real-world multisig shape this primitive is meant to replace
 /// (2-of-3, 3-of-5, ...) while keeping `create_escrow`'s validation,
@@ -55,6 +64,13 @@ pub const MAX_CONDITION_REF_LEN: u32 = 64;
 /// in a single call. Callers (including the SDK) must chunk larger
 /// inputs — see docs/adr/0005.
 pub const MAX_BATCH_SIZE: u32 = 50;
+
+/// Issue #39: a `Liability(token)` entry is re-extended whenever its
+/// remaining TTL falls below this many ledgers (~30 days at 5 s/ledger)…
+pub const LIABILITY_TTL_THRESHOLD: u32 = 518_400;
+/// …to this many ledgers (~120 days), capped at the network's maximum
+/// entry TTL. See docs/threat-model.md ("Solvency monitoring").
+pub const LIABILITY_TTL_EXTEND_TO: u32 = 2_073_600;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -104,8 +120,25 @@ pub struct EscrowData {
     pub refund_to: Address,
     /// Earliest ledger timestamp at which release is allowed.
     pub release_not_before: Option<u64>,
+    /// Optional protocol fee recipient, set once at `create_escrow` time
+    /// and paid at release (never on refund) — see docs/adr/0010. Stored
+    /// as one (recipient, bps) pair in two fields so both are always set
+    /// together or not at all (creation-time rule, `InvalidFee`
+    /// otherwise). `None` (with no bps) means no fee: the payee receives
+    /// the full `amount`, exactly as before this field existed.
+    pub fee_recipient: Option<Address>,
+    /// Fee rate in basis points of `amount` (capped at [`MAX_FEE_BPS`]
+    /// = 10 %), taken once at release, rounded **down** with the
+    /// remainder to the payee — see docs/adr/0010.
+    pub fee_bps: Option<u32>,
 }
 
+/// Maximum `fee_bps`: 1 000 basis points out of [`BASIS_POINTS`] 10 000
+/// = 10 %. A platform fee fixed at creation must be transparent but
+/// cannot be the arrangement itself — see docs/adr/0010.
+pub const MAX_FEE_BPS: u32 = 1_000;
+/// 10 000 basis points = 100 %.
+const BASIS_POINTS: i128 = 10_000;
 /// One entry of a `create_escrows` batch. Mirrors the single-escrow
 /// creation parameters minus the batch-wide `payer`.
 /// Immutable funding configuration of a pooled escrow (issue #113,
@@ -162,6 +195,10 @@ enum DataKey {
     Pooled(u64),
     /// Pooled escrows only (issue #113): one record per contributor.
     Contribution(u64, Address),
+    /// Issue #39: total outstanding liability for one token, i.e. the sum
+    /// of `amount` over every escrow in that token whose status is
+    /// `Funded`. Appended last, so existing entries keep their encoding.
+    Liability(Address),
 }
 
 #[contracterror]
@@ -250,6 +287,11 @@ pub enum Error {
     NotSupportedForPooled = 33,
     /// The funding deadline was not strictly in the future at creation.
     InvalidFundingDeadline = 34,
+    /// The optional protocol fee was misconfigured at creation: `bps`
+    /// above [`MAX_FEE_BPS`] (10 %), a recipient equal to the escrow
+    /// contract itself, or an amount that would overflow the fee math —
+    /// see docs/adr/0010.
+    InvalidFee = 35,
 }
 
 #[contract]
@@ -265,6 +307,13 @@ impl EscrowContract {
             .set(&DataKey::AllowedTokens, &allowed_tokens);
     }
 
+    /// Semantic version of this contract interface and behavior.
+    /// Build provenance is available separately in the WASM contract
+    /// metadata (`git_sha` and `soroban_sdk_version`).
+    pub fn version(env: Env) -> String {
+        String::from_str(&env, CONTRACT_VERSION)
+    }
+
     /// Locks `amount` of `token` pulled from `payer`, held for `payee`,
     /// docs/threat-model.md T10 and ROADMAP.md Phase E5). `releaser` is the
     /// address permitted to call `release`/`refund` on this escrow
@@ -278,6 +327,10 @@ impl EscrowContract {
     /// `payer`; it may not be this contract's own address, and the
     /// `payer`'s auth on this call covers it. For M-of-N releasers use
     /// `create_escrow_with_releasers`.
+    /// `fee_recipient`/`fee_bps` are the optional protocol fee, fixed at
+    /// creation and taken at release — never on refund — with `fee_bps ≤`
+    /// [`MAX_FEE_BPS`] (10 %), floor rounding, and both given together or
+    /// not at all (docs/adr/0010). `None` on both means no fee.
     pub fn create_escrow(
         env: Env,
         payer: Address,
@@ -289,6 +342,8 @@ impl EscrowContract {
         refund_after: Option<u64>,
         notify_payee: bool,
         refund_to: Option<Address>,
+        fee_recipient: Option<Address>,
+        fee_bps: Option<u32>,
     ) -> Result<u64, Error> {
         let mut releasers = Vec::new(&env);
         releasers.push_back(releaser);
@@ -306,11 +361,15 @@ impl EscrowContract {
             false,
             refund_to,
             None,
+            fee_recipient,
+            fee_bps,
         )
     }
 
     /// Creates a single-releaser escrow with an optional earliest release time.
-    /// Release is allowed at the configured timestamp.
+    /// Release is allowed at the configured timestamp. Accepts the same
+    /// optional `fee_recipient`/`fee_bps` pair as `create_escrow`
+    /// (docs/adr/0010).
     pub fn create_escrow_release_time(
         env: Env,
         payer: Address,
@@ -323,6 +382,8 @@ impl EscrowContract {
         notify_payee: bool,
         refund_to: Option<Address>,
         release_not_before: Option<u64>,
+        fee_recipient: Option<Address>,
+        fee_bps: Option<u32>,
     ) -> Result<u64, Error> {
         let mut releasers = Vec::new(&env);
         releasers.push_back(releaser);
@@ -340,6 +401,8 @@ impl EscrowContract {
             false,
             refund_to,
             release_not_before,
+            fee_recipient,
+            fee_bps,
         )
     }
 
@@ -372,6 +435,8 @@ impl EscrowContract {
             false,
             requires_acceptance,
             refund_to,
+            None,
+            None,
             None,
         )
     }
@@ -440,6 +505,8 @@ impl EscrowContract {
             false,
             refund_to,
             None,
+            None,
+            None,
         )
     }
 
@@ -478,6 +545,8 @@ impl EscrowContract {
                 false,
                 None,
                 None,
+                None,
+                None,
             )?;
             ids.push_back(id);
         }
@@ -495,10 +564,12 @@ impl EscrowContract {
 
     /// Read-only accessor for everything stored about `escrow_id` — payer,
     /// payee, token, amount, `condition_ref`, status, the releaser set with
-    /// its threshold, `refund_after` and `refund_to`. Exists so payees and
-    /// integrators can check who can settle, when, and where a refund goes
-    /// before relying on a `Funded` escrow (docs/adr/0004, threat model T8).
-    /// Errors on an unknown id.
+    /// its threshold, `refund_after`, `refund_to` and the optional fee
+    /// (`fee_recipient`/`fee_bps`, exactly as declared at creation). Exists
+    /// so payees and integrators can check who can settle, when, where a
+    /// refund goes and the exact fee before relying on a `Funded` escrow
+    /// (docs/adr/0004, threat model T8; docs/adr/0010). Errors on an
+    /// unknown id.
     pub fn get_escrow(env: Env, escrow_id: u64) -> Result<EscrowData, Error> {
         env.storage()
             .persistent()
@@ -577,6 +648,11 @@ impl EscrowContract {
             // contributor. Stored so every `EscrowData` invariant holds.
             refund_to: creator,
             release_not_before: None,
+            // Pooled escrows carry no protocol fee (docs/adr/0010 is
+            // creation-time only via `create_escrow*`): release pays the
+            // pooled total to the payee in full.
+            fee_recipient: None,
+            fee_bps: None,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         env.storage().persistent().set(&DataKey::Status(id), &data.status);
@@ -704,6 +780,8 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), &data);
+        // Issue #39: the pooled total just dropped by `refund_amount`.
+        Self::sub_liability(&env, &data.token, refund_amount)?;
 
         let token_client = token::Client::new(&env, &data.token);
         token_client.transfer(
@@ -716,6 +794,23 @@ impl EscrowContract {
             (contributor, refund_amount),
         );
         Ok(())
+    }
+
+    /// Read-only solvency check for one token (issue #39): returns
+    /// `(balance, liabilities)`, where `balance` is this contract's current
+    /// balance of `token` and `liabilities` is the sum of `amount` over
+    /// every escrow in `token` that is still `Funded` (pooled escrows count
+    /// their funded total net of claimed refunds). The contract is solvent
+    /// for `token` exactly when `balance >= liabilities`.
+    ///
+    /// `liabilities` is maintained on-chain by every state change that
+    /// moves value — creation, `top_up` and `contribute` add, and
+    /// release/refund/cancel/`claim_refund` subtract — in the same
+    /// invocation, so it can never drift from the escrows themselves.
+    /// A token never used by this contract reports `0` liabilities.
+    pub fn solvency(env: Env, token: Address) -> (i128, i128) {
+        let balance = token::Client::new(&env, &token).balance(&env.current_contract_address());
+        (balance, Self::liability(&env, &token))
     }
 
     /// Read-only: the immutable funding config of a pooled escrow. The
@@ -821,6 +916,12 @@ impl EscrowContract {
             return Err(Error::NotFunded);
         }
         let updated_amount = data.amount.checked_add(amount).ok_or(Error::Overflow)?;
+        // The fee is a bps of the escrowed amount, so a top-up grows it; fail
+        // now (before the transfer) if the larger amount would overflow the
+        // fee math, rather than at release (docs/adr/0010).
+        if let Some(bps) = data.fee_bps {
+            Self::fee_amount(updated_amount, bps)?;
+        }
         Self::transfer_in_exact(&env, &data.token, &payer, amount)?;
         data.amount = updated_amount;
         env.storage()
@@ -841,6 +942,11 @@ impl EscrowContract {
     /// Deliberately **not** gated by `refund_after` (docs/adr/0004): after
     /// the deadline the releaser can still release, racing any timeout
     /// refund — whoever lands first wins and the other fails `NotFunded`.
+    ///
+    /// If the escrow was created with a fee (docs/adr/0010), the fee comes
+    /// off the top — `⌊amount × fee_bps ÷ 10 000⌋` goes to `fee_recipient`,
+    /// the exact remainder to `payee`, so the two transfers always sum to
+    /// the escrowed `amount`. No fee is ever taken on `refund`.
     pub fn release(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
@@ -911,6 +1017,9 @@ impl EscrowContract {
     /// existed — releaser only. On an M-of-N escrow the releaser path needs
     /// a threshold of 1; otherwise use `refund_with_approvals` (the timeout
     /// path stays open to anyone).
+    ///
+    /// A protocol fee (docs/adr/0010) is never taken on the refund path:
+    /// the stored `refund_to` receives the full stored `amount`.
     pub fn refund(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
@@ -1006,6 +1115,8 @@ impl EscrowContract {
         requires_acceptance: bool,
         refund_to: Option<Address>,
         release_not_before: Option<u64>,
+        fee_recipient: Option<Address>,
+        fee_bps: Option<u32>,
     ) -> Result<u64, Error> {
         let allowed_tokens: Vec<Address> = env
             .storage()
@@ -1041,6 +1152,25 @@ impl EscrowContract {
         if refund_to == env.current_contract_address() {
             return Err(Error::InvalidRefundTo);
         }
+        // The optional protocol fee is one (recipient, bps) pair fixed at
+        // creation; a recipient without a rate or a rate without a
+        // recipient is not a coherent configuration — reject it, along
+        // with a cap above 10 %, a self-directed fee and fee math that
+        // would overflow (docs/adr/0010). All of it is checked before any
+        // auth prompt or transfer, so a malformed request costs nothing.
+        match (&fee_recipient, &fee_bps) {
+            (None, None) => {}
+            (Some(_), None) | (None, Some(_)) => return Err(Error::InvalidFee),
+            (Some(recipient), Some(bps)) => {
+                if *bps > MAX_FEE_BPS {
+                    return Err(Error::InvalidFee);
+                }
+                if *recipient == env.current_contract_address() {
+                    return Err(Error::InvalidFee);
+                }
+                Self::fee_amount(amount, *bps)?;
+            }
+        }
 
         payer.require_auth();
         if notify_payee {
@@ -1065,6 +1195,8 @@ impl EscrowContract {
             accepted_at: None,
             refund_to,
             release_not_before,
+            fee_recipient,
+            fee_bps,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         env.storage().persistent().set(&DataKey::Status(id), &data.status);
@@ -1169,6 +1301,28 @@ impl EscrowContract {
         {
             return Err(Error::AcceptanceRequired);
         }
+        // Fee off the top on release only (docs/adr/0010): one transfer to
+        // `fee_recipient`, then the exact remainder to the payee, so the two
+        // always sum to the stored `amount`. Rounding floors, so the fee can
+        // never exceed its bps share. Both fields were validated together at
+        // creation (and re-checked on `top_up`), so the no-fee arm is the
+        // only other reachable one. A refund never reads the fee fields and
+        // returns the full `amount`.
+        let (fee, fee_recipient) = match settled {
+            EscrowStatus::Released => match (&data.fee_recipient, &data.fee_bps) {
+                (Some(recipient), Some(bps)) => (
+                    Self::fee_amount(data.amount, *bps)?,
+                    Some(recipient.clone()),
+                ),
+                _ => (0, None),
+            },
+            _ => (0, None),
+        };
+        let payout = data.amount - fee;
+
+        // Effects before interactions: the state write lands before any
+        // token call, so a re-entrant token cannot see a still-`Funded`
+        // escrow (threat model T4).
         data.status = settled;
         env.storage()
             .persistent()
@@ -1176,11 +1330,21 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Status(escrow_id), &data.status);
+        // Issue #39: the escrow leaves `Funded` in this same write, so its
+        // amount stops being owed here too.
+        Self::sub_liability(env, &data.token, data.amount)?;
 
         let token_client = token::Client::new(env, &data.token);
-        token_client.transfer(&env.current_contract_address(), &destination, &data.amount);
+        if let Some(recipient) = fee_recipient {
+            if fee > 0 {
+                token_client.transfer(&env.current_contract_address(), &recipient, &fee);
+            }
+        }
+        token_client.transfer(&env.current_contract_address(), &destination, &payout);
         if notify_payee {
-            let args = (escrow_id, data.amount).into_val(env);
+            // The callback reports what the payee actually received — gross
+            // minus any protocol fee — not the gross escrowed amount.
+            let args = (escrow_id, payout).into_val(env);
             let callback = env.try_invoke_contract::<(), soroban_sdk::Error>(
                 &data.payee,
                 &soroban_sdk::Symbol::new(env, "on_escrow_released"),
@@ -1225,8 +1389,27 @@ impl EscrowContract {
                 data.requires_acceptance,
                 data.accepted_at,
                 status,
+                // The fee is one nested (recipient, bps) pair: soroban-sdk's
+                // event payloads support tuples of at most 13 values, and
+                // keeping the pair atomic matches how it is stored
+                // (docs/adr/0010).
+                (data.fee_recipient.clone(), data.fee_bps),
             ),
         );
+    }
+
+    /// The protocol fee taken off the top at release: the escrowed `amount`
+    /// scaled by `bps` (of 10 000), rounded **down** so the fee is never
+    /// more than its share and fee + payee remainder always equals the
+    /// released `amount` (docs/adr/0010). Overflow of the scaled
+    /// multiplication is rejected as `InvalidFee` — checked at creation
+    /// (before funds are locked) and again defensively at release, where it
+    /// can no longer occur, and after a `top_up`, which re-checks it.
+    fn fee_amount(amount: i128, bps: u32) -> Result<i128, Error> {
+        amount
+            .checked_mul(i128::from(bps))
+            .and_then(|scaled| scaled.checked_div(BASIS_POINTS))
+            .ok_or(Error::InvalidFee)
     }
 
     fn load(env: &Env, escrow_id: u64) -> Result<EscrowData, Error> {
@@ -1318,6 +1501,51 @@ impl EscrowContract {
         if balance_after.checked_sub(balance_before) != Some(amount) {
             return Err(Error::BalanceMismatch);
         }
+        // Issue #39: every inbound transfer (creation, `top_up`,
+        // `contribute`) goes through here, and each one increases a
+        // `Funded` escrow's amount by exactly `amount` in the same
+        // invocation, so this is where the liability grows.
+        Self::add_liability(env, token, amount)
+    }
+
+    /// Current outstanding liability for `token`; `0` when never used.
+    fn liability(env: &Env, token: &Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Liability(token.clone()))
+            .unwrap_or(0)
+    }
+
+    fn add_liability(env: &Env, token: &Address, amount: i128) -> Result<(), Error> {
+        let updated = Self::liability(env, token)
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
+        Self::set_liability(env, token, updated);
         Ok(())
+    }
+
+    fn sub_liability(env: &Env, token: &Address, amount: i128) -> Result<(), Error> {
+        let updated = Self::liability(env, token)
+            .checked_sub(amount)
+            .ok_or(Error::Overflow)?;
+        // The counter is the sum of `Funded` amounts, so it can never go
+        // below zero; if it would, the accounting is broken and the whole
+        // invocation must revert rather than record a negative liability.
+        if updated < 0 {
+            return Err(Error::Overflow);
+        }
+        Self::set_liability(env, token, updated);
+        Ok(())
+    }
+
+    /// Writes the counter and keeps it from being archived (issue #10):
+    /// the entry lives in persistent storage and its TTL is re-extended on
+    /// every write, so a token with live escrows always has a live counter.
+    fn set_liability(env: &Env, token: &Address, value: i128) {
+        let key = DataKey::Liability(token.clone());
+        let storage = env.storage().persistent();
+        storage.set(&key, &value);
+        let extend_to = LIABILITY_TTL_EXTEND_TO.min(env.storage().max_ttl());
+        storage.extend_ttl(&key, LIABILITY_TTL_THRESHOLD.min(extend_to), extend_to);
     }
 }
