@@ -8,6 +8,7 @@ use soroban_sdk::{
 struct Fixture<'a> {
     client: EscrowContractClient<'a>,
     token: TokenClient<'a>,
+    token_id: Address,
     contract_id: Address,
     payer: Address,
     payee: Address,
@@ -44,6 +45,7 @@ fn fund_stream(env: &Env, amount: i128, schedule: VestingSchedule) -> Fixture<'_
     Fixture {
         client,
         token,
+        token_id,
         contract_id,
         payer,
         payee,
@@ -114,6 +116,9 @@ fn every_timestamp_in_small_stream_is_monotone_and_capped() {
         if claimable > 0 {
             assert_eq!(f.client.withdraw(&f.escrow_id, &f.payee), claimable);
             withdrawn += claimable;
+            let (balance, liabilities) = f.client.solvency(&f.token_id);
+            assert_eq!(balance, total - withdrawn);
+            assert_eq!(liabilities, balance);
         }
         assert!(withdrawn <= total);
     }

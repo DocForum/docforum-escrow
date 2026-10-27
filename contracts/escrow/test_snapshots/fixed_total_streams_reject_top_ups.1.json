@@ -267,6 +267,18 @@
                   },
                   {
                     "key": {
+                      "symbol": "fee_bps"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
+                      "symbol": "fee_recipient"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "notify_payee"
                     },
                     "val": {
@@ -375,6 +387,33 @@
               "key": {
                 "vec": [
                   {
+                    "symbol": "Liability"
+                  },
+                  {
+                    "address": "CBEPDNVYXQGWB5YUBXKJWYJA7OXTZW5LFLNO5JRRGE6Z6C5OSUZPCCEL"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "i128": "100"
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 2073600
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+              "key": {
+                "vec": [
+                  {
                     "symbol": "Status"
                   },
                   {
@@ -389,6 +428,33 @@
                     "symbol": "Funded"
                   }
                 ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "TotalAmount"
+                  },
+                  {
+                    "u64": "0"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "i128": "100"
               }
             }
           },

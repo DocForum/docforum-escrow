@@ -11,17 +11,20 @@
 ## Contract surface
 ```
 __constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
-create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009); deployed on testnet
+version() -> String    // semantic contract version; source revision and Soroban SDK version are embedded as WASM metadata
+create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to, fee_recipient, fee_bps) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009) + optional protocol fee (ADR 0010); the fee is not yet on testnet
+create_escrow_release_time(..., fee_recipient, fee_bps) -> escrow_id   // single-releaser creation with an earliest release time; accepts the same optional fee pair
 create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id   // optional payee acceptance gate; deployed on testnet
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
 cancel(escrow_id, payer) -> ()   // payer-authorized, only while Funded + requires_acceptance + not yet accepted; funds to refund_to, status Cancelled (ADR 0010); not deployed yet
 create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, deployed on testnet
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded | Cancelled — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
-get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after, refund_to — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
+get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after, refund_to, fee_recipient, fee_bps — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
 release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser, threshold must be 1, only while Funded
 release_with_approvals(escrow_id, approvers) -> result   // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — >= threshold distinct releasers, each authorizing this invocation
 refund(escrow_id, caller) -> result    // IMPLEMENTED (Phase E2 + E4) — a releaser when threshold is 1; anyone too, once refund_after has passed, and then still only to the stored `refund_to` (= payer unless set at creation, ADR 0009)
 refund_with_approvals(escrow_id, approvers) -> result    // IMPLEMENTED (Phase E5, issue #119) — same approval rules as release_with_approvals
+settle_many(caller, ops: Vec<(escrow_id, Release|Refund)>) -> Vec<Result<(), Error>> // IMPLEMENTED (Phase E5, issue #29, ADR 0012) — caller authorizes once; each op gets exactly the checks of release/refund against that escrow's own releasers; best-effort, one result per op in input order (Err = untouched; same escrow twice → second NotFunded); a post-transfer failure (payee callback) reverts the whole batch; at most MAX_SETTLE_OPS = 20 (BatchTooLarge); not deployed on testnet yet
 top_up(escrow_id, payer, amount) -> result // IMPLEMENTED (issue #26) — original payer only, funded state only; emits `top_up`
 create_pooled_escrow(creator, payee, token, funding_target, condition_ref, releaser, funding_deadline) -> escrow_id // IMPLEMENTED (Phase E5, issue #113, ADR 0011) — pooled escrow; amount starts at 0, `funding_target` > 0 and a strictly-future `funding_deadline` are fixed at creation; not deployed on testnet yet
 contribute(escrow_id, payer, amount) -> () // IMPLEMENTED (issue #113) — permissionless before the deadline, up to the target only; balance-delta verified (`transfer_in_exact`) and recorded per payer, accumulating across repeats
@@ -29,9 +32,7 @@ claim_refund(escrow_id, contributor) -> () // IMPLEMENTED (issue #113) — pull-
 get_pooled(escrow_id) -> PooledData  // read-only: funding_target, funding_deadline — errors NotPooled (26) on non-pooled ids
 get_contribution(escrow_id, contributor) -> Option<Contribution> // read-only: one contributor's record (amount, refunded); None if never contributed
 rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue #23) — single-releaser escrow only; current releaser and payer authorize; funded only
-create_streamed_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, schedule) -> escrow_id // IMPLEMENTED (Phase E5, issue #44, ADR 0012) — fixed-total linear vesting; schedule = {start, end, cliff?}, start < end, cliff within [start, end]; not deployed on testnet yet
-withdraw(escrow_id, payee) -> i128 // IMPLEMENTED (issue #44) — payee-authorized, Funded streams only; pays vested - withdrawn
-get_vesting(escrow_id) -> VestingInfo // read-only: schedule, total, vested, withdrawn, claimable — errors NotStreamed (36) on non-streamed ids
+solvency(token) -> (balance, liabilities) // IMPLEMENTED (Phase E5, issue #39) — read-only; liabilities = sum of `amount` over Funded escrows in `token`, kept in persistent `Liability(token)` (TTL re-extended on every write) and updated in the same invocation as every create/top_up/contribute (+) and release/refund/cancel/claim_refund (−); not deployed on testnet yet
 ```
 
 No new contract-level role came in with the M-of-N work: `releasers` is
@@ -61,14 +62,6 @@ four-value settlement vocabulary — a failed round stays `Funded`; read
 `get_pooled` + the ledger clock for funding state. New errors 26–34 are
 append-only (ADR 0011 lists them).
 
-Streamed escrows (Phase E5, issue #44, `docs/adr/0012`) use a fixed total
-with linear vesting between configured timestamps, stored under two
-appended keys (`Vesting(id)`, `Withdrawn(id)`). Withdrawals only pay the
-stored payee; `release` pays the payee whatever is still unwithdrawn;
-refunds pay vested but unwithdrawn funds to the payee and return the
-unvested amount to the stored `refund_to`. `top_up` is rejected
-(`StreamTopUpUnsupported`). New errors 35–39 are append-only.
-
 The allowlist is fixed when the contract is deployed. `create_escrow`
 rejects any token outside a non-empty list with `DisallowedToken` (error
 code 8); an empty list preserves the prior open-token behavior. The
@@ -76,7 +69,9 @@ current testnet deployment includes the native XLM SAC and the
 BalanceMismatch test token in its immutable allowlist; see
 `docs/testnet-deployments.md`.
 
-`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to)`.
+Linear vesting streams pay only accrued amounts, reduce outstanding token liabilities on withdrawal, and refund unvested funds to the stored refund destination.
+
+`create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to, fee_recipient, fee_bps)`.
 `notify_payee` opts a contract payee into `on_escrow_released(escrow_id,
 amount)`; when true, the payee must authorize creation as well as the payer.
 The quorum creation entry point has the same final callback flag. The SDK
@@ -116,6 +111,21 @@ may not be the contract itself (`InvalidRefundTo`); omitted, it equals
 destination can hold the token: if the transfer to it fails, so does the
 refund.
 
+The optional protocol fee (`fee_recipient`/`fee_bps`, `docs/adr/0010`):
+set once at creation, taken **off the top** at `release` —
+`⌊amount × fee_bps ÷ 10 000⌋` to `fee_recipient`, the exact remainder to
+`payee` — and never on `refund`, which always returns the full `amount`
+to `refund_to`. `fee_bps` is capped at `MAX_FEE_BPS` = 1 000 (10 %) with
+floor rounding; `fee_recipient` must not be the contract itself; both
+params must be given together or both omitted, or creation fails with
+`InvalidFee` (error 35). `create_escrow` and `create_escrow_release_time`
+take the pair; the acceptance and M-of-N entry points record no fee. A
+`top_up` grows the stored `amount`, so it grows the bps fee (the fee math
+is re-checked before the top-up transfer). Both fields are readable from
+`get_escrow`, and the `ESCROW` event snapshot appends them as one nested
+`(fee_recipient, fee_bps)` pair, so payer and payee can check the exact
+deal before relying on the escrow.
+
 `release_with_approvals`/`refund_with_approvals` check that at least
 `threshold` distinct releasers each authorized this exact invocation.
 Approvals are never stored, so nothing can be replayed, and both work
@@ -139,7 +149,14 @@ management nonce. See [ADR 0005](docs/adr/0005-custom-releaser-account.md).
 import { EscrowClient, Keypair } from "@docforum/escrow-sdk";
 
 const client = new EscrowClient({ contractId }); // defaults: testnet RPC + passphrase
-const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter, notifyPayee: true, refundTo });
+const client2 = new EscrowClient({ contractId, network: networks.testnet }); // named preset: RPC URL + passphrase + known contract ids
+// networks.futurenet and networks.local are also available; custom networks (private quickstart) still work
+// by passing explicit rpcUrl + networkPassphrase. Constructing with the mainnet passphrase throws
+// unless allowMainnet: true is passed. With a preset (or verifyNetwork: true) the RPC's getNetwork
+// passphrase is verified lazily and once (cached) before the first network call, never in the
+// constructor; pass verifyNetwork: true with a custom rpcUrl so it cannot silently point at mainnet
+// (verifyNetwork: false turns the check off). Plain-HTTP RPC needs allowHttp (networks.local sets it).
+const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter, notifyPayee: true, refundTo, feeRecipient, feeBps });
 await client.createQuorumEscrow({ payer, payee, token, amount, conditionRef, releasers, threshold, refundAfter, notifyPayee: true, refundTo }); // M-of-N, ADR 0007
 await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
 await client.getEscrow(escrowId);            // full stored record — incl. releasers + threshold + refundAfter, refundTo, so a payee can check the deal (docs/adr/0004/0007/0009, threat model T8)
@@ -173,6 +190,13 @@ tranches already funded so the caller can release or refund them.
 
 `refundTo` on `createEscrow` and `createQuorumEscrow` is optional too (default: the payer) and
 `getEscrow` returns it as `refundTo`.
+`feeRecipient`/`feeBps` on `createEscrow` are optional as one atomic pair
+(both or neither; `feeBps` is an integer `0..=MAX_FEE_BPS`, i.e. at most
+10 %), validated client-side before any transaction is built. At release
+the floored bps share goes to `feeRecipient` and the remainder to the
+payee; refunds never take a fee. `getEscrow` returns
+`feeRecipient`/`feeBps` (`undefined` = no fee), and `MAX_FEE_BPS` mirrors
+the contract's cap (docs/adr/0010).
 
 Amounts are raw `bigint` in the token's smallest unit. `sdk/src/amounts.ts`
 exports `parseAmount(value, decimals)` and `formatAmount(amount, decimals)`
@@ -215,7 +239,9 @@ and diffs the result (`scripts/check-generated-bindings.sh`, issue #121). See
 `sdk/src/generated/README.md` for the regeneration steps.
 `sdk/src/index.ts` is the actual public surface (hand-written, ergonomic
 wrapper) — consumers import from the package root, never from
-`src/generated/` directly. Known contract ids per network come from the
+`src/generated/` directly. The package publishes ESM and CommonJS entry
+points with declarations for both; browser-aware bundlers use its ESM entry.
+Known contract ids per network come from the
 repo-root `deployments.json` (written by `scripts/deploy`), bundled as
 `src/deployments.generated.ts` and exposed as `knownContractId` /
 `knownNetworkConfig`; unknown networks and mainnet throw.
