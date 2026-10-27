@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Keypair } from "@stellar/stellar-sdk";
-import { EscrowClient } from "../src/index.js";
+import { EscrowClient, networks } from "../src/index.js";
 import {
   beginPhase,
   spanName,
@@ -26,6 +26,13 @@ function fakeSent(hash = "b".repeat(64)) {
 
 function invokeClient(options: ConstructorParameters<typeof EscrowClient>[0]) {
   const client = new EscrowClient(options);
+  // Offline RPC double: answers the network preset check (when a preset or
+  // verifyNetwork: true is configured) with the client's own passphrase, so
+  // nothing here ever reaches a real RPC.
+  const getNetwork = vi.fn(async () => ({
+    passphrase: (client as unknown as { networkPassphrase: string }).networkPassphrase,
+  }));
+  (client as unknown as { rpc: unknown }).rpc = { getNetwork };
   const invoke = (client as unknown as {
     invoke: (
       method: string,
@@ -34,7 +41,7 @@ function invokeClient(options: ConstructorParameters<typeof EscrowClient>[0]) {
       hooks?: { beforeSign?: (tx: unknown) => Promise<void>; address?: string },
     ) => Promise<unknown>;
   }).invoke.bind(client);
-  return { client, invoke };
+  return { client, invoke, getNetwork };
 }
 
 function fakeTx(sent = fakeSent()) {
@@ -140,6 +147,31 @@ describe("phase spans", () => {
     await invoke("release", 9n, async () => fakeTx());
 
     expect(clock).not.toHaveBeenCalled();
+  });
+
+  it("makes no network check without a preset, and none during construction", async () => {
+    const { invoke, getNetwork } = invokeClient({ contractId, rpcUrl: "https://rpc.example.test" });
+    expect(getNetwork).not.toHaveBeenCalled();
+
+    await invoke("release", 5n, async () => fakeTx());
+
+    expect(getNetwork).not.toHaveBeenCalled();
+  });
+
+  it("verifies a selected preset once, before the first submit, against the offline RPC double", async () => {
+    const events: EscrowInstrumentationEvent[] = [];
+    const { invoke, getNetwork } = invokeClient({
+      contractId,
+      network: networks.testnet,
+      onEvent: (event) => events.push(event),
+    });
+    expect(getNetwork).not.toHaveBeenCalled();
+
+    await invoke("release", 6n, async () => fakeTx());
+    await invoke("release", 7n, async () => fakeTx());
+
+    expect(getNetwork).toHaveBeenCalledTimes(1);
+    expect(events.map((event) => event.name).slice(0, 4)).toEqual(["simulate", "sign", "submit", "confirm"]);
   });
 });
 
