@@ -48,6 +48,7 @@ use soroban_sdk::{
 // CI checks this constant against the base branch when this file changes.
 pub const CONTRACT_VERSION: &str = "1.1.0";
 pub const CONTRACT_VERSION: &str = "2.0.0";
+pub const CONTRACT_VERSION: &str = "2.1.0";
 
 include!(concat!(env!("OUT_DIR"), "/contract_metadata.rs"));
 
@@ -65,6 +66,13 @@ pub const MAX_CONDITION_REF_LEN: u32 = 64;
 /// in a single call. Callers (including the SDK) must chunk larger
 /// inputs — see docs/adr/0005.
 pub const MAX_BATCH_SIZE: u32 = 50;
+
+/// Issue #39: a `Liability(token)` entry is re-extended whenever its
+/// remaining TTL falls below this many ledgers (~30 days at 5 s/ledger)…
+pub const LIABILITY_TTL_THRESHOLD: u32 = 518_400;
+/// …to this many ledgers (~120 days), capped at the network's maximum
+/// entry TTL. See docs/threat-model.md ("Solvency monitoring").
+pub const LIABILITY_TTL_EXTEND_TO: u32 = 2_073_600;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -189,6 +197,10 @@ enum DataKey {
     Pooled(u64),
     /// Pooled escrows only (issue #113): one record per contributor.
     Contribution(u64, Address),
+    /// Issue #39: total outstanding liability for one token, i.e. the sum
+    /// of `amount` over every escrow in that token whose status is
+    /// `Funded`. Appended last, so existing entries keep their encoding.
+    Liability(Address),
 }
 
 #[contracterror]
@@ -775,6 +787,8 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), &data);
+        // Issue #39: the pooled total just dropped by `refund_amount`.
+        Self::sub_liability(&env, &data.token, refund_amount)?;
 
         let token_client = token::Client::new(&env, &data.token);
         token_client.transfer(
@@ -787,6 +801,23 @@ impl EscrowContract {
             (contributor, refund_amount),
         );
         Ok(())
+    }
+
+    /// Read-only solvency check for one token (issue #39): returns
+    /// `(balance, liabilities)`, where `balance` is this contract's current
+    /// balance of `token` and `liabilities` is the sum of `amount` over
+    /// every escrow in `token` that is still `Funded` (pooled escrows count
+    /// their funded total net of claimed refunds). The contract is solvent
+    /// for `token` exactly when `balance >= liabilities`.
+    ///
+    /// `liabilities` is maintained on-chain by every state change that
+    /// moves value — creation, `top_up` and `contribute` add, and
+    /// release/refund/cancel/`claim_refund` subtract — in the same
+    /// invocation, so it can never drift from the escrows themselves.
+    /// A token never used by this contract reports `0` liabilities.
+    pub fn solvency(env: Env, token: Address) -> (i128, i128) {
+        let balance = token::Client::new(&env, &token).balance(&env.current_contract_address());
+        (balance, Self::liability(&env, &token))
     }
 
     /// Read-only: the immutable funding config of a pooled escrow. The
@@ -1306,6 +1337,9 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Status(escrow_id), &data.status);
+        // Issue #39: the escrow leaves `Funded` in this same write, so its
+        // amount stops being owed here too.
+        Self::sub_liability(env, &data.token, data.amount)?;
 
         let token_client = token::Client::new(env, &data.token);
         if let Some(recipient) = fee_recipient {
@@ -1531,6 +1565,51 @@ impl EscrowContract {
         if balance_after.checked_sub(balance_before) != Some(amount) {
             return Err(Error::BalanceMismatch);
         }
+        // Issue #39: every inbound transfer (creation, `top_up`,
+        // `contribute`) goes through here, and each one increases a
+        // `Funded` escrow's amount by exactly `amount` in the same
+        // invocation, so this is where the liability grows.
+        Self::add_liability(env, token, amount)
+    }
+
+    /// Current outstanding liability for `token`; `0` when never used.
+    fn liability(env: &Env, token: &Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Liability(token.clone()))
+            .unwrap_or(0)
+    }
+
+    fn add_liability(env: &Env, token: &Address, amount: i128) -> Result<(), Error> {
+        let updated = Self::liability(env, token)
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
+        Self::set_liability(env, token, updated);
         Ok(())
+    }
+
+    fn sub_liability(env: &Env, token: &Address, amount: i128) -> Result<(), Error> {
+        let updated = Self::liability(env, token)
+            .checked_sub(amount)
+            .ok_or(Error::Overflow)?;
+        // The counter is the sum of `Funded` amounts, so it can never go
+        // below zero; if it would, the accounting is broken and the whole
+        // invocation must revert rather than record a negative liability.
+        if updated < 0 {
+            return Err(Error::Overflow);
+        }
+        Self::set_liability(env, token, updated);
+        Ok(())
+    }
+
+    /// Writes the counter and keeps it from being archived (issue #10):
+    /// the entry lives in persistent storage and its TTL is re-extended on
+    /// every write, so a token with live escrows always has a live counter.
+    fn set_liability(env: &Env, token: &Address, value: i128) {
+        let key = DataKey::Liability(token.clone());
+        let storage = env.storage().persistent();
+        storage.set(&key, &value);
+        let extend_to = LIABILITY_TTL_EXTEND_TO.min(env.storage().max_ttl());
+        storage.extend_ttl(&key, LIABILITY_TTL_THRESHOLD.min(extend_to), extend_to);
     }
 }
