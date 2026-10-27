@@ -105,6 +105,8 @@ async function run(): Promise<void> {
         // sponsored-refund options stay on the programmatic SDK surface.
         notify_payee: false,
         refund_to: undefined,
+        fee_recipient: undefined,
+        fee_bps: undefined,
       });
       const simulatedId = tx.result.unwrap();
       if (dryRun) result = { simulated: true, escrowId: simulatedId };
