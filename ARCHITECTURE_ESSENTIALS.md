@@ -154,6 +154,8 @@ await client.getMilestones(group);           // [{ index, amount, escrowId, stat
 await client.estimate({ source, method, args }); // { resourceFee, inclusionFee, total, minResourceFee } — simulation only, 20% resource buffer
 client.guardSponsorship(signedXdr);          // { ok, reasons, invokedContracts } — every op + contract auth entry must target this escrow
 client.feeBump(signedXdr, sponsor, { maxFee, baseFee? }); // { xdr, fee, innerTxHash } — throws MaxFeeExceededError, never overshoots the cap
+client.prepareCreateEscrow({ payer: publicKey, ... });       // { xdr, hash, validUntilLedger, source, authSigners, authValidUntilLedger } — unsigned, no secret key (issue #58)
+client.submitSigned(signedXdr, { expectedHash?, feeBumpSigner?, maxFee? }); // { txHash, innerTxHash, escrowId? } — throws PreparedTransactionExpiredError / StaleSequenceError / SignedTransactionMismatchError
 ```
 
 Milestones are an SDK-level grouping, not a contract entry point: the
