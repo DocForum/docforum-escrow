@@ -311,7 +311,7 @@ export interface Client {
    * `payer` unless a sponsor destination was fixed at creation, ADR
    * 0009) and marks the escrow `Cancelled`. Allowed only while **all**
    * hold:
-   *
+   * 
    * - `payer` is the escrow's stored payer and authorizes the call;
    * - the escrow is still `Funded` (`NotFunded` otherwise — never after
    * a release, refund or earlier cancel);
@@ -319,7 +319,7 @@ export interface Client {
    * (`AcceptanceNotConfigured` otherwise — without the gate there is
    * no acceptance step to race, so no cancel window exists);
    * - the payee has not accepted (`AlreadyAccepted` otherwise).
-   *
+   * 
    * The destination is read from storage, so invariant I1 is unchanged.
    * Payees: do not rely on a `requires_acceptance` escrow until you
    * have called `accept`. `accept` and `cancel` race on one ledger
@@ -333,18 +333,18 @@ export interface Client {
    * `payer` unless a different destination was fixed at creation —
    * docs/adr/0006). Same state rule as
    * `release` (only while `Funded`), but two callers are authorised:
-   *
+   * 
    * - the escrow's releaser (docs/adr/0002), always; or
    * - **anyone**, once `refund_after` has been reached — the timeout
    * refund path for a lost/unsignable releaser key (docs/adr/0004).
-   *
+   * 
    * The destination never changes: timeout or not, funds only ever go
    * to the stored `refund_to`, which no caller can influence. With no
    * `refund_after` set, behaviour is identical to before the timeout
    * existed — releaser only. On an M-of-N escrow the releaser path needs
    * a threshold of 1; otherwise use `refund_with_approvals` (the timeout
    * path stays open to anyone).
-   *
+   * 
    * A protocol fee (docs/adr/0010) is never taken on the refund path:
    * the stored `refund_to` receives the full stored `amount`.
    */
@@ -363,11 +363,11 @@ export interface Client {
    * may call this — the contract enforces WHO, never WHY (ADR 0001). On
    * an M-of-N escrow this single-caller path is only allowed when the
    * threshold is 1; otherwise use `release_with_approvals`.
-   *
+   * 
    * Deliberately **not** gated by `refund_after` (docs/adr/0004): after
    * the deadline the releaser can still release, racing any timeout
    * refund — whoever lands first wins and the other fails `NotFunded`.
-   *
+   * 
    * If the escrow was created with a fee (docs/adr/0010), the fee comes
    * off the top — `⌊amount × fee_bps ÷ 10 000⌋` goes to `fee_recipient`,
    * the exact remainder to `payee`, so the two transfers always sum to
@@ -391,7 +391,7 @@ export interface Client {
    * every escrow in `token` that is still `Funded` (pooled escrows count
    * their funded total net of claimed refunds). The contract is solvent
    * for `token` exactly when `balance >= liabilities`.
-   *
+   * 
    * `liabilities` is maintained on-chain by every state change that
    * moves value — creation, `top_up` and `contribute` add, and
    * release/refund/cancel/`claim_refund` subtract — in the same
@@ -461,7 +461,7 @@ export interface Client {
    * rejected (unknown id, not funded, caller not a releaser, before
    * `release_not_before`). A rejected op does not stop the rest — the
    * caller can inspect the vector and retry only the failures.
-   *
+   * 
    * `escrow_ids.len()` must be `<= MAX_BATCH_SIZE` — see docs/adr/0005.
    */
   settle_many: ({caller, escrow_ids}: {caller: string, escrow_ids: Array<u64>}, options?: MethodOptions) => Promise<AssembledTransaction<Result<Array<Result<void>>>>>
@@ -514,7 +514,7 @@ export interface Client {
    * any item is invalid (bad amount, past `refund_after`, oversized
    * `condition_ref`, short-delivering token) the whole call reverts and
    * no escrows are created.
-   *
+   * 
    * `items.len()` must be `<= MAX_BATCH_SIZE` — see docs/adr/0005.
    */
   create_escrows: ({payer, items}: {payer: string, items: Array<CreateItem>}, options?: MethodOptions) => Promise<AssembledTransaction<Result<Array<u64>>>>
