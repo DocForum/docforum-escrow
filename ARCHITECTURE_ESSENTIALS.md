@@ -69,6 +69,8 @@ current testnet deployment includes the native XLM SAC and the
 BalanceMismatch test token in its immutable allowlist; see
 `docs/testnet-deployments.md`.
 
+Linear vesting streams pay only accrued amounts, reduce outstanding token liabilities on withdrawal, and refund unvested funds to the stored refund destination.
+
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to, fee_recipient, fee_bps)`.
 `notify_payee` opts a contract payee into `on_escrow_released(escrow_id,
 amount)`; when true, the payee must authorize creation as well as the payer.
