@@ -3,7 +3,7 @@
 //
 // release()/refund() are Phase E2 — see tests/release_refund.rs.
 
-use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
+use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus, CONTRACT_VERSION};
 use soroban_sdk::{
     testutils::{Address as _, Events as _, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
@@ -24,7 +24,10 @@ fn version_reports_the_contract_semver() {
     let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    assert_eq!(client.version(), String::from_str(&env, "2.4.0"));
+    // Compared with the constant, not a literal: the version is bumped by the
+    // maintainer fold (contract-changes.d/), and a literal here broke every
+    // open contract PR whenever it moved.
+    assert_eq!(client.version(), String::from_str(&env, CONTRACT_VERSION));
 }
 
 #[test]

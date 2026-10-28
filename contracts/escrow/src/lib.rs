@@ -51,7 +51,7 @@ use soroban_sdk::{
 
 // Bump this value whenever a contract interface or behavior change is made.
 // CI checks this constant against the base branch when this file changes.
-pub const CONTRACT_VERSION: &str = "2.4.0";
+pub const CONTRACT_VERSION: &str = "2.3.0";
 
 include!(concat!(env!("OUT_DIR"), "/contract_metadata.rs"));
 
@@ -345,15 +345,18 @@ pub enum Error {
     /// Stream errors start at 37 to leave error 36 available to the
     /// concurrent undeliverable-payee change (issue #55).
     /// The contract's token balance is below the requested stream payout.
-    PoolInsufficient = 37,
+    PoolInsufficient = 4400,
     /// `withdraw`/`get_vesting` on an escrow without a schedule.
-    NotStreamed = 38,
+    NotStreamed = 4401,
     /// Invalid start/end order or cliff outside the schedule bounds.
-    InvalidVestingSchedule = 39,
+    InvalidVestingSchedule = 4402,
     /// No vested amount is left to withdraw.
-    NothingToWithdraw = 40,
+    NothingToWithdraw = 4403,
     /// Streams have a fixed total; `top_up` is rejected.
-    StreamTopUpUnsupported = 41,
+    StreamTopUpUnsupported = 4404,
+    /// An outbound release transfer failed; the funded escrow remains
+    /// retryable and may still use its refund path.
+    Undeliverable = 36,
 }
 
 #[contract]
@@ -1544,7 +1547,7 @@ impl EscrowContract {
         // Effects before interactions: the state write lands before any
         // token call, so a re-entrant token cannot see a still-`Funded`
         // escrow (threat model T4).
-        data.status = settled;
+        data.status = settled.clone();
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), data);
@@ -1564,17 +1567,33 @@ impl EscrowContract {
         Self::sub_liability(env, &data.token, data.amount)?;
 
         let token_client = token::Client::new(env, &data.token);
-        if let Some(recipient) = fee_recipient {
-            if fee > 0 {
-                token_client.transfer(&env.current_contract_address(), &recipient, &fee);
+        if settled == EscrowStatus::Released {
+            if let Some(recipient) = fee_recipient {
+                if fee > 0 {
+                    let transfer = token_client.try_transfer(
+                        &env.current_contract_address(),
+                        &recipient,
+                        &fee,
+                    );
+                    if !matches!(transfer, Ok(Ok(()))) {
+                        return Err(Error::Undeliverable);
+                    }
+                }
             }
         }
         if payout > 0 {
-            token_client.transfer(
-                &env.current_contract_address(),
-                &data.payee,
-                &payout,
-            );
+            if settled == EscrowStatus::Released {
+                let transfer = token_client.try_transfer(
+                    &env.current_contract_address(),
+                    &data.payee,
+                    &payout,
+                );
+                if !matches!(transfer, Ok(Ok(()))) {
+                    return Err(Error::Undeliverable);
+                }
+            } else {
+                token_client.transfer(&env.current_contract_address(), &data.payee, &payout);
+            }
         }
         if refund_amount > 0 {
             token_client.transfer(

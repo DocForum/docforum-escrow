@@ -341,3 +341,4 @@ quickstart deployment.
 ## Roadmap / status
 See `ROADMAP.md` in this repo. Live testnet deployment record:
 `docs/testnet-deployments.md`.
+A failed outbound token transfer during release returns `Undeliverable` and preserves the funded record, allowing the releaser to retry or use the refund path.

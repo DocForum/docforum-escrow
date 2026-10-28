@@ -803,6 +803,8 @@ Leave findings as comments on the PR that adds this file, or on issue #6.
 A review only counts toward E4 if the reviewer is not the implementer
 (see issue #6).
 
+A rejected outbound token transfer during `release` returns `Undeliverable` and leaves the escrow funded. The releaser can retry after the payee becomes reachable or use the existing refund path.
+
 ## T4 intermediate-contract re-entry regression coverage
 
 Token callbacks must be treated as hostile even when they route through another contract. The regression suite exercises a helper contract that attempts to call back into escrow during a token transfer; the invocation must fail closed and leave the escrow status and balance unchanged.
