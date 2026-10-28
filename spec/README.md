@@ -7,6 +7,7 @@ This directory contains a finite TLA+ model of the escrow contract's actual beha
 - Funded, Released, and Refunded states
 - Single-releaser settlement and M-of-N approval paths
 - Optional timeout refunds via `refund_after`
+- Payee-initiated voluntary refunds while `Funded` (ADR 0010)
 - Earliest-release gating via `release_not_before`
 - Payee acceptance gating for `requires_acceptance`
 - Authorization checks for the releaser and timeout cases

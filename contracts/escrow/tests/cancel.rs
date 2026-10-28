@@ -68,6 +68,8 @@ fn fund<'a>(env: &'a Env, requires_acceptance: bool, refund_after: Option<u64>) 
             &refund_after,
             &false,
             &None,
+            &None,
+            &None,
         )
     };
 
