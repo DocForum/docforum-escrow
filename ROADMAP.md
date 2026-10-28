@@ -275,6 +275,25 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   (scenarios A–M) + 3 malicious-token contribution tests; existing
   suites and snapshots unchanged. SDK `0.7.0 → 0.8.0` (additive).
   **Not yet on testnet** — the live deployment predates it.
+
+- [x] Payee rights transfer (issue #45): `transfer_payee(escrow_id,
+  current_payee, new_payee)` lets the current payee reassign the release
+  destination to a new address while the escrow is `Funded`. Only the
+  current payee may authorise this call — the payer and releaser have no
+  power to redirect funds via this path. `new_payee` may not be the
+  contract's own address (would permanently lock funds) or the payer
+  (would let a colluding payee redirect a release to the payer, bypassing
+  refund auth). Emits a `pay_xfer` event. This is a rotation tool: a
+  payee who has already lost their key cannot use it (they cannot sign).
+  Key loss remains an operational risk the payee must mitigate off-chain.
+  12 tests in `contracts/escrow/tests/transfer_payee.rs` covering the
+  happy path, release/refund after transfer, chained transfers,
+  auth rejection for stranger/payer/releaser, and both rejected
+  `new_payee` targets. Rejected with `Error::InvalidNewPayee`.
+  Threat model
+  I1 updated; T11 added covering the new payee-key attack surface.
+  `ARCHITECTURE_ESSENTIALS.md` contract surface updated.
+  Closes issue #45.
 ## Phase E6 — SDK & integrator tooling
 - [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
