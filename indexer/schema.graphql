@@ -12,6 +12,8 @@ type Escrow @entity {
   notifyPayee: Boolean!
   requiresAcceptance: Boolean!
   acceptedAt: BigInt
+  feeRecipient: String
+  feeBps: BigInt
   status: String!
   updatedLedger: BigInt!
 }

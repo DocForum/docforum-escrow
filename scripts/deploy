@@ -1,0 +1,300 @@
+#!/usr/bin/env bash
+# scripts/deploy: scripted, deterministic escrow contract deployment (issue #89).
+#
+# Builds (or takes) the WASM, checks its hash, uploads it, deploys it with the
+# constructor's token allowlist, confirms the on-chain WASM matches, runs a
+# scripted live verification, and records the result in deployments.json,
+# docs/testnet-deployments.md and the SDK's generated deployments module.
+#
+# Usage:
+#   scripts/deploy [--network testnet] [--wasm PATH] [--expected-wasm-hash HEX]
+#                  [--allowed-tokens C...,C...] [--no-record]
+#   scripts/deploy --dry-run        # same flow against a local quickstart
+#
+# Options:
+#   --network NAME           testnet (default) or local. Nothing else is
+#                            accepted: mainnet is refused until the security
+#                            review (ROADMAP.md Phase E4) is done.
+#   --dry-run                Use the local quickstart network
+#                            (http://localhost:8000). The record is written to
+#                            a temp file and printed; tracked files are not
+#                            touched.
+#   --wasm PATH              Deploy this WASM instead of building one.
+#   --expected-wasm-hash HEX Fail unless the WASM's SHA-256 equals HEX.
+#   --allowed-tokens LIST    Comma-separated constructor allowlist. Default:
+#                            the network's native XLM asset contract. Pass an
+#                            empty string to allow any token.
+#   --no-record              Deploy and verify, but write no record.
+#   -h, --help               Show this help.
+#
+# Environment:
+#   DEPLOY_SOURCE_SECRET     Secret key (S...) that pays for upload/deploy.
+#                            When unset, a fresh account is generated and
+#                            funded by friendbot (testnet and quickstart only).
+#   LOCAL_RPC_URL            Quickstart RPC URL (default
+#                            http://localhost:8000/rpc).
+#
+# Requires the pinned Stellar CLI (scripts/stellar-cli-version), the pinned
+# Rust toolchain with the wasm32v1-none target (unless --wasm), git and node.
+# Refuses to run from a dirty git tree, so the recorded git sha is the source.
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
+die() { echo "deploy: $*" >&2; exit 1; }
+log() { echo "==> $*" >&2; }
+
+network="testnet"
+dry_run=false
+wasm_path=""
+expected_hash=""
+allowed_tokens_set=false
+allowed_tokens=""
+record=true
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --network) network="${2:?--network needs a value}"; shift 2 ;;
+    --dry-run) dry_run=true; network="local"; shift ;;
+    --wasm) wasm_path="${2:?--wasm needs a path}"; shift 2 ;;
+    --expected-wasm-hash) expected_hash="${2:?--expected-wasm-hash needs a value}"; shift 2 ;;
+    --allowed-tokens) allowed_tokens="${2-}"; allowed_tokens_set=true; shift 2 ;;
+    --no-record) record=false; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; die "unknown argument: $1" ;;
+  esac
+done
+
+# --- Network guard -----------------------------------------------------------
+case "$network" in
+  testnet)
+    network_passphrase="Test SDF Network ; September 2015"
+    rpc_url="https://soroban-testnet.stellar.org"
+    explorer_tx="https://stellar.expert/explorer/testnet/tx/"
+    explorer_contract="https://stellar.expert/explorer/testnet/contract/"
+    ;;
+  local)
+    network_passphrase="Standalone Network ; February 2017"
+    rpc_url="${LOCAL_RPC_URL:-http://localhost:8000/rpc}"
+    explorer_tx=""
+    explorer_contract=""
+    ;;
+  mainnet|public|pubnet)
+    die "mainnet deployment is not supported until the security review (ROADMAP.md Phase E4) is done."
+    ;;
+  *)
+    die "unsupported network '$network' (use testnet, or --dry-run for a local quickstart)."
+    ;;
+esac
+if [[ "$network_passphrase" == "Public Global Stellar Network ; September 2015" ]]; then
+  die "refusing the mainnet passphrase."
+fi
+if [[ "$dry_run" == false && "$network" == "local" ]]; then
+  dry_run=true
+fi
+
+# --- Clean tree + tool checks ------------------------------------------------
+command -v git >/dev/null || die "git is required."
+command -v node >/dev/null || die "node is required to write deployment records."
+command -v stellar >/dev/null || die "the Stellar CLI is required (see scripts/stellar-cli-version)."
+
+if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+  git status --short >&2
+  die "refusing to deploy from a dirty git tree; commit or stash first."
+fi
+git_sha="$(git rev-parse HEAD)"
+
+cli_version="$(sed -n 's/^version=//p' scripts/stellar-cli-version)"
+actual_cli_version="$(stellar --version | awk 'NR == 1 { print $2 }' | sed 's/^v//')"
+[[ "$actual_cli_version" == "$cli_version" ]] ||
+  die "expected Stellar CLI $cli_version, found $actual_cli_version."
+
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/escrow-deploy.XXXXXX")"
+trap 'rm -rf "$work_dir"' EXIT
+config_dir="$work_dir/stellar-config"
+net_args=(--rpc-url "$rpc_url" --network-passphrase "$network_passphrase" --config-dir "$config_dir")
+
+hash_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d ' ' -f 1
+  else
+    shasum -a 256 "$1" | cut -d ' ' -f 1
+  fi
+}
+
+# Runs a CLI command that submits a transaction and prints its stdout. The
+# transaction hash (from the CLI's "Signing transaction: <hash>" line) is
+# written to a file, because callers run this in $(...) subshells; read it
+# back with tx_of_last.
+tx_of_last() { cat "$work_dir/last_tx"; }
+submit() {
+  local out err
+  local last_tx=""
+  out="$work_dir/out" err="$work_dir/err"
+  : >"$work_dir/last_tx"
+  if ! stellar "$@" >"$out" 2>"$err"; then
+    cat "$err" >&2
+    return 1
+  fi
+  last_tx="$(sed -n 's/.*Signing transaction: \([0-9a-f]\{64\}\).*/\1/p' "$err" | tail -n 1)"
+  if [[ -z "$last_tx" ]]; then
+    # An upload of WASM that is already on the network submits nothing.
+    if [[ "$1 $2" == "contract upload" ]] && grep -q "already installed" "$err"; then
+      log "WASM already on $network; no upload transaction"
+    else
+      cat "$err" >&2
+      die "could not read the transaction hash from: stellar $1 $2"
+    fi
+  fi
+  printf '%s' "$last_tx" >"$work_dir/last_tx"
+  cat "$out"
+}
+
+# Runs a CLI command that must FAIL with contract error #code. Callers pass
+# --send=no so a rejection is only ever simulated, never submitted.
+expect_contract_error() {
+  local code="$1"; shift
+  local err="$work_dir/expect-err"
+  if stellar "$@" >/dev/null 2>"$err"; then
+    die "expected Error(Contract, #$code) but the call succeeded: stellar $*"
+  fi
+  if ! grep -q "Error(Contract, #$code)" "$err"; then
+    cat "$err" >&2
+    die "expected Error(Contract, #$code) from: stellar $*"
+  fi
+}
+
+# --- WASM: build or take, then hash ------------------------------------------
+if [[ -z "$wasm_path" ]]; then
+  log "Building WASM (scripts/build-wasm.sh)"
+  bash scripts/build-wasm.sh >&2
+  wasm_path="contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm"
+fi
+[[ -f "$wasm_path" ]] || die "WASM not found: $wasm_path"
+wasm_hash="$(hash_file "$wasm_path")"
+log "WASM SHA-256 $wasm_hash"
+if [[ -n "$expected_hash" && "$expected_hash" != "$wasm_hash" ]]; then
+  die "WASM hash mismatch: expected $expected_hash, got $wasm_hash."
+fi
+
+# --- Accounts ------------------------------------------------------------------
+fund_new() {
+  stellar keys generate "$1" "${net_args[@]}" --fund >/dev/null 2>&1 ||
+    die "could not create and fund '$1' (is friendbot reachable at $rpc_url?)."
+}
+if [[ -n "${DEPLOY_SOURCE_SECRET:-}" ]]; then
+  printf '%s\n' "$DEPLOY_SOURCE_SECRET" |
+    stellar keys add deployer --secret-key --config-dir "$config_dir" >/dev/null
+else
+  log "Generating and funding a deployer account"
+  fund_new deployer
+fi
+for role in payer payee releaser stranger; do fund_new "$role"; done
+addr() { stellar keys address "$1" --config-dir "$config_dir"; }
+payer="$(addr payer)" payee="$(addr payee)" releaser="$(addr releaser)" stranger="$(addr stranger)"
+
+native_token="$(stellar contract id asset --asset native "${net_args[@]}")"
+if [[ "$allowed_tokens_set" == false ]]; then
+  allowed_tokens="$native_token"
+fi
+allowed_json="$(node -e 'const l=process.argv[1].split(",").map(s=>s.trim()).filter(Boolean);console.log(JSON.stringify(l))' "$allowed_tokens")"
+
+# --- Upload + deploy -------------------------------------------------------------
+log "Uploading WASM to $network"
+uploaded_hash="$(submit contract upload --wasm "$wasm_path" --source deployer "${net_args[@]}" | tail -n 1)"
+upload_tx="$(tx_of_last)"
+[[ "$uploaded_hash" == "$wasm_hash" ]] ||
+  die "uploaded WASM hash $uploaded_hash does not match local $wasm_hash."
+
+log "Deploying with allowed_tokens=$allowed_json"
+contract_id="$(submit contract deploy --wasm-hash "$wasm_hash" --source deployer "${net_args[@]}" \
+  -- --allowed_tokens "$allowed_json" | tail -n 1)"
+deploy_tx="$(tx_of_last)"
+[[ "$contract_id" =~ ^C[A-Z2-7]{55}$ ]] || die "unexpected contract id: $contract_id"
+log "Contract $contract_id"
+
+log "Confirming on-chain WASM matches"
+stellar contract fetch --id "$contract_id" "${net_args[@]}" --out-file "$work_dir/on-chain.wasm" >/dev/null 2>&1
+on_chain_hash="$(hash_file "$work_dir/on-chain.wasm")"
+[[ "$on_chain_hash" == "$wasm_hash" ]] ||
+  die "on-chain WASM $on_chain_hash does not match $wasm_hash."
+
+# --- Scripted live verification ----------------------------------------------
+invoke() { local who="$1"; shift; submit contract invoke --id "$contract_id" --source "$who" "${net_args[@]}" -- "$@" | tail -n 1; }
+status_of() {
+  stellar contract invoke --id "$contract_id" --source stranger "${net_args[@]}" --send=no \
+    -- get_status --escrow_id "$1" 2>/dev/null | tail -n 1 | tr -d '"'
+}
+create() {
+  invoke payer create_escrow --payer "$payer" --payee "$payee" --token "$native_token" \
+    --amount "$1" --condition_ref "deploy-verify" --releaser "$releaser" --notify_payee false
+}
+results="$work_dir/verification.ndjson"
+: >"$results"
+pass() { # name status escrow_id tx expect
+  node -e 'const [n,s,id,tx,e]=process.argv.slice(1);process.stdout.write(JSON.stringify({case:n,result:s,escrowId:id===""?null:Number(id),txHash:tx||null,expected:e})+"\n")' "$@" >>"$results"
+  log "verify: $1 $2"
+}
+check_status() { local got; got="$(status_of "$1")"; [[ "$got" == "$2" ]] || die "escrow $1 status is '$got', expected '$2'."; }
+
+if [[ -n "$allowed_tokens" && ",$allowed_tokens," != *",$native_token,"* ]]; then
+  die "the verification escrows use the native asset contract ($native_token); include it in --allowed-tokens."
+fi
+
+id="$(create 1000000)"; tx="$(tx_of_last)"; check_status "$id" Funded
+pass create Passed "$id" "$tx" "Funded"
+release_id="$id"
+invoke releaser release --escrow_id "$id" --caller "$releaser" >/dev/null; check_status "$id" Released
+pass release Passed "$id" "$(tx_of_last)" "Released"
+
+id="$(create 1000000)"; check_status "$id" Funded
+invoke releaser refund --escrow_id "$id" --caller "$releaser" >/dev/null; check_status "$id" Refunded
+pass refund Passed "$id" "$(tx_of_last)" "Refunded"
+
+id="$(create 1000000)"
+expect_contract_error 3 contract invoke --send=no --id "$contract_id" --source stranger "${net_args[@]}" \
+  -- release --escrow_id "$id" --caller "$stranger"
+check_status "$id" Funded
+pass reject_stranger_release Passed "$id" "" "Error(Contract, #3) Unauthorized"
+invoke releaser refund --escrow_id "$id" --caller "$releaser" >/dev/null
+
+expect_contract_error 4 contract invoke --send=no --id "$contract_id" --source releaser "${net_args[@]}" \
+  -- release --escrow_id "$release_id" --caller "$releaser"
+pass reject_double_release Passed "$release_id" "" "Error(Contract, #4) NotFunded"
+
+expect_contract_error 2 contract invoke --send=no --id "$contract_id" --source payer "${net_args[@]}" \
+  -- create_escrow --payer "$payer" --payee "$payee" --token "$native_token" --amount 0 \
+  --condition_ref "deploy-verify" --releaser "$releaser" --notify_payee false
+pass reject_non_positive_amount Passed "" "" "Error(Contract, #2) InvalidAmount"
+
+# --- Record --------------------------------------------------------------------------
+record_json="$work_dir/record.json"
+node -e '
+const fs = require("fs");
+const [net, pass, rpc, cid, hash, sha, upTx, depTx, allowed, results, txBase, contractBase] = process.argv.slice(1);
+const verification = fs.readFileSync(results, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+const record = {
+  network: net, networkPassphrase: pass, rpcUrl: rpc, contractId: cid, wasmHash: hash,
+  gitSha: sha, deployedAt: new Date().toISOString(),
+  uploadTxHash: upTx || null, deployTxHash: depTx,
+  allowedTokens: JSON.parse(allowed), verification,
+};
+if (txBase) record.explorer = { contract: contractBase + cid, tx: txBase };
+fs.writeFileSync(process.argv[13], JSON.stringify(record, null, 2) + "\n");
+' "$network" "$network_passphrase" "$rpc_url" "$contract_id" "$wasm_hash" "$git_sha" \
+  "$upload_tx" "$deploy_tx" "$allowed_json" "$results" "$explorer_tx" "$explorer_contract" "$record_json"
+
+if [[ "$dry_run" == true ]]; then
+  log "Dry run: tracked files not changed. Record:"
+  cat "$record_json"
+elif [[ "$record" == true ]]; then
+  node scripts/deploy-record.mjs "$record_json"
+  log "Recorded in deployments.json, docs/testnet-deployments.md and sdk/src/deployments.generated.ts"
+else
+  log "--no-record: nothing written. Record:"
+  cat "$record_json"
+fi
+echo "$contract_id"

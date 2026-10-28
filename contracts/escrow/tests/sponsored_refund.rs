@@ -66,9 +66,20 @@ fn fund<'a>(env: &'a Env, distinct_refund_to: bool, refund_after: Option<u64>) -
         &refund_after,
         &false,
         &arg,
+        &None,
+        &None,
     );
 
-    Fixture { client, token, contract_id, payer, payee, releaser, refund_to, escrow_id }
+    Fixture {
+        client,
+        token,
+        contract_id,
+        payer,
+        payee,
+        releaser,
+        refund_to,
+        escrow_id,
+    }
 }
 
 // --- each refund path with a distinct refund_to ---------------------------
@@ -231,6 +242,8 @@ fn two_escrows_keep_their_own_refund_to() {
         &None,
         &false,
         &Some(other.clone()),
+        &None,
+        &None,
     );
 
     a.client.refund(&second, &a.releaser);
@@ -292,6 +305,8 @@ fn explicit_refund_to_equal_to_payer_behaves_like_the_default() {
         &None,
         &false,
         &Some(payer.clone()),
+        &None,
+        &None,
     );
     client.refund(&id, &releaser);
 
@@ -322,6 +337,8 @@ fn create_escrow_rejects_the_contract_as_refund_to() {
         &None,
         &false,
         &Some(contract_id.clone()),
+        &None,
+        &None,
     );
 
     assert_eq!(result, Err(Ok(Error::InvalidRefundTo)));
@@ -358,6 +375,8 @@ fn create_escrow_with_refund_to_requires_the_funders_auth() {
         &None,
         &false,
         &Some(Address::generate(&env)),
+        &None,
+        &None,
     );
 
     assert!(result.is_err());
@@ -372,8 +391,7 @@ fn the_beneficiary_refund_to_never_has_to_sign() {
 
     // `auths()` reflects the authorisations used by the last invocation
     // (create_escrow): the funder's, and never the refund destination's.
-    let signers: std::vec::Vec<Address> =
-        env.auths().into_iter().map(|(addr, _)| addr).collect();
+    let signers: std::vec::Vec<Address> = env.auths().into_iter().map(|(addr, _)| addr).collect();
     assert!(signers.contains(&f.payer));
     assert!(!signers.contains(&f.refund_to));
 }
