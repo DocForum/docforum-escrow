@@ -46,7 +46,7 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
-    Address, Env, IntoVal, String, Vec,
+    Address, Env, IntoVal, Map, String, TryFromVal, TryIntoVal, Val, Vec,
 };
 
 // Bump this value whenever a contract interface or behavior change is made.
@@ -157,6 +157,89 @@ pub struct EscrowData {
     pub fee_bps: Option<u32>,
 }
 
+/// Exact seven-field map written before `refund_after` was introduced.
+#[contracttype]
+#[derive(Clone)]
+struct EscrowDataV1 {
+    payer: Address,
+    payee: Address,
+    token: Address,
+    amount: i128,
+    condition_ref: String,
+    status: EscrowStatus,
+    releaser: Address,
+}
+
+/// Exact eight-field map written after `refund_after` and before releaser sets.
+#[contracttype]
+#[derive(Clone)]
+struct EscrowDataV2 {
+    payer: Address,
+    payee: Address,
+    token: Address,
+    amount: i128,
+    condition_ref: String,
+    status: EscrowStatus,
+    releaser: Address,
+    refund_after: Option<u64>,
+}
+
+/// Current versioned payload; future fields require a new variant.
+#[contracttype]
+#[derive(Clone)]
+struct EscrowDataV3 {
+    payer: Address,
+    payee: Address,
+    token: Address,
+    amount: i128,
+    condition_ref: String,
+    status: EscrowStatus,
+    releasers: Vec<Address>,
+    threshold: u32,
+    refund_after: Option<u64>,
+    notify_payee: bool,
+    requires_acceptance: bool,
+    accepted_at: Option<u64>,
+}
+
+#[contracttype]
+#[derive(Clone)]
+struct EscrowDataV4 {
+    payer: Address,
+    payee: Address,
+    token: Address,
+    amount: i128,
+    condition_ref: String,
+    status: EscrowStatus,
+    releasers: Vec<Address>,
+    threshold: u32,
+    refund_after: Option<u64>,
+    notify_payee: bool,
+    requires_acceptance: bool,
+    accepted_at: Option<u64>,
+    refund_to: Address,
+    release_not_before: Option<u64>,
+}
+
+#[contracttype]
+#[derive(Clone)]
+struct EscrowDataV5 {
+    payer: Address, payee: Address, token: Address, amount: i128,
+    condition_ref: String, status: EscrowStatus, releasers: Vec<Address>,
+    threshold: u32, refund_after: Option<u64>, notify_payee: bool,
+    requires_acceptance: bool, accepted_at: Option<u64>, refund_to: Address,
+    release_not_before: Option<u64>, fee_recipient: Option<Address>, fee_bps: Option<u32>,
+}
+
+#[contracttype]
+#[derive(Clone)]
+enum StoredEscrowData {
+    V1(EscrowDataV1),
+    V2(EscrowDataV2),
+    V3(EscrowDataV3),
+    V4(EscrowDataV4),
+    V5(EscrowDataV5),
+}
 /// Maximum `fee_bps`: 1 000 basis points out of [`BASIS_POINTS`] 10 000
 /// = 10 %. A platform fee fixed at creation must be transparent but
 /// cannot be the arrangement itself — see docs/adr/0010.
@@ -269,6 +352,8 @@ pub enum Error {
     AcceptanceRequired = 18,
     AcceptanceNotConfigured = 19,
     AlreadyAccepted = 20,
+    /// Stored escrow data is not any supported exact historical or tagged layout.
+    UnsupportedStorageVersion = 3700,
     /// The new releaser cannot be the escrow contract or payee.
     InvalidReleaser = 24,
     /// `refund_to` was the escrow contract's own address — funds sent
@@ -471,11 +556,7 @@ impl EscrowContract {
     /// Records the payee's acceptance for an opted-in funded escrow.
     pub fn accept(env: Env, escrow_id: u64, payee: Address) -> Result<(), Error> {
         payee.require_auth();
-        let mut data: EscrowData = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)?;
+        let mut data = Self::load_escrow(&env, escrow_id)?;
         if data.payee != payee {
             return Err(Error::Unauthorized);
         }
@@ -490,9 +571,7 @@ impl EscrowContract {
         }
         let accepted_at = env.ledger().timestamp();
         data.accepted_at = Some(accepted_at);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &data);
+        Self::save_escrow(&env, escrow_id, &data);
         env.events()
             .publish((symbol_short!("accepted"), escrow_id), (payee, accepted_at));
         Ok(())
@@ -582,11 +661,10 @@ impl EscrowContract {
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
     pub fn get_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, Error> {
-        env
-            .storage()
-            .persistent()
-            .get(&DataKey::Status(escrow_id))
-            .ok_or(Error::NotFound)
+        if let Some(status) = Self::stored_status(&env, escrow_id) {
+            return Ok(status);
+        }
+        Ok(Self::load_escrow(&env, escrow_id)?.status)
     }
 
     /// Read-only accessor for everything stored about `escrow_id` — payer,
@@ -598,10 +676,7 @@ impl EscrowContract {
     /// (docs/adr/0004, threat model T8; docs/adr/0010). Errors on an
     /// unknown id.
     pub fn get_escrow(env: Env, escrow_id: u64) -> Result<EscrowData, Error> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)
+        Self::load_escrow(&env, escrow_id)
     }
 
     /// Creates a pooled escrow funded by many payers (issue #113,
@@ -681,8 +756,8 @@ impl EscrowContract {
             fee_recipient: None,
             fee_bps: None,
         };
-        env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        env.storage().persistent().set(&DataKey::Status(id), &data.status);
+        Self::save_escrow(&env, id, &data);
+        Self::save_status(&env, id, &data.status);
         env.storage().persistent().set(
             &DataKey::Pooled(id),
             &PooledData {
@@ -716,7 +791,7 @@ impl EscrowContract {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
-        let mut data: EscrowData = Self::load(&env, escrow_id)?;
+        let mut data: EscrowData = Self::load_escrow(&env, escrow_id)?;
         let pooled = Self::pooled_data(&env, escrow_id)?;
         Self::check_funded(&data)?;
         if env.ledger().timestamp() >= pooled.funding_deadline {
@@ -749,9 +824,7 @@ impl EscrowContract {
         let funded = data.amount.checked_add(amount).ok_or(Error::Overflow)?;
         data.amount = funded;
         env.storage().persistent().set(&key, &contribution);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &data);
+        Self::save_escrow(&env, escrow_id, &data);
         env.events().publish(
             (symbol_short!("contrib"), escrow_id),
             (payer, amount, funded),
@@ -775,7 +848,7 @@ impl EscrowContract {
     pub fn claim_refund(env: Env, escrow_id: u64, contributor: Address) -> Result<(), Error> {
         contributor.require_auth();
 
-        let mut data: EscrowData = Self::load(&env, escrow_id)?;
+        let mut data: EscrowData = Self::load_escrow(&env, escrow_id)?;
         let pooled = Self::pooled_data(&env, escrow_id)?;
         Self::check_funded(&data)?;
         if env.ledger().timestamp() < pooled.funding_deadline {
@@ -806,9 +879,7 @@ impl EscrowContract {
             .checked_sub(refund_amount)
             .ok_or(Error::Overflow)?;
         env.storage().persistent().set(&key, &contribution);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &data);
+        Self::save_escrow(&env, escrow_id, &data);
         // Issue #39: the pooled total just dropped by `refund_amount`.
         Self::sub_liability(&env, &data.token, refund_amount)?;
 
@@ -887,11 +958,7 @@ impl EscrowContract {
         new_releaser: Address,
     ) -> Result<(), Error> {
         caller.require_auth();
-        let mut data: EscrowData = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)?;
+        let mut data = Self::load_escrow(&env, escrow_id)?;
 
         if data.threshold != 1 {
             return Err(Error::ThresholdNotMet);
@@ -911,9 +978,7 @@ impl EscrowContract {
         let mut releasers = Vec::new(&env);
         releasers.push_back(new_releaser.clone());
         data.releasers = releasers;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &data);
+        Self::save_escrow(&env, escrow_id, &data);
         env.events().publish(
             (symbol_short!("rotate"), escrow_id),
             (previous_releaser, new_releaser),
@@ -928,11 +993,7 @@ impl EscrowContract {
             return Err(Error::InvalidAmount);
         }
         payer.require_auth();
-        let mut data: EscrowData = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)?;
+        let mut data = Self::load_escrow(&env, escrow_id)?;
         // A pooled escrow grows only through `contribute`, which records
         // the payer and verifies the received amount (docs/adr/0011).
         // A bare top-up would raise `data.amount` without a contribution
@@ -953,9 +1014,7 @@ impl EscrowContract {
         }
         Self::transfer_in_exact(&env, &data.token, &payer, amount)?;
         data.amount = updated_amount;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &data);
+        Self::save_escrow(&env, escrow_id, &data);
         env.events().publish(
             (symbol_short!("top_up"), escrow_id),
             (amount, updated_amount),
@@ -994,7 +1053,7 @@ impl EscrowContract {
         escrow_id: u64,
         approvers: Vec<Address>,
     ) -> Result<(), Error> {
-        let mut data = Self::load(&env, escrow_id)?;
+        let mut data = Self::load_escrow(&env, escrow_id)?;
         Self::check_approvals(&env, &data, &approvers)?;
         Self::check_funded(&data)?;
         Self::check_pooled_fully_funded(&env, escrow_id, &data)?;
@@ -1094,7 +1153,7 @@ impl EscrowContract {
     pub fn cancel(env: Env, escrow_id: u64, payer: Address) -> Result<(), Error> {
         payer.require_auth();
 
-        let mut data = Self::load(&env, escrow_id)?;
+        let mut data = Self::load_escrow(&env, escrow_id)?;
         // Pooled escrows have no acceptance gate to race and no push
         // refund path at all (docs/adr/0011) — contributors pull their
         // own funds after a missed funding deadline.
@@ -1123,7 +1182,7 @@ impl EscrowContract {
         escrow_id: u64,
         approvers: Vec<Address>,
     ) -> Result<(), Error> {
-        let mut data = Self::load(&env, escrow_id)?;
+        let mut data = Self::load_escrow(&env, escrow_id)?;
         // See `refund`: pooled escrows never push refunds (docs/adr/0011).
         Self::reject_pooled(&env, escrow_id)?;
         Self::check_approvals(&env, &data, &approvers)?;
@@ -1229,8 +1288,8 @@ impl EscrowContract {
             fee_recipient,
             fee_bps,
         };
-        env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        env.storage().persistent().set(&DataKey::Status(id), &data.status);
+        Self::save_escrow(env, id, &data);
+        Self::save_status(env, id, &data.status);
         Self::publish_state(env, symbol_short!("created"), id, &data);
         Ok(id)
     }
@@ -1332,6 +1391,9 @@ impl EscrowContract {
         {
             return Err(Error::AcceptanceRequired);
         }
+        data.status = settled.clone();
+        Self::save_escrow(env, escrow_id, data);
+        Self::save_status(env, escrow_id, &data.status);
         // Fee off the top on release only (docs/adr/0010): one transfer to
         // `fee_recipient`, then the exact remainder to the payee, so the two
         // always sum to the stored `amount`. Rounding floors, so the fee can
@@ -1355,12 +1417,8 @@ impl EscrowContract {
         // token call, so a re-entrant token cannot see a still-`Funded`
         // escrow (threat model T4).
         data.status = settled.clone();
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), data);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Status(escrow_id), &data.status);
+        Self::save_escrow(env, escrow_id, data);
+        Self::save_status(env, escrow_id, &data.status);
         // Issue #39: the escrow leaves `Funded` in this same write, so its
         // amount stops being owed here too.
         Self::sub_liability(env, &data.token, data.amount)?;
@@ -1414,8 +1472,7 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Emits a complete state snapshot for indexers, with releaser sets
-    /// preserved for M-of-N escrows.
+    /// Emits a complete state snapshot for indexers, with releaser sets preserved.
     fn publish_state(env: &Env, action: soroban_sdk::Symbol, id: u64, data: &EscrowData) {
         let status = match &data.status {
             EscrowStatus::Funded => symbol_short!("Funded"),
@@ -1532,10 +1589,231 @@ impl EscrowContract {
     }
 
     fn load(env: &Env, escrow_id: u64) -> Result<EscrowData, Error> {
-        env.storage()
+        Self::load_escrow(env, escrow_id)
+    }
+
+    fn load_escrow(env: &Env, escrow_id: u64) -> Result<EscrowData, Error> {
+        let raw: Val = env
+            .storage()
             .persistent()
             .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)
+            .ok_or(Error::NotFound)?;
+        if let Ok(map) = Map::<Val, Val>::try_from_val(env, &raw) {
+            match map.len() {
+                7 => {
+                    return EscrowDataV1::try_from_val(env, &raw)
+                        .map(|v| Self::from_v1(env, v))
+                        .map_err(|_| Error::UnsupportedStorageVersion)
+                }
+                8 => {
+                    return EscrowDataV2::try_from_val(env, &raw)
+                        .map(|v| Self::from_v2(env, v))
+                        .map_err(|_| Error::UnsupportedStorageVersion)
+                }
+                12 => {
+                    return EscrowDataV3::try_from_val(env, &raw)
+                        .map(Self::from_v3)
+                        .map_err(|_| Error::UnsupportedStorageVersion)
+                }
+                14 => {
+                    return EscrowDataV4::try_from_val(env, &raw)
+                        .map(Self::from_v4)
+                        .map_err(|_| Error::UnsupportedStorageVersion)
+                }
+                16 => {
+                    return EscrowData::try_from_val(env, &raw)
+                        .map_err(|_| Error::UnsupportedStorageVersion)
+                }
+                _ => {}
+            }
+        }
+        let stored: StoredEscrowData = raw
+            .try_into_val(env)
+            .map_err(|_| Error::UnsupportedStorageVersion)?;
+        match stored {
+            StoredEscrowData::V1(v) => Ok(Self::from_v1(env, v)),
+            StoredEscrowData::V2(v) => Ok(Self::from_v2(env, v)),
+            StoredEscrowData::V3(v) => Ok(Self::from_v3(v)),
+            StoredEscrowData::V4(v) => Ok(Self::from_v4(v)),
+            StoredEscrowData::V5(v) => Ok(Self::from_v5(v)),
+        }
+    }
+
+    fn save_escrow(env: &Env, escrow_id: u64, data: &EscrowData) {
+        // Older deployed layouts predate the liability counter. If a funded
+        // legacy record is first rewritten, seed its outstanding amount
+        // before the caller applies any settlement delta. This is idempotent:
+        // after this write the record is V5 and later writes skip the seed.
+        if Self::is_legacy_layout(env, escrow_id) {
+            if let Ok(previous) = Self::load_escrow(env, escrow_id) {
+                if previous.status == EscrowStatus::Funded
+                    && Self::add_liability(env, &previous.token, previous.amount).is_err()
+                {
+                    panic_with_error!(env, Error::Overflow);
+                }
+            }
+        }
+        let current = EscrowDataV5 {
+            payer: data.payer.clone(),
+            payee: data.payee.clone(),
+            token: data.token.clone(),
+            amount: data.amount,
+            condition_ref: data.condition_ref.clone(),
+            status: data.status.clone(),
+            releasers: data.releasers.clone(),
+            threshold: data.threshold,
+            refund_after: data.refund_after,
+            notify_payee: data.notify_payee,
+            requires_acceptance: data.requires_acceptance,
+            accepted_at: data.accepted_at,
+            refund_to: data.refund_to.clone(),
+            release_not_before: data.release_not_before,
+            fee_recipient: data.fee_recipient.clone(),
+            fee_bps: data.fee_bps,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &StoredEscrowData::V5(current));
+    }
+
+    fn is_legacy_layout(env: &Env, escrow_id: u64) -> bool {
+        let Some(raw) = env
+            .storage()
+            .persistent()
+            .get::<_, Val>(&DataKey::Escrow(escrow_id))
+        else {
+            return false;
+        };
+        if let Ok(map) = Map::<Val, Val>::try_from_val(env, &raw) {
+            if matches!(map.len(), 7 | 8 | 12 | 14) {
+                return true;
+            }
+        }
+        let stored: Result<StoredEscrowData, _> = raw.try_into_val(env);
+        matches!(
+            stored,
+            Ok(StoredEscrowData::V1(_)
+                | StoredEscrowData::V2(_)
+                | StoredEscrowData::V3(_)
+                | StoredEscrowData::V4(_))
+        )
+    }
+
+    /// Writes the status-only read key (#260). Called wherever the status
+    /// changes (creation and settlement); `get_status` falls back to the
+    /// versioned escrow body when this key is absent on a legacy record.
+    fn save_status(env: &Env, escrow_id: u64, status: &EscrowStatus) {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(escrow_id), status);
+    }
+
+    /// Fast lookup for records with a dedicated status key. The public
+    /// query falls back to the versioned body for older layouts.
+    fn stored_status(env: &Env, escrow_id: u64) -> Option<EscrowStatus> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Status(escrow_id))
+    }
+
+    fn from_v1(env: &Env, v: EscrowDataV1) -> EscrowData {
+        let mut releasers = Vec::new(env);
+        releasers.push_back(v.releaser);
+        EscrowData {
+            refund_to: v.payer.clone(),
+            payer: v.payer,
+            payee: v.payee,
+            token: v.token,
+            amount: v.amount,
+            condition_ref: v.condition_ref,
+            status: v.status,
+            releasers,
+            threshold: 1,
+            refund_after: None,
+            notify_payee: false,
+            requires_acceptance: false,
+            accepted_at: None,
+            release_not_before: None,
+            fee_recipient: None,
+            fee_bps: None,
+        }
+    }
+
+    fn from_v2(env: &Env, v: EscrowDataV2) -> EscrowData {
+        let mut releasers = Vec::new(env);
+        releasers.push_back(v.releaser);
+        EscrowData {
+            refund_to: v.payer.clone(),
+            payer: v.payer,
+            payee: v.payee,
+            token: v.token,
+            amount: v.amount,
+            condition_ref: v.condition_ref,
+            status: v.status,
+            releasers,
+            threshold: 1,
+            refund_after: v.refund_after,
+            notify_payee: false,
+            requires_acceptance: false,
+            accepted_at: None,
+            release_not_before: None,
+            fee_recipient: None,
+            fee_bps: None,
+        }
+    }
+
+    fn from_v3(v: EscrowDataV3) -> EscrowData {
+        EscrowData {
+            refund_to: v.payer.clone(),
+            payer: v.payer,
+            payee: v.payee,
+            token: v.token,
+            amount: v.amount,
+            condition_ref: v.condition_ref,
+            status: v.status,
+            releasers: v.releasers,
+            threshold: v.threshold,
+            refund_after: v.refund_after,
+            notify_payee: v.notify_payee,
+            requires_acceptance: v.requires_acceptance,
+            accepted_at: v.accepted_at,
+            release_not_before: None,
+            fee_recipient: None,
+            fee_bps: None,
+        }
+    }
+
+    fn from_v4(v: EscrowDataV4) -> EscrowData {
+        EscrowData {
+            payer: v.payer,
+            payee: v.payee,
+            token: v.token,
+            amount: v.amount,
+            condition_ref: v.condition_ref,
+            status: v.status,
+            releasers: v.releasers,
+            threshold: v.threshold,
+            refund_after: v.refund_after,
+            notify_payee: v.notify_payee,
+            requires_acceptance: v.requires_acceptance,
+            accepted_at: v.accepted_at,
+            refund_to: v.refund_to,
+            release_not_before: v.release_not_before,
+            fee_recipient: None,
+            fee_bps: None,
+        }
+    }
+
+    fn from_v5(v: EscrowDataV5) -> EscrowData {
+        EscrowData {
+            payer: v.payer, payee: v.payee, token: v.token, amount: v.amount,
+            condition_ref: v.condition_ref, status: v.status, releasers: v.releasers,
+            threshold: v.threshold, refund_after: v.refund_after,
+            notify_payee: v.notify_payee, requires_acceptance: v.requires_acceptance,
+            accepted_at: v.accepted_at, refund_to: v.refund_to,
+            release_not_before: v.release_not_before,
+            fee_recipient: v.fee_recipient, fee_bps: v.fee_bps,
+        }
     }
 
     fn check_funded(data: &EscrowData) -> Result<(), Error> {
