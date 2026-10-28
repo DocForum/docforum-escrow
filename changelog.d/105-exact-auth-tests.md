@@ -1,0 +1,1 @@
+Added explicit Soroban authorization trees for escrow creation, including its nested token transfer, and for release/refund tests. This is an incremental part of issue #105; other contract test modules still use permissive auth mocks.

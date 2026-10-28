@@ -10,6 +10,9 @@ use soroban_sdk::{
     Address, Env, IntoVal, String, Vec,
 };
 
+#[path = "common/auth.rs"]
+mod auth;
+
 fn setup<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
     let admin = Address::generate(env);
     let contract_id = env.register_stellar_asset_contract_v2(admin);
@@ -263,4 +266,61 @@ fn callback_opt_in_requires_payee_authorization() {
         client.try_get_status(&0),
         Err(Ok(docforum_escrow::Error::NotFound))
     ));
+}
+
+#[test]
+fn creation_requires_payer_auth_with_nested_token_transfer_tree() {
+    let env = Env::default();
+    env.mock_all_auths(); // authorize fixture minting; replaced with the exact call tree below
+    let (token_id, token, asset) = setup(&env);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    asset.mint(&payer, &1_000);
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let condition_ref = String::from_str(&env, "exact-create-auth");
+
+    let transfer = MockAuthInvoke {
+        contract: &token_id,
+        fn_name: "transfer",
+        args: (payer.clone(), contract_id.clone(), 300i128).into_val(&env),
+        sub_invokes: &[],
+    };
+    let sub_invokes = [transfer];
+    let create = MockAuthInvoke {
+        contract: &contract_id,
+        fn_name: "create_escrow",
+        args: (
+            payer.clone(),
+            payee.clone(),
+            token_id.clone(),
+            300i128,
+            condition_ref.clone(),
+            releaser.clone(),
+            None::<u64>,
+            false,
+            None::<Address>,
+        )
+            .into_val(&env),
+        sub_invokes: &sub_invokes,
+    };
+
+    env.mock_auths(&[MockAuth { address: &payer, invoke: &create }]);
+    let id = client.create_escrow(
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &condition_ref,
+        &releaser,
+        &None,
+        &false,
+        &None,
+    );
+
+    auth::assert_auth_addresses(&env, &[payer.clone()]);
+    assert_eq!(token.balance(&payer), 700);
+    assert_eq!(token.balance(&contract_id), 300);
+    assert_eq!(client.get_status(&id), EscrowStatus::Funded);
 }

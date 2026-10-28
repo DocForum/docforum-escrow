@@ -361,6 +361,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   contract functions merged first.
 
 ## Phase E7 — Verification, testing & release engineering
+- [ ] Assert exact auth trees throughout contract tests (issue #105). This contribution covers `create_escrow`, `release`, and `refund`, including nested token-transfer auth on creation; remaining contract-test modules still need conversion.
 - [x] Contract version and reproducible build provenance exposed in the
   contract interface and WASM metadata (issue #52).
 - [x] **Storage and resource optimisation guided by benchmarks (issue #98)** — `get_status` reads a dedicated persistent status value instead of decoding `EscrowData`. Benchmarks showed that moving `NextId` to persistent storage raised creation costs, so it remains in instance storage. The added status record improves `get_status` while adding writes to creation and settlement. Storage layout changed, so deploy as a new testnet contract ID under ADR 0005 and let existing escrows settle on their original contract.
