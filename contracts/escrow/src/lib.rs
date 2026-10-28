@@ -117,6 +117,11 @@ pub struct EscrowData {
     pub payee: Address,
     pub token: Address,
     pub amount: i128,
+    /// Opaque caller-supplied reference the contract stores but never
+    /// interprets (docs/adr/0001). This field is **public on-chain forever**,
+    /// like the rest of `EscrowData` (docs/threat-model.md T9): never put
+    /// private, personal or sensitive data here. Pass an opaque, meaningless
+    /// id such as a UUID or an internal record id.
     pub condition_ref: String,
     pub status: EscrowStatus,
     /// Addresses permitted to settle this escrow — see docs/adr/0002 for the
@@ -372,12 +377,10 @@ impl EscrowContract {
     /// destination for a sponsored escrow where the funder (`payer`) is
     /// not who should get the money back (docs/adr/0009): `None` means
     /// `payer`; it may not be this contract's own address, and the
-    /// `payer`'s auth on this call covers it. For M-of-N releasers use
-    /// `create_escrow_with_releasers`.
-    /// `fee_recipient`/`fee_bps` are the optional protocol fee, fixed at
-    /// creation and taken at release — never on refund — with `fee_bps ≤`
-    /// [`MAX_FEE_BPS`] (10 %), floor rounding, and both given together or
-    /// not at all (docs/adr/0010). `None` on both means no fee.
+    /// `payer`'s auth on this call covers it. `condition_ref` is stored
+    /// verbatim and is public on-chain forever (docs/threat-model.md T9):
+    /// pass an opaque id, never private or personal data. For M-of-N
+    /// releasers use `create_escrow_with_releasers`.
     pub fn create_escrow(
         env: Env,
         payer: Address,

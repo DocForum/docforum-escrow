@@ -1104,88 +1104,16 @@ export class EscrowClient {
     });
   }
 
-  /** Non-secret attributes shared by every span of one contract call. */
-  private spanAttributes(method: string, escrowId?: bigint, address?: string): EscrowSpanAttributes {
-    const attributes: EscrowSpanAttributes = {
-      "contract.id": this.contractId,
-      "contract.function": method,
-    };
-    if (escrowId !== undefined) attributes["escrow.id"] = escrowId.toString();
-    if (address && this.instrumentation?.includeAddresses) attributes["account.address"] = address;
-    return attributes;
-  }
-
-  /** `spanAttributes` only when instrumentation is on; otherwise no allocation. */
-  private spanAttributesIfEnabled(method: string, escrowId?: bigint, address?: string): EscrowSpanAttributes {
-    return isInstrumentationEnabled(this.instrumentation)
-      ? this.spanAttributes(method, escrowId, address)
-      : EMPTY_SPAN_ATTRIBUTES;
-  }
-
   /**
-   * Simulate, sign, submit and confirm one write call, recording one span per
-   * phase. With instrumentation disabled it skips every span allocation and
-   * takes the shortest path (`send()`, which polls to completion).
+   * Locks `amount` of `token` from `payer`, held for `payee`. Returns the new
+   * escrow's id and the funding transaction's hash.
+   *
+   * `conditionRef` is stored on-chain and is public forever, together with
+   * `payer`, `payee` and `amount` (docs/threat-model.md T9). Never put
+   * private, personal or sensitive data in it — pass an opaque, meaningless
+   * id such as a UUID or an internal record id. The contract never interprets
+   * it.
    */
-  private async invoke<T>(
-    method: string,
-    escrowId: bigint | undefined,
-    build: () => Promise<AssembledTransaction<T>>,
-    hooks: { beforeSign?: (tx: AssembledTransaction<T>) => Promise<void>; address?: string } = {},
-  ): Promise<SentTransaction<T>> {
-    await this.ensureNetworkVerified();
-    const attributes = this.spanAttributesIfEnabled(method, escrowId, hooks.address);
-    const tx = await tracePhase(this.instrumentation, "simulate", attributes, build);
-    if (tx.isReadCall) {
-      throw new Error(`${method} was simulated as a read call; no transaction was sent.`);
-    }
-    await tracePhase(this.instrumentation, "sign", attributes, async () => {
-      if (hooks.beforeSign) await hooks.beforeSign(tx);
-      await tx.sign();
-    });
-
-    if (!this.instrumentation?.tracer && !this.instrumentation?.onEvent) {
-      return tx.send();
-    }
-
-    const submitSpan = beginPhase(this.instrumentation, "submit", attributes);
-    const confirmSpan = beginPhase(this.instrumentation, "confirm", attributes);
-    let submitted = false;
-    try {
-      // `send()` submits and polls to a terminal state. `onSubmitted` marks
-      // the submit/confirm boundary so the two phases are timed separately.
-      const sent = await tx.send({
-        onSubmitted: (response?: Api.SendTransactionResponse) => {
-          submitted = true;
-          if (response?.hash) {
-            submitSpan.attributes["tx.hash"] = response.hash;
-            confirmSpan.attributes["tx.hash"] = response.hash;
-          }
-          submitSpan.end();
-          confirmSpan.start();
-        },
-      });
-      if (!submitted) {
-        submitSpan.end();
-        confirmSpan.start();
-      }
-      const hash = sent.sendTransactionResponse?.hash;
-      if (hash) {
-        submitSpan.attributes["tx.hash"] = hash;
-        confirmSpan.attributes["tx.hash"] = hash;
-      }
-      const attempts = sent.getTransactionResponseAll?.length ?? 0;
-      if (attempts > 0) confirmSpan.attributes["retry.count"] = Math.max(0, attempts - 1);
-      confirmSpan.end();
-      return sent;
-    } catch (error) {
-      if (!submitted) submitSpan.end(error);
-      confirmSpan.end(error);
-      throw error;
-    }
-  }
-
-  /** Locks `amount` of `token` from `payer`, held for `payee`. Returns the new escrow's id and the funding transaction's hash. */
   async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
     if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
       throw new Error(
