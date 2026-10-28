@@ -36,6 +36,8 @@ fn setup(env: &Env) -> Fixture<'_> {
         &None,
         &false,
         &None,
+        &None,
+        &None,
     );
     Fixture { client, token, payer, payee, releaser, id }
 }
@@ -98,6 +100,8 @@ fn split_settlement_respects_the_release_time_lock() {
         &false,
         &None,
         &Some(1_100),
+        &None,
+        &None,
     );
 
     assert_eq!(
