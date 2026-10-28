@@ -929,3 +929,69 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `scripts/test_settle_outcomes.py` run by a new CI job. The 50+ escrow testnet
   drill is still to be run and recorded in the runbook. No contract or SDK
   change.
+- 2026-10-27 — Issue #29 (Phase E5): batch release and refund. `settle_many` now takes
+  `ops: Vec<(escrow_id, SettleAction)>` (`Release` | `Refund`) instead of
+  release-only `escrow_ids`, and `caller` authorizes the batch once (the
+  old version called `release` per id, so any batch of two or more failed
+  `Error(Auth, ExistingValue)`). Each op runs exactly the checks of
+  `release`/`refund` against that escrow's own releaser set, shared through
+  `release_checks`/`refund_checks` so the paths can't diverge. Best-effort,
+  decided in `docs/adr/0012`: one result per op in input order, `Err` means
+  untouched, the same escrow twice gives `NotFunded` on the second op, and
+  a failure after an op's transfer (a failing payee callback) reverts the
+  whole batch. Bound `MAX_SETTLE_OPS` = 20, measured: 656 bytes of events
+  per release against the 16,384-byte events budget (13,120 at 20).
+  Existing error codes unchanged (`BatchTooLarge` = 25 reused). T1
+  response guidance in `docs/threat-model.md`. 13 tests in
+  `tests/settle_many.rs`. Bindings regenerated (SDK patch). Not yet
+  deployed to testnet.
+- 2026-10-27 — Issue #30 (Phase E5): optional protocol fee taken at release. `create_escrow`
+  (and `create_escrow_release_time`) accept an optional `fee_recipient`/`fee_bps`
+  pair, fixed at creation, capped at 10 % and floor-rounded; `release` pays that
+  share to `fee_recipient` and the exact remainder to the payee, while refunds
+  still return the full amount. `get_escrow` exposes the pair, the `ESCROW`
+  event snapshot appends it as one nested pair, and `top_up` re-checks the fee
+  math as the amount grows. Decided in `docs/adr/0010`; new invariant I7 in the
+  threat model; new append-only error `InvalidFee = 35`. The SDK gains
+  `feeRecipient`/`feeBps` on `createEscrow` (minor changeset) and regenerated
+  bindings. Not yet redeployed to testnet.
+- 2026-10-27 — Issue #39 (Phase E5): per-token liability accounting and an on-chain
+  solvency view. New read-only `solvency(token) -> (balance, liabilities)`;
+  `liabilities` is the sum of `amount` over every `Funded` escrow in that
+  token, kept in a new persistent `DataKey::Liability(token)` entry
+  (appended last, so existing storage encodings are unchanged) whose TTL is
+  re-extended on every write. The counter is increased in
+  `transfer_in_exact` (the single inbound path for every creation entry
+  point, `top_up` and `contribute`) and decreased in `settle()` and
+  `claim_refund`, always in the same invocation as the state change.
+  `tests/liabilities.rs`: 14 tests, including a proptest that runs random
+  sequences over every state-changing entry point and checks, after each
+  step, that liabilities equal the per-token sum of `Funded` amounts and the
+  contract balance. Monitoring guidance in `docs/threat-model.md`. Existing
+  test snapshots change only by the new `Liability` storage entry. SDK:
+  `client.getSolvency(token)` and regenerated bindings (minor). Not yet
+  deployed to testnet.
+- 2026-10-27 — The SDK now publishes ESM and CommonJS builds with matching declarations and a browser-compatible ESM entry. CI smoke checks exercise Node imports and a browser bundle.
+- 2026-10-27 — Phase E6 (issue #247): added multisig releaser setup helpers to the SDK.
+  `buildMultisigSetup` returns one atomic `setOptions` transaction (thresholds,
+  one operation per signer, master key weight zeroed last) and refuses any
+  configuration that would lock the account out; `dryRunMultisigSetup` and
+  `verifyMultisig` cover review and on-chain verification. Client-side only — no
+  contract change, so the generated bindings are unchanged.
+- 2026-10-28 — Issue #55 (Phase E5): `release` now uses `try_transfer` for the payout. If the
+  token rejects the transfer (for example a SAC payee whose trustline was
+  deauthorised, or a contract payee that rejects the funds), the call returns the
+  new append-only `Error::Undeliverable = 35` and the escrow stays `Funded` with
+  its balance intact, so the releaser can retry once the payee is reachable or
+  use the refund path. Refund transfers are unchanged. Tests in
+  `contracts/escrow/tests/undeliverable.rs`; generated SDK bindings regenerated
+  for the new error code.
+- 2026-10-28 — Contract changes now use fragments in `contract-changes.d/` instead of each
+  PR bumping `CONTRACT_VERSION`, which put every open contract PR into conflict
+  on each contract merge. New `Error` variants use provisional codes
+  (issue number × 100 + n) until the maintainer fold
+  (`scripts/fold-contract-changes.mjs`) bumps the version once per batch and
+  assigns final codes. CI's "Contract changes use a fragment, not a version
+  bump" step (`scripts/check-contract-change.mjs`) replaces the old
+  "Require a contract version bump" step. The version test now compares with
+  `CONTRACT_VERSION` instead of a literal.
