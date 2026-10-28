@@ -218,7 +218,7 @@
               "val": {
                 "vec": [
                   {
-                    "symbol": "V4"
+                    "symbol": "V5"
                   },
                   {
                     "map": [
@@ -243,6 +243,18 @@
                         "val": {
                           "string": "pooled"
                         }
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_bps"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_recipient"
+                        },
+                        "val": "void"
                       },
                       {
                         "key": {
@@ -751,6 +763,12 @@
                 "void",
                 {
                   "symbol": "Funded"
+                },
+                {
+                  "vec": [
+                    "void",
+                    "void"
+                  ]
                 }
               ]
             }

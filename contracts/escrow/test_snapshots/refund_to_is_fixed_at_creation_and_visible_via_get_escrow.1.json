@@ -81,7 +81,9 @@
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
-                }
+                },
+                "void",
+                "void"
               ]
             }
           },
@@ -226,7 +228,7 @@
               "val": {
                 "vec": [
                   {
-                    "symbol": "V4"
+                    "symbol": "V5"
                   },
                   {
                     "map": [
@@ -251,6 +253,18 @@
                         "val": {
                           "string": "opaque-condition-ref"
                         }
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_bps"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_recipient"
+                        },
+                        "val": "void"
                       },
                       {
                         "key": {
@@ -353,6 +367,33 @@
           "ext": "v0"
         },
         "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "Liability"
+                  },
+                  {
+                    "address": "CBEPDNVYXQGWB5YUBXKJWYJA7OXTZW5LFLNO5JRRGE6Z6C5OSUZPCCEL"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "i128": "300"
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 2073600
       },
       {
         "entry": {

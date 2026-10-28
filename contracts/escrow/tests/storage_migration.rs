@@ -78,11 +78,33 @@ struct EscrowDataV4Fixture {
 }
 
 #[contracttype]
+#[derive(Clone)]
+struct EscrowDataV5Fixture {
+    payer: Address,
+    payee: Address,
+    token: Address,
+    amount: i128,
+    condition_ref: String,
+    status: EscrowStatus,
+    releasers: Vec<Address>,
+    threshold: u32,
+    refund_after: Option<u64>,
+    notify_payee: bool,
+    requires_acceptance: bool,
+    accepted_at: Option<u64>,
+    refund_to: Address,
+    release_not_before: Option<u64>,
+    fee_recipient: Option<Address>,
+    fee_bps: Option<u32>,
+}
+
+#[contracttype]
 enum StoredEscrowDataFixture {
     V1(EscrowDataV1Fixture),
     V2(EscrowDataV2Fixture),
     V3(EscrowDataV3Fixture),
     V4(EscrowDataV4Fixture),
+    V5(EscrowDataV5Fixture),
 }
 
 struct Fixture<'a> {
@@ -115,7 +137,7 @@ fn setup(env: &Env) -> Fixture<'_> {
     }
 }
 
-fn assert_written_as_v4(env: &Env, f: &Fixture<'_>, expected_status: EscrowStatus) {
+fn assert_written_as_v5(env: &Env, f: &Fixture<'_>, expected_status: EscrowStatus) {
     env.as_contract(&f.contract_id, || {
         let stored: StoredEscrowDataFixture = env
             .storage()
@@ -123,17 +145,19 @@ fn assert_written_as_v4(env: &Env, f: &Fixture<'_>, expected_status: EscrowStatu
             .get(&DataKeyFixture::Escrow(0))
             .expect("state-changing action writes a tagged layout");
         match stored {
-            StoredEscrowDataFixture::V4(v4) => {
-                assert_eq!(v4.status, expected_status);
-                assert_eq!(v4.releasers.len(), 1);
-                assert_eq!(v4.threshold, 1);
-                assert!(!v4.notify_payee);
-                assert!(!v4.requires_acceptance);
-                assert_eq!(v4.accepted_at, None);
-                assert_eq!(v4.refund_to, v4.payer);
-                assert_eq!(v4.release_not_before, None);
+            StoredEscrowDataFixture::V5(v5) => {
+                assert_eq!(v5.status, expected_status);
+                assert_eq!(v5.releasers.len(), 1);
+                assert_eq!(v5.threshold, 1);
+                assert!(!v5.notify_payee);
+                assert!(!v5.requires_acceptance);
+                assert_eq!(v5.accepted_at, None);
+                assert_eq!(v5.refund_to, v5.payer);
+                assert_eq!(v5.release_not_before, None);
+                assert_eq!(v5.fee_recipient, None);
+                assert_eq!(v5.fee_bps, None);
             }
-            _ => panic!("legacy record was not migrated to tagged V4"),
+            _ => panic!("legacy record was not migrated to tagged V5"),
         }
     });
 }
@@ -164,7 +188,7 @@ fn legacy_seven_field_map_is_read_and_migrated_on_release() {
     f.client.release(&0, &f.releaser);
 
     assert_eq!(TokenClient::new(&env, &f.token_id).balance(&f.payee), 300);
-    assert_written_as_v4(&env, &f, EscrowStatus::Released);
+    assert_written_as_v5(&env, &f, EscrowStatus::Released);
 }
 
 #[test]
@@ -190,11 +214,11 @@ fn historical_eight_field_map_is_read_and_migrated_on_refund() {
     assert_eq!(f.client.get_escrow(&0).refund_after, None);
     f.client.refund(&0, &f.releaser);
     assert_eq!(TokenClient::new(&env, &f.token_id).balance(&f.payer), 300);
-    assert_written_as_v4(&env, &f, EscrowStatus::Refunded);
+    assert_written_as_v5(&env, &f, EscrowStatus::Refunded);
 }
 
 #[test]
-fn tagged_v1_variant_is_upgraded_to_tagged_v4_on_write() {
+fn tagged_v1_variant_is_upgraded_to_tagged_v5_on_write() {
     let env = Env::default();
     let f = setup(&env);
     let old = EscrowDataV1Fixture {
@@ -214,11 +238,11 @@ fn tagged_v1_variant_is_upgraded_to_tagged_v4_on_write() {
     });
 
     f.client.release(&0, &f.releaser);
-    assert_written_as_v4(&env, &f, EscrowStatus::Released);
+    assert_written_as_v5(&env, &f, EscrowStatus::Released);
 }
 
 #[test]
-fn current_twelve_field_map_is_read_and_migrated_to_tagged_v4_on_write() {
+fn current_twelve_field_map_is_read_and_migrated_to_tagged_v5_on_write() {
     let env = Env::default();
     let f = setup(&env);
     let mut releasers = Vec::new(&env);
@@ -244,11 +268,11 @@ fn current_twelve_field_map_is_read_and_migrated_to_tagged_v4_on_write() {
     });
     assert_eq!(f.client.get_escrow(&0).threshold, 1);
     f.client.release(&0, &f.releaser);
-    assert_written_as_v4(&env, &f, EscrowStatus::Released);
+    assert_written_as_v5(&env, &f, EscrowStatus::Released);
 }
 
 #[test]
-fn tagged_v2_variant_is_upgraded_to_tagged_v4_on_write() {
+fn tagged_v2_variant_is_upgraded_to_tagged_v5_on_write() {
     let env = Env::default();
     let f = setup(&env);
     let old = EscrowDataV2Fixture {
@@ -268,7 +292,7 @@ fn tagged_v2_variant_is_upgraded_to_tagged_v4_on_write() {
         );
     });
     f.client.release(&0, &f.releaser);
-    assert_written_as_v4(&env, &f, EscrowStatus::Released);
+    assert_written_as_v5(&env, &f, EscrowStatus::Released);
 }
 
 #[test]
@@ -302,11 +326,11 @@ fn legacy_record_without_status_key_reports_status_from_the_escrow_body() {
             .expect("settlement writes the status read key");
         assert_eq!(status, EscrowStatus::Released);
     });
-    assert_written_as_v4(&env, &f, EscrowStatus::Released);
+    assert_written_as_v5(&env, &f, EscrowStatus::Released);
 }
 
 #[test]
-fn pooled_escrow_body_is_written_as_tagged_v4() {
+fn pooled_escrow_body_is_written_as_tagged_v5() {
     let env = Env::default();
     let f = setup(&env);
     let contributor = Address::generate(&env);
@@ -330,12 +354,14 @@ fn pooled_escrow_body_is_written_as_tagged_v4() {
             .get(&DataKeyFixture::Escrow(id))
             .expect("pooled escrow body is stored under the escrow key");
         match stored {
-            StoredEscrowDataFixture::V4(v4) => {
-                assert_eq!(v4.status, EscrowStatus::Funded);
-                assert_eq!(v4.amount, 40);
-                assert_eq!(v4.refund_to, f.payer);
+            StoredEscrowDataFixture::V5(v5) => {
+                assert_eq!(v5.status, EscrowStatus::Funded);
+                assert_eq!(v5.amount, 40);
+                assert_eq!(v5.refund_to, f.payer);
+                assert_eq!(v5.fee_recipient, None);
+                assert_eq!(v5.fee_bps, None);
             }
-            _ => panic!("pooled escrow body was not written as tagged V4"),
+            _ => panic!("pooled escrow body was not written as tagged V5"),
         }
     });
 }

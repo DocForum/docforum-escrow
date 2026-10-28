@@ -152,7 +152,7 @@
               "val": {
                 "vec": [
                   {
-                    "symbol": "V4"
+                    "symbol": "V5"
                   },
                   {
                     "map": [
@@ -177,6 +177,18 @@
                         "val": {
                           "string": "pooled-malicious-token"
                         }
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_bps"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_recipient"
+                        },
+                        "val": "void"
                       },
                       {
                         "key": {

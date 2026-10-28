@@ -220,6 +220,8 @@ fn fixture<'a>(env: &'a Env, amount: i128, refund_after: Option<u64>) -> Fixture
         &refund_after,
         &false,
         &None,
+        &None,
+        &None,
     );
 
     Fixture {

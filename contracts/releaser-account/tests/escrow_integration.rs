@@ -35,6 +35,8 @@ fn custom_account_can_be_configured_as_escrow_releaser() {
         &None,
         &false,
         &None,
+        &None,
+        &None,
     );
     escrow.release(&id, &releaser_id);
 
