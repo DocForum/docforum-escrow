@@ -114,6 +114,16 @@ export type {
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Cancelled";
 
+export interface ExtendRefundAfterParams {
+  escrowId: bigint;
+  /** New `refund_after`, unix seconds. Must be later than the current one. */
+  newDeadline: bigint;
+  /** The escrow's payer. Signs the transaction and pays the fee. */
+  payer: EscrowSigner;
+  /** The escrow's single releaser. Signs its own auth entry. */
+  releaser: EscrowSigner;
+}
+
 /**
  * One tranche of a milestone schedule. A milestone escrow is a *group* of
  * single-tranche escrows — see `createMilestoneEscrow`.
@@ -2196,6 +2206,40 @@ export class EscrowClient {
       else events.push({ ...base, type: "unknown", ...(unknownName ? { eventName: unknownName } : {}), ...(escrowId !== undefined ? { escrowId } : {}), topics: nativeTopics });
     }
     return { events, nextCursor: response.cursor };
+  }
+
+  /**
+   * Moves a `Funded` single-releaser escrow's `refund_after` later with the
+   * payer's and releaser's consent (issue #41, docs/adr/0004). The current
+   * deadline must exist and not have passed, and `newDeadline` must be
+   * strictly later. The payer is the transaction source; the releaser signs
+   * its own auth entry unless it is the same address. Returns the
+   * transaction's hash.
+   */
+  async extendRefundAfter(params: ExtendRefundAfterParams): Promise<{ txHash: string }> {
+    const payer = signerAddress(params.payer);
+    const releaser = signerAddress(params.releaser);
+    const client = this.contractClient(params.payer);
+    const sent = await this.invoke(
+      "extend_refund_after",
+      params.escrowId,
+      () => client.extend_refund_after({ escrow_id: params.escrowId, new_deadline: params.newDeadline }),
+      {
+        address: payer,
+        beforeSign: async (tx) => {
+          const pending = tx.needsNonInvokerSigningBy();
+          const unknown = pending.filter((address) => address !== releaser);
+          if (unknown.length > 0) {
+            throw new Error(`extend_refund_after needs authorization from ${unknown.join(", ")}, which is neither the payer nor the releaser.`);
+          }
+          if (pending.includes(releaser)) {
+            await tx.signAuthEntries({ signAuthEntry: params.releaser });
+          }
+        },
+      },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
   }
 
   /**

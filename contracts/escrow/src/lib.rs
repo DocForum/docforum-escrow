@@ -45,8 +45,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
-    Address, Env, IntoVal, String, Vec,
+    contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error,
+    symbol_short, token, Address, Env, IntoVal, String, Vec,
 };
 
 // Bump this value whenever a contract interface or behavior change is made.
@@ -316,9 +316,21 @@ pub enum Error {
     /// contract itself, or an amount that would overflow the fee math —
     /// see docs/adr/0010.
     InvalidFee = 35,
+    /// The refund deadline is absent, already elapsed, or the replacement
+    /// deadline is not strictly later than the current one (issue #41).
+    InvalidRefundExtension = 4100,
     /// An outbound release transfer failed; the funded escrow remains
     /// retryable and may still use its refund path.
     Undeliverable = 36,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundDeadlineExtended {
+    #[topic]
+    pub escrow_id: u64,
+    pub old_deadline: u64,
+    pub new_deadline: u64,
 }
 
 #[contract]
@@ -602,6 +614,38 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::NotFound)
+    }
+
+    /// Moves an active refund deadline later with the payer's and the
+    /// single releaser's consent. Quorum escrows use their threshold path.
+    pub fn extend_refund_after(
+        env: Env,
+        escrow_id: u64,
+        new_deadline: u64,
+    ) -> Result<(), Error> {
+        let mut data = Self::load(&env, escrow_id)?;
+        Self::check_funded(&data)?;
+        let current_deadline = data.refund_after.ok_or(Error::InvalidRefundExtension)?;
+        if env.ledger().timestamp() >= current_deadline || new_deadline <= current_deadline {
+            return Err(Error::InvalidRefundExtension);
+        }
+        if data.threshold != 1 {
+            return Err(Error::ThresholdNotMet);
+        }
+        data.payer.require_auth();
+        let releaser = data.releasers.get(0).ok_or(Error::InvalidReleaser)?;
+        releaser.require_auth();
+        data.refund_after = Some(new_deadline);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        RefundDeadlineExtended {
+            escrow_id,
+            old_deadline: current_deadline,
+            new_deadline,
+        }
+        .publish(&env);
+        Ok(())
     }
 
     /// Creates a pooled escrow funded by many payers (issue #113,
