@@ -311,6 +311,8 @@ pub enum Error {
     NotSupportedForPooled = 33,
     /// The funding deadline was not strictly in the future at creation.
     InvalidFundingDeadline = 34,
+    /// A split settlement amount is outside the escrowed range.
+    InvalidSettlementAmount = 4600,
     /// The optional protocol fee was misconfigured at creation: `bps`
     /// above [`MAX_FEE_BPS`] (10 %), a recipient equal to the escrow
     /// contract itself, or an amount that would overflow the fee math —
@@ -921,6 +923,90 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Pays `payee_amount` of a funded escrow to its payee and returns the rest
+    /// to its refund destination (`refund_to`, the payer unless set at creation).
+    /// A single releaser authorizes the split; quorum escrows must use the
+    /// approval path. Applies the same release-time and acceptance gates as
+    /// `release`, so a split can never bypass them.
+    pub fn settle(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        payee_amount: i128,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+        let mut data = Self::load(&env, escrow_id)?;
+        Self::check_single_caller(&data, &caller)?;
+        Self::reject_pooled(&env, escrow_id)?;
+        Self::check_funded(&data)?;
+        if payee_amount < 0 {
+            return Err(Error::InvalidSettlementAmount);
+        }
+        let fee = match (data.fee_recipient.as_ref(), data.fee_bps) {
+            (Some(_), Some(bps)) => Self::fee_amount(data.amount, bps)?,
+            _ => 0,
+        };
+        let distributable = data.amount - fee;
+        if payee_amount > distributable {
+            return Err(Error::InvalidSettlementAmount);
+        }
+        let payer_amount = distributable - payee_amount;
+        if data
+            .release_not_before
+            .is_some_and(|release_time| env.ledger().timestamp() < release_time)
+        {
+            return Err(Error::ReleaseTooEarly);
+        }
+        if data.requires_acceptance && data.accepted_at.is_none() {
+            return Err(Error::AcceptanceRequired);
+        }
+        let refund_to = data.refund_to.clone();
+        let notify_payee = data.notify_payee && payee_amount > 0;
+
+        data.status = EscrowStatus::Released;
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(escrow_id), &data.status);
+        Self::sub_liability(&env, &data.token, data.amount)?;
+        let token_client = token::Client::new(&env, &data.token);
+        let contract_address = env.current_contract_address();
+        if fee > 0 {
+            if let Some(recipient) = data.fee_recipient.as_ref() {
+                let transfer = token_client.try_transfer(&contract_address, recipient, &fee);
+                if !matches!(transfer, Ok(Ok(()))) {
+                    return Err(Error::Undeliverable);
+                }
+            }
+        }
+        if payee_amount > 0 {
+            let transfer = token_client.try_transfer(&contract_address, &data.payee, &payee_amount);
+            if !matches!(transfer, Ok(Ok(()))) {
+                return Err(Error::Undeliverable);
+            }
+        }
+        if payer_amount > 0 {
+            let transfer = token_client.try_transfer(&contract_address, &refund_to, &payer_amount);
+            if !matches!(transfer, Ok(Ok(()))) {
+                return Err(Error::Undeliverable);
+            }
+        }
+        if notify_payee {
+            let args = (escrow_id, payee_amount).into_val(&env);
+            let callback = env.try_invoke_contract::<(), soroban_sdk::Error>(
+                &data.payee,
+                &soroban_sdk::Symbol::new(&env, "on_escrow_released"),
+                args,
+            );
+            match callback {
+                Ok(Ok(())) => {}
+                _ => return Err(Error::CallbackFailed),
+            }
+        }
+        env.events().publish((symbol_short!("settled"), escrow_id), (payee_amount, payer_amount));
+        Ok(())
+    }
+
     /// Adds funds to a funded escrow without changing its parties or id.
     /// Only its original payer may authorize the transfer.
     pub fn top_up(env: Env, escrow_id: u64, payer: Address, amount: i128) -> Result<(), Error> {
@@ -980,7 +1066,7 @@ impl EscrowContract {
         caller.require_auth();
 
         let mut data = Self::release_checks(&env, escrow_id, &caller)?;
-        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
+        Self::settle_full(&env, escrow_id, &mut data, EscrowStatus::Released)
     }
 
     /// Moves the escrowed `amount` to `payee` on behalf of an M-of-N
@@ -999,7 +1085,7 @@ impl EscrowContract {
         Self::check_funded(&data)?;
         Self::check_pooled_fully_funded(&env, escrow_id, &data)?;
 
-        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
+        Self::settle_full(&env, escrow_id, &mut data, EscrowStatus::Released)
     }
 
     /// Settles many escrows in one transaction (issue #29, docs/adr/0012) —
@@ -1070,7 +1156,7 @@ impl EscrowContract {
         caller.require_auth();
 
         let mut data = Self::refund_checks(&env, escrow_id, &caller)?;
-        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
+        Self::settle_full(&env, escrow_id, &mut data, EscrowStatus::Refunded)
     }
 
     /// Lets the payer take the funds back **before the payee accepts**
@@ -1110,7 +1196,7 @@ impl EscrowContract {
             return Err(Error::AlreadyAccepted);
         }
 
-        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Cancelled)
+        Self::settle_full(&env, escrow_id, &mut data, EscrowStatus::Cancelled)
     }
 
     /// Returns the escrowed `amount` to `refund_to` on behalf of an M-of-N
@@ -1129,7 +1215,7 @@ impl EscrowContract {
         Self::check_approvals(&env, &data, &approvers)?;
         Self::check_funded(&data)?;
 
-        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
+        Self::settle_full(&env, escrow_id, &mut data, EscrowStatus::Refunded)
     }
 
     fn create_escrow_inner(
@@ -1308,7 +1394,7 @@ impl EscrowContract {
     /// token contract, which aborts and rolls back this whole invocation —
     /// including the status write — so a failed payout can never leave an
     /// escrow marked `Released`/`Refunded`.
-    fn settle(
+    fn settle_full(
         env: &Env,
         escrow_id: u64,
         data: &mut EscrowData,
@@ -1511,7 +1597,7 @@ impl EscrowContract {
                 EscrowStatus::Refunded,
             ),
         };
-        if let Err(error) = Self::settle(env, escrow_id, &mut data, settled) {
+        if let Err(error) = Self::settle_full(env, escrow_id, &mut data, settled) {
             panic_with_error!(env, error);
         }
         Ok(())

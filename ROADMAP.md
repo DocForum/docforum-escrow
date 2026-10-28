@@ -165,6 +165,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 - [x] Per-token liability accounting and an on-chain solvency view (issue #39): `solvency(token) -> (balance, liabilities)`; the counter moves in the same invocation as every value-moving state change and its TTL is extended on each write. Property test: `contracts/escrow/tests/liabilities.rs`. Monitoring guidance in `docs/threat-model.md`. **Not yet on testnet.**
 - [x] Optional escrow-wide earliest release time (issue #43, ADR 0009); refund path remains independent.
 - [x] Two-party releaser rotation (issue #23): current releaser and payer authorize; only funded single-releaser escrows can rotate. Contract and payee addresses are rejected.
+- [x] Releaser-authorized split settlement (issue #46): a single releaser may pay a chosen amount to the payee and return the remainder to the stored refund destination; configured release fees remain accounted for.
 - [x] Undeliverable payee handling (issue #55): a rejected outbound release transfer (deauthorised SAC trustline, rejecting contract payee) returns append-only `Error::Undeliverable = 35` and leaves the escrow `Funded`, so the releaser can retry or refund. Tests: `tests/undeliverable.rs`.
 
 - [x] **OpenZeppelin Stellar library evaluation** (issue #118) —
