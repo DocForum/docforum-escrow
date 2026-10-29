@@ -101,6 +101,8 @@ fn legacy_creation_keeps_acceptance_opt_out() {
         &None,
         &false,
         &None,
+        &None,
+        &None,
     );
     let data = client.get_escrow(&id);
     assert!(!data.requires_acceptance);
