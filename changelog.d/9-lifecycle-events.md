@@ -1,0 +1,1 @@
+Issue #9 (Phase E4, T7): cover the contract's full-state lifecycle events on create, release, refund, and cancel, keyed by escrow_id. Error paths emit nothing. Added contract tests in `contracts/escrow/tests/events.rs`, documented the indexer-compatible payload in `ARCHITECTURE_ESSENTIALS.md § Events`, and marked T7 mitigated in `docs/threat-model.md`.

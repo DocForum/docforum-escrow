@@ -1,0 +1,21 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "feat/issue-74-phase-e6-sdk-batch-create-and-batch-settle",
+    "feat/issue-75-phase-e6-sdk-attestation-signing-and-release",
+    "main",
+    "origin"
+  ],
+  "parent": {
+    "feat/issue-74-phase-e6-sdk-batch-create-and-batch-settle": "main",
+    "feat/issue-75-phase-e6-sdk-attestation-signing-and-release": "main",
+    "main": null,
+    "origin": "main"
+  },
+  "order": [
+    "main",
+    "feat/issue-74-phase-e6-sdk-batch-create-and-batch-settle",
+    "feat/issue-75-phase-e6-sdk-attestation-signing-and-release",
+    "origin"
+  ]
+}
