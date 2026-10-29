@@ -130,6 +130,8 @@ impl PayeeHook {
                     &None,
                     &false,
                     &None,
+                    &None,
+                    &None,
                 );
             }
             _ => {}
@@ -173,6 +175,8 @@ fn fixture(env: &Env) -> Fixture<'_> {
         &releaser,
         &None,
         &true,
+        &None,
+        &None,
         &None,
     );
 
