@@ -1,15 +1,20 @@
 {
   "name": "@docforum/escrow-sdk",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "TypeScript client for the docforum-escrow Soroban contract.",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/cjs/index.js",
+  "types": "dist/esm/index.d.ts",
   "sideEffects": false,
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./dist/esm/index.d.ts",
+      "browser": "./dist/esm/index.js",
+      "import": "./dist/esm/index.js",
+      "require": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
     },
     "./signers/wallets-kit": {
       "types": "./dist/signers/wallets-kit.d.ts",
@@ -21,18 +26,26 @@
   ],
   "scripts": {
     "prepare": "npm run build",
-    "build": "tsc",
+    "build": "npm run build:esm && npm run build:cjs",
     "test": "vitest run",
     "test:integration": "vitest run",
     "test:fixtures": "vitest run tests/events.test.ts",
+    "test:unit": "vitest run tests/fees.test.ts tests/signers.test.ts tests/protocol-fee.test.ts tests/amounts.test.ts tests/network-presets.test.ts",
     "test:milestones": "vitest run tests/milestones.test.ts",
-    "test:unit": "vitest run tests/fees.test.ts tests/signers.test.ts",
     "test:instrumentation": "vitest run tests/instrumentation.test.ts",
-    "test:offline": "vitest run tests/events.test.ts tests/quorum-validation.test.ts tests/pooled-validation.test.ts tests/instrumentation.test.ts tests/signers.test.ts tests/relayed.test.ts tests/escrow-data.test.ts tests/factory.test.ts",
+    "test:offline": "vitest run tests/events.test.ts tests/quorum-validation.test.ts tests/pooled-validation.test.ts tests/instrumentation.test.ts tests/signers.test.ts tests/relayed.test.ts tests/escrow-data.test.ts tests/factory.test.ts tests/multisig.test.ts tests/deployments.test.ts",
     "typecheck": "tsc --noEmit",
     "test:runtime": "node tests/runtime-smoke.mjs",
     "test:browser": "node tests/browser-smoke.mjs",
-    "test:factory": "vitest run tests/factory.test.ts"
+    "test:futurenet": "vitest run --config vitest.futurenet.config.ts",
+    "test:factory": "vitest run tests/factory.test.ts",
+    "test:lifecycle": "vitest run tests/lifecycle.test.ts",
+    "build:esm": "tsc -p tsconfig.json",
+    "build:cjs": "esbuild src/index.ts --bundle --platform=node --format=cjs --external:@stellar/stellar-sdk --external:@creit.tech/stellar-wallets-kit --external:@opentelemetry/api --outfile=dist/cjs/index.js && node -e \"require('node:fs').writeFileSync('dist/cjs/package.json', '{\\\"type\\\":\\\"commonjs\\\"}\\n')\"",
+    "smoke:cjs": "node smoke/cjs.cjs",
+    "smoke:esm": "node smoke/esm.mjs",
+    "smoke:browser": "vite build --config smoke/browser/vite.config.mjs",
+    "smoke": "npm run smoke:cjs && npm run smoke:esm && npm run smoke:browser"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^16.0.1"
@@ -51,11 +64,14 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
+    "esbuild": "^0.28.2",
     "typescript": "^5.6.2",
     "vite": "^8.3.4",
     "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=22"
-  }
+  },
+  "module": "dist/esm/index.js",
+  "browser": "dist/esm/index.js"
 }

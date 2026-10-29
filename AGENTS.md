@@ -12,6 +12,11 @@ the change belongs in `docforum-core` instead, not here.
 - No PHI. No healthcare domain concepts (patient, doctor, referral, etc.)
   anywhere in this repo — see `ARCHITECTURE_ESSENTIALS.md` hard rule 1.
 - Contract changes need contract tests in the same PR, always.
+- Never edit `CONTRACT_VERSION` or renumber an `Error` code. A PR that
+  changes `contracts/escrow/src/lib.rs` adds a fragment under
+  `contract-changes.d/`, and new `Error` variants use a provisional code
+  (issue number × 100 + n). A maintainer bumps the version and assigns final
+  codes. See `contract-changes.d/README.md`; CI enforces it.
 - Testnet only, per `ARCHITECTURE_ESSENTIALS.md` hard rule 4, until an
   explicit security-review milestone (ROADMAP.md Phase E4) is marked done.
 - Update `ROADMAP.md` on every contribution — org-wide rule, applies here

@@ -27,13 +27,13 @@ import {
   TransactionBuilder,
   nativeToScVal,
 } from "@stellar/stellar-sdk";
-import { EscrowClient, FactoryClient, predictInstanceAddress } from "../src/index.js";
+import { EscrowClient, EscrowPreconditionError, FactoryClient, predictInstanceAddress } from "../src/index.js";
 
 // Current upstream-main testnet deployment, including BalanceMismatch
 // and opt-in payee acceptance -- see docs/testnet-deployments.md.
 // Public contract addresses, not secrets.
-const CONTRACT_ID = "CAFIQ5OTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR";
-const NATIVE_XLM_SAC = "CDLZFC3SYJYDZT7K67ZV75HPJVIEUVNIXF47ZG2FB2RMQVVU2HHGCYSC";
+const CONTRACT_ID = "CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR";
+const NATIVE_XLM_SAC = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 // Phase E6 factory contract deployed on testnet alongside the
 // instance contract above. Overridable via env for forks that deploy
 // their own factory. Public contract address, not a secret.
@@ -178,6 +178,100 @@ describe("EscrowClient against live testnet", () => {
     await client.refund({ escrowId, caller: releaser });
 
     expect(await client.getStatus(escrowId)).toBe("Refunded");
+  });
+
+  // Issue #84: lifecycle amendments.
+  it("tops up a funded escrow and releases the new total", async () => {
+    const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-top-up",
+      releaser: releaser.publicKey(),
+    });
+
+    await client.topUp({ escrowId, payer, amount: 500_000n });
+    expect((await client.getEscrow(escrowId)).amount).toBe(1_500_000n);
+
+    await expect(client.topUp({ escrowId, payer: payee, amount: 1n })).rejects.toThrow(EscrowPreconditionError);
+    await client.release({ escrowId, caller: releaser });
+    expect(await client.getStatus(escrowId)).toBe("Released");
+  });
+
+  it("records payee acceptance, after which the payer can no longer cancel", async () => {
+    const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-accept",
+      releaser: releaser.publicKey(),
+      requiresAcceptance: true,
+    });
+    expect((await client.getEscrow(escrowId)).requiresAcceptance).toBe(true);
+
+    await client.accept({ escrowId, payee });
+    expect((await client.getEscrow(escrowId)).acceptedAt).toBeGreaterThan(0n);
+    await expect(client.cancel({ escrowId, payer })).rejects.toMatchObject({ code: "AlreadyAccepted" });
+    expect(await client.getStatus(escrowId)).toBe("Funded");
+  });
+
+  // `cancel` is not on the shared testnet deployment yet (see
+  // ARCHITECTURE_ESSENTIALS.md); set TESTNET_HAS_CANCEL=1 once it is.
+  it.skipIf(!process.env.TESTNET_HAS_CANCEL)("lets the payer cancel before the payee accepts", async () => {
+    const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-cancel",
+      releaser: releaser.publicKey(),
+      requiresAcceptance: true,
+    });
+
+    await client.cancel({ escrowId, payer });
+    expect(await client.getStatus(escrowId)).toBe("Cancelled");
+    await expect(client.accept({ escrowId, payee })).rejects.toMatchObject({ code: "NotFunded" });
+  });
+
+  it("runs prepare → sign → submit with the signer and submitter in separate clients", async () => {
+    const [payer, payee, releaser, relayer] = await Promise.all([
+      fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(),
+    ]);
+    const setup = new EscrowClient({ contractId: CONTRACT_ID });
+    const { escrowId } = await setup.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-two-party",
+      releaser: releaser.publicKey(),
+    });
+
+    // Each step uses its own client and passes only JSON, as separate processes would.
+    const prepared = await new EscrowClient({ contractId: CONTRACT_ID }).prepareLifecycleCall({
+      call: { method: "top_up", escrowId, payer: payer.publicKey(), amount: 250_000n },
+      source: relayer.publicKey(),
+    });
+    expect(prepared.pendingSigners).toEqual([payer.publicKey()]);
+    const signed = await new EscrowClient({ contractId: CONTRACT_ID }).signLifecycleCall(
+      JSON.parse(JSON.stringify(prepared)),
+      payer,
+    );
+    expect(signed.pendingSigners).toEqual([]);
+    await new EscrowClient({ contractId: CONTRACT_ID }).submitLifecycleCall(
+      JSON.parse(JSON.stringify(signed)),
+      relayer,
+      "top_up",
+    );
+    expect((await setup.getEscrow(escrowId)).amount).toBe(1_250_000n);
   });
 
   it("rejects release from a caller that isn't the escrow's releaser", async () => {

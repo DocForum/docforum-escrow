@@ -13,6 +13,7 @@ import {
   FeeBumpTransaction,
   Keypair,
   Operation,
+  Networks,
   Transaction,
   TransactionBuilder,
   scValToNative,
@@ -37,8 +38,23 @@ import {
 } from "./instrumentation.js";
 import type { FactoryClient as FactoryClientType } from "./factory.js";
 import { signerAddress, type EscrowSigner } from "./signers/types.js";
+import { getTokenInfo as readTokenInfo, rpcTokenInfoSource, type TokenInfo } from "./amounts.js";
 
 export { Keypair };
+export {
+  getTokenInfo,
+  parseAmount,
+  formatAmount,
+  normaliseAmount,
+  clearTokenInfoCache,
+  rpcTokenInfoSource,
+  AmountError,
+  InvalidAmountError,
+  MAX_TOKEN_DECIMALS,
+  type TokenInfo,
+  type TokenInfoSource,
+  type TokenInfoSourceOptions,
+} from "./amounts.js";
 export { signerAddress, type EscrowSigner } from "./signers/types.js";
 export {
   otelTracer,
@@ -53,7 +69,48 @@ export {
 export { EscrowIndexerClient } from "./indexer-client.js";
 export type { EscrowIndexerClientConfig, EscrowPage, IndexedEscrow } from "./indexer-client.js";
 export { FactoryClient, predictInstanceAddress } from "./factory.js";
+export {
+  KNOWN_DEPLOYMENTS,
+  UnknownDeploymentError,
+  knownContractId,
+  knownNetworkConfig,
+  latestDeployment,
+  parseDeployments,
+  type DeploymentRecord,
+  type DeploymentVerificationCase,
+  type DeploymentsDocument,
+} from "./deployments.js";
 export type { FactoryClientConfig, DeployInstanceParams, DeployInstanceResult, FactoryInstance } from "./factory.js";
+
+// Multisig releaser account helpers (T1 mitigation). Client-side only: they
+// build classic `setOptions` transactions for the releaser account itself and
+// never touch the escrow contract.
+export {
+  buildMultisigSetup,
+  dryRunMultisigSetup,
+  printMultisigDryRun,
+  readOnChainMultisig,
+  resolveMultisigPolicy,
+  validateMultisigPolicy,
+  verifyMultisig,
+  MultisigLockOutError,
+  MultisigValidationError,
+  MAX_WEIGHT,
+  MIN_WEIGHT,
+  TESTNET_PASSPHRASE,
+} from "./multisig.js";
+export type {
+  BuildMultisigSetupOptions,
+  HorizonServerLike,
+  MultisigDryRun,
+  MultisigOnState,
+  MultisigPolicy,
+  MultisigSetupResult,
+  MultisigSigner,
+  MultisigVerificationResult,
+  ResolvedMultisigPolicy,
+  VerifyMultisigOptions,
+} from "./multisig.js";
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Cancelled";
 
@@ -178,6 +235,19 @@ export interface Escrow {
   refundAfter?: bigint;
   /** Earliest ledger timestamp at which release is allowed. Omit for immediate release. */
   releaseNotBefore?: bigint;
+  /**
+   * Optional protocol-fee recipient, fixed at creation (docs/adr/0010).
+   * Set together with `feeBps`; at release `feeBps` basis points of the
+   * escrowed amount go here and the remainder to the payee. Refunds never
+   * take a fee. `undefined` means no fee.
+   */
+  feeRecipient?: string;
+  /**
+   * Optional protocol-fee rate in basis points of the escrowed amount,
+   * capped at 1 000 (10 %) and floored at release (docs/adr/0010). Must be
+   * set together with `feeRecipient`.
+   */
+  feeBps?: number;
   /** Whether to call the contract payee's on_escrow_released hook. Defaults to false. */
   notifyPayee: boolean;
   /**
@@ -187,6 +257,10 @@ export interface Escrow {
    * reversal would pay.
    */
   refundTo: string;
+  /** Whether release waits for the payee's `accept` (issue #25). */
+  requiresAcceptance: boolean;
+  /** Ledger timestamp of the payee's acceptance; `undefined` until `accept`. */
+  acceptedAt?: bigint;
   status: EscrowStatus;
 }
 
@@ -212,6 +286,15 @@ export class MilestoneScheduleError extends Error {
     this.reason = reason;
   }
 }
+
+/**
+ * Maximum protocol-fee rate in basis points of the escrowed amount — must
+ * match the contract's `MAX_FEE_BPS` (1 000 = 10 %, see docs/adr/0010).
+ * Validated client-side so callers fail fast instead of paying network
+ * fees for a rejected transaction. Keep in sync with the contract; a
+ * change is an SDK semver event (hard rule 3).
+ */
+export const MAX_FEE_BPS = 1_000;
 
 /**
  * `amount` must be positive, the schedule non-empty, every tranche positive,
@@ -291,6 +374,83 @@ const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
 const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
 
 /**
+ * Named network presets (Phase E6). Each preset bundles the RPC URL, the
+ * network passphrase and the known contract ids for that network. Hard rule
+ * 4: testnet only until the security review — mainnet is deliberately not a
+ * preset, and constructing a client against the mainnet passphrase throws
+ * unless the caller passes `allowMainnet: true`.
+ */
+export interface NetworkPreset {
+  /** Human-readable network name. */
+  name: string;
+  /** Soroban RPC endpoint for this network. */
+  rpcUrl: string;
+  /** Stellar network passphrase. */
+  networkPassphrase: string;
+  /** Known docforum-escrow contract ids deployed on this network. */
+  contractIds: Record<string, string>;
+  /** Plain-HTTP RPC is allowed (local quickstart only). Defaults to `false`. */
+  allowHttp?: boolean;
+}
+
+/** The Stellar mainnet passphrase — never a default, only an explicit opt-in. */
+export const MAINNET_NETWORK_PASSPHRASE = Networks.PUBLIC;
+
+export const networks = {
+  /** Soroban testnet — the only network wired into defaults (hard rule 4). */
+  testnet: {
+    name: "testnet",
+    rpcUrl: TESTNET_RPC_URL,
+    networkPassphrase: TESTNET_NETWORK_PASSPHRASE,
+    // Current upstream deployment (docs/testnet-deployments.md) and the
+    // testnet native XLM Stellar Asset Contract on its token allowlist.
+    contractIds: {
+      escrow: "CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR",
+      nativeXlm: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+    },
+  } as NetworkPreset,
+  /** Stellar futurenet — an experimental testnet, still not mainnet. */
+  futurenet: {
+    name: "futurenet",
+    rpcUrl: "https://rpc-futurenet.stellar.org",
+    networkPassphrase: Networks.FUTURENET,
+    contractIds: {},
+  } as NetworkPreset,
+  /** A local quickstart node (private network). */
+  local: {
+    name: "local",
+    rpcUrl: "http://localhost:8000/soroban/rpc",
+    networkPassphrase: "Standalone Network ; February 2017",
+    contractIds: {},
+    allowHttp: true,
+  } as NetworkPreset,
+} as const;
+
+/** Thrown when a client is configured for mainnet without the explicit opt-in. */
+export class MainnetNotAllowedError extends Error {
+  readonly name = "MainnetNotAllowedError";
+  constructor() {
+    super(
+      "Refusing to construct a client against the Stellar mainnet passphrase. " +
+        "Hard rule 4 keeps mainnet out of defaults until the security review; " +
+        "pass allowMainnet: true to opt in deliberately.",
+    );
+  }
+}
+
+/** Thrown when the RPC's reported network passphrase does not match the configured one. */
+export class NetworkMismatchError extends Error {
+  readonly name = "NetworkMismatchError";
+  readonly expected: string;
+  readonly actual: string;
+  constructor(expected: string, actual: string) {
+    super(`RPC network passphrase mismatch: expected "${expected}", got "${actual}".`);
+    this.expected = expected;
+    this.actual = actual;
+  }
+}
+
+/**
  * Maximum allowed length of `conditionRef` in bytes — must match the
  * contract's bound (currently 64 bytes, see contracts/escrow/src/lib.rs
  * and docs/threat-model.md T10). Validated client-side so callers fail
@@ -330,6 +490,41 @@ export interface EscrowClientConfig {
   /** Use the restore signer to authorize calls that automatically restore archived entries. */
   archivalBehavior?: ArchivedEntryBehavior;
   restoreSigner?: Keypair;
+  /**
+   * Named network preset (Phase E6). Supplies `rpcUrl` and `networkPassphrase`
+   * defaults; explicit `rpcUrl`/`networkPassphrase` still win. Custom networks
+   * (e.g. a private quickstart) can be configured without a preset.
+   */
+  network?: NetworkPreset;
+  /**
+   * Explicit opt-in required to construct a client against the Stellar
+   * mainnet passphrase (hard rule 4). Defaults to `false`.
+   */
+  allowMainnet?: boolean;
+  /**
+   * Allow a plain-HTTP `rpcUrl` (e.g. a private quickstart node). Defaults to
+   * the preset's `allowHttp` (only `networks.local` sets it), else `false`.
+   */
+  allowHttp?: boolean;
+  /**
+   * Verify the RPC's reported network passphrase against the configured one,
+   * lazily and once, before the client's first network call, and throw
+   * `NetworkMismatchError` on a mismatch. Never runs during construction.
+   *
+   * - `true`: always verify. An RPC that cannot report its network (no
+   *   `getNetwork`) is an error, since verification was explicitly asked for.
+   *   Recommended with a custom `rpcUrl`, so it cannot silently point the
+   *   client at a different network (including mainnet) than its passphrase.
+   * - `false`: never verify automatically (`verifyNetwork()` still works on
+   *   demand).
+   * - unset (default): verify only when a `network` preset is selected, and
+   *   skip the check if the RPC has no `getNetwork` (e.g. an offline test
+   *   double).
+   *
+   * The result is cached: one `getNetwork` round trip per client, not per
+   * call. A failed check is not cached, so a transient RPC error is retryable.
+   */
+  verifyNetwork?: boolean;
 }
 
 export interface CreateEscrowParams {
@@ -366,6 +561,21 @@ export interface CreateEscrowParams {
   refundTo?: string;
   /** Earliest ledger timestamp at which release is allowed; omit for immediate release. */
   releaseNotBefore?: bigint;
+  /**
+   * Optional protocol fee, fixed at creation and taken at release
+   * (docs/adr/0010). `feeRecipient` and `feeBps` are one atomic pair: give
+   * both or neither, and `feeBps` may not exceed 1 000 (10 %). Omit both
+   * for no fee — the payee then receives the full amount, as before.
+   */
+  feeRecipient?: string;
+  /** Fee rate in basis points of the escrowed amount; see `feeRecipient`. */
+  feeBps?: number;
+  /**
+   * Require the payee to `accept` before release (issue #25). Until they
+   * do, the payer may `cancel`. Cannot be combined with `notifyPayee` or
+   * `releaseNotBefore` (the contract has no such creation entry point).
+   */
+  requiresAcceptance?: boolean;
 }
 
 export interface CreateMilestoneEscrowParams extends Omit<CreateEscrowParams, "amount"> {
@@ -392,8 +602,106 @@ export interface MilestoneEscrow {
 export interface CancelParams {
   escrowId: bigint;
   /** The escrow's payer; signs the cancellation. */
-  payer: Keypair;
+  payer: EscrowSigner;
+  /** See `LifecycleCallOptions.checkPreconditions`. Default `true`. */
+  checkPreconditions?: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Lifecycle amendments (issue #84): top-up, payee acceptance, payer cancel,
+// plus a prepare → collect auth → submit flow for calls signed by parties
+// on different machines.
+// ---------------------------------------------------------------------------
+
+/** Options shared by the lifecycle amendment methods. */
+export interface LifecycleCallOptions {
+  /**
+   * Read the escrow first and throw `EscrowPreconditionError` when the call
+   * would certainly fail (wrong signer, not `Funded`, no acceptance gate,
+   * already accepted). Costs one read-only simulation, saves a failed
+   * transaction fee. The contract enforces the same rules either way.
+   * Default `true`.
+   */
+  checkPreconditions?: boolean;
+}
+
+export interface TopUpParams extends LifecycleCallOptions {
+  escrowId: bigint;
+  /** The escrow's original payer; signs the transfer and pays the fee. */
+  payer: EscrowSigner;
+  /** Raw token units to add; must be positive. */
+  amount: bigint;
+}
+
+export interface AcceptParams extends LifecycleCallOptions {
+  escrowId: bigint;
+  /** The escrow's payee; signs the acceptance and pays the fee. */
+  payee: EscrowSigner;
+}
+
+/**
+ * Why a lifecycle call was refused before submission. Each maps to the
+ * contract error the transaction would otherwise fail with.
+ */
+export type EscrowPreconditionCode =
+  | "InvalidAmount"
+  | "NotFunded"
+  | "Unauthorized"
+  | "AcceptanceNotConfigured"
+  | "AlreadyAccepted";
+
+/** Thrown before any transaction is built when a client-side check fails. */
+export class EscrowPreconditionError extends Error {
+  readonly name = "EscrowPreconditionError";
+  readonly code: EscrowPreconditionCode;
+  readonly method: LifecycleMethod;
+  constructor(method: LifecycleMethod, code: EscrowPreconditionCode, message: string) {
+    super(`${method}: ${message}`);
+    this.method = method;
+    this.code = code;
+  }
+}
+
+/** Contract functions the prepare/submit flow can carry. */
+export type LifecycleMethod = "top_up" | "accept" | "cancel";
+
+/** One lifecycle call, described without any signer. */
+export type LifecycleCall =
+  | { method: "top_up"; escrowId: bigint; payer: string; amount: bigint }
+  | { method: "accept"; escrowId: bigint; payee: string }
+  | { method: "cancel"; escrowId: bigint; payer: string };
+
+/**
+ * A simulated lifecycle transaction in transit between signers. Plain JSON
+ * strings and numbers only, so it can be passed between processes or
+ * machines as-is (for example over HTTP or a queue).
+ */
+export interface PreparedLifecycleCall {
+  method: LifecycleMethod;
+  /** `AssembledTransaction.toJSON()` output; not a base64 envelope. */
+  transaction: string;
+  /** The transaction source: signs the envelope and pays the fee at submit. */
+  source: string;
+  /** Addresses whose contract auth entry is still unsigned. */
+  pendingSigners: string[];
+  /** Ledger after which every collected auth entry expires. */
+  expiresAtLedger: number;
+}
+
+export interface PrepareLifecycleParams extends LifecycleCallOptions {
+  call: LifecycleCall;
+  /**
+   * Address that will submit the transaction (envelope signer and fee
+   * payer). Its own auth is covered by the envelope signature, so it never
+   * appears in `pendingSigners`. Defaults to the call's own signer.
+   */
+  source?: string;
+  /** How long collected auth entries stay valid. Default `PREPARED_AUTH_TTL_LEDGERS`. */
+  ttlLedgers?: number;
+}
+
+/** Default lifetime of auth entries collected by `prepareLifecycleCall`, in ledgers (~5 minutes). */
+export const PREPARED_AUTH_TTL_LEDGERS = 60;
 
 /**
  * Creation parameters for a pooled escrow (issue #113, docs/adr/0011): one
@@ -441,6 +749,19 @@ export interface ClaimRefundParams {
 export interface PooledEscrow {
   fundingTarget: bigint;
   fundingDeadline: bigint;
+}
+
+/**
+ * Per-token solvency reading (`getSolvency`, issue #39). `liabilities` is
+ * the on-chain sum of `amount` over every `Funded` escrow in that token.
+ */
+export interface SolvencyReport {
+  /** The escrow contract's current balance of the token. */
+  balance: bigint;
+  /** Total the contract owes in that token across all `Funded` escrows. */
+  liabilities: bigint;
+  /** `balance >= liabilities`. */
+  solvent: boolean;
 }
 
 /** One contributor's record on a pooled escrow (`getContribution`). */
@@ -649,6 +970,17 @@ function contractAddressOf(scAddress: xdr.ScAddress): string | undefined {
  * `create_escrow`/`get_status`/`get_escrow`/`release`/`refund` with plain
  * TypeScript types and no manual XDR/signing plumbing.
  */
+function assertPositiveAmount(call: { method: LifecycleMethod; amount: bigint }): void {
+  if (call.amount <= 0n) {
+    throw new EscrowPreconditionError(call.method, "InvalidAmount", `amount must be positive, got ${call.amount}.`);
+  }
+}
+
+/** The party whose signature a lifecycle call needs. */
+function lifecycleCallSigner(call: LifecycleCall): string {
+  return call.method === "accept" ? call.payee : call.payer;
+}
+
 export class EscrowClient {
   /** Contract id of the escrow instance this client talks to. */
   readonly contractId: string;
@@ -658,12 +990,33 @@ export class EscrowClient {
   private readonly instrumentation?: InstrumentationOptions;
   private readonly archivalBehavior: ArchivedEntryBehavior;
   private readonly restoreSigner?: Keypair;
+  private readonly allowMainnet: boolean;
+  private readonly allowHttp: boolean;
+  /** "required": explicit opt-in; "auto": preset selected; "off": no automatic check. */
+  private readonly networkVerification: "required" | "auto" | "off";
+  /** Cached result of the network passphrase verification. */
+  private networkVerified?: Promise<void>;
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
-    this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
-    this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
-    this.rpc = new RpcServer(this.rpcUrl);
+    this.rpcUrl = config.rpcUrl ?? config.network?.rpcUrl ?? TESTNET_RPC_URL;
+    this.networkPassphrase =
+      config.networkPassphrase ?? config.network?.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
+    this.allowMainnet = config.allowMainnet === true;
+    if (this.networkPassphrase === MAINNET_NETWORK_PASSPHRASE && !this.allowMainnet) {
+      throw new MainnetNotAllowedError();
+    }
+    // No network I/O here: verification is lazy (see ensureNetworkVerified).
+    this.networkVerification =
+      config.verifyNetwork === true
+        ? "required"
+        : config.verifyNetwork === false
+          ? "off"
+          : config.network
+            ? "auto"
+            : "off";
+    this.allowHttp = config.allowHttp ?? config.network?.allowHttp ?? false;
+    this.rpc = new RpcServer(this.rpcUrl, { allowHttp: this.allowHttp });
     this.instrumentation = config.onEvent
       ? { ...config.instrumentation, onEvent: config.onEvent }
       : config.instrumentation;
@@ -691,12 +1044,60 @@ export class EscrowClient {
     });
   }
 
+  /**
+   * Verifies once (and caches) that the RPC's reported network passphrase
+   * matches the configured one. A mismatch throws `NetworkMismatchError` so a
+   * custom `rpcUrl` cannot silently point a client at another network. Calling
+   * this is an explicit request, so an RPC without `getNetwork` is an error. A
+   * rejection is not cached, so a transient RPC failure is retryable.
+   */
+  verifyNetwork(): Promise<void> {
+    return this.runNetworkVerification(true);
+  }
+
+  private runNetworkVerification(required: boolean): Promise<void> {
+    if (!this.networkVerified) {
+      const rpc = this.rpc as Partial<Pick<RpcServer, "getNetwork">>;
+      if (typeof rpc.getNetwork !== "function") {
+        // Not cached: a later explicit request must still fail loudly.
+        return required
+          ? Promise.reject(
+              new Error("Cannot verify the network: the RPC client does not implement getNetwork()."),
+            )
+          : Promise.resolve();
+      }
+      const getNetwork = rpc.getNetwork.bind(rpc);
+      this.networkVerified = (async () => {
+        const rpcNetwork = await getNetwork();
+        if (rpcNetwork.passphrase !== this.networkPassphrase) {
+          throw new NetworkMismatchError(this.networkPassphrase, rpcNetwork.passphrase);
+        }
+      })();
+      this.networkVerified.catch(() => {
+        this.networkVerified = undefined;
+      });
+    }
+    return this.networkVerified;
+  }
+
+  /**
+   * Gate on every network call path: lazily verifies the RPC's passphrase once
+   * (see `verifyNetwork()`), then reuses the cached result. A no-op unless a
+   * `network` preset was selected or `verifyNetwork: true` was passed; with a
+   * preset only, an RPC without `getNetwork` is skipped rather than failing.
+   */
+  private async ensureNetworkVerified(): Promise<void> {
+    if (this.networkVerification === "off") return;
+    await this.runNetworkVerification(this.networkVerification === "required");
+  }
+
   private contractClient(signer?: EscrowSigner): EscrowContractClient {
     const effectiveSigner = signer ?? (this.archivalBehavior === "auto" ? this.restoreSigner : undefined);
     return new EscrowContractClient({
       contractId: this.contractId,
       rpcUrl: this.rpcUrl,
       networkPassphrase: this.networkPassphrase,
+      allowHttp: this.allowHttp,
       ...(effectiveSigner
         ? { publicKey: signerAddress(effectiveSigner), signTransaction: effectiveSigner }
         : {}),
@@ -732,6 +1133,7 @@ export class EscrowClient {
     build: () => Promise<AssembledTransaction<T>>,
     hooks: { beforeSign?: (tx: AssembledTransaction<T>) => Promise<void>; address?: string } = {},
   ): Promise<SentTransaction<T>> {
+    await this.ensureNetworkVerified();
     const attributes = this.spanAttributesIfEnabled(method, escrowId, hooks.address);
     const tx = await tracePhase(this.instrumentation, "simulate", attributes, build);
     if (tx.isReadCall) {
@@ -790,6 +1192,12 @@ export class EscrowClient {
         `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
       );
     }
+    if ((params.feeRecipient === undefined) !== (params.feeBps === undefined)) {
+      throw new TypeError("feeRecipient and feeBps must be given together, or both omitted");
+    }
+    if (params.feeBps !== undefined && (!Number.isInteger(params.feeBps) || params.feeBps < 0 || params.feeBps > MAX_FEE_BPS)) {
+      throw new RangeError(`feeBps must be an integer between 0 and ${MAX_FEE_BPS} (10 %)`);
+    }
     const client = this.contractClient(params.payer);
     const createParams = {
       payer: signerAddress(params.payer),
@@ -801,11 +1209,28 @@ export class EscrowClient {
       refund_after: params.refundAfter,
       notify_payee: params.notifyPayee ?? false,
       refund_to: params.refundTo,
+      fee_recipient: params.feeRecipient,
+      fee_bps: params.feeBps,
     };
+    if (params.requiresAcceptance && (params.notifyPayee || params.releaseNotBefore !== undefined)) {
+      throw new Error("requiresAcceptance cannot be combined with notifyPayee or releaseNotBefore.");
+    }
     const sent = await this.invoke(
       "create_escrow",
       undefined,
-      () => params.releaseNotBefore === undefined
+      () => params.requiresAcceptance
+        ? client.create_escrow_with_acceptance({
+            payer: createParams.payer,
+            payee: createParams.payee,
+            token: createParams.token,
+            amount: createParams.amount,
+            condition_ref: createParams.condition_ref,
+            releaser: createParams.releaser,
+            refund_after: createParams.refund_after,
+            requires_acceptance: true,
+            refund_to: createParams.refund_to,
+          })
+        : params.releaseNotBefore === undefined
         ? client.create_escrow(createParams)
         : client.create_escrow_release_time({
             ...createParams,
@@ -816,8 +1241,23 @@ export class EscrowClient {
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
   }
 
+  /**
+   * Read-only: `decimals`, `symbol` and `name` for `token`, read from the
+   * SEP-41 contract over this client's RPC and cached per contract address.
+   * Pass the returned `decimals` to `parseAmount`/`formatAmount` instead of
+   * assuming 7.
+   */
+  async getTokenInfo(token: string): Promise<TokenInfo> {
+    await this.ensureNetworkVerified();
+    return readTokenInfo(
+      token,
+      rpcTokenInfoSource({ rpcUrl: this.rpcUrl, networkPassphrase: this.networkPassphrase }),
+    );
+  }
+
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
   async getStatus(escrowId: bigint): Promise<EscrowStatus> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient();
     const tx = await tracePhase(
       this.instrumentation,
@@ -890,6 +1330,7 @@ export class EscrowClient {
    * T8). Throws if `escrowId` doesn't exist.
    */
   async getEscrow(escrowId: bigint): Promise<Escrow> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient();
     const tx = await tracePhase(
       this.instrumentation,
@@ -930,6 +1371,10 @@ export class EscrowClient {
       notifyPayee: data.notify_payee,
       refundTo: data.refund_to,
       releaseNotBefore: data.release_not_before ?? undefined,
+      feeRecipient: data.fee_recipient ?? undefined,
+      feeBps: data.fee_bps ?? undefined,
+      requiresAcceptance: data.requires_acceptance,
+      acceptedAt: data.accepted_at ?? undefined,
       status: data.status.tag,
     };
   }
@@ -1049,11 +1494,203 @@ export class EscrowClient {
    * transaction's hash.
    */
   async cancel(params: CancelParams): Promise<{ txHash: string }> {
+    await this.ensureNetworkVerified();
+    const payer = signerAddress(params.payer);
+    const call: LifecycleCall = { method: "cancel", escrowId: params.escrowId, payer };
+    if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
     const client = this.contractClient(params.payer);
-    const tx = await client.cancel({ escrow_id: params.escrowId, payer: params.payer.publicKey() });
+    const sent = await this.invoke(
+      "cancel",
+      params.escrowId,
+      () => client.cancel({ escrow_id: params.escrowId, payer }),
+      { address: payer },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Adds `amount` to a `Funded` escrow without changing its parties or id
+   * (issue #26). Only the escrow's original payer may top up; pooled
+   * escrows grow through `contribute` instead and are rejected by the
+   * contract (`NotSupportedForPooled`). Returns the transaction's hash.
+   */
+  async topUp(params: TopUpParams): Promise<{ txHash: string }> {
+    const payer = signerAddress(params.payer);
+    const call: LifecycleCall = { method: "top_up", escrowId: params.escrowId, payer, amount: params.amount };
+    assertPositiveAmount(call);
+    if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
+    const client = this.contractClient(params.payer);
+    const sent = await this.invoke(
+      "top_up",
+      params.escrowId,
+      () => client.top_up({ escrow_id: params.escrowId, payer, amount: params.amount }),
+      { address: payer },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Records the payee's acceptance on an escrow created with the
+   * acceptance gate (issue #25). Once accepted, the payer can no longer
+   * `cancel`. One-time and only while `Funded`. Returns the transaction's
+   * hash.
+   */
+  async accept(params: AcceptParams): Promise<{ txHash: string }> {
+    const payee = signerAddress(params.payee);
+    const call: LifecycleCall = { method: "accept", escrowId: params.escrowId, payee };
+    if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
+    const client = this.contractClient(params.payee);
+    const sent = await this.invoke(
+      "accept",
+      params.escrowId,
+      () => client.accept({ escrow_id: params.escrowId, payee }),
+      { address: payee },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Step 1 of the multi-party flow: simulates `call` with `source` as the
+   * transaction source and returns it as portable JSON, listing every other
+   * party whose contract authorization is still needed. Pass the result to
+   * each of them for `signLifecycleCall`, then to the source for
+   * `submitLifecycleCall`. Nothing is signed here.
+   */
+  async prepareLifecycleCall(params: PrepareLifecycleParams): Promise<PreparedLifecycleCall> {
+    const { call } = params;
+    if (call.method === "top_up") assertPositiveAmount(call);
+    await this.ensureNetworkVerified();
+    if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
+    const source = params.source ?? lifecycleCallSigner(call);
+    const client = this.contractClientForAddress(source);
+    const tx = await this.buildLifecycleCall(client, call);
+    if (tx.isReadCall) {
+      throw new Error(`${call.method} was simulated as a read call; no transaction was assembled.`);
+    }
+    const latestLedger = await this.rpc.getLatestLedger();
+    return {
+      method: call.method,
+      transaction: tx.toJSON(),
+      source,
+      pendingSigners: tx.needsNonInvokerSigningBy(),
+      expiresAtLedger: latestLedger.sequence + (params.ttlLedgers ?? PREPARED_AUTH_TTL_LEDGERS),
+    };
+  }
+
+  /**
+   * Step 2: signs `signer`'s contract auth entry in a prepared call and
+   * returns the updated call with `signer` removed from `pendingSigners`.
+   * Safe to run in a separate process from `prepareLifecycleCall`; the
+   * signer never sees or signs the envelope.
+   */
+  async signLifecycleCall(
+    prepared: PreparedLifecycleCall,
+    signer: EscrowSigner,
+  ): Promise<PreparedLifecycleCall> {
+    const address = signerAddress(signer);
+    if (!prepared.pendingSigners.includes(address)) {
+      throw new Error(`${address} has no pending authorization in this ${prepared.method} call.`);
+    }
+    const client = this.contractClientForAddress(prepared.source);
+    const tx = client.txFromJSON<Result<void>>(prepared.transaction);
+    await tx.signAuthEntries({ signAuthEntry: signer, expiration: prepared.expiresAtLedger });
+    return {
+      ...prepared,
+      transaction: tx.toJSON(),
+      pendingSigners: tx.needsNonInvokerSigningBy(),
+    };
+  }
+
+  /**
+   * Step 3: the source signs the envelope and submits. Refuses to submit
+   * while any party's authorization is still missing, or when `expectedMethod`
+   * does not match, so a call meant for one function cannot be passed off as
+   * another. Returns the transaction's hash.
+   */
+  async submitLifecycleCall(
+    prepared: PreparedLifecycleCall,
+    source: EscrowSigner,
+    expectedMethod?: LifecycleMethod,
+  ): Promise<{ txHash: string }> {
+    let method: unknown;
+    try {
+      method = (JSON.parse(prepared.transaction) as { method?: unknown }).method;
+    } catch (error) {
+      throw new TypeError(`Prepared call is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (method !== prepared.method || (expectedMethod && method !== expectedMethod)) {
+      throw new TypeError(
+        `Prepared call is for ${String(method) || "an unknown method"}, not ${expectedMethod ?? prepared.method}.`
+      );
+    }
+    if (signerAddress(source) !== prepared.source) {
+      throw new Error(`Prepared call must be submitted by its source ${prepared.source}.`);
+    }
+    await this.ensureNetworkVerified();
+    const client = this.contractClient(source);
+    const tx = client.txFromJSON<Result<void>>(prepared.transaction);
+    const missing = tx.needsNonInvokerSigningBy();
+    if (missing.length > 0) {
+      throw new Error(`Still waiting for authorization from: ${missing.join(", ")}.`);
+    }
     const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /** A contract client that simulates as `address` without being able to sign. */
+  private contractClientForAddress(address: string): EscrowContractClient {
+    return new EscrowContractClient({
+      contractId: this.contractId,
+      rpcUrl: this.rpcUrl,
+      networkPassphrase: this.networkPassphrase,
+      allowHttp: this.allowHttp,
+      publicKey: address,
+    });
+  }
+
+  private buildLifecycleCall(
+    client: EscrowContractClient,
+    call: LifecycleCall,
+  ): Promise<AssembledTransaction<Result<void>>> {
+    switch (call.method) {
+      case "top_up":
+        return client.top_up({ escrow_id: call.escrowId, payer: call.payer, amount: call.amount });
+      case "accept":
+        return client.accept({ escrow_id: call.escrowId, payee: call.payee });
+      case "cancel":
+        return client.cancel({ escrow_id: call.escrowId, payer: call.payer });
+    }
+  }
+
+  /**
+   * Client-side precondition check: reads the escrow once and throws
+   * `EscrowPreconditionError` for anything the contract would certainly
+   * reject. Rules mirror `contracts/escrow/src/lib.rs`.
+   */
+  private async checkLifecycleCall(call: LifecycleCall): Promise<void> {
+    const escrow = await this.getEscrow(call.escrowId);
+    const fail = (code: EscrowPreconditionCode, message: string): never => {
+      throw new EscrowPreconditionError(call.method, code, message);
+    };
+    // Same order as the contract, so the error matches what it would return.
+    const [party, expected] = call.method === "accept"
+      ? ["payee", escrow.payee] as const
+      : ["payer", escrow.payer] as const;
+    if (lifecycleCallSigner(call) !== expected) {
+      fail("Unauthorized", `only the escrow's ${party} can call ${call.method}.`);
+    }
+    if (escrow.status !== "Funded") {
+      fail("NotFunded", `escrow ${call.escrowId} is ${escrow.status}, not Funded.`);
+    }
+    if (call.method === "top_up") return;
+    if (!escrow.requiresAcceptance) {
+      fail("AcceptanceNotConfigured", "the escrow was created without the acceptance gate.");
+    }
+    if (escrow.acceptedAt !== undefined) fail("AlreadyAccepted", "the payee has already accepted.");
   }
 
   /**
@@ -1159,6 +1796,7 @@ export class EscrowClient {
    * `NotPooled` (error 26) on a non-pooled or unknown id.
    */
   async getPooled(escrowId: bigint): Promise<PooledEscrow> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient();
     const tx = await tracePhase(
       this.instrumentation,
@@ -1183,6 +1821,7 @@ export class EscrowClient {
     escrowId: bigint,
     contributor: string
   ): Promise<ContributionRecord | undefined> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient();
     const tx = await tracePhase(
       this.instrumentation,
@@ -1193,6 +1832,26 @@ export class EscrowClient {
     const record: GeneratedContribution | undefined = tx.result.unwrap();
     if (record == null) return undefined;
     return { amount: record.amount, refunded: record.refunded };
+  }
+
+  /**
+   * Read-only solvency check for one token (issue #39): the contract's
+   * balance of `token` and its total outstanding liability in it (the sum
+   * of `amount` over every `Funded` escrow, maintained on-chain in the
+   * same invocation as each state change). `solvent` is false only when
+   * the contract holds less than it owes, e.g. after an issuer clawback
+   * (threat model T5). A token never used reports zero liabilities.
+   */
+  async getSolvency(token: string): Promise<SolvencyReport> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("solvency"),
+      () => client.solvency({ token }),
+    );
+    const [balance, liabilities] = tx.result;
+    return { balance, liabilities, solvent: balance >= liabilities };
   }
 
   /**
@@ -1238,6 +1897,7 @@ export class EscrowClient {
     settlement: "release" | "refund",
     params: RelayedAuthorizationParams,
   ): Promise<RelayedAuthorization> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient(params.relayer);
     const tx = settlement === "release"
       ? await client.release({ escrow_id: params.escrowId, caller: params.releaser.publicKey() })
@@ -1285,6 +1945,7 @@ export class EscrowClient {
       );
     }
 
+    await this.ensureNetworkVerified();
     const client = this.contractClient(relayer);
     const tx = client.txFromJSON<Result<void>>(authorization.transaction);
     const sent = await tx.signAndSend();
@@ -1303,6 +1964,7 @@ export class EscrowClient {
    * — fee-bump it with `maxFee` set to the most they are willing to pay.
    */
   async estimate(call: EstimateCallParams): Promise<FeeEstimate> {
+    await this.ensureNetworkVerified();
     const contractId = call.contractId ?? this.contractId;
     const account = await this.rpc.getAccount(signerAddress(call.source));
     const transaction = new TransactionBuilder(account, {
@@ -1503,6 +2165,9 @@ export class EscrowClient {
     if (params.fromLedger !== undefined && (!Number.isSafeInteger(params.fromLedger) || params.fromLedger < 1)) {
       throw new RangeError("fromLedger must be a positive safe integer.");
     }
+    // Validate the arguments before any network work, so a bad call fails
+    // fast and never depends on RPC availability.
+    await this.ensureNetworkVerified();
     const filter: Api.EventFilter = { type: "contract", contractIds: [this.contractId] };
     const request: Api.GetEventsRequest = "cursor" in params && params.cursor !== undefined
       ? { cursor: params.cursor, filters: [filter], limit: 100 }

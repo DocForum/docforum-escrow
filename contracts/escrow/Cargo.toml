@@ -3,6 +3,7 @@ name = "docforum-escrow"
 version = "0.0.0"
 edition = "2021"
 publish = false
+build = "build.rs"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -13,6 +14,10 @@ soroban-sdk = "27.0.6"
 [dev-dependencies]
 soroban-sdk = { version = "27.0.6", features = ["testutils"] }
 proptest = "1.5"
+
+[[bench]]
+name = "resource_profile"
+harness = false
 
 [profile.release]
 opt-level = "z"
