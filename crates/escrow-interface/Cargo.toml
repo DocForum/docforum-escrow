@@ -1,0 +1,20 @@
+[package]
+name = "docforum-escrow-interface"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Shared types and contract client for cross-contract calls into the DocForum escrow contract"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+default = []
+# Enable this to get the contractclient-generated client for cross-contract calls.
+# It is off by default so the escrow contract itself can depend on this crate
+# only for the shared types without pulling in a client it can't use.
+client = []
+
+[dependencies]
+soroban-sdk = "27.0.6"

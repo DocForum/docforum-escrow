@@ -28,6 +28,10 @@
 // per-payer contributions); `EscrowData` and every pre-existing entry
 // point keep their exact meaning.
 //
+// Phase E6: the shared types (`EscrowData`, `EscrowStatus`, `Error`) and the
+// cross-contract client live in the `escrow-interface` crate. This contract
+// depends on that crate for the types so the two can never drift.
+//
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
 // never interprets it. Keep it that way; domain logic belongs in the
@@ -44,6 +48,7 @@
 // describe them as proven.
 #![no_std]
 
+use escrow_interface::{Error, EscrowData, EscrowStatus};
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error,
     symbol_short, token,
@@ -220,6 +225,8 @@ pub struct CreateItem {
     pub refund_after: Option<u64>,
 }
 
+// Internal storage keys are an implementation detail of this contract
+// and deliberately not part of the published interface.
 #[contracttype]
 enum DataKey {
     Escrow(u64),
@@ -986,8 +993,8 @@ impl EscrowContract {
     /// an M-of-N escrow this single-caller path is only allowed when the
     /// threshold is 1; otherwise use `release_with_approvals`.
     ///
-    /// Deliberately **not** gated by `refund_after` (docs/adr/0004): after
-    /// the deadline the releaser can still release, racing any timeout
+    /// Deliberately **not** gated by `refund_after` (docs/adr/0004): after the
+    /// deadline the releaser can still release, racing any timeout
     /// refund — whoever lands first wins and the other fails `NotFunded`.
     ///
     /// If the escrow was created with a fee (docs/adr/0010), the fee comes
@@ -1760,6 +1767,3 @@ impl EscrowContract {
         storage.extend_ttl(&key, LIABILITY_TTL_THRESHOLD.min(extend_to), extend_to);
     }
 }
-
-
-

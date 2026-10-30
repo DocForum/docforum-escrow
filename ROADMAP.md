@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (contract features) now includes the OZ-library evaluation (ADR 0006, no library adopted) and the optional in-contract M-of-N releaser quorum (ADR 0007, SDK 0.5.0) — implemented, tested and pending a testnet redeploy. Phase E6 (npm publishing) in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm. Fee estimation and fee-bump sponsorship helpers (issue #70) are implemented in the SDK, `0.5.0`. Phase E7 (verification/release engineering) started: committed Soroban test snapshots with a CI drift check (issue #120) and a CI check that generated SDK bindings match the contract WASM (issue #121).**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (contract features) now includes the OZ-library evaluation (ADR 0006, no library adopted) and the optional in-contract M-of-N releaser quorum (ADR 0007, SDK 0.5.0) — implemented, tested and pending a testnet redeploy. Phase E6 (SDK & integrator tooling) started: Rust interface crate for cross-contract calls into the escrow; npm publishing in progress: automated `sdk-v*` release workflow with provenance, changesets, and a superseding ADR landed; the one-time human npm org/trusted-publishing setup is still pending, so `sdk-v0.3.0` is not yet on npm. Fee estimation and fee-bump sponsorship helpers (issue #70) are implemented in the SDK, `0.5.0`. Phase E7 (verification/release engineering) started: committed Soroban test snapshots with a CI drift check (issue #120) and a CI check that generated SDK bindings match the contract WASM (issue #121).**
 
 ## Payee acceptance (issue #25)
 
@@ -296,6 +296,17 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `ARCHITECTURE_ESSENTIALS.md` contract surface updated.
   Closes issue #45.
 ## Phase E6 — SDK & integrator tooling
+- [x] Rust interface crate for cross-contract calls into the escrow.
+  New `crates/escrow-interface/` exposes a `contractclient`-generated
+  client plus the shared types (`EscrowData`, `EscrowStatus`, `Error`),
+  all `#[contracttype]`-compatible. The escrow contract itself now
+  depends on these shared types so they can't drift from the interface
+  crate. Added `contracts/examples/` with an example contract that
+  creates and releases an escrow cross-contract, with tests. Auth
+  requirements for contract-to-contract calls (the calling contract as
+  payer or releaser) documented in `ARCHITECTURE_ESSENTIALS.md` and the
+  interface crate's README. Workspace build still produces the same
+  escrow WASM (hash unchanged by the refactor). Closes issue #16.
 - [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
   triggered by an `sdk-v*` tag: builds, typechecks, tests, runs
@@ -602,7 +613,14 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   (`CAXESEEAJILFFCN3PH2HHNMWAAHLEB64UTJHZ6IP7C5BBICT3S3VODSM`, supersedes
   the Phase E1-only deployment) and verified `release`/`refund` live:
   real fund transfers on both paths, plus a real unauthorized-caller
-  rejection (`Error(Contract, #3)`) confirmed via the contract's own
+  rejection (`Error(Con
+- 2026-10-20 — Phase E6 started: added `crates/escrow-interface/` (a
+  `contractclient`-generated client plus the shared `EscrowData`,
+  `EscrowStatus`, and `Error` types), made the escrow contract depend on
+  those shared types so they can't drift, and added
+  `contracts/examples/` with a cross-contract create/release example and
+  tests. Contract-to-contract auth requirements documented. Escrow WASM
+  hash unchanged by the refactor. Closes issue #16.tract, #3)`) confirmed via the contract's own
   diagnostic events, not just a local assertion. Closes the "not yet
   done" gap from the previous entry. Full record:
   `docs/testnet-deployments.md`.
