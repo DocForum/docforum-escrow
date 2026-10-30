@@ -1327,7 +1327,9 @@ export class EscrowClient {
    * Read-only: everything stored about `escrowId` — including the
    * `releasers` set, its `threshold` and `refundAfter`, which payees should
    * check before relying on a `Funded` escrow (docs/adr/0004, threat model
-   * T8). Throws if `escrowId` doesn't exist.
+   * T8). Throws if `escrowId` doesn't exist, **and also once the escrow has
+   * settled**: its record is reclaimed (docs/adr/0013). Use `getStatus` for a
+   * settled id and the `ESCROW` state event for its history.
    */
   async getEscrow(escrowId: bigint): Promise<Escrow> {
     await this.ensureNetworkVerified();

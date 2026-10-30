@@ -295,6 +295,19 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   I1 updated; T11 added covering the new payee-key attack surface.
   `ARCHITECTURE_ESSENTIALS.md` contract surface updated.
   Closes issue #45.
+- [x] **Reclaim storage for settled escrows** (issue #48) —
+  `docs/adr/0013`: keep only the existing `Status` entry, chosen over delete / keep-everything. Every
+  terminal transition of an ordinary escrow goes through `settle()`, which
+  removes the persistent `EscrowData` (the `Status` entry stays), then publishes
+  the existing `ESCROW` state event. `get_status`
+  answers for settled ids (`NotFound` now means "never created"),
+  `get_escrow` is funded-only, and mutating calls on a settled id still return
+  `NotFunded`. Measured: the 628-byte record is reclaimed per settled escrow; a 28-byte `Status` entry remains. Pooled
+  escrows are not reclaimed (ADR 0011 reads their record after settlement).
+  Known gap: the state event omits `refund_to` and `release_not_before`;
+  widening it breaks the indexer's fixed 12-field decoder, so it is a
+  separate change. SDK minor, `getEscrow()` breaking for settled ids.
+  **Not yet on testnet** — needs a redeploy.
 ## Phase E6 — SDK & integrator tooling
 - [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),

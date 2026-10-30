@@ -119,25 +119,27 @@ impl Model {
                 Ok(())
             }
             Op::Release { as_releaser } => {
-                // `check_single_caller` runs before `check_funded`, so a
-                // stranger gets Unauthorized even on a settled escrow.
-                if !as_releaser {
-                    return Err(Failure::Unauthorized);
-                }
+                // A settled escrow's record is reclaimed (docs/adr/0011), so
+                // there is no releaser set left to authorize against: every
+                // caller, stranger included, gets NotFunded.
                 if self.phase != Phase::Funded {
                     return Err(Failure::NotFunded);
+                }
+                if !as_releaser {
+                    return Err(Failure::Unauthorized);
                 }
                 self.phase = Phase::Released;
                 Ok(())
             }
             Op::Refund { as_releaser } => {
-                // Timeout first: after the deadline anyone may refund, and
-                // the caller check is skipped entirely.
-                if !self.timeout_passed() && !as_releaser {
-                    return Err(Failure::Unauthorized);
-                }
+                // Settled first (record reclaimed, docs/adr/0011). Then
+                // timeout: after the deadline anyone may refund, and the
+                // caller check is skipped entirely.
                 if self.phase != Phase::Funded {
                     return Err(Failure::NotFunded);
+                }
+                if !self.timeout_passed() && !as_releaser {
+                    return Err(Failure::Unauthorized);
                 }
                 self.phase = Phase::Refunded;
                 Ok(())
@@ -343,11 +345,24 @@ proptest! {
             );
 
             prop_assert_eq!(status_of(&f.client, f.escrow_id), model.phase, "status after step {:?}", op);
-            prop_assert_eq!(
-                f.client.get_escrow(&f.escrow_id).amount,
-                model.amount,
-                "stored amount after step {:?}", op
-            );
+            // A funded escrow's stored amount tracks the model; a settled
+            // escrow's record is reclaimed (docs/adr/0011), so only the
+            // `Status` entry above remains observable.
+            if f.client.get_status(&f.escrow_id) == EscrowStatus::Funded {
+                prop_assert_eq!(
+                    f.client.get_escrow(&f.escrow_id).amount,
+                    model.amount,
+                    "stored amount after step {:?}", op
+                );
+            } else {
+                prop_assert!(
+                    matches!(
+                        f.client.try_get_escrow(&f.escrow_id),
+                        Err(Ok(Error::NotFound))
+                    ),
+                    "settled record should be reclaimed after step {:?}", op
+                );
+            }
 
             // I3 / I1: balances follow the model exactly.
             prop_assert_eq!(

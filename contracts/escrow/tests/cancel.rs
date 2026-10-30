@@ -136,7 +136,11 @@ fn race_cancel_lands_first_then_accept_fails_and_payer_keeps_the_funds() {
 
     assert_eq!(accept, Err(Ok(Error::NotFunded)));
     assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Cancelled);
-    assert!(!f.client.get_escrow(&f.escrow_id).accepted_at.is_some());
+    // The cancelled escrow's record is reclaimed (docs/adr/0011).
+    assert!(matches!(
+        f.client.try_get_escrow(&f.escrow_id),
+        Err(Ok(Error::NotFound))
+    ));
     assert_eq!(f.token.balance(&f.payer), 1_000);
     assert_eq!(f.token.balance(&f.payee), 0);
     assert_eq!(f.token.balance(&f.contract_id), 0);
@@ -390,7 +394,7 @@ fn top_up_before_accept_is_fully_returned_by_cancel() {
     assert_eq!(f.token.balance(&f.payer), 1_000);
     assert_eq!(f.token.balance(&f.payee), 0);
     assert_eq!(f.token.balance(&f.contract_id), 0);
-    assert_eq!(f.client.get_escrow(&f.escrow_id).status, EscrowStatus::Cancelled);
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Cancelled);
 }
 
 #[test]

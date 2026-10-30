@@ -3,7 +3,7 @@
 // The invariant under test: for every token, the contract's on-chain
 // liability counter equals the sum of `amount` over every escrow in that
 // token whose status is `Funded`. The oracle below reads every escrow back
-// through `get_escrow` (ids are contiguous from 0), so it never trusts the
+// through `get_status`/`get_escrow` (ids are contiguous from 0), so it never trusts the
 // test's own bookkeeping.
 //
 // Coverage of every state-changing entry point (reviewer checklist):
@@ -153,9 +153,14 @@ impl<'a> Fixture<'a> {
     fn funded_sum(&self, token: usize) -> i128 {
         let mut sum = 0i128;
         let mut id = 0u64;
-        while let Ok(Ok(escrow)) = self.client.try_get_escrow(&id) {
-            if escrow.status == EscrowStatus::Funded && escrow.token == self.tokens[token] {
-                sum += escrow.amount;
+        // `get_status` answers for every id ever created, settled or not;
+        // only funded escrows still have a full record (docs/adr/0013).
+        while let Ok(Ok(status)) = self.client.try_get_status(&id) {
+            if status == EscrowStatus::Funded {
+                let escrow = self.client.get_escrow(&id);
+                if escrow.token == self.tokens[token] {
+                    sum += escrow.amount;
+                }
             }
             id += 1;
         }
@@ -500,7 +505,7 @@ fn arb_op() -> impl Strategy<Value = Op> {
 /// `None` before any escrow exists.
 fn existing_id(f: &Fixture, pick: usize) -> Option<u64> {
     let mut count = 0u64;
-    while let Ok(Ok(_)) = f.client.try_get_escrow(&count) {
+    while let Ok(Ok(_)) = f.client.try_get_status(&count) {
         count += 1;
     }
     (count > 0).then(|| pick as u64 % count)
