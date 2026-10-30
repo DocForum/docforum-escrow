@@ -45,9 +45,9 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error,
-    symbol_short, token,
-    Address, Env, IntoVal, String, Vec,
+    address_payload::AddressPayload, contract, contracterror, contractevent, contractimpl,
+    contracttype, panic_with_error, symbol_short, token, Address, Bytes, BytesN, Env, IntoVal,
+    String, Vec,
 };
 
 // Bump this value whenever a contract interface or behavior change is made.
@@ -65,6 +65,11 @@ pub const MAX_RELEASERS: u32 = 10;
 
 /// Maximum `condition_ref` length in bytes (threat model T10, Phase E5).
 pub const MAX_CONDITION_REF_LEN: u32 = 64;
+
+/// Domain separator for attestation messages. Written into every message
+/// without a length prefix and mirrored byte for byte in the SDK's
+/// `buildAttestationMessage` — see docs/adr/0005.
+pub const ATTESTATION_DOMAIN: &[u8] = b"docforum-escrow-attestation";
 
 /// Maximum number of items accepted by `create_escrows` / `settle_many`
 /// in a single call. Callers (including the SDK) must chunk larger
@@ -232,6 +237,7 @@ enum DataKey {
     Pooled(u64),
     /// Pooled escrows only (issue #113): one record per contributor.
     Contribution(u64, Address),
+
     /// Issue #39: total outstanding liability for one token, i.e. the sum
     /// of `amount` over every escrow in that token whose status is
     /// `Funded`. Appended last, so existing entries keep their encoding.
@@ -296,47 +302,53 @@ pub enum Error {
     InvalidReleaseNotBefore = 22,
     /// Release was attempted before the configured time.
     ReleaseTooEarly = 23,
+    /// The escrow's single releaser is not an ed25519 account key, so an
+    /// attestation signature cannot be checked against it. Appended at the
+    /// end so existing discriminants keep their on-chain values.
+    InvalidSignature = 25,
+    /// The attestation `action` was not the expected `"release"` value.
+    InvalidAction = 26,
     /// A batch call was passed more than `MAX_BATCH_SIZE` items — see
     /// docs/adr/0005. Callers must chunk. Appended at the end so existing
     /// discriminants keep their on-chain values.
-    BatchTooLarge = 25,
+    BatchTooLarge = 27,
     /// `contribute`/`claim_refund`/`get_contribution` on a non-pooled
     /// escrow, or `get_pooled` on a non-pooled/unknown id — see
     /// docs/adr/0011.
-    NotPooled = 26,
+    NotPooled = 28,
     /// A contribution arrived after the pooled escrow's funding deadline.
     /// Late contributions can never be accepted: the round's outcome
     /// (release vs per-contributor refunds) is fixed at the deadline.
-    FundingDeadlinePassed = 27,
+    FundingDeadlinePassed = 29,
     /// A contribution would push the pooled total past the funding target
     /// (overfunding is rejected, not accepted), the target is already met,
     /// or a refund was claimed on a fully funded pooled escrow.
-    FundingTargetReached = 28,
+    FundingTargetReached = 30,
     /// `release` on a pooled escrow whose funded total is below the
     /// funding target — partial funding is never releasable.
-    FundingIncomplete = 29,
+    FundingIncomplete = 31,
     /// `claim_refund` before the funding deadline passed on a round that
     /// is still (or now fully) funded. Claims open only for a failed round.
-    RefundNotOpen = 30,
+    RefundNotOpen = 32,
     /// The same contributor tried to claim a refund twice.
-    AlreadyRefunded = 31,
+    AlreadyRefunded = 33,
     /// `claim_refund` by an address with no recorded contribution.
-    NoContribution = 32,
+    NoContribution = 34,
     /// `refund`/`refund_with_approvals`/`cancel`/`top_up` on a pooled
     /// escrow: pushing the whole pooled total to one address would violate
     /// per-contributor accounting. Pooled refunds are pull-based
     /// (`claim_refund`); pooled funding is `contribute`-only.
-    NotSupportedForPooled = 33,
+    NotSupportedForPooled = 35,
     /// The funding deadline was not strictly in the future at creation.
-    InvalidFundingDeadline = 34,
+    InvalidFundingDeadline = 36,
     /// The optional protocol fee was misconfigured at creation: `bps`
     /// above [`MAX_FEE_BPS`] (10 %), a recipient equal to the escrow
     /// contract itself, or an amount that would overflow the fee math —
     /// see docs/adr/0010.
-    InvalidFee = 35,
+    InvalidFee = 37,
     /// An outbound release transfer failed; the funded escrow remains
     /// retryable and may still use its refund path.
-    Undeliverable = 36,
+    Undeliverable = 38,
 }
 
 #[contract]
@@ -1169,6 +1181,49 @@ impl EscrowContract {
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
     }
 
+    /// Releases the escrowed `amount` to `payee` on presentation of an
+    /// off-chain ed25519 attestation, instead of the releaser signing this
+    /// transaction (docs/adr/0005). Anyone may submit the call; the
+    /// authorisation comes entirely from `signature`.
+    ///
+    /// The escrow must have exactly one releaser and that releaser must be
+    /// an ed25519 account address (`G…`) — its account key is the
+    /// attestation key. M-of-N escrows use `release_with_approvals`.
+    ///
+    /// The signed message is `attestation_message(escrow_id, action)`: it is
+    /// domain-separated, bound to this contract's address, this network's id
+    /// and the `escrow_id`, so a signature can never be replayed on another
+    /// network, contract or escrow. `action` must be `"release"`.
+    ///
+    /// Same state rule as `release`: only while `Funded`. A bad signature
+    /// fails verification (the host traps), so nothing is released.
+    pub fn release_with_attestation(
+        env: Env,
+        escrow_id: u64,
+        action: String,
+        signature: BytesN<64>,
+    ) -> Result<(), Error> {
+        if action != String::from_str(&env, "release") {
+            return Err(Error::InvalidAction);
+        }
+
+        let mut data = Self::load(&env, escrow_id)?;
+        Self::check_funded(&data)?;
+        let public_key = Self::releaser_ed25519_key(&data)?;
+        let message = Self::build_attestation_message(&env, escrow_id, &action);
+        env.crypto().ed25519_verify(&public_key, &message, &signature);
+
+        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
+    }
+
+    /// The canonical attestation message for `escrow_id` and `action`,
+    /// exposed read-only so clients and auditor tooling can verify a
+    /// signature without reconstructing the layout themselves. Mirrored
+    /// exactly by `buildAttestationMessage` in the SDK.
+    pub fn attestation_message(env: Env, escrow_id: u64, action: String) -> Bytes {
+        Self::build_attestation_message(&env, escrow_id, &action)
+    }
+
     fn create_escrow_inner(
         env: &Env,
         payer: Address,
@@ -1582,6 +1637,52 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// The ed25519 key an attestation must be signed with: the master key
+    /// of the escrow's single releaser account. Errs for M-of-N escrows and
+    /// for contract-address releasers, which have no ed25519 key.
+    fn releaser_ed25519_key(data: &EscrowData) -> Result<BytesN<32>, Error> {
+        if data.threshold != 1 {
+            return Err(Error::ThresholdNotMet);
+        }
+        let releaser = data.releasers.get(0).ok_or(Error::InvalidReleaser)?;
+        match releaser.to_payload() {
+            Some(AddressPayload::AccountIdPublicKeyEd25519(key)) => Ok(key),
+            _ => Err(Error::InvalidSignature),
+        }
+    }
+
+    /// Builds the canonical attestation message. Layout (big-endian, no
+    /// padding), mirrored by the SDK:
+    ///
+    ///   domain         : `ATTESTATION_DOMAIN` bytes, no length prefix
+    ///   network_id     : 32 bytes (sha256 of the network passphrase)
+    ///   contract_len   : u32
+    ///   contract_id    : UTF-8 strkey of this contract (`C…`)
+    ///   escrow_id      : u64
+    ///   action_len     : u32
+    ///   action         : UTF-8 bytes
+    fn build_attestation_message(env: &Env, escrow_id: u64, action: &String) -> Bytes {
+        let mut message = Bytes::new(env);
+        message.append(&Bytes::from_slice(env, ATTESTATION_DOMAIN));
+        message.append(&Bytes::from_array(env, &env.ledger().network_id().to_array()));
+
+        let contract_id = env.current_contract_address().to_string().to_bytes();
+        message.append(&Bytes::from_array(
+            env,
+            &(contract_id.len() as u32).to_be_bytes(),
+        ));
+        message.append(&contract_id);
+
+        message.append(&Bytes::from_array(env, &escrow_id.to_be_bytes()));
+        let action_bytes = action.to_bytes();
+        message.append(&Bytes::from_array(
+            env,
+            &(action_bytes.len() as u32).to_be_bytes(),
+        ));
+        message.append(&action_bytes);
+        message
+    }
+
     /// Loads a pooled escrow's immutable funding config, or errors
     /// `NotPooled` for any escrow without one (issue #113, ADR 0011).
     fn pooled_data(env: &Env, escrow_id: u64) -> Result<PooledData, Error> {
@@ -1760,6 +1861,3 @@ impl EscrowContract {
         storage.extend_ttl(&key, LIABILITY_TTL_THRESHOLD.min(extend_to), extend_to);
     }
 }
-
-
-

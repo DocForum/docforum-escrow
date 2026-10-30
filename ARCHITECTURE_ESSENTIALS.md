@@ -24,6 +24,8 @@ release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser,
 release_with_approvals(escrow_id, approvers) -> result   // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — >= threshold distinct releasers, each authorizing this invocation
 refund(escrow_id, caller) -> result    // releaser (threshold 1), stored payee voluntarily while Funded, or anyone after timeout; always pays stored `refund_to` (ADR 0009/0010)
 refund_with_approvals(escrow_id, approvers) -> result    // IMPLEMENTED (Phase E5, issue #119) — same approval rules as release_with_approvals
+release_with_attestation(escrow_id, action, signature) -> result // IMPLEMENTED (Phase E5, issue #75) — single-releaser ed25519 attestation; `action` must be "release"
+attestation_message(escrow_id, action) -> bytes // IMPLEMENTED (Phase E5, issue #75) — read-only: the exact bytes an attestation signs
 settle_many(caller, ops: Vec<(escrow_id, Release|Refund)>) -> Vec<Result<(), Error>> // IMPLEMENTED (Phase E5, issue #29, ADR 0012) — caller authorizes once; each op gets exactly the checks of release/refund against that escrow's own releasers; best-effort, one result per op in input order (Err = untouched; same escrow twice → second NotFunded); a post-transfer failure (payee callback) reverts the whole batch; at most MAX_SETTLE_OPS = 20 (BatchTooLarge); not deployed on testnet yet
 top_up(escrow_id, payer, amount) -> result // IMPLEMENTED (issue #26) — original payer only, funded state only; emits `top_up`
 transfer_payee(escrow_id, current_payee, new_payee) -> result // IMPLEMENTED (Phase E5, issue #45) — current payee only, funded state only; new_payee may not be the contract address or the payer; rotation tool, not key-loss recovery
@@ -67,9 +69,21 @@ Other emitted events (not lifecycle):
 - `accepted` — topic `("accepted", escrow_id)`, payload `(payee, accepted_at)`
 
 No new contract-level role came in with the M-of-N work: `releasers` is
-escrow data chosen by the payer at creation and immutable afterwards.There is still no admin, no owner, no pause and no upgrade path — OpenZeppelin's
+escrow data chosen by the payer at creation and immutable afterwards.
+There is still no admin, no owner, no pause and no upgrade path — OpenZeppelin's
 pausable/upgradeable/access modules were evaluated and rejected in
 `docs/adr/0006` precisely because they would add one.
+
+`release_with_attestation` lets a single-releaser escrow settle on an
+off-chain ed25519 attestation instead of a transaction signed by the
+releaser: the releaser's account key signs a message binding the domain
+(`docforum-escrow-attestation`), the network id, the contract address, the
+escrow id and the action, so a signature cannot be replayed on another
+network, deployment, escrow or action. The message layout is mirrored
+byte-for-byte by the SDK's `buildAttestationMessage`; M-of-N escrows keep
+using `release_with_approvals`, and escrows whose releaser is a contract
+address have no ed25519 key to verify against. The transaction fee can be
+paid by any account, so a relayer can submit a release it did not authorise.
 
 Pooled escrows (Phase E5, issue #113, `docs/adr/0011`) are additive: they
 live behind `create_pooled_escrow` and two appended storage keys

@@ -16,9 +16,11 @@ import {
   Networks,
   Transaction,
   TransactionBuilder,
+  hash,
   scValToNative,
   xdr,
 } from "@stellar/stellar-sdk";
+import { Buffer } from "buffer";
 import { Api, Server as RpcServer } from "@stellar/stellar-sdk/rpc";
 import type { AssembledTransaction, Result, SentTransaction } from "@stellar/stellar-sdk/contract";
 import {
@@ -469,6 +471,112 @@ export const MAX_CONDITION_REF_LENGTH = 64;
  * semver event (hard rule 3).
  */
 export const MAX_RELEASERS = 10;
+
+/**
+ * Domain separator written into every attestation message — must match the
+ * contract's `ATTESTATION_DOMAIN` byte for byte (contracts/escrow/src/lib.rs).
+ */
+export const ATTESTATION_DOMAIN = "docforum-escrow-attestation";
+
+/** The only action an attestation authorises today. */
+export type AttestationAction = "release";
+
+export interface BuildAttestationMessageParams {
+  /** The deployed docforum-escrow contract's address (`C…`). */
+  contractId: string;
+  /** The network passphrase the attestation is bound to. */
+  networkPassphrase: string;
+  escrowId: bigint;
+  /** Defaults to `"release"`. */
+  action?: AttestationAction;
+}
+
+/**
+ * Anything that can produce an ed25519 signature over raw bytes. A local
+ * `Keypair` satisfies this directly; remote/HSM signers can too, so no raw
+ * secret has to flow through the SDK.
+ */
+export interface AttestationSigner {
+  sign(message: Buffer): Uint8Array | Promise<Uint8Array>;
+}
+
+export interface ReleaseWithAttestationParams {
+  escrowId: bigint;
+  /** 64-byte ed25519 signature over `buildAttestationMessage(...)`. */
+  signature: Uint8Array;
+  /**
+   * Pays the transaction fee and signs the envelope. Its address carries no
+   * authority here — the attestation signature does — so any funded account
+   * can relay the release.
+   */
+  source: EscrowSigner;
+}
+
+/**
+ * Builds the canonical attestation message the contract verifies. Layout
+ * (big-endian, no padding), mirrored by `build_attestation_message` in
+ * contracts/escrow/src/lib.rs:
+ *
+ *   domain        : `ATTESTATION_DOMAIN` UTF-8 bytes, no length prefix
+ *   network_id    : 32 bytes — sha256(network passphrase)
+ *   contract_len  : u32
+ *   contract_id   : UTF-8 strkey (`C…`)
+ *   escrow_id     : u64
+ *   action_len    : u32
+ *   action        : UTF-8 bytes
+ *
+ * The network id and contract id make a signature unreplayable on another
+ * network or another deployment; the escrow id and action bind it to one
+ * settlement.
+ */
+export function buildAttestationMessage(params: BuildAttestationMessageParams): Uint8Array {
+  const action = params.action ?? "release";
+  if (action !== "release") {
+    throw new Error(`unsupported attestation action: ${action}`);
+  }
+  if (params.escrowId < 0n || params.escrowId > 0xffffffffffffffffn) {
+    throw new Error(`escrowId must fit in u64, got ${params.escrowId}`);
+  }
+
+  const encoder = new TextEncoder();
+  const domain = encoder.encode(ATTESTATION_DOMAIN);
+  const networkId = hash(Buffer.from(params.networkPassphrase, "utf8"));
+  const contractId = encoder.encode(params.contractId);
+  const actionBytes = encoder.encode(action);
+
+  const out = new Uint8Array(
+    domain.length + 32 + 4 + contractId.length + 8 + 4 + actionBytes.length,
+  );
+  const view = new DataView(out.buffer);
+  let offset = 0;
+  out.set(domain, offset);
+  offset += domain.length;
+  out.set(networkId, offset);
+  offset += 32;
+  view.setUint32(offset, contractId.length, false);
+  offset += 4;
+  out.set(contractId, offset);
+  offset += contractId.length;
+  view.setBigUint64(offset, params.escrowId, false);
+  offset += 8;
+  view.setUint32(offset, actionBytes.length, false);
+  offset += 4;
+  out.set(actionBytes, offset);
+  return out;
+}
+
+/** Signs an attestation message, checking that the signer returned 64 bytes. */
+export async function signAttestation(
+  message: Uint8Array,
+  signer: AttestationSigner,
+): Promise<Uint8Array> {
+  const signature = await signer.sign(Buffer.from(message));
+  const bytes = signature instanceof Uint8Array ? signature : Uint8Array.from(signature);
+  if (bytes.length !== 64) {
+    throw new Error(`attestation signer must return 64 bytes, got ${bytes.length}`);
+  }
+  return bytes;
+}
 
 /** Shared placeholder used on the uninstrumented path (no per-call allocation). */
 const EMPTY_SPAN_ATTRIBUTES = {} as EscrowSpanAttributes;
@@ -1868,6 +1976,40 @@ export class EscrowClient {
       params.escrowId,
       () => client.refund({ escrow_id: params.escrowId, caller: signerAddress(params.caller) }),
       { address: signerAddress(params.caller) },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Releases the escrow on presentation of an off-chain ed25519 attestation
+   * instead of a transaction signed by the releaser. The escrow must have a
+   * single releaser that is an ed25519 account address (`G…`); its account key
+   * is the attestation key. `signature` must be over
+   * `buildAttestationMessage({ contractId, networkPassphrase, escrowId })`.
+   *
+   * `source` only pays the fee: because the attestation carries the
+   * authorisation, any funded account can relay the release. Returns the
+   * transaction's hash.
+   */
+  async releaseWithAttestation(
+    params: ReleaseWithAttestationParams,
+  ): Promise<{ txHash: string }> {
+    if (params.signature.length !== 64) {
+      throw new Error(
+        `attestation signature must be 64 bytes, got ${params.signature.length}`,
+      );
+    }
+    const client = this.contractClient(params.source);
+    const sent = await this.invoke(
+      "release_with_attestation",
+      params.escrowId,
+      () => client.release_with_attestation({
+        escrow_id: params.escrowId,
+        action: "release",
+        signature: Buffer.from(params.signature),
+      }),
+      { address: signerAddress(params.source) },
     );
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };

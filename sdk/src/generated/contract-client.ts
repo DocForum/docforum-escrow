@@ -119,70 +119,80 @@ export const Errors = {
    */
   23: {message:"ReleaseTooEarly"},
   /**
+   * The escrow's single releaser is not an ed25519 account key, so an
+   * attestation signature cannot be checked against it. Appended at the
+   * end so existing discriminants keep their on-chain values.
+   */
+  25: {message:"InvalidSignature"},
+  /**
+   * The attestation `action` was not the expected `"release"` value.
+   */
+  26: {message:"InvalidAction"},
+  /**
    * A batch call was passed more than `MAX_BATCH_SIZE` items — see
    * docs/adr/0005. Callers must chunk. Appended at the end so existing
    * discriminants keep their on-chain values.
    */
-  25: {message:"BatchTooLarge"},
+  27: {message:"BatchTooLarge"},
   /**
    * `contribute`/`claim_refund`/`get_contribution` on a non-pooled
    * escrow, or `get_pooled` on a non-pooled/unknown id — see
    * docs/adr/0011.
    */
-  26: {message:"NotPooled"},
+  28: {message:"NotPooled"},
   /**
    * A contribution arrived after the pooled escrow's funding deadline.
    * Late contributions can never be accepted: the round's outcome
    * (release vs per-contributor refunds) is fixed at the deadline.
    */
-  27: {message:"FundingDeadlinePassed"},
+  29: {message:"FundingDeadlinePassed"},
   /**
    * A contribution would push the pooled total past the funding target
    * (overfunding is rejected, not accepted), the target is already met,
    * or a refund was claimed on a fully funded pooled escrow.
    */
-  28: {message:"FundingTargetReached"},
+  30: {message:"FundingTargetReached"},
   /**
    * `release` on a pooled escrow whose funded total is below the
    * funding target — partial funding is never releasable.
    */
-  29: {message:"FundingIncomplete"},
+  31: {message:"FundingIncomplete"},
   /**
    * `claim_refund` before the funding deadline passed on a round that
    * is still (or now fully) funded. Claims open only for a failed round.
    */
-  30: {message:"RefundNotOpen"},
+  32: {message:"RefundNotOpen"},
   /**
    * The same contributor tried to claim a refund twice.
    */
-  31: {message:"AlreadyRefunded"},
+  33: {message:"AlreadyRefunded"},
   /**
    * `claim_refund` by an address with no recorded contribution.
    */
-  32: {message:"NoContribution"},
+  34: {message:"NoContribution"},
   /**
    * `refund`/`refund_with_approvals`/`cancel`/`top_up` on a pooled
    * escrow: pushing the whole pooled total to one address would violate
    * per-contributor accounting. Pooled refunds are pull-based
    * (`claim_refund`); pooled funding is `contribute`-only.
    */
-  33: {message:"NotSupportedForPooled"},
+  35: {message:"NotSupportedForPooled"},
   /**
    * The funding deadline was not strictly in the future at creation.
    */
-  34: {message:"InvalidFundingDeadline"},
+  36: {message:"InvalidFundingDeadline"},
   /**
    * The optional protocol fee was misconfigured at creation: `bps`
    * above [`MAX_FEE_BPS`] (10 %), a recipient equal to the escrow
    * contract itself, or an amount that would overflow the fee math —
    * see docs/adr/0010.
    */
-  35: {message:"InvalidFee"},
+  37: {message:"InvalidFee"},
   /**
    * An outbound release transfer failed; the funded escrow remains
    * retryable and may still use its refund path.
    */
-  36: {message:"Undeliverable"}
+  38: {message:"Undeliverable"}
 }
 
 
@@ -272,8 +282,6 @@ threshold: u32;
 
 
 /**
- * One entry of a `create_escrows` batch. Mirrors the single-escrow
- * creation parameters minus the batch-wide `payer`.
  * Immutable funding configuration of a pooled escrow (issue #113,
  * docs/adr/0011). Existence of this record under `DataKey::Pooled(id)` is
  * what makes an escrow "pooled"; the aggregate funded amount lives in
@@ -582,6 +590,15 @@ export interface Client {
   rotate_releaser: ({escrow_id, caller, new_releaser}: {escrow_id: u64, caller: string, new_releaser: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
 
   /**
+   * Construct and simulate a attestation_message transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * The canonical attestation message for `escrow_id` and `action`,
+   * exposed read-only so clients and auditor tooling can verify a
+   * signature without reconstructing the layout themselves. Mirrored
+   * exactly by `buildAttestationMessage` in the SDK.
+   */
+  attestation_message: ({escrow_id, action}: {escrow_id: u64, action: string}, options?: MethodOptions) => Promise<AssembledTransaction<Buffer>>
+
+  /**
    * Construct and simulate a get_contribution transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Read-only: one contributor's record on a pooled escrow — the exact
    * amount they can claim back from a failed round, and whether it has
@@ -629,6 +646,27 @@ export interface Client {
    * and no approval to replay — a settled escrow fails `NotFunded`.
    */
   release_with_approvals: ({escrow_id, approvers}: {escrow_id: u64, approvers: Array<string>}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
+
+  /**
+   * Construct and simulate a release_with_attestation transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Releases the escrowed `amount` to `payee` on presentation of an
+   * off-chain ed25519 attestation, instead of the releaser signing this
+   * transaction (docs/adr/0005). Anyone may submit the call; the
+   * authorisation comes entirely from `signature`.
+   * 
+   * The escrow must have exactly one releaser and that releaser must be
+   * an ed25519 account address (`G…`) — its account key is the
+   * attestation key. M-of-N escrows use `release_with_approvals`.
+   * 
+   * The signed message is `attestation_message(escrow_id, action)`: it is
+   * domain-separated, bound to this contract's address, this network's id
+   * and the `escrow_id`, so a signature can never be replayed on another
+   * network, contract or escrow. `action` must be `"release"`.
+   * 
+   * Same state rule as `release`: only while `Funded`. A bad signature
+   * fails verification (the host traps), so nothing is released.
+   */
+  release_with_attestation: ({escrow_id, action, signature}: {escrow_id: u64, action: string, signature: Buffer}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
 
   /**
    * Construct and simulate a create_escrow_release_time transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
@@ -704,10 +742,12 @@ export class Client extends ContractClient {
         "AAAAAAAAAaNCYXRjaCB2ZXJzaW9uIG9mIGBjcmVhdGVfZXNjcm93YC4gQ3JlYXRlcyBvbmUgZXNjcm93IHBlciBpdGVtLCBpbgppbnB1dCBvcmRlciwgYW5kIHJldHVybnMgdGhlIG5ldyBpZHMgaW4gdGhlIHNhbWUgb3JkZXIgYXMgYGl0ZW1zYC4KYHBheWVyYCBhdXRob3JpemVzIG9uY2UgZm9yIHRoZSB3aG9sZSBjYWxsLiBGYWlscyBhdG9taWNhbGx5OiBpZgphbnkgaXRlbSBpcyBpbnZhbGlkIChiYWQgYW1vdW50LCBwYXN0IGByZWZ1bmRfYWZ0ZXJgLCBvdmVyc2l6ZWQKYGNvbmRpdGlvbl9yZWZgLCBzaG9ydC1kZWxpdmVyaW5nIHRva2VuKSB0aGUgd2hvbGUgY2FsbCByZXZlcnRzIGFuZApubyBlc2Nyb3dzIGFyZSBjcmVhdGVkLgoKYGl0ZW1zLmxlbigpYCBtdXN0IGJlIGA8PSBNQVhfQkFUQ0hfU0laRWAg4oCUIHNlZSBkb2NzL2Fkci8wMDA1LgAAAAAOY3JlYXRlX2VzY3Jvd3MAAAAAAAIAAAAAAAAABXBheWVyAAAAAAAAEwAAAAAAAAAFaXRlbXMAAAAAAAPqAAAH0AAAAApDcmVhdGVJdGVtAAAAAAABAAAD6QAAA+oAAAAGAAAAAw==",
         "AAAAAAAAA6VMZXRzIHRoZSBjdXJyZW50IGBwYXllZWAgcmVhc3NpZ24gZnV0dXJlIHBheW91dCByaWdodHMgdG8gYSBuZXcKYWRkcmVzcy4gT25seSB0aGUgY3VycmVudCBgcGF5ZWVgIG1heSBhdXRob3Jpc2UgdGhpcyDigJQgbm8gb25lCmVsc2UgKG5vdCB0aGUgcGF5ZXIsIG5vdCB0aGUgcmVsZWFzZXIpIGNhbiByZWRpcmVjdCB3aGVyZSBhCnJlbGVhc2Ugd2lsbCBnbyAoc2VlIGludmFyaWFudCBJMSBhbmQgZG9jcy90aHJlYXQtbW9kZWwubWQpLgoKUmVzdHJpY3Rpb25zOgotIE9ubHkgd2hpbGUgdGhlIGVzY3JvdyBpcyBgRnVuZGVkYCAobm8gZWZmZWN0IGFmdGVyIHJlbGVhc2Ugb3IKcmVmdW5kOyB0aGUgdHJhbnNmZXIgaXMgYSBwYXlvdXQtY2xhaW0gcmVhc3NpZ25tZW50LCBub3QgYW4KdW5kbyBvZiBhIHNldHRsZW1lbnQpLgotIGBuZXdfcGF5ZWVgIG1heSBub3QgYmUgdGhlIGNvbnRyYWN0J3Mgb3duIGFkZHJlc3MgKGl0IGNhbiBuZXZlcgpzaWduIHRvIGNsYWltIGZ1bmRzKSBvciB0aGUgYHBheWVyYCdzIGFkZHJlc3MgKHByZXZlbnRpbmcgYQpwYXllciBmcm9tIHVzaW5nIGEgY29sbHVkaW5nIHBheWVlIHRvIHJlZGlyZWN0IHRoZSBlc2Nyb3cgdG8KdGhlbXNlbHZlcykuCgpUaGlzIGhlbHBzIGEgcGF5ZWUgd2hvIGlzICpyb3RhdGluZyogdGhlaXIgd2FsbGV0IOKAlCBpdCBkb2VzIE5PVApoZWxwIGEgcGF5ZWUgd2hvIGhhcyBhbHJlYWR5ICpsb3N0KiB0aGVpciBrZXkgYW5kIGNhbiBubyBsb25nZXIKc2lnbjogdGhleSBjYW5ub3QgYXV0aG9yaXNlIHRoaXMgY2FsbC4gS2V5IGxvc3MgaXMgYW4gb3BlcmF0aW9uYWwKcmlzayB0aGUgcGF5ZWUgbXVzdCBtaXRpZ2F0ZSBvZmYtY2hhaW4gYmVmb3JlIGl0IGhhcHBlbnMuCgpFbWl0cyBhIGBwYXlfeGZlcmAgZXZlbnQgd2l0aCBgKGVzY3Jvd19pZCwgb2xkX3BheWVlLCBuZXdfcGF5ZWUpYC4AAAAAAAAOdHJhbnNmZXJfcGF5ZWUAAAAAAAMAAAAAAAAACWVzY3Jvd19pZAAAAAAAAAYAAAAAAAAADWN1cnJlbnRfcGF5ZWUAAAAAAAATAAAAAAAAAAluZXdfcGF5ZWUAAAAAAAATAAAAAQAAA+kAAAACAAAAAw==",
         "AAAAAAAAAPhSb3RhdGVzIGEgZnVuZGVkIGVzY3JvdydzIHJlbGVhc2VyLiBCb3RoIHRoZSBjdXJyZW50IHJlbGVhc2VyIGFuZApwYXllciBtdXN0IGF1dGhvcml6ZSB0aGUgY2hhbmdlOyB0aGUgcGF5ZXIncyBjb25zZW50IHByZXZlbnRzIGEKY29tcHJvbWlzZWQgcmVsZWFzZXIgZnJvbSBzaWxlbnRseSBhcHBvaW50aW5nIGFuIGF0dGFja2VyLiBUaGUKcmVwbGFjZW1lbnQgY2Fubm90IGJlIHRoZSBjb250cmFjdCBpdHNlbGYgb3IgdGhlIHBheWVlLgAAAA9yb3RhdGVfcmVsZWFzZXIAAAAAAwAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAAAAAAGY2FsbGVyAAAAAAATAAAAAAAAAAxuZXdfcmVsZWFzZXIAAAATAAAAAQAAA+kAAAACAAAAAw==",
+        "AAAAAAAAAO9UaGUgY2Fub25pY2FsIGF0dGVzdGF0aW9uIG1lc3NhZ2UgZm9yIGBlc2Nyb3dfaWRgIGFuZCBgYWN0aW9uYCwKZXhwb3NlZCByZWFkLW9ubHkgc28gY2xpZW50cyBhbmQgYXVkaXRvciB0b29saW5nIGNhbiB2ZXJpZnkgYQpzaWduYXR1cmUgd2l0aG91dCByZWNvbnN0cnVjdGluZyB0aGUgbGF5b3V0IHRoZW1zZWx2ZXMuIE1pcnJvcmVkCmV4YWN0bHkgYnkgYGJ1aWxkQXR0ZXN0YXRpb25NZXNzYWdlYCBpbiB0aGUgU0RLLgAAAAATYXR0ZXN0YXRpb25fbWVzc2FnZQAAAAACAAAAAAAAAAllc2Nyb3dfaWQAAAAAAAAGAAAAAAAAAAZhY3Rpb24AAAAAABAAAAABAAAADg==",
         "AAAAAAAAARRSZWFkLW9ubHk6IG9uZSBjb250cmlidXRvcidzIHJlY29yZCBvbiBhIHBvb2xlZCBlc2Nyb3cg4oCUIHRoZSBleGFjdAphbW91bnQgdGhleSBjYW4gY2xhaW0gYmFjayBmcm9tIGEgZmFpbGVkIHJvdW5kLCBhbmQgd2hldGhlciBpdCBoYXMKYWxyZWFkeSBiZWVuIGNsYWltZWQuIGBOb25lYCBtZWFucyB0aGUgYWRkcmVzcyBuZXZlciBjb250cmlidXRlZC4KRXJyb3JzIGBOb3RGb3VuZGAgb24gYW4gdW5rbm93biBpZCBhbmQgYE5vdFBvb2xlZGAgb24gYQpub24tcG9vbGVkIGVzY3Jvdy4AAAAQZ2V0X2NvbnRyaWJ1dGlvbgAAAAIAAAAAAAAACWVzY3Jvd19pZAAAAAAAAAYAAAAAAAAAC2NvbnRyaWJ1dG9yAAAAABMAAAABAAAD6QAAA+gAAAfQAAAADENvbnRyaWJ1dGlvbgAAAAM=",
         "AAAAAAAAA1VDcmVhdGVzIGEgcG9vbGVkIGVzY3JvdyBmdW5kZWQgYnkgbWFueSBwYXllcnMgKGlzc3VlICMxMTMsCmRvY3MvYWRyLzAwMTEpLiBgY3JlYXRvcmAgc2V0cyB0aGUgZGVhbCDigJQgcGF5ZWUsIHRva2VuLCByZWxlYXNlciwKb3BhcXVlIGBjb25kaXRpb25fcmVmYCwgYW4gZXhwbGljaXQgYGZ1bmRpbmdfdGFyZ2V0YCAoPiAwKSBhbmQgYQpgZnVuZGluZ19kZWFkbGluZWAgKHVuaXggc2Vjb25kcywgc3RyaWN0bHkgaW4gdGhlIGZ1dHVyZSkg4oCUIGJ1dApmdW5kcyBub3RoaW5nIGF0IGNyZWF0aW9uOiBgRXNjcm93RGF0YS5hbW91bnRgIHN0YXJ0cyBhdCAwIGFuZCBncm93cwphcyBjb250cmlidXRvcnMgY2FsbCBgY29udHJpYnV0ZWAuIFJlbGVhc2UgYmVjb21lcyBwb3NzaWJsZSBvbmx5Cm9uY2UgY29udHJpYnV0aW9ucyByZWFjaCB0aGUgdGFyZ2V0IGV4YWN0bHk7IGlmIHRoZSBkZWFkbGluZSBwYXNzZXMKZmlyc3QsIHRoZSByb3VuZCBoYXMgZmFpbGVkIGFuZCBldmVyeSBjb250cmlidXRvciBwdWxscyB0aGVpciBvd24KcmVjb3JkZWQgYW1vdW50IGJhY2sgd2l0aCBgY2xhaW1fcmVmdW5kYC4gYGNyZWF0b3JgIGlzIHN0b3JlZCBhcwp0aGUgZXNjcm93J3MgYHBheWVyYCAoY28tYXV0aG9yaXphdGlvbiBmb3IgYHJvdGF0ZV9yZWxlYXNlcmAgb25seSkKYW5kIGFzIHRoZSBgcmVmdW5kX3RvYCBwbGFjZWhvbGRlcjsgbm8gcHVzaCByZWZ1bmQgcGF0aCBleGlzdHMgZm9yCnBvb2xlZCBlc2Nyb3dzLiBObyBgcmVmdW5kX2FmdGVyYCwgbm8gYWNjZXB0YW5jZSBnYXRlLCBubyBjYWxsYmFjazoKcG9vbGVkIHNldHRsZW1lbnQgcmV1c2VzIHRoZSBwbGFpbiByZWxlYXNlci90aHJlc2hvbGQgcnVsZXMuAAAAAAAAFGNyZWF0ZV9wb29sZWRfZXNjcm93AAAABwAAAAAAAAAHY3JlYXRvcgAAAAATAAAAAAAAAAVwYXllZQAAAAAAABMAAAAAAAAABXRva2VuAAAAAAAAEwAAAAAAAAAOZnVuZGluZ190YXJnZXQAAAAAAAsAAAAAAAAADWNvbmRpdGlvbl9yZWYAAAAAAAAQAAAAAAAAAAhyZWxlYXNlcgAAABMAAAAAAAAAEGZ1bmRpbmdfZGVhZGxpbmUAAAAGAAAAAQAAA+kAAAAGAAAAAw==",
         "AAAAAAAAASdSZXR1cm5zIHRoZSBlc2Nyb3dlZCBgYW1vdW50YCB0byBgcmVmdW5kX3RvYCBvbiBiZWhhbGYgb2YgYW4gTS1vZi1OCnJlbGVhc2VyIHNldCAoZG9jcy9hZHIvMDAwNykuIFNhbWUgYXBwcm92YWwgcnVsZXMgYXMKYHJlbGVhc2Vfd2l0aF9hcHByb3ZhbHNgLiBUaGUgdGltZW91dCByZWZ1bmQgcGF0aCBpbiBgcmVmdW5kYCBzdGF5cwphdmFpbGFibGUgYXMgd2VsbDogb25jZSBgcmVmdW5kX2FmdGVyYCBwYXNzZXMsIGFueW9uZSBjYW4gcmV0dXJuIHRoZQpmdW5kcyB0byB0aGUgcGF5ZXIgd2l0aG91dCBhcHByb3ZhbHMuAAAAABVyZWZ1bmRfd2l0aF9hcHByb3ZhbHMAAAAAAAACAAAAAAAAAAllc2Nyb3dfaWQAAAAAAAAGAAAAAAAAAAlhcHByb3ZlcnMAAAAAAAPqAAAAEwAAAAEAAAPpAAAAAgAAAAM=",
         "AAAAAAAAAZFNb3ZlcyB0aGUgZXNjcm93ZWQgYGFtb3VudGAgdG8gYHBheWVlYCBvbiBiZWhhbGYgb2YgYW4gTS1vZi1OCnJlbGVhc2VyIHNldCAoZG9jcy9hZHIvMDAwNykuIEV2ZXJ5IGFkZHJlc3MgaW4gYGFwcHJvdmVyc2AgbXVzdCBiZSBhCnJlbGVhc2VyLCBhcHBlYXIgYXQgbW9zdCBvbmNlLCBhbmQgYXV0aG9yaXplIHRoaXMgZXhhY3QgaW52b2NhdGlvbjsKYXQgbGVhc3QgYHRocmVzaG9sZGAgZGlzdGluY3QgYXBwcm92ZXJzIGFyZSByZXF1aXJlZC4gQXBwcm92YWxzIGFyZQpub3Qgc3RvcmVkIGJldHdlZW4gY2FsbHMsIHNvIHRoZXJlIGlzIG5vdGhpbmcgdG8gY2xlYXIgb24gc2V0dGxlbWVudAphbmQgbm8gYXBwcm92YWwgdG8gcmVwbGF5IOKAlCBhIHNldHRsZWQgZXNjcm93IGZhaWxzIGBOb3RGdW5kZWRgLgAAAAAAABZyZWxlYXNlX3dpdGhfYXBwcm92YWxzAAAAAAACAAAAAAAAAAllc2Nyb3dfaWQAAAAAAAAGAAAAAAAAAAlhcHByb3ZlcnMAAAAAAAPqAAAAEwAAAAEAAAPpAAAAAgAAAAM=",
+        "AAAAAAAAAz9SZWxlYXNlcyB0aGUgZXNjcm93ZWQgYGFtb3VudGAgdG8gYHBheWVlYCBvbiBwcmVzZW50YXRpb24gb2YgYW4Kb2ZmLWNoYWluIGVkMjU1MTkgYXR0ZXN0YXRpb24sIGluc3RlYWQgb2YgdGhlIHJlbGVhc2VyIHNpZ25pbmcgdGhpcwp0cmFuc2FjdGlvbiAoZG9jcy9hZHIvMDAwNSkuIEFueW9uZSBtYXkgc3VibWl0IHRoZSBjYWxsOyB0aGUKYXV0aG9yaXNhdGlvbiBjb21lcyBlbnRpcmVseSBmcm9tIGBzaWduYXR1cmVgLgoKVGhlIGVzY3JvdyBtdXN0IGhhdmUgZXhhY3RseSBvbmUgcmVsZWFzZXIgYW5kIHRoYXQgcmVsZWFzZXIgbXVzdCBiZQphbiBlZDI1NTE5IGFjY291bnQgYWRkcmVzcyAoYEfigKZgKSDigJQgaXRzIGFjY291bnQga2V5IGlzIHRoZQphdHRlc3RhdGlvbiBrZXkuIE0tb2YtTiBlc2Nyb3dzIHVzZSBgcmVsZWFzZV93aXRoX2FwcHJvdmFsc2AuCgpUaGUgc2lnbmVkIG1lc3NhZ2UgaXMgYGF0dGVzdGF0aW9uX21lc3NhZ2UoZXNjcm93X2lkLCBhY3Rpb24pYDogaXQgaXMKZG9tYWluLXNlcGFyYXRlZCwgYm91bmQgdG8gdGhpcyBjb250cmFjdCdzIGFkZHJlc3MsIHRoaXMgbmV0d29yaydzIGlkCmFuZCB0aGUgYGVzY3Jvd19pZGAsIHNvIGEgc2lnbmF0dXJlIGNhbiBuZXZlciBiZSByZXBsYXllZCBvbiBhbm90aGVyCm5ldHdvcmssIGNvbnRyYWN0IG9yIGVzY3Jvdy4gYGFjdGlvbmAgbXVzdCBiZSBgInJlbGVhc2UiYC4KClNhbWUgc3RhdGUgcnVsZSBhcyBgcmVsZWFzZWA6IG9ubHkgd2hpbGUgYEZ1bmRlZGAuIEEgYmFkIHNpZ25hdHVyZQpmYWlscyB2ZXJpZmljYXRpb24gKHRoZSBob3N0IHRyYXBzKSwgc28gbm90aGluZyBpcyByZWxlYXNlZC4AAAAAGHJlbGVhc2Vfd2l0aF9hdHRlc3RhdGlvbgAAAAMAAAAAAAAACWVzY3Jvd19pZAAAAAAAAAYAAAAAAAAABmFjdGlvbgAAAAAAEAAAAAAAAAAJc2lnbmF0dXJlAAAAAAAD7gAAAEAAAAABAAAD6QAAAAIAAAAD",
         "AAAAAAAAANVDcmVhdGVzIGEgc2luZ2xlLXJlbGVhc2VyIGVzY3JvdyB3aXRoIGFuIG9wdGlvbmFsIGVhcmxpZXN0IHJlbGVhc2UgdGltZS4KUmVsZWFzZSBpcyBhbGxvd2VkIGF0IHRoZSBjb25maWd1cmVkIHRpbWVzdGFtcC4gQWNjZXB0cyB0aGUgc2FtZQpvcHRpb25hbCBgZmVlX3JlY2lwaWVudGAvYGZlZV9icHNgIHBhaXIgYXMgYGNyZWF0ZV9lc2Nyb3dgCihkb2NzL2Fkci8wMDEwKS4AAAAAAAAaY3JlYXRlX2VzY3Jvd19yZWxlYXNlX3RpbWUAAAAAAAwAAAAAAAAABXBheWVyAAAAAAAAEwAAAAAAAAAFcGF5ZWUAAAAAAAATAAAAAAAAAAV0b2tlbgAAAAAAABMAAAAAAAAABmFtb3VudAAAAAAACwAAAAAAAAANY29uZGl0aW9uX3JlZgAAAAAAABAAAAAAAAAACHJlbGVhc2VyAAAAEwAAAAAAAAAMcmVmdW5kX2FmdGVyAAAD6AAAAAYAAAAAAAAADG5vdGlmeV9wYXllZQAAAAEAAAAAAAAACXJlZnVuZF90bwAAAAAAA+gAAAATAAAAAAAAABJyZWxlYXNlX25vdF9iZWZvcmUAAAAAA+gAAAAGAAAAAAAAAA1mZWVfcmVjaXBpZW50AAAAAAAD6AAAABMAAAAAAAAAB2ZlZV9icHMAAAAD6AAAAAQAAAABAAAD6QAAAAYAAAAD",
         "AAAAAAAAAZNTYW1lIGFzIGBjcmVhdGVfZXNjcm93YCwgYnV0IHRoZSBlc2Nyb3cgaXMgc2V0dGxlZCBieSBNLW9mLU4KcmVsZWFzZXJzIGluc3RlYWQgb2Ygb25lIGFkZHJlc3MgKGRvY3MvYWRyLzAwMDcpOiBgdGhyZXNob2xkYApkaXN0aW5jdCBhZGRyZXNzZXMgZnJvbSBgcmVsZWFzZXJzYCBtdXN0IGF1dGhvcml6ZSBhIHNldHRsZW1lbnQuClRoZSBzZXQgaXMgc3RvcmVkIGF0IGNyZWF0aW9uIGFuZCBjYW5ub3QgYmUgY2hhbmdlZCBhZnRlcndhcmRzIOKAlAp0aGVyZSBpcyBubyBhZG1pbiBhbmQgbm8gc2V0dGVyLiBSZWplY3RzIGFuIGVtcHR5IHNldCwgbW9yZSB0aGFuCjEwIHJlbGVhc2VycywgZHVwbGljYXRlIGFkZHJlc3NlcywgYW5kIGEgdGhyZXNob2xkIG9mIDAgb3Igb25lCmxhcmdlciB0aGFuIHRoZSBzZXQuAAAAABxjcmVhdGVfZXNjcm93X3dpdGhfcmVsZWFzZXJzAAAACgAAAAAAAAAFcGF5ZXIAAAAAAAATAAAAAAAAAAVwYXllZQAAAAAAABMAAAAAAAAABXRva2VuAAAAAAAAEwAAAAAAAAAGYW1vdW50AAAAAAALAAAAAAAAAA1jb25kaXRpb25fcmVmAAAAAAAAEAAAAAAAAAAJcmVsZWFzZXJzAAAAAAAD6gAAABMAAAAAAAAACXRocmVzaG9sZAAAAAAAAAQAAAAAAAAADHJlZnVuZF9hZnRlcgAAA+gAAAAGAAAAAAAAAAxub3RpZnlfcGF5ZWUAAAABAAAAAAAAAAlyZWZ1bmRfdG8AAAAAAAPoAAAAEwAAAAEAAAPpAAAABgAAAAM=",
         "AAAAAAAAAIZDcmVhdGVzIGFuIGVzY3JvdyB3aXRoIGFuIG9wdC1pbiBwYXllZSBhY2NlcHRhbmNlIGdhdGUuIEV4aXN0aW5nCmludGVncmF0aW9ucyBjYW4ga2VlcCB1c2luZyBgY3JlYXRlX2VzY3Jvd2AsIHdoaWNoIGRlZmF1bHRzIHRoaXMgb2ZmLgAAAAAAHWNyZWF0ZV9lc2Nyb3dfd2l0aF9hY2NlcHRhbmNlAAAAAAAACQAAAAAAAAAFcGF5ZXIAAAAAAAATAAAAAAAAAAVwYXllZQAAAAAAABMAAAAAAAAABXRva2VuAAAAAAAAEwAAAAAAAAAGYW1vdW50AAAAAAALAAAAAAAAAA1jb25kaXRpb25fcmVmAAAAAAAAEAAAAAAAAAAIcmVsZWFzZXIAAAATAAAAAAAAAAxyZWZ1bmRfYWZ0ZXIAAAPoAAAABgAAAAAAAAATcmVxdWlyZXNfYWNjZXB0YW5jZQAAAAABAAAAAAAAAAlyZWZ1bmRfdG8AAAAAAAPoAAAAEwAAAAEAAAPpAAAABgAAAAM=" ]),
@@ -732,10 +772,12 @@ export class Client extends ContractClient {
         create_escrows: this.txFromJSON<Result<Array<u64>>>,
         transfer_payee: this.txFromJSON<Result<void>>,
         rotate_releaser: this.txFromJSON<Result<void>>,
+        attestation_message: this.txFromJSON<Buffer>,
         get_contribution: this.txFromJSON<Result<Option<Contribution>>>,
         create_pooled_escrow: this.txFromJSON<Result<u64>>,
         refund_with_approvals: this.txFromJSON<Result<void>>,
         release_with_approvals: this.txFromJSON<Result<void>>,
+        release_with_attestation: this.txFromJSON<Result<void>>,
         create_escrow_release_time: this.txFromJSON<Result<u64>>,
         create_escrow_with_releasers: this.txFromJSON<Result<u64>>,
         create_escrow_with_acceptance: this.txFromJSON<Result<u64>>
