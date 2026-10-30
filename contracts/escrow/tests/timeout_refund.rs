@@ -49,7 +49,7 @@ fn fund_escrow(env: &Env, refund_after: Option<u64>) -> Fixture<'_> {
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env), None::<Address>));
     let client = EscrowContractClient::new(env, &contract_id);
 
     let escrow_id = client.create_escrow(
@@ -122,7 +122,7 @@ fn create_escrow_rejects_deadline_already_passed_or_now() {
     asset.mint(&payer, &1_000);
     env.ledger().set_timestamp(CREATED_AT);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), None::<Address>));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let now = client.try_create_escrow(
@@ -387,7 +387,7 @@ fn get_escrow_errors_for_unknown_escrow() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), None::<Address>));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_get_escrow(&999);

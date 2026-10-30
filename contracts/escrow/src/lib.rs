@@ -232,6 +232,7 @@ enum DataKey {
     Pooled(u64),
     /// Pooled escrows only (issue #113): one record per contributor.
     Contribution(u64, Address),
+    Integrator,
     /// Issue #39: total outstanding liability for one token, i.e. the sum
     /// of `amount` over every escrow in that token whose status is
     /// `Funded`. Appended last, so existing entries keep their encoding.
@@ -346,10 +347,15 @@ pub struct EscrowContract;
 impl EscrowContract {
     /// Sets the immutable token allowlist at deployment. An empty list
     /// preserves the legacy behavior and allows any token address.
-    pub fn __constructor(env: Env, allowed_tokens: Vec<Address>) {
+    pub fn __constructor(env: Env, allowed_tokens: Vec<Address>, integrator: Option<Address>) {
         env.storage()
             .instance()
             .set(&DataKey::AllowedTokens, &allowed_tokens);
+        if let Some(integrator) = integrator {
+            env.storage()
+                .instance()
+                .set(&DataKey::Integrator, &integrator);
+        }
     }
 
     /// Semantic version of this contract interface and behavior.
@@ -600,8 +606,7 @@ impl EscrowContract {
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
     pub fn get_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, Error> {
-        env
-            .storage()
+        env.storage()
             .persistent()
             .get(&DataKey::Status(escrow_id))
             .ok_or(Error::NotFound)
@@ -700,7 +705,9 @@ impl EscrowContract {
             fee_bps: None,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        env.storage().persistent().set(&DataKey::Status(id), &data.status);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(id), &data.status);
         env.storage().persistent().set(
             &DataKey::Pooled(id),
             &PooledData {
@@ -1267,7 +1274,9 @@ impl EscrowContract {
             fee_bps,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        env.storage().persistent().set(&DataKey::Status(id), &data.status);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(id), &data.status);
         Self::publish_state(env, symbol_short!("created"), id, &data);
         Ok(id)
     }

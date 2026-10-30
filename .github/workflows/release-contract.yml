@@ -28,13 +28,13 @@ jobs:
       - name: Create SHA-256 file
         run: |
           set -eu
-          wasm=contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm
+          wasm=contracts/target/wasm32v1-none/release/docforum_escrow.wasm
           sha256sum "$wasm" | awk '{ print $1 "  docforum_escrow.wasm" }' > docforum_escrow.wasm.sha256
 
       - name: Publish WASM and SHA-256 as release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm
+            contracts/target/wasm32v1-none/release/docforum_escrow.wasm
             docforum_escrow.wasm.sha256
           generate_release_notes: true

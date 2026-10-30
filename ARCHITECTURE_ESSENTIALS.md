@@ -10,7 +10,7 @@
 
 ## Contract surface
 ```
-__constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
+__constructor(allowed_tokens: Vec<Address>, integrator: Option<Address>)    // immutable token allowlist; empty means allow all; optional factory-bound integrator metadata
 version() -> String    // semantic contract version; source revision and Soroban SDK version are embedded as WASM metadata
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to, fee_recipient, fee_bps) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009) + optional protocol fee (ADR 0010); the fee is not yet on testnet
 create_escrow_release_time(..., fee_recipient, fee_bps) -> escrow_id   // single-releaser creation with an earliest release time; accepts the same optional fee pair

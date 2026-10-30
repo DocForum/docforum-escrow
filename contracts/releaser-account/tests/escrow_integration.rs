@@ -15,7 +15,7 @@ fn custom_account_can_be_configured_as_escrow_releaser() {
     let token_client = token::Client::new(&env, &token_id.address());
     token.mint(&payer, &500);
 
-    let escrow_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let escrow_id = env.register(EscrowContract, (Vec::<Address>::new(&env), None::<Address>));
     let escrow = EscrowContractClient::new(&env, &escrow_id);
     let signer_key = soroban_sdk::BytesN::from_array(&env, &[7; 32]);
     let signers: Vec<soroban_sdk::BytesN<32>> = Vec::from_array(&env, [signer_key]);

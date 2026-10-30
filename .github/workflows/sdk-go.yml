@@ -85,8 +85,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            contracts/escrow/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+            contracts/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/Cargo.lock') }}
 
       - name: Build escrow contract WASM
         working-directory: contracts/escrow
@@ -152,7 +152,7 @@ jobs:
         id: deploy
         run: |
           set -euo pipefail
-          wasm="../contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm"
+          wasm="../contracts/target/wasm32v1-none/release/docforum_escrow.wasm"
           test -f "$wasm"
 
           stellar contract asset deploy \
@@ -162,14 +162,14 @@ jobs:
             --alias native-token
           token_id=$(stellar contract alias show native-token --network escrow-local)
 
-          # __constructor(allowed_tokens: Vec<Address>) — empty list keeps the
-          # legacy open-token behavior, which is fine for an ephemeral local net.
+          # Empty allowed-token list keeps legacy open-token behavior; `null`
+          # selects the default (unrestricted) integrator for this local test.
           stellar contract deploy \
             --wasm "$wasm" \
             --source-account deployer \
             --network escrow-local \
             --alias escrow \
-            -- --allowed_tokens '[]'
+            -- --allowed_tokens '[]' --integrator null
           contract_id=$(stellar contract alias show escrow --network escrow-local)
 
           echo "token_id=$token_id"

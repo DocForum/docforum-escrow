@@ -20,7 +20,7 @@ trap 'rm -rf "$temp_root"' EXIT
 on_chain_wasm="$temp_root/on-chain.wasm"
 
 bash "$repo_root/scripts/build-wasm.sh"
-local_wasm="$repo_root/contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm"
+local_wasm="$repo_root/contracts/target/wasm32v1-none/release/docforum_escrow.wasm"
 
 stellar contract fetch \
   --config-dir "$temp_root/stellar-config" \

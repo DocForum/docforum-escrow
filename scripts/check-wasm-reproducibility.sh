@@ -30,8 +30,8 @@ build_at() {
 build_at "$checkout_one"
 build_at "$checkout_two"
 
-wasm_one="$checkout_one/contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm"
-wasm_two="$checkout_two/contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm"
+wasm_one="$checkout_one/contracts/target/wasm32v1-none/release/docforum_escrow.wasm"
+wasm_two="$checkout_two/contracts/target/wasm32v1-none/release/docforum_escrow.wasm"
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | cut -d ' ' -f 1

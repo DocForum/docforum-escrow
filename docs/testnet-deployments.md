@@ -275,7 +275,8 @@ stellar contract deploy \
   --wasm target/wasm32v1-none/release/docforum_escrow.wasm \
   --source <alias> \
   --network testnet \
-  --alias docforum-escrow
+  --alias docforum-escrow \
+  -- --allowed_tokens '[]' --integrator null
 ```
 
 Remember the SDK's tests and any consumer config (`contractId`) point at
@@ -372,7 +373,8 @@ stellar contract deploy \
   --wasm target/wasm32v1-none/release/docforum_escrow.wasm \
   --source <alias> \
   --network testnet \
-  --alias docforum-escrow
+  --alias docforum-escrow \
+  -- --allowed_tokens '[]' --integrator null
 ```
 
 Mainnet is explicitly out of scope until the Phase E4 security review is

@@ -107,7 +107,10 @@ fn run(input: &[u8]) {
         address
     };
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), None::<Address>),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
     let created = client.try_create_escrow(
         &payer,

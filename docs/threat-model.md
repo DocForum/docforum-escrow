@@ -321,7 +321,8 @@ behave like SEP-41.
     practical mitigation stays with the consumer: allowlist only
     tokens without clawback, transfer fees, or rebasing.
   - **Deploy-time token allowlist (issue #36):** the immutable
-    `__constructor(allowed_tokens)` records approved token addresses, and
+    `__constructor(allowed_tokens, integrator)` records approved token
+    addresses and the optional factory-bound integrator, and
     `create_escrow` rejects any other token with `DisallowedToken` (error
     code 7). An empty list deliberately preserves the legacy allow-all
     behavior. Deployment operators must omit clawback-enabled, rebasing,

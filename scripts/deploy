@@ -211,7 +211,7 @@ upload_tx="$(tx_of_last)"
 
 log "Deploying with allowed_tokens=$allowed_json"
 contract_id="$(submit contract deploy --wasm-hash "$wasm_hash" --source deployer "${net_args[@]}" \
-  -- --allowed_tokens "$allowed_json" | tail -n 1)"
+  -- --allowed_tokens "$allowed_json" --integrator null | tail -n 1)"
 deploy_tx="$(tx_of_last)"
 [[ "$contract_id" =~ ^C[A-Z2-7]{55}$ ]] || die "unexpected contract id: $contract_id"
 log "Contract $contract_id"
