@@ -267,8 +267,8 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   Alternatives rejected in the ADR: permissionless pause (trivial
   griefing), auto-expiring pause (silently lapses mid-incident), token
   allowlist (a different problem), and doing nothing. New error codes
-  `Paused`, `AlreadyPaused` and `NotPaused`, added with the provisional
-  codes 3500–3502 (`contract-changes.d/35-emergency-pause.md`);
+  `Paused`, `AlreadyPaused` and `NotPaused`, with codes
+  38–40 (contract 2.5.0);
   `Paused`/`Unpaused` events carry the custodian. 20 tests in
   `contracts/escrow/tests/pause.rs`, including release, releaser refund,
   stranger timeout refund, and release-after-deadline while paused, plus a
@@ -1049,3 +1049,18 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   - Issue #40: allow the stored payee to authorize a voluntary full refund of a funded single-payee escrow to its stored payer destination, and emit a distinct `payee_refunded` event.
   - Issue #45 (Phase E5): new `transfer_payee(escrow_id, current_payee, new_payee)` entry point — only the current payee may authorize it, only while the escrow is `Funded`, and `new_payee` may be neither the contract address nor the payer. Emits a `pay_xfer` event and adds `Error::InvalidNewPayee` (code 37). Rotation tool, not key-loss recovery; covered by `contracts/escrow/tests/transfer_payee.rs`.
   Final error codes: Error::InvalidNewPayee 4500 -> 37.
+- 2026-10-31 — Issue #35 (Phase E5): deposit-only emergency pause. The contract's
+  `__constructor` now also takes a `pause_admin` address; only that custodian
+  can call `pause`/`unpause`, and while paused every deposit path fails with
+  `Paused` before any funds move — including pooled `create_pooled_escrow`
+  and `contribute` (`Paused`, plus `AlreadyPaused`/`NotPaused` for the
+  transition guards — codes 38–40). `release`, `refund`, the timeout refund and pooled
+  `claim_refund` never read the flag, so a
+  pause can stop new exposure but never lock escrowed funds (invariant I8,
+  threat model T12, `docs/adr/0011`). The SDK gains `pause`/`unpause`/
+  `isPaused`/`getPauseAdmin` (minor changeset) and regenerated bindings. This
+  is a deployment change: the live testnet contract predates the constructor
+  and cannot pause until it is redeployed.
+- 2026-10-31 — Contract 2.5.0 (was 2.4.0), folded from 1 change(s):
+  - Issue #35 (Phase E5): deposit-only emergency pause (ADR 0011). The constructor gains a second argument (`pause_admin`) and the contract gains `pause`/`unpause`/`is_paused`/`get_pause_admin` entry points plus the `Paused`/`Unpaused` events and the `Paused`, `AlreadyPaused`, `NotPaused` errors (codes 38–40). Every deposit path is gated — `create_escrow` and its variants, `top_up`, and pooled `create_pooled_escrow`/`contribute` — while `release`, `refund`, the timeout refund, pooled `claim_refund` and both `settle_many` ops never read the flag, so a pause can never lock funds already escrowed.
+  Final error codes: Error::Paused 3500 -> 38, Error::AlreadyPaused 3501 -> 39, Error::NotPaused 3502 -> 40.

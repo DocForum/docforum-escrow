@@ -125,7 +125,7 @@ Option 1.
    an event never claims a transition that didn't happen.
 3. **Scope: new deposits only.** Every creation entry point funnels through
    `create_escrow_inner`, which checks the flag first and returns the new
-   `Error::Paused` (provisional code 3500) without pulling funds, without
+   `Error::Paused` (code 38) without pulling funds, without
    consuming an escrow id, and without writing an escrow. `top_up` — a deposit path added after
    this ADR was first written — applies the same check before its transfer,
    exactly as the ADR originally required of any future deposit path.
@@ -178,10 +178,9 @@ the deadline.
   keys (`PauseAdmin`, `Paused`) are added. Existing escrow entries are
   unaffected — and there is no migration to worry about, because a
   redeploy is a new contract id by definition.
-- **New error codes**: `Paused`, `AlreadyPaused`, `NotPaused`, added with
-  the provisional codes 3500–3502 (issue #35 × 100 + n) described in
-  `contract-changes.d/README.md`; the maintainer fold assigns the final
-  numbers. Every existing code keeps its number, because consumers map
+- **New error codes**: `Paused`, `AlreadyPaused`, `NotPaused`, codes 38–40,
+  assigned by the contract 2.5.0 maintainer fold from the provisional codes
+  3500–3502 (issue #35 × 100 + n) described in `contract-changes.d/README.md`. Every existing code keeps its number, because consumers map
   codes, not names. They were originally reserved as 26–28, but batch
   settlement (`BatchTooLarge = 25`), pooled escrows (`NotPooled` through
   `InvalidFundingDeadline`, 26–34) and the protocol fee / outbound-transfer
