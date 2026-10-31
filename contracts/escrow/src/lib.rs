@@ -114,6 +114,13 @@ pub enum SettleAction {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowDependency {
+    pub escrow_id: u64,
+    pub required_status: EscrowStatus,
+}
+
+#[contracttype]
 #[derive(Clone)]
 pub struct EscrowData {
     /// The funder: authorises and pays for the escrow at creation. Also
@@ -228,6 +235,7 @@ pub struct CreateItem {
 #[contracttype]
 enum DataKey {
     Escrow(u64),
+    Dependency(u64),
     NextId,
     Status(u64),
     AllowedTokens,
@@ -1860,6 +1868,10 @@ impl EscrowContract {
         let id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
         env.storage().instance().set(&DataKey::NextId, &(id + 1));
         id
+    }
+
+    fn peek_next_id(env: &Env) -> u64 {
+        env.storage().instance().get(&DataKey::NextId).unwrap_or(0)
     }
 
     fn transfer_in_exact(

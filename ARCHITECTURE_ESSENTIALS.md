@@ -19,6 +19,7 @@ version() -> String    // semantic contract version; source revision and Soroban
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to, fee_recipient, fee_bps) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009) + optional protocol fee (ADR 0010); the fee is not yet on testnet
 create_escrow_release_time(..., fee_recipient, fee_bps) -> escrow_id   // single-releaser creation with an earliest release time; accepts the same optional fee pair
 create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id   // optional payee acceptance gate; deployed on testnet
+create_acceptance_dependency(..., depends_on) -> escrow_id   // Acceptance gate plus local dependency
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
 cancel(escrow_id, payer) -> ()   // payer-authorized, only while Funded + requires_acceptance + not yet accepted; funds to refund_to, status Cancelled (ADR 0010); not deployed yet
 create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, deployed on testnet
