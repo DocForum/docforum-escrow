@@ -62,8 +62,7 @@ If a bug turns up after mainnet, the alternative to a pause is asking every
 integrator to stop calling the contract. Since issue #35 there is a narrow
 on-chain lever instead: one `pause_admin` address, fixed at deployment by
 the contract's constructor, can flip a flag that makes every deposit path
-fail with `Paused` (provisional error code 3500; the maintainer fold
-renumbers it).
+fail with `Paused` (error code 38).
 
 Nothing else changes. `release`, `refund`, the timeout refund, and both
 `settle_many` ops (release and refund) never read the flag, so **a pause can never lock funds that are already escrowed** —

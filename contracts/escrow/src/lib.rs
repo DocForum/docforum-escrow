@@ -57,7 +57,7 @@ use soroban_sdk::{
 
 // Bump this value whenever a contract interface or behavior change is made.
 // CI checks this constant against the base branch when this file changes.
-pub const CONTRACT_VERSION: &str = "2.4.0";
+pub const CONTRACT_VERSION: &str = "2.5.0";
 
 include!(concat!(env!("OUT_DIR"), "/contract_metadata.rs"));
 
@@ -366,16 +366,14 @@ pub enum Error {
     /// retryable and may still use its refund path.
     Undeliverable = 36,
     /// A deposit path was called while the emergency pause is on — see
-    /// docs/adr/0011. `main` already spent 35 (`InvalidFee`) and 36
-    /// (`Undeliverable`), so this uses a provisional code (issue #35 × 100);
-    /// the maintainer fold renumbers it — see contract-changes.d/README.md.
-    Paused = 3500,
+    /// docs/adr/0011.
+    Paused = 38,
     /// `pause` on an already-paused contract. The transition did not
     /// happen, so no event is emitted.
-    AlreadyPaused = 3501,
+    AlreadyPaused = 39,
     /// `unpause` on a running contract. The transition did not happen, so
     /// no event is emitted.
-    NotPaused = 3502,
+    NotPaused = 40,
 }
 
 #[contract]
