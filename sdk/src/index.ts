@@ -1874,6 +1874,74 @@ export class EscrowClient {
   }
 
   /**
+   * Blocks **new deposits** — `createEscrow`, its variants and any future
+   * deposit path — until `unpause` is called (docs/adr/0011). Only the
+   * custodian fixed at deployment may call it, and it must sign.
+   *
+   * Deliberately cannot touch money already escrowed: `release`,
+   * `refund` and the timeout refund never read the flag, so a pause can
+   * stop new exposure but never lock existing funds. Returns the
+   * transaction's hash.
+   */
+  async pause(caller: EscrowSigner): Promise<{ txHash: string }> {
+    const client = this.contractClient(caller);
+    const sent = await this.invoke(
+      "pause",
+      undefined,
+      () => client.pause({ caller: signerAddress(caller) }),
+      { address: signerAddress(caller) },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Re-opens new deposits after a pause (docs/adr/0011). Same authority as
+   * `pause` — only the deploy-time custodian, which must sign. Returns the
+   * transaction's hash.
+   */
+  async unpause(caller: EscrowSigner): Promise<{ txHash: string }> {
+    const client = this.contractClient(caller);
+    const sent = await this.invoke(
+      "unpause",
+      undefined,
+      () => client.unpause({ caller: signerAddress(caller) }),
+      { address: signerAddress(caller) },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /** Read-only: is the emergency pause currently blocking new deposits? */
+  async isPaused(): Promise<boolean> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("is_paused"),
+      () => client.is_paused(),
+    );
+    return tx.result;
+  }
+
+  /**
+   * Read-only: the custodian address that may `pause`/`unpause`, so an
+   * integrator can verify who holds the role without trusting docs
+   * (docs/adr/0011). `undefined` only for an instance deployed without a
+   * constructor, which this contract's WASM does not allow.
+   */
+  async getPauseAdmin(): Promise<string | undefined> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("get_pause_admin"),
+      () => client.get_pause_admin(),
+    );
+    return tx.result ?? undefined;
+  }
+
+  /**
    * Simulates a `release`, has the releaser sign only its short-lived contract
    * authorization entry, and returns the resulting transaction for a separate
    * relayer to sign and submit. The relayer is the transaction source, so it

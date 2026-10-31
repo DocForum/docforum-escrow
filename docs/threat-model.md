@@ -35,6 +35,12 @@ refund destination that may differ from the funder (`payer`), decided in
 `docs/adr/0006`. Touches §1 (I1, I2), §2 (actors), T1, T2, T8, a new T11
 and §6.*
 
+*Updated 2026-10-20 for issue #35 (Phase E5): the emergency pause from
+`docs/adr/0011` — one deploy-time custodian that can block **new** deposits
+and nothing else. This adds a new actor (§2), a new invariant (I8, §1), a
+new threat (T12), and grows the contract's public surface by
+`pause`/`unpause`/`is_paused`/`get_pause_admin` plus a constructor
+argument. The scope commit above still predates these changes.*
 *Updated 2026-10-22 for issue #113 (Phase E5, `docs/adr/0011`): pooled
 escrows funded by multiple payers. §1 I1–I4 generalize to per-contributor
 accounting; §2 gains the `contributor` actor; new threats T16–T19 cover
@@ -56,6 +62,7 @@ and contributor-resource exhaustion; §8 traceability gains matching rows.*
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
 | I6 | An escrow created with `requires_acceptance` cannot be settled (released/refunded/canceled) without the payee's explicit `accept` call first. | `release`/`refund`/`cancel` all check `data.accepted_at` — `AcceptanceRequired` if absent, `NotFunded` if already terminal. The accept/cancel race on one ledger state is resolved by ordering: first to commit wins. |
 | I7 | A declared fee takes exactly once per release: `⌊amount × fee_bps ÷ 10 000⌋` (≤ 10 %) to the `fee_recipient` fixed at creation, the remainder to `payee` — the two sum to exactly `amount` — and no fee ever moves on the refund path. | Fee is validated before funds are locked at creation (`InvalidFee` for a half-set pair, `bps` > 1 000 or a self-recipient; overflow rejected via checked math), computed with floor rounding at release (`fee_amount`), re-checked on `top_up` (which grows `amount`, and therefore the fee), and `refund` never reads the fee fields (ADR 0010, issue #30). Split-payout features (if any land later) must divide the fee-free net, not re-charge the bps. |
+| I8 | The emergency pause can never prevent funds from leaving an existing escrow. | Only the deposit paths (`create_escrow_inner`, shared by every creation entry point, and `top_up`) read the pause flag. `release`, `refund` (both paths), `settle_many` (release and refund ops), `get_status` and `get_escrow` never read it; `contracts/escrow/tests/pause.rs` exercises every outbound path while paused, including a release after the deadline and both `settle_many` ops (ADR 0011). |
 
 I1 is the most important property in this design. A full compromise of the
 `releaser` key lets an attacker pick the **wrong outcome** (release when it
@@ -75,6 +82,7 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 | `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser`, and optionally a distinct `refund_to` — all under its single creation signature | Nothing after creation. Has no on-chain power to cancel. |
 | `payee` | Receive funds; optionally accept an escrow before release; reassign the future payout destination to another address while `Funded` via `transfer_payee` (issue #45), which needs only its own auth | Nothing beyond the payee-transfer path: it can pick **which** address is paid, never force a release or block a refund. Without the opt-in acceptance gate it has no on-chain power to object to release or refund. |
 | `releaser` (one address, or an M-of-N `releasers` set, ADR 0007) | `release` or `refund` its escrows, once — a quorum escrow needs `threshold` distinct releasers on one call | Choosing the correct outcome. This is the main trust assumption; a quorum splits it across the set. |
+| `pause_admin` (custodian) | Block **new** deposits (`pause`), re-open them (`unpause`), read `is_paused`/`get_pause_admin`. Set once by the constructor; cannot be changed | Nothing about money. Its only power is refusing new deposits, so a compromised or lost key can deny new business but can never touch an existing escrow — see T12. |
 | `rotate_releaser` (single‑releaser escrow only, ADR 0009) | `rotate_releaser` — both the current releaser and the payer must authorize; the replacement cannot be the contract or the payee | Current releaser key safety: the payer's consent prevents a compromised releaser from silently appointing an attacker. |
 | `top_up` (single‑releaser escrow only, Phase E5) | `top_up` — only the original payer may add funds to a `Funded` escrow | Payer‑controlled fund growth; the escrow amount increases but parties and rules remain unchanged. |
 | `contributor` (pooled escrows, issue #113) | `contribute` its own funds to any open pooled escrow before its funding deadline; after a missed deadline, `claim_refund` back its own exact recorded amount | Nothing. Contributions are self-funding (you can only send your own tokens) and claims can only reach the caller's own record. |
@@ -83,10 +91,13 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 | Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds to that escrow's stored `refund_to` | Nothing. |
 | `attester` (**planned**, not implemented) | Would publish signed attestations referenced by an escrow's `condition_ref` | Nothing on-chain; the contract never reads attestations. See T12. |
 
-There is **no admin, no upgrade function, and no pause.** The deployed
-WASM is immutable. Nobody, including the deployer, can change an
-escrow's data or move funds outside `release`/`refund`. This is a chosen
-security property, not an unimplemented recovery mechanism: see
+There is **no admin over funds and no upgrade function.** The deployed
+WASM is immutable; nobody, including the deployer, can change an escrow's
+data or move funds outside `release`/`refund`. Since issue #35 there is one
+contract-level role, the pause custodian (`docs/adr/0011`), which can only
+stop **new** deposits — it has no authority over anything already escrowed
+(invariant I8). This is a chosen security property, not an unimplemented
+recovery mechanism: see
 [`docs/adr/0005`](adr/0005-immutable-contract-and-redeploy-migrations.md)
 for the redeployment and old-escrow settlement procedure.
 
@@ -105,6 +116,37 @@ value. **Reviewers should challenge these ratings.**
   deployment, and settle old escrows under their existing rules before
   retiring the old ID from writes. See ADR 0005. No upgrade key or
   migration hook is introduced to address this operational risk.
+
+### T12 — Pause custodian compromised, lost, or malicious · **Low**
+- **What it can do:** refuse **new** deposits on this contract id. That is
+  the entire scope of `pause` (`docs/adr/0011`, invariant I8). It cannot
+  release, refund, edit an escrow's data, rotate a `releaser`, unpause on
+  someone else's behalf, or upgrade anything. A paused contract still pays
+  out every existing escrow, including timeout refunds after the deadline
+  and releases after it — asserted in `contracts/escrow/tests/pause.rs`.
+- **Actual loss from a compromised key:** none directly. The damage is
+  **liveness/griefing**: no new deposits until the custodian unpauses, so
+  integrators see `Error::Paused` and must either wait, use a fresh
+  deployment, or route around this contract id.
+- **Loss from a *lost* key:** the contract can never be unpaused, so this
+  contract id stops taking new business permanently. Existing escrows are
+  unaffected and settle normally. Operational mitigation is the same as
+  T1/T2: hold the custodian as a multisig (2-of-3) so one lost signer is
+  survivable, and record it somewhere the operator can recover.
+- **Why not worse:** the role was deliberately kept narrower than the
+  contract-level admin ADR 0002 rejected. It gets no say over any existing
+  escrow, so the worst case is "this deployment stops growing", never
+  "someone's money is stuck" or "funds went somewhere else".
+- **Reviewer, please verify:** that no outbound path reads the flag (a
+  grep of `Paused` should only hit the deposit entry points, `pause`,
+  `unpause`, `is_paused`, and the constructor), and that the custodian
+  cannot change itself after deployment (no setter, no upgrade,
+  constructor-only).
+- **Residual, accepted:** the pause is not time-bounded. An auto-expiring
+  pause was considered in ADR 0011 (option 3) and rejected because a pause
+  that silently lapses during an incident is worse than the bounded
+  griefing it prevents. Detection is the mitigation: the `Paused` event,
+  `is_paused`, and the `Paused` error are all observable.
 
 ### T1 — `releaser` key leaked or stolen · **High**
 - **What an attacker can do:** call `release` or `refund` on every
@@ -828,10 +870,17 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
 - [x] Tests with a malicious mock token: lying transfer, short
       delivery, re-entry attempt (T4, T5) — issue #12,
       `tests/malicious_token.rs`
+- [x] ⚙ Emergency pause that can only stop new deposits (T12, issue #35)
+      — `docs/adr/0011`, constructor-set custodian, tests in
+      `contracts/escrow/tests/pause.rs` including every outbound path
+      while paused. Not yet on testnet: the current deployment predates
+      the constructor, so a redeploy is required.
 - [ ] Releaser held as multisig or in a KMS, not a plain env var (T1, T2)
       — the SDK now builds and verifies the multisig setup
       (`sdk/src/multisig.ts`, offline tests in `sdk/tests/multisig.test.ts`),
       but adopting it operationally is still open.
+- [ ] Pause custodian held as a multisig (T12) — no contract change
+      needed, pass the multisig account as `pause_admin` at deploy time
 - [ ] Consumer funding flow made idempotent + reconcile job (§5)
 - [x] **Traceability table added to threat model** (T1‑T15 mapped to tests
       or residual risk) — this issue

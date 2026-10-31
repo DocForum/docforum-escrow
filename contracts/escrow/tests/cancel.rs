@@ -42,7 +42,10 @@ fn fund<'a>(env: &'a Env, requires_acceptance: bool, refund_after: Option<u64>) 
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
     let condition = String::from_str(env, "opaque-condition-ref");
     let escrow_id = if requires_acceptance {
@@ -73,7 +76,15 @@ fn fund<'a>(env: &'a Env, requires_acceptance: bool, refund_after: Option<u64>) 
         )
     };
 
-    Fixture { client, token, contract_id, payer, payee, releaser, escrow_id }
+    Fixture {
+        client,
+        token,
+        contract_id,
+        payer,
+        payee,
+        releaser,
+        escrow_id,
+    }
 }
 
 fn assert_unchanged_funded(f: &Fixture) {
@@ -189,11 +200,7 @@ fn only_the_stored_payer_may_cancel() {
     env.mock_all_auths();
     let f = fund(&env, true, None);
 
-    for impostor in [
-        Address::generate(&env),
-        f.payee.clone(),
-        f.releaser.clone(),
-    ] {
+    for impostor in [Address::generate(&env), f.payee.clone(), f.releaser.clone()] {
         assert_eq!(
             f.client.try_cancel(&f.escrow_id, &impostor),
             Err(Ok(Error::Unauthorized))
@@ -241,7 +248,9 @@ fn escrow_without_requires_acceptance_still_releases_and_refunds_as_before() {
     env.mock_all_auths();
 
     let released = fund(&env, false, None);
-    released.client.release(&released.escrow_id, &released.releaser);
+    released
+        .client
+        .release(&released.escrow_id, &released.releaser);
     assert_eq!(released.token.balance(&released.payee), 300);
     assert_eq!(
         released.client.get_status(&released.escrow_id),
@@ -249,7 +258,9 @@ fn escrow_without_requires_acceptance_still_releases_and_refunds_as_before() {
     );
 
     let refunded = fund(&env, false, None);
-    refunded.client.refund(&refunded.escrow_id, &refunded.releaser);
+    refunded
+        .client
+        .refund(&refunded.escrow_id, &refunded.releaser);
     assert_eq!(refunded.token.balance(&refunded.payer), 1_000);
     assert_eq!(
         refunded.client.get_status(&refunded.escrow_id),
@@ -390,7 +401,10 @@ fn top_up_before_accept_is_fully_returned_by_cancel() {
     assert_eq!(f.token.balance(&f.payer), 1_000);
     assert_eq!(f.token.balance(&f.payee), 0);
     assert_eq!(f.token.balance(&f.contract_id), 0);
-    assert_eq!(f.client.get_escrow(&f.escrow_id).status, EscrowStatus::Cancelled);
+    assert_eq!(
+        f.client.get_escrow(&f.escrow_id).status,
+        EscrowStatus::Cancelled
+    );
 }
 
 #[test]

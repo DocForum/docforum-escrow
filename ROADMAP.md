@@ -256,6 +256,33 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   invariant I7, 17 tests in `tests/protocol_fee.rs`. Breaking read shape
   and creation signature → SDK minor changeset and regenerated bindings.
   **Not yet on testnet** — the live deployment predates the fee.
+- [x] Emergency pause that can only stop new deposits — issue #35.
+  `docs/adr/0011`: one `pause_admin` address fixed at deployment by
+  `__constructor(allowed_tokens, pause_admin)`, which may `pause`/`unpause`
+  a flag that blocks **every deposit path** — `create_escrow` and its
+  variants (they share `create_escrow_inner`), `top_up`, and the pooled
+  `create_pooled_escrow`/`contribute` — and nothing else. `release`,
+  `refund`, the timeout refund and pooled `claim_refund` never read it, so a
+  pause can never lock existing funds (invariant I8, threat model T12).
+  Alternatives rejected in the ADR: permissionless pause (trivial
+  griefing), auto-expiring pause (silently lapses mid-incident), token
+  allowlist (a different problem), and doing nothing. New error codes
+  `Paused`, `AlreadyPaused` and `NotPaused`, added with the provisional
+  codes 3500–3502 (`contract-changes.d/35-emergency-pause.md`);
+  `Paused`/`Unpaused` events carry the custodian. 20 tests in
+  `contracts/escrow/tests/pause.rs`, including release, releaser refund,
+  stranger timeout refund, and release-after-deadline while paused, plus a
+  year-long pause leaving nothing stuck, `top_up` blocked, and pooled
+  contributions blocked while pooled claims and releases still pay out. SDK minor
+  changeset with `pause`/`unpause`/`isPaused`/`getPauseAdmin` and
+  regenerated bindings. Not yet redeployed to testnet — the current
+  deployment predates the constructor and cannot pause.
+- [ ] Redeploy to testnet with the new constructor (`allowed_tokens`,
+  `pause_admin`) and verify `pause`/`unpause` live, including a release
+  while paused.
+- [ ] Decide the mainnet custodian: a Stellar multisig account (2-of-3)
+  held in a KMS/HSM — no contract change needed, it is the deploy-time
+  `pause_admin` argument (threat model T12).
 - [x] **Pooled escrows funded by multiple payers** (issue #113) —
   `docs/adr/0011`: open contributions until an explicit
   `funding_target` (fixed contributor list rejected — see ADR table),

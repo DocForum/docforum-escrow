@@ -1,11 +1,7 @@
 #![allow(deprecated)]
 
 use docforum_escrow::{EscrowContract, EscrowContractClient};
-use soroban_sdk::{
-    testutils::Address as _,
-    token::StellarAssetClient,
-    Address, Env, String, Vec,
-};
+use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, Env, String, Vec};
 
 struct Fixture<'a> {
     env: Env,
@@ -26,9 +22,19 @@ fn fixture() -> Fixture<'static> {
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
     asset.mint(&payer, &10_000);
-    let contract = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    // The constructor also takes the immutable pause admin (docs/adr/0011);
+    // the profile never pauses, so any address will do.
+    let pause_admin = Address::generate(&env);
+    let contract = env.register(EscrowContract, (Vec::<Address>::new(&env), pause_admin));
     let client = EscrowContractClient::new(&env, &contract);
-    Fixture { env, client, payer, payee, releaser, token }
+    Fixture {
+        env,
+        client,
+        payer,
+        payee,
+        releaser,
+        token,
+    }
 }
 
 impl Fixture<'_> {
@@ -42,6 +48,8 @@ impl Fixture<'_> {
             &self.releaser,
             &None,
             &false,
+            &None,
+            &None,
             &None,
         )
     }
@@ -59,23 +67,40 @@ fn measure(name: &str, env: &Env, operation: impl FnOnce()) {
 
 fn main() {
     let f = fixture();
-    measure("create_escrow", &f.env, || { f.create(); });
+    measure("create_escrow", &f.env, || {
+        f.create();
+    });
 
     let f = fixture();
     measure("create_escrow_release_time", &f.env, || {
         f.client.create_escrow_release_time(
-            &f.payer, &f.payee, &f.token, &100,
-            &String::from_str(&f.env, "resource-profile"), &f.releaser,
-            &None, &false, &None, &Some(1_000),
+            &f.payer,
+            &f.payee,
+            &f.token,
+            &100,
+            &String::from_str(&f.env, "resource-profile"),
+            &f.releaser,
+            &None,
+            &false,
+            &None,
+            &Some(1_000),
+            &None,
+            &None,
         );
     });
 
     let f = fixture();
     measure("create_escrow_with_acceptance", &f.env, || {
         f.client.create_escrow_with_acceptance(
-            &f.payer, &f.payee, &f.token, &100,
-            &String::from_str(&f.env, "resource-profile"), &f.releaser,
-            &None, &true, &None,
+            &f.payer,
+            &f.payee,
+            &f.token,
+            &100,
+            &String::from_str(&f.env, "resource-profile"),
+            &f.releaser,
+            &None,
+            &true,
+            &None,
         );
     });
 
@@ -83,27 +108,46 @@ fn main() {
     let releasers = soroban_sdk::vec![&f.env, f.releaser.clone()];
     measure("create_escrow_with_releasers", &f.env, || {
         f.client.create_escrow_with_releasers(
-            &f.payer, &f.payee, &f.token, &100,
-            &String::from_str(&f.env, "resource-profile"), &releasers,
-            &1, &None, &false, &None,
+            &f.payer,
+            &f.payee,
+            &f.token,
+            &100,
+            &String::from_str(&f.env, "resource-profile"),
+            &releasers,
+            &1,
+            &None,
+            &false,
+            &None,
         );
     });
 
     let f = fixture();
     let id = f.client.create_escrow_with_acceptance(
-        &f.payer, &f.payee, &f.token, &100,
-        &String::from_str(&f.env, "resource-profile"), &f.releaser,
-        &None, &true, &None,
+        &f.payer,
+        &f.payee,
+        &f.token,
+        &100,
+        &String::from_str(&f.env, "resource-profile"),
+        &f.releaser,
+        &None,
+        &true,
+        &None,
     );
-    measure("accept", &f.env, || { f.client.accept(&id, &f.payee); });
+    measure("accept", &f.env, || {
+        f.client.accept(&id, &f.payee);
+    });
 
     let f = fixture();
     let id = f.create();
-    measure("get_status", &f.env, || { f.client.get_status(&id); });
+    measure("get_status", &f.env, || {
+        f.client.get_status(&id);
+    });
 
     let f = fixture();
     let id = f.create();
-    measure("get_escrow", &f.env, || { f.client.get_escrow(&id); });
+    measure("get_escrow", &f.env, || {
+        f.client.get_escrow(&id);
+    });
 
     let f = fixture();
     let id = f.create();
@@ -114,18 +158,28 @@ fn main() {
 
     let f = fixture();
     let id = f.create();
-    measure("top_up", &f.env, || { f.client.top_up(&id, &f.payer, &10); });
+    measure("top_up", &f.env, || {
+        f.client.top_up(&id, &f.payer, &10);
+    });
 
     let f = fixture();
     let id = f.create();
-    measure("release", &f.env, || { f.client.release(&id, &f.releaser); });
+    measure("release", &f.env, || {
+        f.client.release(&id, &f.releaser);
+    });
 
     let f = fixture();
     let id = f.client.create_escrow_with_releasers(
-        &f.payer, &f.payee, &f.token, &100,
+        &f.payer,
+        &f.payee,
+        &f.token,
+        &100,
         &String::from_str(&f.env, "resource-profile"),
         &soroban_sdk::vec![&f.env, f.releaser.clone()],
-        &1, &None, &false, &None,
+        &1,
+        &None,
+        &false,
+        &None,
     );
     let approvers = soroban_sdk::vec![&f.env, f.releaser.clone()];
     measure("release_with_approvals", &f.env, || {
@@ -134,14 +188,22 @@ fn main() {
 
     let f = fixture();
     let id = f.create();
-    measure("refund", &f.env, || { f.client.refund(&id, &f.releaser); });
+    measure("refund", &f.env, || {
+        f.client.refund(&id, &f.releaser);
+    });
 
     let f = fixture();
     let id = f.client.create_escrow_with_releasers(
-        &f.payer, &f.payee, &f.token, &100,
+        &f.payer,
+        &f.payee,
+        &f.token,
+        &100,
         &String::from_str(&f.env, "resource-profile"),
         &soroban_sdk::vec![&f.env, f.releaser.clone()],
-        &1, &None, &false, &None,
+        &1,
+        &None,
+        &false,
+        &None,
     );
     let approvers = soroban_sdk::vec![&f.env, f.releaser.clone()];
     measure("refund_with_approvals", &f.env, || {

@@ -56,7 +56,14 @@ jobs:
         # Quickstart's local mode is an ephemeral single-node network with
         # Soroban RPC. NETWORK=local is the documented env-var equivalent of
         # `stellar/quickstart --local`; RPC is exposed at /rpc on port 8000.
-        image: stellar/quickstart:latest
+        #
+        # Pinned by digest: the 2026-10-26 `latest` (core/RPC v30) makes the
+        # pinned Stellar CLI's very first simulation (`contract asset deploy
+        # --asset native`) fail with `HostError: Error(Context, InternalError)`
+        # on every PR, before the escrow contract is touched. This digest is
+        # the `latest` that main last passed with (run 39607326690). Bump it
+        # together with scripts/stellar-cli-version.
+        image: stellar/quickstart@sha256:4f8dfd693deba57fddef7f0bc722e4782c2e606c8675e3adc5438cebae249295
         env:
           NETWORK: local
           ENABLE_SOROBAN_RPC: "true"
@@ -162,14 +169,16 @@ jobs:
             --alias native-token
           token_id=$(stellar contract alias show native-token --network escrow-local)
 
-          # __constructor(allowed_tokens: Vec<Address>) — empty list keeps the
-          # legacy open-token behavior, which is fine for an ephemeral local net.
+          # __constructor(allowed_tokens: Vec<Address>, pause_admin: Address) —
+          # empty list keeps the legacy open-token behavior, which is fine for
+          # an ephemeral local net; the deployer doubles as the pause
+          # custodian (docs/adr/0011).
           stellar contract deploy \
             --wasm "$wasm" \
             --source-account deployer \
             --network escrow-local \
             --alias escrow \
-            -- --allowed_tokens '[]'
+            -- --allowed_tokens '[]' --pause_admin "$(stellar keys public-key deployer)"
           contract_id=$(stellar contract alias show escrow --network escrow-local)
 
           echo "token_id=$token_id"
