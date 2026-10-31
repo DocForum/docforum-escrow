@@ -67,6 +67,12 @@ monitors can check `balance >= liabilities` in one call — see
 It's kept in that one place so that adding or changing a contract function
 is a single edit. Update that list, not this summary.
 
+Existing immutable testnet deployments cannot participate in the consent-based
+migration flow because they do not implement `export_to`. Integrators must keep
+tracking the source deployment id for each live escrow, continue settling those
+escrows on their original deployment, and only create new escrows on a
+deployment that recognizes its predecessor contracts.
+
 **Design rule, enforced deliberately:** the contract decides **who** may
 call `release`/`refund`, never **why**. `condition_ref` is an opaque
 string the contract stores but never interprets; all domain
