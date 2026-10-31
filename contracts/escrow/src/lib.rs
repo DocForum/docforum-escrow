@@ -52,7 +52,7 @@ use soroban_sdk::{
 
 // Bump this value whenever a contract interface or behavior change is made.
 // CI checks this constant against the base branch when this file changes.
-pub const CONTRACT_VERSION: &str = "2.3.0";
+pub const CONTRACT_VERSION: &str = "2.4.0";
 
 include!(concat!(env!("OUT_DIR"), "/contract_metadata.rs"));
 
@@ -268,9 +268,7 @@ pub enum Error {
     /// or the payer's address. The contract address can never sign to
     /// accept a payout; the payer is excluded so a payer cannot redirect
     /// the release destination to themselves via a colluding payee.
-    /// Provisional code (issue #45 × 100); the maintainer fold assigns the
-    /// final number — see contract-changes.d/README.md.
-    InvalidNewPayee = 4500,
+    InvalidNewPayee = 37,
     Overflow = 12,
     /// The releaser set is empty, or `threshold` is 0 or larger than the
     /// number of releasers — see docs/adr/0007.

@@ -752,8 +752,7 @@ escrow.
     `new_payee == contract_address` (would lock funds) and
     `new_payee == payer` (would let a colluding payee redirect to payer,
     turning a release into a de-facto payer refund that bypasses refund
-    auth). These are rejected with `Error::InvalidNewPayee` (provisional
-    code 4500 until the maintainer fold assigns the final number).
+    auth). These are rejected with `Error::InvalidNewPayee` (code 37).
   - The releaser cannot use `transfer_payee` — they have no power over
     the payee field. This is enforced by `current_payee.require_auth()`
     plus the `current_payee == data.payee` check.
