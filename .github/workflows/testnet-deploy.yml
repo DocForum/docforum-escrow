@@ -1,0 +1,79 @@
+name: Testnet Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch, tag, or SHA) to deploy from"
+        required: true
+        type: string
+        default: main
+      notes:
+        description: "Optional notes recorded in the deployment PR"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testnet-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to testnet
+    runs-on: ubuntu-latest
+    environment:
+      name: testnet-deployer
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.1.1
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4.0.4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+
+      - name: Install dependencies
+        working-directory: sdk
+        run: npm ci
+
+      - name: Build SDK
+        working-directory: sdk
+        run: npm run build
+
+      - name: Pre-flight checks (Friendbot + RPC)
+        env: TESTNET_RPC_URL: ${{ secrets.TESTNET_RPC_URL }}
+             TESTNET_FRIENDBOT_URL: ${{ secrets.TESTNET_FRIENDBOT_URL }}
+        run: node scripts/preflight-check.mjs
+
+      - name: Run deploy script
+        env: TESTNET_RPC_URL: ${{ secrets.TESTNET_RPC_URL }}
+             TESTNET_FRIENDBOT_URL: ${{ secrets.TESTNET_FRIENDBOT_URL }}
+             TESTNET_DEPLOYER_SECRET: ${{ secrets.TESTNET_DEPLOYER_SECRET }}
+             DEPLOYER_IDENTITY: ${{ vars.TESTNET_DEPLOYER_IDENTITY }}
+        run: node scripts/deploy-testnet.mjs
+
+      - name Validate deployment records
+        run: node scripts/validate-deployment-records.mjs
+
+      - name: Open deployment record PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPLOYER_IDENTITY: ${{ vars.TESTNET_DEPLOYER_IDENTITY }}
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_NOTES: ${{ inputs.notes }}
+          TRIGGERED_BY: ${{ github.actor }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/open-deployment-pr.mjs
