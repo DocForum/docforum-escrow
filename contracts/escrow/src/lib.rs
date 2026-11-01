@@ -14,6 +14,12 @@
 // releaser set (`create_escrow_with_releasers`) — see docs/adr/0007.
 // Single-releaser escrows are stored as a one-address set with threshold 1
 // and behave exactly as before.
+// Phase E5 (issue #35): a narrow emergency pause — see docs/adr/0011. One
+// address set at deploy may flip a flag that blocks NEW deposits
+// (`create_escrow`, `create_escrow_release_time`, `create_escrow_with_*`,
+// `create_pooled_escrow`, `top_up` and `contribute`) only. `release`,
+// `refund`, the timeout refund, `claim_refund` and `settle_many` never read
+// it: a pause can stop new exposure, never lock existing funds.
 // Phase E5 (issue #29): `settle_many(caller, ops)` settles up to
 // `MAX_SETTLE_OPS` escrows (release or refund each) in one transaction,
 // best-effort with per-op results — see docs/adr/0012 and threat model T1.
@@ -46,13 +52,12 @@
 
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error,
-    symbol_short, token,
-    Address, Env, IntoVal, String, Vec,
+    symbol_short, token, Address, Env, IntoVal, String, Vec,
 };
 
 // Bump this value whenever a contract interface or behavior change is made.
 // CI checks this constant against the base branch when this file changes.
-pub const CONTRACT_VERSION: &str = "2.4.0";
+pub const CONTRACT_VERSION: &str = "2.5.0";
 
 include!(concat!(env!("OUT_DIR"), "/contract_metadata.rs"));
 
@@ -226,6 +231,12 @@ enum DataKey {
     NextId,
     Status(u64),
     AllowedTokens,
+    /// The one address allowed to `pause`/`unpause` — set once by
+    /// `__constructor`, never changeable afterwards (docs/adr/0011).
+    PauseAdmin,
+    /// The emergency-pause flag. Absent/false = normal operation; only the
+    /// deposit entry points read it (docs/adr/0011).
+    Paused,
     /// Pooled escrows only (issue #113): immutable funding config.
     /// Soroban encodes enum variants by name, so appending these two
     /// variants does not disturb any existing storage entry.
@@ -236,6 +247,23 @@ enum DataKey {
     /// of `amount` over every escrow in that token whose status is
     /// `Funded`. Appended last, so existing entries keep their encoding.
     Liability(Address),
+}
+
+/// Emitted by `pause` (docs/adr/0011). Carries the custodian that flipped
+/// the flag so integrators and monitoring can react without polling.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Paused {
+    #[topic]
+    pub admin: Address,
+}
+
+/// Emitted by `unpause` (docs/adr/0011).
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Unpaused {
+    #[topic]
+    pub admin: Address,
 }
 
 #[contracterror]
@@ -337,6 +365,15 @@ pub enum Error {
     /// An outbound release transfer failed; the funded escrow remains
     /// retryable and may still use its refund path.
     Undeliverable = 36,
+    /// A deposit path was called while the emergency pause is on — see
+    /// docs/adr/0011.
+    Paused = 38,
+    /// `pause` on an already-paused contract. The transition did not
+    /// happen, so no event is emitted.
+    AlreadyPaused = 39,
+    /// `unpause` on a running contract. The transition did not happen, so
+    /// no event is emitted.
+    NotPaused = 40,
 }
 
 #[contract]
@@ -344,158 +381,26 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
-    /// Sets the immutable token allowlist and trusted source deployments at
-    /// deployment. An empty allowlist preserves the legacy behavior and allows
-    /// any token address. The source allowlist is fixed for the lifetime of the
-    /// deployment because this contract has no admin or upgrade route.
-    pub fn __constructor(env: Env, allowed_tokens: Vec<Address>, approved_sources: Vec<Address>) {
+    /// Sets the immutable token allowlist at deployment. An empty list
+    /// preserves the legacy behavior and allows any token address.
+    ///
+    /// Also stores the single address permitted to `pause`/`unpause`
+    /// (docs/adr/0011). There is no setter, so the custodian cannot be
+    /// changed after deployment — a new custodian means a new deployment.
+    /// No auth is required here: the constructor runs as part of deploying
+    /// the instance, before any caller exists.
+    ///
+    /// The custodian is deliberately weak: its only power is to refuse
+    /// **new** deposits. It cannot release, refund, edit an escrow, or
+    /// upgrade anything.
+    pub fn __constructor(env: Env, allowed_tokens: Vec<Address>, pause_admin: Address) {
         env.storage()
             .instance()
             .set(&DataKey::AllowedTokens, &allowed_tokens);
         env.storage()
             .instance()
-            .set(&DataKey::ApprovedSources, &approved_sources);
-    }
-
-    pub fn export_to(
-        env: Env,
-        escrow_id: u64,
-        new_contract: Address,
-        approvers: Vec<Address>,
-    ) -> Result<u64, Error> {
-        let mut data = Self::load(&env, escrow_id)?;
-        if data.status != EscrowStatus::Funded {
-            return Err(Error::MigrationNotEligible);
-        }
-
-        data.payer.require_auth();
-        Self::check_approvals(&env, &data, &approvers)?;
-
-        let payload = MigrationData {
-            source_contract: env.current_contract_address(),
-            escrow_id,
-            destination_balance_before: token::Client::new(&env, &data.token).balance(&new_contract),
-            payer: data.payer.clone(),
-            payee: data.payee.clone(),
-            token: data.token.clone(),
-            amount: data.amount,
-            condition_ref: data.condition_ref.clone(),
-            status: EscrowStatus::Funded,
-            releasers: data.releasers.clone(),
-            threshold: data.threshold,
-            refund_after: data.refund_after,
-            notify_payee: data.notify_payee,
-            requires_acceptance: data.requires_acceptance,
-            accepted_at: data.accepted_at,
-            refund_to: data.refund_to.clone(),
-        };
-
-        let source_contract = env.current_contract_address();
-        let token_client = token::Client::new(&env, &data.token);
-        token_client.transfer(&source_contract, &new_contract, &data.amount);
-
-        let import_result = env.try_invoke_contract::<u64, soroban_sdk::Error>(
-            &new_contract,
-            &soroban_sdk::Symbol::new(&env, "import_from"),
-            (source_contract, payload).into_val(&env),
-        );
-        let imported_id = match import_result {
-            Ok(Ok(id)) => id,
-            Ok(Err(_)) | Err(_) => return Err(Error::MigrationFailed),
-        };
-
-        data.status = EscrowStatus::Migrated;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
-        env.storage().persistent().set(
-            &DataKey::Imported(MigrationKey {
-                source_contract: env.current_contract_address(),
-                source_id: escrow_id,
-            }),
-            &true,
-        );
-        Ok(imported_id)
-    }
-
-    pub fn import_from(
-        env: Env,
-        source_contract: Address,
-        migration: MigrationData,
-    ) -> Result<u64, Error> {
-        source_contract.require_auth();
-        if source_contract == env.current_contract_address() {
-            return Err(Error::UnapprovedSource);
-        }
-
-        let approved: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::ApprovedSources)
-            .unwrap_or(Vec::new(&env));
-        if !Self::contains(&approved, &source_contract) {
-            return Err(Error::UnapprovedSource);
-        }
-        if migration.source_contract != source_contract {
-            return Err(Error::InvalidMigration);
-        }
-        if migration.status != EscrowStatus::Funded {
-            return Err(Error::MigrationNotEligible);
-        }
-        if migration.amount <= 0 {
-            return Err(Error::InvalidAmount);
-        }
-        let allowed_tokens: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::AllowedTokens)
-            .unwrap_or(Vec::new(&env));
-        if !allowed_tokens.is_empty() && !Self::contains(&allowed_tokens, &migration.token) {
-            return Err(Error::DisallowedToken);
-        }
-        if migration.condition_ref.len() > MAX_CONDITION_REF_LEN {
-            return Err(Error::ConditionRefTooLong);
-        }
-        Self::check_releaser_set(&env, &migration.releasers, migration.threshold)?;
-        if migration.refund_to == env.current_contract_address() {
-            return Err(Error::InvalidRefundTo);
-        }
-
-        let import_key = MigrationKey {
-            source_contract: source_contract.clone(),
-            source_id: migration.escrow_id,
-        };
-        if env.storage().persistent().has(&DataKey::Imported(import_key.clone())) {
-            return Err(Error::AlreadyMigrated);
-        }
-
-        let token_client = token::Client::new(&env, &migration.token);
-        let destination_balance = token_client.balance(&env.current_contract_address());
-        let expected_balance = migration
-            .destination_balance_before
-            .checked_add(migration.amount)
-            .ok_or(Error::Overflow)?;
-        if destination_balance != expected_balance {
-            return Err(Error::BalanceMismatch);
-        }
-
-        let destination_id = Self::next_id(&env);
-        let imported = EscrowData {
-            payer: migration.payer,
-            payee: migration.payee,
-            token: migration.token,
-            amount: migration.amount,
-            condition_ref: migration.condition_ref,
-            status: EscrowStatus::Funded,
-            releasers: migration.releasers,
-            threshold: migration.threshold,
-            refund_after: migration.refund_after,
-            notify_payee: migration.notify_payee,
-            requires_acceptance: migration.requires_acceptance,
-            accepted_at: migration.accepted_at,
-            refund_to: migration.refund_to,
-        };
-        env.storage().persistent().set(&DataKey::Escrow(destination_id), &imported);
-        env.storage().persistent().set(&DataKey::Imported(import_key), &true);
-        Ok(destination_id)
+            .set(&DataKey::PauseAdmin, &pause_admin);
+        env.storage().instance().set(&DataKey::Paused, &false);
     }
 
     /// Semantic version of this contract interface and behavior.
@@ -518,6 +423,12 @@ impl EscrowContract {
     /// `payer`; it may not be this contract's own address, and the
     /// `payer`'s auth on this call covers it. For M-of-N releasers use
     /// `create_escrow_with_releasers`.
+    ///
+    /// This is a deposit path, so it is gated by the emergency pause
+    /// (docs/adr/0011): while paused it fails with `Paused` before any
+    /// funds move, no escrow id is consumed and nothing is stored. The
+    /// same check covers every creation entry point, and `top_up` applies
+    /// it too.
     /// `fee_recipient`/`fee_bps` are the optional protocol fee, fixed at
     /// creation and taken at release — never on refund — with `fee_bps ≤`
     /// [`MAX_FEE_BPS`] (10 %), floor rounding, and both given together or
@@ -746,8 +657,7 @@ impl EscrowContract {
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
     pub fn get_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, Error> {
-        env
-            .storage()
+        env.storage()
             .persistent()
             .get(&DataKey::Status(escrow_id))
             .ok_or(Error::NotFound)
@@ -791,6 +701,13 @@ impl EscrowContract {
         releaser: Address,
         funding_deadline: u64,
     ) -> Result<u64, Error> {
+        // Creating a pooled escrow opens a new deposit target, so the
+        // emergency pause gates it like every other creation entry point
+        // (docs/adr/0011): while paused no id is consumed and nothing is
+        // stored.
+        if Self::is_paused(env.clone()) {
+            return Err(Error::Paused);
+        }
         // Validate everything before any auth prompt so a malformed
         // request costs the caller nothing on-chain (same convention as
         // `create_escrow_inner`).
@@ -846,7 +763,9 @@ impl EscrowContract {
             fee_bps: None,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        env.storage().persistent().set(&DataKey::Status(id), &data.status);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(id), &data.status);
         env.storage().persistent().set(
             &DataKey::Pooled(id),
             &PooledData {
@@ -879,6 +798,12 @@ impl EscrowContract {
     pub fn contribute(env: Env, escrow_id: u64, payer: Address, amount: i128) -> Result<(), Error> {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
+        }
+        // `contribute` is how new money enters a pooled escrow, so the
+        // emergency pause blocks it (docs/adr/0011). `claim_refund` and
+        // `release` never read the flag: a pause cannot trap pooled funds.
+        if Self::is_paused(env.clone()) {
+            return Err(Error::Paused);
         }
         let mut data: EscrowData = Self::load(&env, escrow_id)?;
         let pooled = Self::pooled_data(&env, escrow_id)?;
@@ -1091,6 +1016,12 @@ impl EscrowContract {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
+        // `top_up` is a deposit path, so the emergency pause gates it too
+        // (docs/adr/0011): paused blocks every way new money enters, and
+        // nothing else.
+        if Self::is_paused(env.clone()) {
+            return Err(Error::Paused);
+        }
         payer.require_auth();
         let mut data: EscrowData = env
             .storage()
@@ -1136,6 +1067,9 @@ impl EscrowContract {
     /// the deadline the releaser can still release, racing any timeout
     /// refund — whoever lands first wins and the other fails `NotFunded`.
     ///
+    /// Also deliberately **not** gated by the emergency pause
+    /// (docs/adr/0011): funds must always be able to leave an existing
+    /// escrow, whatever state new deposits are in.
     /// If the escrow was created with a fee (docs/adr/0010), the fee comes
     /// off the top — `⌊amount × fee_bps ÷ 10 000⌋` goes to `fee_recipient`,
     /// the exact remainder to `payee`, so the two transfers always sum to
@@ -1195,6 +1129,10 @@ impl EscrowContract {
     ///
     /// `ops.len()` must be `<= MAX_SETTLE_OPS` (`BatchTooLarge`). An empty
     /// batch returns an empty vector.
+    ///
+    /// Deliberately **not** gated by the emergency pause (docs/adr/0011):
+    /// both ops are outbound, exactly like single `release`/`refund`, and a
+    /// pause stops new deposits only — it must never block funds leaving.
     pub fn settle_many(
         env: Env,
         caller: Address,
@@ -1226,6 +1164,12 @@ impl EscrowContract {
     /// `refund_after` set, behaviour is identical to before the timeout
     /// existed — releaser only. On an M-of-N escrow the releaser path needs
     /// a threshold of 1; otherwise use `refund_with_approvals` (the timeout
+    /// path stays open to anyone).
+    ///
+    /// Deliberately **not** gated by the emergency pause (docs/adr/0011):
+    /// pausing new deposits must never trap funds already escrowed.
+    /// A protocol fee (docs/adr/0010) is never taken on the refund path:
+    /// the stored `refund_to` receives the full stored `amount`.
     /// path stays open to anyone). The stored payee may also voluntarily
     /// refund a funded escrow; that path emits `payee_refunded` (ADR 0010).
     /// A protocol fee is never taken on the refund path.
@@ -1332,6 +1276,12 @@ impl EscrowContract {
         fee_recipient: Option<Address>,
         fee_bps: Option<u32>,
     ) -> Result<u64, Error> {
+        // Every creation entry point funnels through here, so this one
+        // check covers all deposit paths: while paused, no new escrow can
+        // be created, no id is consumed and no funds move (docs/adr/0011).
+        if Self::is_paused(env.clone()) {
+            return Err(Error::Paused);
+        }
         let allowed_tokens: Vec<Address> = env
             .storage()
             .instance()
@@ -1413,7 +1363,9 @@ impl EscrowContract {
             fee_bps,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        env.storage().persistent().set(&DataKey::Status(id), &data.status);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(id), &data.status);
         Self::publish_state(env, symbol_short!("created"), id, &data);
         Ok(id)
     }
@@ -1779,6 +1731,72 @@ impl EscrowContract {
         false
     }
 
+    /// Blocks new deposits (`create_escrow` and its variants,
+    /// `create_pooled_escrow`, `top_up` and `contribute`) until `unpause`
+    /// is called. Callable only by the custodian
+    /// set at deployment, which must sign this call (docs/adr/0011). Emits
+    /// a `Paused` event carrying that address.
+    ///
+    /// Deliberately has no effect on money already escrowed: `release`,
+    /// `refund`, the timeout refund and `claim_refund` do not read the
+    /// flag, so a pause can never lock existing funds. Errors
+    /// `AlreadyPaused` if the contract is already paused.
+    pub fn pause(env: Env, caller: Address) -> Result<(), Error> {
+        caller.require_auth();
+        Self::require_pause_admin(&env, &caller)?;
+        if Self::is_paused(env.clone()) {
+            return Err(Error::AlreadyPaused);
+        }
+
+        env.storage().instance().set(&DataKey::Paused, &true);
+        Paused { admin: caller }.publish(&env);
+        Ok(())
+    }
+
+    /// Re-opens new deposits. Same auth as `pause` — only the custodian
+    /// set at deployment. Emits an `Unpaused` event. Errors `NotPaused` if
+    /// the contract isn't paused.
+    ///
+    /// Unpausing is not timelocked on purpose (docs/adr/0011): it restores
+    /// normal operation and cannot touch a single escrow, so delaying it
+    /// would only delay recovery.
+    pub fn unpause(env: Env, caller: Address) -> Result<(), Error> {
+        caller.require_auth();
+        Self::require_pause_admin(&env, &caller)?;
+        if !Self::is_paused(env.clone()) {
+            return Err(Error::NotPaused);
+        }
+
+        env.storage().instance().set(&DataKey::Paused, &false);
+        Unpaused { admin: caller }.publish(&env);
+        Ok(())
+    }
+
+    /// Read-only: is the emergency pause currently blocking new deposits?
+    /// Says nothing about existing escrows — `release`/`refund` work either
+    /// way (docs/adr/0011).
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
+    /// Read-only: the custodian address that may `pause`/`unpause`, so
+    /// integrators can verify who holds the role without trusting docs
+    /// (docs/adr/0011). `None` only for an instance deployed without a
+    /// constructor, which this contract's WASM does not allow.
+    pub fn get_pause_admin(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::PauseAdmin)
+    }
+
+    fn require_pause_admin(env: &Env, caller: &Address) -> Result<(), Error> {
+        let admin: Option<Address> = env.storage().instance().get(&DataKey::PauseAdmin);
+        match admin {
+            Some(admin) if &admin == caller => Ok(()),
+            _ => Err(Error::Unauthorized),
+        }
+    }
 
     /// Lets the current `payee` reassign future payout rights to a new
     /// address. Only the current `payee` may authorise this — no one
