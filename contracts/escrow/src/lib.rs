@@ -71,10 +71,14 @@ pub const MAX_RELEASERS: u32 = 10;
 /// Maximum `condition_ref` length in bytes (threat model T10, Phase E5).
 pub const MAX_CONDITION_REF_LEN: u32 = 64;
 
-/// Maximum number of items accepted by `create_escrows` / `settle_many`
-/// in a single call. Callers (including the SDK) must chunk larger
-/// inputs — see docs/adr/0005.
-pub const MAX_BATCH_SIZE: u32 = 50;
+/// Maximum number of items accepted by one `create_escrows` call. Callers
+/// (including the SDK) must chunk larger inputs. Measured, not guessed: each
+/// item emits a full escrow state event plus the token's transfer event, and
+/// the per-transaction contract-events budget (16,384 bytes on Mainnet) is
+/// the first limit a batch hits, at 24 items. 16 leaves about 30% headroom;
+/// `tests/create_escrow.rs::max_create_batch_fits_mainnet_limits` re-measures
+/// it on every `cargo test`. See docs/adr/0012.
+pub const MAX_BATCH_SIZE: u32 = 16;
 
 /// Maximum number of operations accepted by one `settle_many` call (issue
 /// #29). Measured, not guessed: every settled op emits a full escrow state
@@ -465,6 +469,7 @@ impl EscrowContract {
             None,
             fee_recipient,
             fee_bps,
+            false,
         )
     }
 
@@ -505,6 +510,7 @@ impl EscrowContract {
             release_not_before,
             fee_recipient,
             fee_bps,
+            false,
         )
     }
 
@@ -540,6 +546,7 @@ impl EscrowContract {
             None,
             None,
             None,
+            false,
         )
     }
 
@@ -609,6 +616,7 @@ impl EscrowContract {
             None,
             None,
             None,
+            false,
         )
     }
 
@@ -628,6 +636,7 @@ impl EscrowContract {
         if items.len() > MAX_BATCH_SIZE {
             return Err(Error::BatchTooLarge);
         }
+        payer.require_auth();
 
         let mut ids: Vec<u64> = Vec::new(&env);
         for item in items.iter() {
@@ -649,6 +658,7 @@ impl EscrowContract {
                 None,
                 None,
                 None,
+                true,
             )?;
             ids.push_back(id);
         }
@@ -1275,6 +1285,7 @@ impl EscrowContract {
         release_not_before: Option<u64>,
         fee_recipient: Option<Address>,
         fee_bps: Option<u32>,
+        payer_already_authorized: bool,
     ) -> Result<u64, Error> {
         // Every creation entry point funnels through here, so this one
         // check covers all deposit paths: while paused, no new escrow can
@@ -1336,7 +1347,11 @@ impl EscrowContract {
             }
         }
 
-        payer.require_auth();
+        // `require_auth` can only run once per address in a frame, so a batch
+        // authorizes up front instead of once per item.
+        if !payer_already_authorized {
+            payer.require_auth();
+        }
         if notify_payee {
             payee.require_auth();
         }
