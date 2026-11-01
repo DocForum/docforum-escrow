@@ -82,7 +82,11 @@ fn fixture(env: &Env) -> Fixture<'_> {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(env), Address::generate(env)),
+        (
+            Vec::<Address>::new(env),
+            Vec::<Address>::new(env),
+            Address::generate(env),
+        ),
     );
     Fixture {
         env,

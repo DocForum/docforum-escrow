@@ -13,6 +13,17 @@ fn setup<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
     (contract_id.address(), token, asset)
 }
 
+fn register_contract(
+    env: &Env,
+    allowed_tokens: Vec<Address>,
+    approved_sources: Vec<Address>,
+) -> Address {
+    env.register(
+        EscrowContract,
+        (allowed_tokens, approved_sources, Address::generate(env)),
+    )
+}
+
 #[test]
 fn successful_migration_moves_funds_and_marks_source_as_migrated() {
     let env = Env::default();
@@ -22,9 +33,13 @@ fn successful_migration_moves_funds_and_marks_source_as_migrated() {
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let source_contract = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
+    let source_contract = register_contract(&env, Vec::new(&env), Vec::new(&env));
     let source_client = EscrowContractClient::new(&env, &source_contract);
-    let destination_contract = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::from_array(&env, [source_contract.clone()])));
+    let destination_contract = register_contract(
+        &env,
+        Vec::new(&env),
+        Vec::from_array(&env, [source_contract.clone()]),
+    );
     let destination_client = EscrowContractClient::new(&env, &destination_contract);
 
     asset.mint(&payer, &1_000);
@@ -38,14 +53,21 @@ fn successful_migration_moves_funds_and_marks_source_as_migrated() {
         &None,
         &false,
         &None,
+        &None,
+        &None,
     );
 
     let approvals = Vec::from_array(&env, [releaser]);
-    assert_eq!(source_client.export_to(&escrow_id, &destination_contract, &approvals), 0);
+    assert_eq!(
+        source_client.export_to(&escrow_id, &destination_contract, &approvals),
+        0
+    );
     assert_eq!(source_client.get_status(&escrow_id), EscrowStatus::Migrated);
     assert_eq!(destination_client.get_status(&0), EscrowStatus::Funded);
     assert_eq!(token.balance(&destination_contract), 300);
     assert_eq!(token.balance(&source_contract), 0);
+    assert_eq!(source_client.solvency(&token_id), (0, 0));
+    assert_eq!(destination_client.solvency(&token_id), (300, 300));
 }
 
 #[test]
@@ -58,10 +80,14 @@ fn migration_requires_both_payer_and_releaser_consent() {
     let payee = Address::generate(&env);
     let releasers = Vec::from_array(
         &env,
-        [Address::generate(&env), Address::generate(&env), Address::generate(&env)],
+        [
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+        ],
     );
-    let src = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
-    let dest = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::from_array(&env, [src.clone()])));
+    let src = register_contract(&env, Vec::new(&env), Vec::new(&env));
+    let dest = register_contract(&env, Vec::new(&env), Vec::from_array(&env, [src.clone()]));
     asset.mint(&payer, &1_000);
 
     let source = EscrowContractClient::new(&env, &src);
@@ -140,8 +166,8 @@ fn unrecognized_source_contract_is_rejected() {
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let src = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
-    let dest = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
+    let src = register_contract(&env, Vec::new(&env), Vec::new(&env));
+    let dest = register_contract(&env, Vec::new(&env), Vec::new(&env));
     let source = EscrowContractClient::new(&env, &src);
     asset.mint(&payer, &1_000);
     let escrow_id = source.create_escrow(
@@ -153,6 +179,8 @@ fn unrecognized_source_contract_is_rejected() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
 
@@ -172,10 +200,11 @@ fn destination_token_allowlist_rejection_rolls_back_the_transfer() {
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let src = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
-    let dest = env.register(
-        EscrowContract,
-        (Vec::from_array(&env, [other_token.address.clone()]), Vec::from_array(&env, [src.clone()])),
+    let src = register_contract(&env, Vec::new(&env), Vec::new(&env));
+    let dest = register_contract(
+        &env,
+        Vec::from_array(&env, [other_token.address.clone()]),
+        Vec::from_array(&env, [src.clone()]),
     );
     let source = EscrowContractClient::new(&env, &src);
     asset.mint(&payer, &1_000);
@@ -188,6 +217,8 @@ fn destination_token_allowlist_rejection_rolls_back_the_transfer() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
 
@@ -205,7 +236,7 @@ fn forged_import_from_an_unapproved_contract_is_rejected() {
 
     let (_, _token, _asset) = setup(&env);
     let source = Address::generate(&env);
-    let dest = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
+    let dest = register_contract(&env, Vec::new(&env), Vec::new(&env));
     let dest_client = EscrowContractClient::new(&env, &dest);
     let payload = MigrationData {
         source_contract: source.clone(),
@@ -224,6 +255,9 @@ fn forged_import_from_an_unapproved_contract_is_rejected() {
         requires_acceptance: false,
         accepted_at: None,
         refund_to: Address::generate(&env),
+        release_not_before: None,
+        fee_recipient: None,
+        fee_bps: None,
     };
 
     let result = dest_client.try_import_from(&source, &payload);
@@ -243,8 +277,8 @@ fn duplicate_migration_is_rejected() {
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let src = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
-    let dest = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::from_array(&env, [src.clone()])));
+    let src = register_contract(&env, Vec::new(&env), Vec::new(&env));
+    let dest = register_contract(&env, Vec::new(&env), Vec::from_array(&env, [src.clone()]));
     let source = EscrowContractClient::new(&env, &src);
     let dest_client = EscrowContractClient::new(&env, &dest);
     asset.mint(&payer, &1_000);
@@ -258,6 +292,8 @@ fn duplicate_migration_is_rejected() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
 
@@ -277,11 +313,12 @@ fn id_collisions_across_sources_do_not_overlap() {
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let src_a = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
-    let src_b = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
-    let dest = env.register(
-        EscrowContract,
-        (Vec::<Address>::new(&env), Vec::from_array(&env, [src_a.clone(), src_b.clone()])),
+    let src_a = register_contract(&env, Vec::new(&env), Vec::new(&env));
+    let src_b = register_contract(&env, Vec::new(&env), Vec::new(&env));
+    let dest = register_contract(
+        &env,
+        Vec::new(&env),
+        Vec::from_array(&env, [src_a.clone(), src_b.clone()]),
     );
     let client_a = EscrowContractClient::new(&env, &src_a);
     let client_b = EscrowContractClient::new(&env, &src_b);
@@ -298,6 +335,8 @@ fn id_collisions_across_sources_do_not_overlap() {
         &None,
         &false,
         &None,
+        &None,
+        &None,
     );
     let second_id = client_b.create_escrow(
         &payer,
@@ -308,6 +347,8 @@ fn id_collisions_across_sources_do_not_overlap() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
 
@@ -329,8 +370,12 @@ fn source_escrow_cannot_release_or_refund_after_migration() {
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let src = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::from_array(&env, [Address::generate(&env)])));
-    let dest = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::from_array(&env, [src.clone()])));
+    let src = register_contract(
+        &env,
+        Vec::new(&env),
+        Vec::from_array(&env, [Address::generate(&env)]),
+    );
+    let dest = register_contract(&env, Vec::new(&env), Vec::from_array(&env, [src.clone()]));
     asset.mint(&payer, &1_000);
     let client = EscrowContractClient::new(&env, &src);
     let escrow = client.create_escrow(
@@ -342,6 +387,8 @@ fn source_escrow_cannot_release_or_refund_after_migration() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
 

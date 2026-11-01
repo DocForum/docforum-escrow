@@ -10,19 +10,21 @@
 
 ## Contract surface
 ```
-__constructor(allowed_tokens: Vec<Address>, pause_admin: Address)    // immutable token allowlist (empty = allow all) + the one pause custodian; no setter, no upgrade
+__constructor(allowed_tokens: Vec<Address>, approved_sources: Vec<Address>, pause_admin: Address)    // immutable token/predecessor allowlists + the one pause custodian; no setter, no upgrade
 pause(caller) -> result                // IMPLEMENTED (Phase E5, ADR 0011) — custodian only; blocks every deposit path, never release/refund
 unpause(caller) -> result              // IMPLEMENTED (Phase E5, ADR 0011) — custodian only; re-opens new deposits
 is_paused() -> bool                    // IMPLEMENTED (Phase E5, ADR 0011) — read-only pause flag
 get_pause_admin() -> Option<Address>   // IMPLEMENTED (Phase E5, ADR 0011) — read-only custodian address
 version() -> String    // semantic contract version; source revision and Soroban SDK version are embedded as WASM metadata
+export_to(escrow_id, new_contract, approvers) -> destination_id   // issue #117; payer + stored releaser threshold authorize; moves funded non-pooled escrow atomically to a mutually recognized deployment
+import_from(source_contract, migration_payload: MigrationData) -> escrow_id   // issue #117; approved source only, validates payload and exact balance increase, rejects replay
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to, fee_recipient, fee_bps) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009) + optional protocol fee (ADR 0010); the fee is not yet on testnet
 create_escrow_release_time(..., fee_recipient, fee_bps) -> escrow_id   // single-releaser creation with an earliest release time; accepts the same optional fee pair
 create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id   // optional payee acceptance gate; deployed on testnet
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
 cancel(escrow_id, payer) -> ()   // payer-authorized, only while Funded + requires_acceptance + not yet accepted; funds to refund_to, status Cancelled (ADR 0010); not deployed yet
 create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, deployed on testnet
-get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded | Cancelled — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
+get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded | Cancelled | Migrated — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after, refund_to, fee_recipient, fee_bps — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
 release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser, threshold must be 1, only while Funded
 release_with_approvals(escrow_id, approvers) -> result   // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — >= threshold distinct releasers, each authorizing this invocation
@@ -60,8 +62,8 @@ Payload: (payer, payee, token, amount, condition_ref, releasers, threshold,
           status, (fee_recipient, fee_bps))
 ```
 
-The status value is the matching `Funded`, `Released`, `Refunded`, or
-`Cancelled` symbol. The fee fields are nested because Soroban event tuples
+The status value is the matching `Funded`, `Released`, `Refunded`,
+`Cancelled`, or `Migrated` symbol. The fee fields are nested because Soroban event tuples
 support at most 13 values. `condition_ref` remains opaque: callers must not
 put sensitive data in it (threat model T9).
 
@@ -211,7 +213,7 @@ const client2 = new EscrowClient({ contractId, network: networks.testnet }); // 
 // (verifyNetwork: false turns the check off). Plain-HTTP RPC needs allowHttp (networks.local sets it).
 const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter, notifyPayee: true, refundTo, feeRecipient, feeBps });
 await client.createQuorumEscrow({ payer, payee, token, amount, conditionRef, releasers, threshold, refundAfter, notifyPayee: true, refundTo }); // M-of-N, ADR 0007
-await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
+await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded" | "Cancelled" | "Migrated"
 await client.getEscrow(escrowId);            // full stored record — incl. releasers + threshold + refundAfter, refundTo, so a payee can check the deal (docs/adr/0004/0007/0009, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair or SEP-43 Signer, must be a releaser and threshold must be 1
 await client.releaseWithApprovals({ escrowId, approvers }); // { txHash } — one Keypair/Signer per approver (>= threshold, distinct)

@@ -60,7 +60,11 @@ fn setup(env: &Env, target: i128) -> Fixture<'_> {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(env), Address::generate(env)),
+        (
+            Vec::<Address>::new(env),
+            Vec::<Address>::new(env),
+            Address::generate(env),
+        ),
     );
     let client = EscrowContractClient::new(env, &contract_id);
     let id = client.create_pooled_escrow(
@@ -470,7 +474,11 @@ fn pooled_creation_validation() {
     let releaser = Address::generate(&env);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
     let ref_str = String::from_str(&env, "pooled");
@@ -563,7 +571,14 @@ fn pooled_creation_respects_the_token_allowlist() {
 
     let mut allowlist = Vec::new(&env);
     allowlist.push_back(allowed.clone());
-    let contract_id = env.register(EscrowContract, (allowlist, Address::generate(&env)));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            allowlist,
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     assert_eq!(
@@ -755,7 +770,11 @@ fn ordinary_escrows_are_unaffected() {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
     let id = client.create_escrow(

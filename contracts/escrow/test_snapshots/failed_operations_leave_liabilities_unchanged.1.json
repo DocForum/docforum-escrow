@@ -1055,6 +1055,18 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "ApprovedSources"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": []
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "NextId"
                           }
                         ]

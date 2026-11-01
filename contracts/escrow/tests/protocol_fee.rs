@@ -42,7 +42,11 @@ fn setup<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
 fn deploy(env: &Env) -> (Address, EscrowContractClient<'_>) {
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(env), Address::generate(env)),
+        (
+            Vec::<Address>::new(env),
+            Vec::<Address>::new(env),
+            Address::generate(env),
+        ),
     );
     (
         contract_id.clone(),

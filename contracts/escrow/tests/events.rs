@@ -87,7 +87,11 @@ fn funded_escrow(env: &Env, amount: i128) -> Fixture<'_> {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(env), Address::generate(env)),
+        (
+            Vec::<Address>::new(env),
+            Vec::<Address>::new(env),
+            Address::generate(env),
+        ),
     );
     let client = EscrowContractClient::new(env, &contract_id);
 
@@ -168,7 +172,11 @@ fn create_error_path_emits_no_event() {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -345,7 +353,11 @@ fn refund_event_destination_is_refund_to_not_payer() {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -496,7 +508,11 @@ fn timeout_refund_after_deadline_emits_refunded_event() {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -561,7 +577,11 @@ fn release_with_approvals_emits_released_event() {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 

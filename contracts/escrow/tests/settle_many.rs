@@ -58,7 +58,11 @@ fn fixture(env: &Env) -> Fixture<'_> {
     StellarAssetClient::new(env, &token_id).mint(&payer, &1_000_000);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(env), Address::generate(env)),
+        (
+            Vec::<Address>::new(env),
+            Vec::<Address>::new(env),
+            Address::generate(env),
+        ),
     );
     Fixture {
         env,

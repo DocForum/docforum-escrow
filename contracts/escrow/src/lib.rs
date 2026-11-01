@@ -101,6 +101,7 @@ pub enum EscrowStatus {
     /// The payer withdrew the funds before the payee accepted — see
     /// docs/adr/0010. Terminal, like `Released` and `Refunded`.
     Cancelled,
+    Migrated,
 }
 
 /// What one `settle_many` operation does to its escrow (issue #29).
@@ -212,6 +213,37 @@ pub struct Contribution {
     pub refunded: bool,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MigrationKey {
+    pub source_contract: Address,
+    pub source_id: u64,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct MigrationData {
+    pub source_contract: Address,
+    pub escrow_id: u64,
+    pub destination_balance_before: i128,
+    pub payer: Address,
+    pub payee: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub condition_ref: String,
+    pub status: EscrowStatus,
+    pub releasers: Vec<Address>,
+    pub threshold: u32,
+    pub refund_after: Option<u64>,
+    pub notify_payee: bool,
+    pub requires_acceptance: bool,
+    pub accepted_at: Option<u64>,
+    pub refund_to: Address,
+    pub release_not_before: Option<u64>,
+    pub fee_recipient: Option<Address>,
+    pub fee_bps: Option<u32>,
+}
+
 /// One entry of a `create_escrows` batch. Mirrors the single-escrow
 /// creation parameters minus the batch-wide `payer`.
 #[contracttype]
@@ -245,8 +277,10 @@ enum DataKey {
     Contribution(u64, Address),
     /// Issue #39: total outstanding liability for one token, i.e. the sum
     /// of `amount` over every escrow in that token whose status is
-    /// `Funded`. Appended last, so existing entries keep their encoding.
+    /// `Funded`. Appending variants preserves existing storage encodings.
     Liability(Address),
+    ApprovedSources,
+    Imported(MigrationKey),
 }
 
 /// Emitted by `pause` (docs/adr/0011). Carries the custodian that flipped
@@ -374,6 +408,11 @@ pub enum Error {
     /// `unpause` on a running contract. The transition did not happen, so
     /// no event is emitted.
     NotPaused = 40,
+    UnapprovedSource = 11700,
+    MigrationNotEligible = 11701,
+    InvalidMigration = 11702,
+    AlreadyMigrated = 11703,
+    MigrationFailed = 11704,
 }
 
 #[contract]
@@ -381,8 +420,8 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
-    /// Sets the immutable token allowlist at deployment. An empty list
-    /// preserves the legacy behavior and allows any token address.
+    /// Sets the immutable token and predecessor allowlists plus the pause
+    /// custodian at deployment.
     ///
     /// Also stores the single address permitted to `pause`/`unpause`
     /// (docs/adr/0011). There is no setter, so the custodian cannot be
@@ -393,14 +432,201 @@ impl EscrowContract {
     /// The custodian is deliberately weak: its only power is to refuse
     /// **new** deposits. It cannot release, refund, edit an escrow, or
     /// upgrade anything.
-    pub fn __constructor(env: Env, allowed_tokens: Vec<Address>, pause_admin: Address) {
+    pub fn __constructor(
+        env: Env,
+        allowed_tokens: Vec<Address>,
+        approved_sources: Vec<Address>,
+        pause_admin: Address,
+    ) {
         env.storage()
             .instance()
             .set(&DataKey::AllowedTokens, &allowed_tokens);
         env.storage()
             .instance()
+            .set(&DataKey::ApprovedSources, &approved_sources);
+        env.storage()
+            .instance()
             .set(&DataKey::PauseAdmin, &pause_admin);
         env.storage().instance().set(&DataKey::Paused, &false);
+    }
+
+    pub fn export_to(
+        env: Env,
+        escrow_id: u64,
+        new_contract: Address,
+        approvers: Vec<Address>,
+    ) -> Result<u64, Error> {
+        let mut data = Self::load(&env, escrow_id)?;
+        if data.status != EscrowStatus::Funded
+            || env.storage().persistent().has(&DataKey::Pooled(escrow_id))
+        {
+            return Err(Error::MigrationNotEligible);
+        }
+
+        data.payer.require_auth();
+        Self::check_approvals(&env, &data, &approvers)?;
+
+        let payload = MigrationData {
+            source_contract: env.current_contract_address(),
+            escrow_id,
+            destination_balance_before: token::Client::new(&env, &data.token)
+                .balance(&new_contract),
+            payer: data.payer.clone(),
+            payee: data.payee.clone(),
+            token: data.token.clone(),
+            amount: data.amount,
+            condition_ref: data.condition_ref.clone(),
+            status: EscrowStatus::Funded,
+            releasers: data.releasers.clone(),
+            threshold: data.threshold,
+            refund_after: data.refund_after,
+            notify_payee: data.notify_payee,
+            requires_acceptance: data.requires_acceptance,
+            accepted_at: data.accepted_at,
+            refund_to: data.refund_to.clone(),
+            release_not_before: data.release_not_before,
+            fee_recipient: data.fee_recipient.clone(),
+            fee_bps: data.fee_bps,
+        };
+
+        let source_contract = env.current_contract_address();
+        token::Client::new(&env, &data.token).transfer(
+            &source_contract,
+            &new_contract,
+            &data.amount,
+        );
+
+        let import_result = env.try_invoke_contract::<u64, soroban_sdk::Error>(
+            &new_contract,
+            &soroban_sdk::Symbol::new(&env, "import_from"),
+            (source_contract.clone(), payload).into_val(&env),
+        );
+        let imported_id = match import_result {
+            Ok(Ok(id)) => id,
+            Ok(Err(_)) | Err(_) => return Err(Error::MigrationFailed),
+        };
+
+        Self::sub_liability(&env, &data.token, data.amount)?;
+        data.status = EscrowStatus::Migrated;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(escrow_id), &data.status);
+        Ok(imported_id)
+    }
+
+    pub fn import_from(
+        env: Env,
+        source_contract: Address,
+        migration: MigrationData,
+    ) -> Result<u64, Error> {
+        source_contract.require_auth();
+        if source_contract == env.current_contract_address() {
+            return Err(Error::UnapprovedSource);
+        }
+
+        let approved: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedSources)
+            .unwrap_or(Vec::new(&env));
+        if !Self::contains(&approved, &source_contract) {
+            return Err(Error::UnapprovedSource);
+        }
+        if migration.source_contract != source_contract {
+            return Err(Error::InvalidMigration);
+        }
+        if migration.status != EscrowStatus::Funded {
+            return Err(Error::MigrationNotEligible);
+        }
+        if migration.amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        let allowed_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedTokens)
+            .unwrap_or(Vec::new(&env));
+        if !allowed_tokens.is_empty() && !Self::contains(&allowed_tokens, &migration.token) {
+            return Err(Error::DisallowedToken);
+        }
+        if migration.condition_ref.len() > MAX_CONDITION_REF_LEN {
+            return Err(Error::ConditionRefTooLong);
+        }
+        Self::check_releaser_set(&env, &migration.releasers, migration.threshold)?;
+        if migration.refund_to == env.current_contract_address() {
+            return Err(Error::InvalidRefundTo);
+        }
+        if migration.release_not_before.is_some_and(|release_time| {
+            migration
+                .refund_after
+                .is_some_and(|refund_time| release_time > refund_time)
+        }) {
+            return Err(Error::InvalidReleaseNotBefore);
+        }
+        match (&migration.fee_recipient, migration.fee_bps) {
+            (None, None) => {}
+            (Some(recipient), Some(bps)) if *recipient != env.current_contract_address() => {
+                Self::fee_amount(migration.amount, bps)?;
+            }
+            _ => return Err(Error::InvalidFee),
+        }
+
+        let import_key = MigrationKey {
+            source_contract: source_contract.clone(),
+            source_id: migration.escrow_id,
+        };
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Imported(import_key.clone()))
+        {
+            return Err(Error::AlreadyMigrated);
+        }
+
+        let token_client = token::Client::new(&env, &migration.token);
+        let destination_balance = token_client.balance(&env.current_contract_address());
+        let expected_balance = migration
+            .destination_balance_before
+            .checked_add(migration.amount)
+            .ok_or(Error::Overflow)?;
+        if destination_balance != expected_balance {
+            return Err(Error::BalanceMismatch);
+        }
+
+        let destination_id = Self::next_id(&env);
+        let imported = EscrowData {
+            payer: migration.payer,
+            payee: migration.payee,
+            token: migration.token.clone(),
+            amount: migration.amount,
+            condition_ref: migration.condition_ref,
+            status: EscrowStatus::Funded,
+            releasers: migration.releasers,
+            threshold: migration.threshold,
+            refund_after: migration.refund_after,
+            notify_payee: migration.notify_payee,
+            requires_acceptance: migration.requires_acceptance,
+            accepted_at: migration.accepted_at,
+            refund_to: migration.refund_to,
+            release_not_before: migration.release_not_before,
+            fee_recipient: migration.fee_recipient,
+            fee_bps: migration.fee_bps,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(destination_id), &imported);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(destination_id), &EscrowStatus::Funded);
+        Self::add_liability(&env, &imported.token, imported.amount)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Imported(import_key), &true);
+        Ok(destination_id)
     }
 
     /// Semantic version of this contract interface and behavior.
@@ -1514,11 +1740,8 @@ impl EscrowContract {
                     }
                 }
             }
-            let transfer = token_client.try_transfer(
-                &env.current_contract_address(),
-                &destination,
-                &payout,
-            );
+            let transfer =
+                token_client.try_transfer(&env.current_contract_address(), &destination, &payout);
             if !matches!(transfer, Ok(Ok(()))) {
                 return Err(Error::Undeliverable);
             }
@@ -1544,6 +1767,7 @@ impl EscrowContract {
             EscrowStatus::Released => symbol_short!("released"),
             EscrowStatus::Refunded => symbol_short!("refunded"),
             EscrowStatus::Cancelled => symbol_short!("cancelled"),
+            EscrowStatus::Migrated => symbol_short!("migrated"),
         };
         Self::publish_state(env, action, escrow_id, data);
         Ok(())
@@ -1557,6 +1781,7 @@ impl EscrowContract {
             EscrowStatus::Released => symbol_short!("Released"),
             EscrowStatus::Refunded => symbol_short!("Refunded"),
             EscrowStatus::Cancelled => symbol_short!("Cancelled"),
+            EscrowStatus::Migrated => symbol_short!("Migrated"),
         };
         env.events().publish(
             (symbol_short!("ESCROW"), action, id),
@@ -1855,7 +2080,6 @@ impl EscrowContract {
         Ok(())
     }
 
-
     fn next_id(env: &Env) -> u64 {
         let id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
         env.storage().instance().set(&DataKey::NextId, &(id + 1));
@@ -1924,6 +2148,3 @@ impl EscrowContract {
         storage.extend_ttl(&key, LIABILITY_TTL_THRESHOLD.min(extend_to), extend_to);
     }
 }
-
-
-

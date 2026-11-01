@@ -1,0 +1,1 @@
+Issue #117 (Phase E5): restored the consented migration protocol between approved deployments. Migration preserves escrow state, rejects pooled escrows and replayed imports, and updates per-token liabilities atomically.
