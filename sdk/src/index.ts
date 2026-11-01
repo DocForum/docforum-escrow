@@ -472,11 +472,11 @@ export const MAX_RELEASERS = 10;
 
 /**
  * Maximum number of items in one batched call — must match the contract's
- * `MAX_BATCH_SIZE` (currently 50, see docs/adr/0005). `createEscrows` and
+ * `MAX_BATCH_SIZE` (currently 16, see docs/adr/0012). `createEscrows` and
  * `settleMany` chunk larger inputs automatically. Keep in sync with the
  * contract; a change is an SDK semver event (hard rule 3).
  */
-export const MAX_BATCH_SIZE = 50;
+export const MAX_BATCH_SIZE = 16;
 
 /** One escrow to create in a batched `createEscrows` call. */
 export interface BatchCreateItem extends CreateEscrowParams {}

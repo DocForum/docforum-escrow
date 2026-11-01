@@ -308,13 +308,14 @@ fn batch_of(env: &Env, token: &Address, count: u32) -> Vec<docforum_escrow::Crea
 fn create_escrows_rejects_one_item_over_the_batch_limit() {
     let env = Env::default();
     env.mock_all_auths();
-    let (token, _, _) = setup(&env);
+    let (token, _, asset) = setup(&env);
     let contract_id = env.register(
         EscrowContract,
         (Vec::<Address>::new(&env), Address::generate(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
     let payer = Address::generate(&env);
+    asset.mint(&payer, &100);
 
     let oversized = batch_of(&env, &token, docforum_escrow::MAX_BATCH_SIZE + 1);
     assert_eq!(
@@ -322,11 +323,159 @@ fn create_escrows_rejects_one_item_over_the_batch_limit() {
         Err(Ok(docforum_escrow::Error::BatchTooLarge))
     );
 
-    // Only the size check is under test here, so this asserts that a full
-    // batch gets past it, not that the whole batch succeeds.
+    // Recording auths for a full batch needs more memory than the default
+    // test budget allows. Mainnet's limits on the invocation still apply.
+    env.cost_estimate().budget().reset_unlimited();
     let full = batch_of(&env, &token, docforum_escrow::MAX_BATCH_SIZE);
-    assert_ne!(
-        client.try_create_escrows(&payer, &full),
-        Err(Ok(docforum_escrow::Error::BatchTooLarge))
+    assert_eq!(
+        client.create_escrows(&payer, &full).len(),
+        docforum_escrow::MAX_BATCH_SIZE
+    );
+}
+
+#[test]
+fn create_escrows_creates_every_item_in_input_order() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (token, token_client, asset) = setup(&env);
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let payer = Address::generate(&env);
+    asset.mint(&payer, &100);
+    let mut items = batch_of(&env, &token, 3);
+    for (index, amount) in [10i128, 20, 30].into_iter().enumerate() {
+        let mut item = items.get_unchecked(index as u32);
+        item.amount = amount;
+        items.set(index as u32, item);
+    }
+
+    let ids = client.create_escrows(&payer, &items);
+
+    assert_eq!(ids, soroban_sdk::vec![&env, 0u64, 1, 2]);
+    for (id, item) in ids.iter().zip(items.iter()) {
+        let stored = client.get_escrow(&id);
+        assert_eq!(stored.payee, item.payee);
+        assert_eq!(stored.amount, item.amount);
+        assert_eq!(client.get_status(&id), EscrowStatus::Funded);
+    }
+    assert_eq!(token_client.balance(&contract_id), 60);
+    assert_eq!(token_client.balance(&payer), 40);
+}
+
+#[test]
+fn create_escrows_needs_one_payer_authorization_covering_every_transfer() {
+    let env = Env::default();
+    let (token, token_client, asset) = setup(&env);
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let payer = Address::generate(&env);
+    env.mock_all_auths();
+    asset.mint(&payer, &100);
+    env.set_auths(&[]);
+    let items = batch_of(&env, &token, 2);
+
+    // Nobody signed: nothing is created.
+    assert!(client.try_create_escrows(&payer, &items).is_err());
+    assert_eq!(token_client.balance(&payer), 100);
+
+    let transfer = MockAuthInvoke {
+        contract: &token,
+        fn_name: "transfer",
+        args: (payer.clone(), contract_id.clone(), 1i128).into_val(&env),
+        sub_invokes: &[],
+    };
+    let ids = client
+        .mock_auths(&[MockAuth {
+            address: &payer,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "create_escrows",
+                args: (payer.clone(), items.clone()).into_val(&env),
+                sub_invokes: &[transfer.clone(), transfer],
+            },
+        }])
+        .create_escrows(&payer, &items);
+
+    assert_eq!(ids.len(), 2);
+    assert_eq!(token_client.balance(&payer), 98);
+}
+
+#[test]
+fn create_escrows_reverts_the_whole_batch_when_one_item_is_invalid() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (token, token_client, asset) = setup(&env);
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let payer = Address::generate(&env);
+    asset.mint(&payer, &100);
+    let mut items = batch_of(&env, &token, 2);
+    let mut invalid = items.get_unchecked(1);
+    invalid.amount = 0;
+    items.set(1, invalid);
+
+    assert_eq!(
+        client.try_create_escrows(&payer, &items),
+        Err(Ok(docforum_escrow::Error::InvalidAmount))
+    );
+
+    assert_eq!(token_client.balance(&payer), 100);
+    assert_eq!(token_client.balance(&contract_id), 0);
+    assert!(client.try_get_status(&0).is_err());
+}
+
+/// `MAX_BATCH_SIZE` items with a maximum-length `condition_ref` and a refund
+/// deadline must fit Mainnet's per-transaction limits. The binding one is
+/// contract events + return value (16,384 bytes), so this sizes the events the
+/// batch actually emitted (XDR, as the network meters them) and requires at
+/// least 15% headroom. `Env::default()` enforces the other limits.
+#[test]
+fn max_create_batch_fits_mainnet_limits() {
+    use soroban_sdk::xdr::{Limits, WriteXdr};
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let (token, _, asset) = setup(&env);
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let payer = Address::generate(&env);
+    asset.mint(&payer, &1_000);
+    let mut items = batch_of(&env, &token, docforum_escrow::MAX_BATCH_SIZE);
+    for index in 0..items.len() {
+        let mut item = items.get_unchecked(index);
+        item.condition_ref = String::from_str(&env, &"r".repeat(64));
+        item.refund_after = Some(u64::MAX);
+        items.set(index, item);
+    }
+
+    // See create_escrows_rejects_one_item_over_the_batch_limit.
+    env.cost_estimate().budget().reset_unlimited();
+    let ids = client.create_escrows(&payer, &items);
+    let events_bytes: usize = env
+        .events()
+        .all()
+        .events()
+        .iter()
+        .map(|event| event.to_xdr(Limits::none()).unwrap().len())
+        .sum();
+
+    assert_eq!(ids.len(), docforum_escrow::MAX_BATCH_SIZE);
+    // One id per item in the return value; a generous allowance.
+    let return_bytes = 16 * docforum_escrow::MAX_BATCH_SIZE as usize + 64;
+    assert!(
+        events_bytes + return_bytes <= 16_384 * 85 / 100,
+        "events {events_bytes} + return {return_bytes} bytes"
     );
 }

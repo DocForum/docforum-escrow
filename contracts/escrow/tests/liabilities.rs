@@ -242,24 +242,26 @@ fn creation_paths_add_to_liabilities() {
     );
     assert_eq!(f.liabilities(0), 190);
 
-    // One item per batch: on current `main`, a batch with two or more
-    // items calls `payer.require_auth()` once per item in the same frame
-    // and fails `Error(Auth, ExistingValue)` — a pre-existing limitation
-    // of `create_escrows`/`settle_many`, not something this change touches.
-    for (token, amount) in [(0usize, 5i128), (1, 7)] {
-        let items = soroban_sdk::vec![
-            &env,
-            CreateItem {
-                payee: f.payee.clone(),
-                token: f.tokens[token].clone(),
-                amount,
-                condition_ref: f.cond(),
-                releaser: f.releaser.clone(),
-                refund_after: None,
-            },
-        ];
-        f.client.create_escrows(&f.payer, &items);
-    }
+    let items = soroban_sdk::vec![
+        &env,
+        CreateItem {
+            payee: f.payee.clone(),
+            token: f.tokens[0].clone(),
+            amount: 5,
+            condition_ref: f.cond(),
+            releaser: f.releaser.clone(),
+            refund_after: None,
+        },
+        CreateItem {
+            payee: f.payee.clone(),
+            token: f.tokens[1].clone(),
+            amount: 7,
+            condition_ref: f.cond(),
+            releaser: f.releaser.clone(),
+            refund_after: None,
+        },
+    ];
+    f.client.create_escrows(&f.payer, &items);
     assert_eq!(f.liabilities(0), 195);
     assert_eq!(f.liabilities(1), 7);
     f.assert_invariant();
