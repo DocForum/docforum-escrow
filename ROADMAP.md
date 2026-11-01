@@ -1064,3 +1064,24 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 - 2026-10-31 — Contract 2.5.0 (was 2.4.0), folded from 1 change(s):
   - Issue #35 (Phase E5): deposit-only emergency pause (ADR 0011). The constructor gains a second argument (`pause_admin`) and the contract gains `pause`/`unpause`/`is_paused`/`get_pause_admin` entry points plus the `Paused`/`Unpaused` events and the `Paused`, `AlreadyPaused`, `NotPaused` errors (codes 38–40). Every deposit path is gated — `create_escrow` and its variants, `top_up`, and pooled `create_pooled_escrow`/`contribute` — while `release`, `refund`, the timeout refund, pooled `claim_refund` and both `settle_many` ops never read the flag, so a pause can never lock funds already escrowed.
   Final error codes: Error::Paused 3500 -> 38, Error::AlreadyPaused 3501 -> 39, Error::NotPaused 3502 -> 40.
+- 2026-11-01 — Contract 2.5.1 (was 2.5.0), folded from 1 change(s):
+  - `create_escrows` now works for more than one item: `payer` authorizes once for the whole batch instead of once per item, which aborted with `Error(Auth, ExistingValue)`. `MAX_BATCH_SIZE` drops from 50 to 16, because 24 items already exceed Mainnet's 16,384-byte contract events limit (docs/adr/0012).
+- 2026-11-01 — `create_escrows` now works for batches of more than one item, and stays atomic.
+  `MAX_BATCH_SIZE` drops from 50 to 16 in the contract and the SDK, because 24
+  items exceed Mainnet's contract events limit. See the amended consequences in
+  `docs/adr/0012-batch-settlement-best-effort.md`.
+- 2026-11-01 — Added contract tests for the five mutants the nightly mutation run missed: the
+  `create_escrows` batch limit, a pooled `condition_ref` of exactly 64 bytes, no
+  fee transfer when the fee is zero, and `settle_many` at exactly `release_time`.
+  Tests only, so no contract change.
+- 2026-11-01 — Restored the SDK's batch helpers (`createEscrows`, `settleMany`,
+  `BatchPartialFailureError`, `MAX_BATCH_SIZE` and the related types), which #248
+  removed by accident when it merged from a stale branch, and put
+  `tests/batch.test.ts` back in `test:offline` so CI catches this if it happens
+  again. No contract change, so the generated bindings are unchanged.
+- 2026-11-01 — Nightly soak: failures are now classified correctly. The old check matched bare
+  words such as "network", which `tests/network-presets.test.ts` always printed,
+  so every failure was reported as `INFRASTRUCTURE_FAILURE`. Added a
+  `DEPLOYMENT_OUTDATED` result for a contract whose function arguments no longer
+  match the SDK. The live suite now reads its contract id from `deployments.json`
+  through `knownContractId("testnet")`, or from `TESTNET_CONTRACT_ID`.
