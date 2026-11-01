@@ -521,3 +521,25 @@ fn get_escrow_reports_no_fee_when_none_was_set() {
     assert_eq!(data.fee_recipient, None);
     assert_eq!(data.fee_bps, None);
 }
+
+#[test]
+fn a_zero_fee_sends_no_transfer_to_the_fee_recipient() {
+    use soroban_sdk::testutils::Events as _;
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let f = fund_escrow(&env, 300, Some(0));
+
+    f.client.release(&f.escrow_id, &f.releaser);
+
+    // Balances can't show a zero-value transfer, but its token event can:
+    // the payout to the payee must be the only one.
+    assert_eq!(
+        env.events()
+            .all()
+            .filter_by_contract(&f.token.address)
+            .events()
+            .len(),
+        1
+    );
+}

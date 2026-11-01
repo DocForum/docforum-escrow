@@ -288,3 +288,45 @@ fn callback_opt_in_requires_payee_authorization() {
         Err(Ok(docforum_escrow::Error::NotFound))
     ));
 }
+
+fn batch_of(env: &Env, token: &Address, count: u32) -> Vec<docforum_escrow::CreateItem> {
+    let mut items = Vec::new(env);
+    for _ in 0..count {
+        items.push_back(docforum_escrow::CreateItem {
+            payee: Address::generate(env),
+            token: token.clone(),
+            amount: 1,
+            condition_ref: String::from_str(env, "batch"),
+            releaser: Address::generate(env),
+            refund_after: None,
+        });
+    }
+    items
+}
+
+#[test]
+fn create_escrows_rejects_one_item_over_the_batch_limit() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (token, _, _) = setup(&env);
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let payer = Address::generate(&env);
+
+    let oversized = batch_of(&env, &token, docforum_escrow::MAX_BATCH_SIZE + 1);
+    assert_eq!(
+        client.try_create_escrows(&payer, &oversized),
+        Err(Ok(docforum_escrow::Error::BatchTooLarge))
+    );
+
+    // Only the size check is under test here, so this asserts that a full
+    // batch gets past it, not that the whole batch succeeds.
+    let full = batch_of(&env, &token, docforum_escrow::MAX_BATCH_SIZE);
+    assert_ne!(
+        client.try_create_escrows(&payer, &full),
+        Err(Ok(docforum_escrow::Error::BatchTooLarge))
+    );
+}
