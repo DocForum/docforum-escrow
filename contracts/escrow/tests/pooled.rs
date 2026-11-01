@@ -865,3 +865,22 @@ fn claim_refund_emits_an_event() {
         ]
     );
 }
+
+#[test]
+fn create_pooled_escrow_accepts_a_condition_ref_at_the_length_limit() {
+    let env = Env::default();
+    let f = setup(&env, 100);
+    let at_limit = String::from_str(&env, &"x".repeat(64));
+
+    let id = f.client.create_pooled_escrow(
+        &f.creator,
+        &f.payee,
+        &f.token.address,
+        &100,
+        &at_limit,
+        &f.releaser,
+        &DEADLINE,
+    );
+
+    assert_eq!(f.client.get_status(&id), EscrowStatus::Funded);
+}
