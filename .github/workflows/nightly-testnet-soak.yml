@@ -45,9 +45,11 @@ jobs:
           npm run test:integration 2>&1 | tee testnet-soak.log
           result=${PIPESTATUS[0]}
           if [ "$result" -ne 0 ]; then
-            if grep -Eqi 'contract.{0,30}(not found|missing)|wasm.{0,30}(not found|missing)' testnet-soak.log; then
+            if grep -Eq 'MismatchingParameterLen' testnet-soak.log; then
+              echo 'failure_kind=DEPLOYMENT_OUTDATED: deployed escrow contract does not match the SDK' >> "$GITHUB_OUTPUT"
+            elif grep -Eqi 'contract.{0,30}(not found|missing)|wasm.{0,30}(not found|missing)' testnet-soak.log; then
               echo 'failure_kind=TESTNET_RESET: deployed escrow contract or WASM missing' >> "$GITHUB_OUTPUT"
-            elif grep -Eqi 'Friendbot funding failed|ECONN|fetch failed|RPC|network|socket|connection|DNS|timed out|temporarily unavailable|status code 50[234]|429' testnet-soak.log; then
+            elif grep -Eq 'Friendbot funding failed|ECONN(REFUSED|RESET)|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up|temporarily unavailable|status code (50[234]|429)' testnet-soak.log; then
               echo 'failure_kind=INFRASTRUCTURE_FAILURE: Friendbot, RPC, or testnet unavailable' >> "$GITHUB_OUTPUT"
             else
               echo 'failure_kind=SDK_TEST_FAILURE: integration assertion or SDK call failed' >> "$GITHUB_OUTPUT"
@@ -83,7 +85,9 @@ jobs:
             const kind = process.env.SIMULATED === 'true'
               ? 'forced reporting check'
               : process.env.FAILURE_KIND;
-            const resetNote = kind.startsWith('TESTNET_RESET')
+            const resetNote = kind.startsWith('DEPLOYMENT_OUTDATED')
+              ? 'The SDK calls a contract function with a different argument count than the deployed contract, so the contract changed after the last deployment. Redeploy with scripts/deploy, which records the new contract id in deployments.json.'
+              : kind.startsWith('TESTNET_RESET')
               ? 'If the failure reports that the escrow contract or its WASM is missing, the testnet may have reset; redeploy the documented testnet contract before treating this as an SDK regression.'
               : kind.startsWith('SDK_TEST_FAILURE')
                 ? 'This run reached the integration suite and an SDK call or assertion failed. Inspect the run log for the failing lifecycle path.'
@@ -100,14 +104,15 @@ jobs:
 
       - name: Publish failure classification
         if: ${{ failure() }}
+        env:
+          FAILURE_KIND: ${{ steps.integration.outputs.failure_kind }}
+          SIMULATED: ${{ inputs.simulate_failure }}
         run: |
-          if [ ! -f testnet-soak.log ]; then
-            echo '::error::INFRASTRUCTURE_FAILURE: workflow setup failed before the SDK test log was created.'
-          elif grep -Eqi 'contract.{0,30}(not found|missing)|wasm.{0,30}(not found|missing)' testnet-soak.log; then
-            echo '::error::TESTNET_RESET: the deployed escrow contract or WASM is missing.'
-          elif grep -Eqi 'Friendbot funding failed|ECONN|fetch failed|RPC|network|socket|connection|DNS|timed out|temporarily unavailable|status code 50[234]|429' testnet-soak.log; then
-            echo '::error::INFRASTRUCTURE_FAILURE: Friendbot, RPC, or testnet availability failed.'
+          if [ "$SIMULATED" = 'true' ]; then
+            echo '::error::SOAK_FORCED_FAILURE: manual issue-reporting check'
+          elif [ -n "$FAILURE_KIND" ]; then
+            echo "::error::$FAILURE_KIND"
           else
-            echo '::error::SDK_TEST_FAILURE: inspect the failed integration assertion above.'
+            echo '::error::INFRASTRUCTURE_FAILURE: workflow setup failed before the SDK test log was created.'
           fi
         shell: bash

@@ -27,12 +27,12 @@ import {
   TransactionBuilder,
   nativeToScVal,
 } from "@stellar/stellar-sdk";
-import { EscrowClient, EscrowPreconditionError, FactoryClient, predictInstanceAddress } from "../src/index.js";
+import { EscrowClient, EscrowPreconditionError, FactoryClient, knownContractId, predictInstanceAddress } from "../src/index.js";
 
-// Current upstream-main testnet deployment, including BalanceMismatch
-// and opt-in payee acceptance -- see docs/testnet-deployments.md.
+// Newest testnet deployment recorded by scripts/deploy (deployments.json), so
+// a redeploy needs no edit here. Overridable via env to test another instance.
 // Public contract addresses, not secrets.
-const CONTRACT_ID = "CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR";
+const CONTRACT_ID = process.env.TESTNET_CONTRACT_ID ?? knownContractId("testnet");
 const NATIVE_XLM_SAC = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 // Phase E6 factory contract deployed on testnet alongside the
 // instance contract above. Overridable via env for forks that deploy
