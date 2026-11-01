@@ -9,6 +9,15 @@
 New records are written by `scripts/deploy`, newest first, and mirrored in the
 machine-readable `/deployments.json`. Older records were written by hand.
 
+> **Note (2026-10-20, updated 2026-10-24):** every deployment recorded below
+> (the scripted 2026-10-24 record included) predates Phase E5's
+> `__constructor(allowed_tokens, pause_admin)` (issue #35, `docs/adr/0011`),
+> so **none of them has the emergency pause** and none can be upgraded to it
+> in place — a constructor is part of the instance's deployment. Redeploying
+> is tracked as an open item in `ROADMAP.md`; these entries stay as accurate
+> history of what was actually deployed at the time. `scripts/deploy` now
+> passes `--pause_admin` (default: the deployer account).
+
 <!-- scripts/deploy inserts new records below this line -->
 
 ## `docforum_escrow` — 2026-10-24 (`eafe267`, recorded by `scripts/deploy`)
@@ -275,8 +284,14 @@ stellar contract deploy \
   --wasm target/wasm32v1-none/release/docforum_escrow.wasm \
   --source <alias> \
   --network testnet \
-  --alias docforum-escrow
+  --alias docforum-escrow \
+  -- --allowed_tokens '["<token-address>"]' --pause_admin <custodian-address>
 ```
+
+Both constructor arguments are required by the current source: the
+immutable token allowlist (an empty list allows any token) and the pause
+custodian (docs/adr/0011). Pass a Stellar multisig account as
+`--pause_admin` for a deployment whose pause cannot be lost with one key.
 
 Remember the SDK's tests and any consumer config (`contractId`) point at
 the id above — a redeploy means updating those, not just this file.

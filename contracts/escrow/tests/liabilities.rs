@@ -80,7 +80,10 @@ fn fixture(env: &Env) -> Fixture<'_> {
     let tokens = [new_token(env), new_token(env)];
     let unused = new_token(env);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
     Fixture {
         env,
         client: EscrowContractClient::new(env, &contract_id),
@@ -168,7 +171,11 @@ impl<'a> Fixture<'a> {
     fn assert_invariant(&self) {
         for t in 0..TOKENS {
             let (balance, liabilities) = self.client.solvency(&self.tokens[t]);
-            assert_eq!(liabilities, self.funded_sum(t), "liabilities drifted for token {t}");
+            assert_eq!(
+                liabilities,
+                self.funded_sum(t),
+                "liabilities drifted for token {t}"
+            );
             assert!(liabilities >= 0);
             assert_eq!(balance, liabilities, "balance != liabilities for token {t}");
         }
@@ -211,7 +218,15 @@ fn creation_paths_add_to_liabilities() {
         &None,
     );
     f.client.create_escrow_with_acceptance(
-        &f.payer, &f.payee, &f.tokens[0], &30, &f.cond(), &f.releaser, &None, &true, &None,
+        &f.payer,
+        &f.payee,
+        &f.tokens[0],
+        &30,
+        &f.cond(),
+        &f.releaser,
+        &None,
+        &true,
+        &None,
     );
     f.client.create_escrow_with_releasers(
         &f.payer,
@@ -329,9 +344,15 @@ fn settle_many_subtracts_each_release() {
     let b = f.create(0, 20);
     f.create(1, 30);
     // One id per call; see `creation_paths_add_to_liabilities` for why.
-    f.client.settle_many(&f.releaser, &soroban_sdk::vec![&env, (a, SettleAction::Release)]);
+    f.client.settle_many(
+        &f.releaser,
+        &soroban_sdk::vec![&env, (a, SettleAction::Release)],
+    );
     assert_eq!(f.liabilities(0), 20);
-    f.client.settle_many(&f.releaser, &soroban_sdk::vec![&env, (b, SettleAction::Release)]);
+    f.client.settle_many(
+        &f.releaser,
+        &soroban_sdk::vec![&env, (b, SettleAction::Release)],
+    );
     assert_eq!(f.liabilities(0), 0);
     assert_eq!(f.liabilities(1), 30);
     f.assert_invariant();
@@ -342,7 +363,15 @@ fn cancel_subtracts_from_liabilities() {
     let env = Env::default();
     let f = fixture(&env);
     let id = f.client.create_escrow_with_acceptance(
-        &f.payer, &f.payee, &f.tokens[0], &45, &f.cond(), &f.releaser, &None, &true, &None,
+        &f.payer,
+        &f.payee,
+        &f.tokens[0],
+        &45,
+        &f.cond(),
+        &f.releaser,
+        &None,
+        &true,
+        &None,
     );
     assert_eq!(f.liabilities(0), 45);
     f.client.cancel(&id, &f.payer);
@@ -415,7 +444,10 @@ fn liability_entry_ttl_is_extended_on_write() {
     f.create(0, 100);
     let key = (Symbol::new(&env, "Liability"), f.tokens[0].clone());
     let (ttl, max_ttl) = env.as_contract(&f.client.address, || {
-        (env.storage().persistent().get_ttl(&key), env.storage().max_ttl())
+        (
+            env.storage().persistent().get_ttl(&key),
+            env.storage().max_ttl(),
+        )
     });
     let expected = docforum_escrow::LIABILITY_TTL_EXTEND_TO.min(max_ttl);
     assert_eq!(ttl, expected);
@@ -431,24 +463,72 @@ fn liability_entry_ttl_is_extended_on_write() {
 
 #[derive(Debug, Clone, Copy)]
 enum Op {
-    Create { token: usize, amount: i128, timeout: bool },
-    CreateTimed { token: usize, amount: i128 },
-    CreateAcceptance { token: usize, amount: i128 },
-    CreateQuorum { token: usize, amount: i128 },
-    CreateBatch { token: usize, amount: i128 },
-    CreatePooled { token: usize, target: i128 },
-    TopUp { pick: usize, amount: i128 },
-    Contribute { pick: usize, who: usize, amount: i128 },
-    Accept { pick: usize },
-    Rotate { pick: usize },
-    Release { pick: usize },
-    ReleaseQuorum { pick: usize },
-    SettleMany { pick: usize },
-    Refund { pick: usize, stranger: bool },
-    RefundQuorum { pick: usize },
-    Cancel { pick: usize },
-    ClaimRefund { pick: usize, who: usize },
-    Advance { seconds: u64 },
+    Create {
+        token: usize,
+        amount: i128,
+        timeout: bool,
+    },
+    CreateTimed {
+        token: usize,
+        amount: i128,
+    },
+    CreateAcceptance {
+        token: usize,
+        amount: i128,
+    },
+    CreateQuorum {
+        token: usize,
+        amount: i128,
+    },
+    CreateBatch {
+        token: usize,
+        amount: i128,
+    },
+    CreatePooled {
+        token: usize,
+        target: i128,
+    },
+    TopUp {
+        pick: usize,
+        amount: i128,
+    },
+    Contribute {
+        pick: usize,
+        who: usize,
+        amount: i128,
+    },
+    Accept {
+        pick: usize,
+    },
+    Rotate {
+        pick: usize,
+    },
+    Release {
+        pick: usize,
+    },
+    ReleaseQuorum {
+        pick: usize,
+    },
+    SettleMany {
+        pick: usize,
+    },
+    Refund {
+        pick: usize,
+        stranger: bool,
+    },
+    RefundQuorum {
+        pick: usize,
+    },
+    Cancel {
+        pick: usize,
+    },
+    ClaimRefund {
+        pick: usize,
+        who: usize,
+    },
+    Advance {
+        seconds: u64,
+    },
 }
 
 /// A test env that writes no snapshot per randomized case (issue #120).
@@ -472,8 +552,13 @@ fn arb_amount() -> impl Strategy<Value = i128> {
 fn arb_op() -> impl Strategy<Value = Op> {
     let pick = 0usize..64;
     prop_oneof![
-        (arb_token(), arb_amount(), any::<bool>())
-            .prop_map(|(token, amount, timeout)| Op::Create { token, amount, timeout }),
+        (arb_token(), arb_amount(), any::<bool>()).prop_map(|(token, amount, timeout)| {
+            Op::Create {
+                token,
+                amount,
+                timeout,
+            }
+        }),
         (arb_token(), arb_amount()).prop_map(|(token, amount)| Op::CreateTimed { token, amount }),
         (arb_token(), arb_amount())
             .prop_map(|(token, amount)| Op::CreateAcceptance { token, amount }),
@@ -512,7 +597,11 @@ fn apply(f: &Fixture, op: Op) {
     let env = f.env;
     let now = env.ledger().timestamp();
     match op {
-        Op::Create { token, amount, timeout } => {
+        Op::Create {
+            token,
+            amount,
+            timeout,
+        } => {
             let refund_after = timeout.then_some(now + 100);
             let _ = f.client.try_create_escrow(
                 &f.payer,
@@ -580,7 +669,9 @@ fn apply(f: &Fixture, op: Op) {
                 releaser: f.releaser.clone(),
                 refund_after: None,
             };
-            let _ = f.client.try_create_escrows(&f.payer, &soroban_sdk::vec![env, item]);
+            let _ = f
+                .client
+                .try_create_escrows(&f.payer, &soroban_sdk::vec![env, item]);
         }
         Op::CreatePooled { token, target } => {
             let _ = f.client.try_create_pooled_escrow(
@@ -611,7 +702,9 @@ fn apply(f: &Fixture, op: Op) {
         Op::Rotate { pick } => {
             if let Some(id) = existing_id(f, pick) {
                 let new_releaser = Address::generate(env);
-                let _ = f.client.try_rotate_releaser(&id, &f.releaser, &new_releaser);
+                let _ = f
+                    .client
+                    .try_rotate_releaser(&id, &f.releaser, &new_releaser);
             }
         }
         Op::Release { pick } => {
@@ -626,12 +719,19 @@ fn apply(f: &Fixture, op: Op) {
         }
         Op::SettleMany { pick } => {
             if let Some(id) = existing_id(f, pick) {
-                let _ = f.client.try_settle_many(&f.releaser, &soroban_sdk::vec![env, (id, SettleAction::Release)]);
+                let _ = f.client.try_settle_many(
+                    &f.releaser,
+                    &soroban_sdk::vec![env, (id, SettleAction::Release)],
+                );
             }
         }
         Op::Refund { pick, stranger } => {
             if let Some(id) = existing_id(f, pick) {
-                let caller = if stranger { Address::generate(env) } else { f.releaser.clone() };
+                let caller = if stranger {
+                    Address::generate(env)
+                } else {
+                    f.releaser.clone()
+                };
                 let _ = f.client.try_refund(&id, &caller);
             }
         }
