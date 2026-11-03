@@ -405,7 +405,7 @@ export const networks = {
     // Current upstream deployment (docs/testnet-deployments.md) and the
     // testnet native XLM Stellar Asset Contract on its token allowlist.
     contractIds: {
-      escrow: "CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR",
+      escrow: "CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E",
       nativeXlm: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
     },
   } as NetworkPreset,

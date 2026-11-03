@@ -9,16 +9,40 @@
 New records are written by `scripts/deploy`, newest first, and mirrored in the
 machine-readable `/deployments.json`. Older records were written by hand.
 
-> **Note (2026-10-20, updated 2026-10-24):** every deployment recorded below
-> (the scripted 2026-10-24 record included) predates Phase E5's
-> `__constructor(allowed_tokens, pause_admin)` (issue #35, `docs/adr/0011`),
-> so **none of them has the emergency pause** and none can be upgraded to it
-> in place — a constructor is part of the instance's deployment. Redeploying
-> is tracked as an open item in `ROADMAP.md`; these entries stay as accurate
-> history of what was actually deployed at the time. `scripts/deploy` now
-> passes `--pause_admin` (default: the deployer account).
+> **Note (updated 2026-11-03):** the 2026-11-03 record below (contract 2.5.1)
+> is the first deployment with Phase E5's
+> `__constructor(allowed_tokens, pause_admin)` (issue #35, `docs/adr/0011`).
+> Every older record predates that constructor, so **none of them has the
+> emergency pause** and none can be upgraded to it in place: a constructor is
+> part of the instance's deployment. Those entries stay as accurate history of
+> what was actually deployed at the time. `scripts/deploy` passes
+> `--pause_admin` (default: the deployer account).
 
 <!-- scripts/deploy inserts new records below this line -->
+
+## `docforum_escrow` — 2026-11-03 (`52a6a39`, recorded by `scripts/deploy`)
+
+| | |
+|---|---|
+| Network | testnet (`Test SDF Network ; September 2015`) |
+| Contract ID | `CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E` |
+| Explorer | https://stellar.expert/explorer/testnet/contract/CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E |
+| WASM hash | `95e15dec669d99e227984f2e9cb787316816acb48140bb8d8616bf78d76a1ff6` |
+| WASM upload tx | https://stellar.expert/explorer/testnet/tx/9e78a662ad3b8febd324d2faaf124ea911333a9ff4e149d46b0b09a00eabf755 |
+| Deploy tx | https://stellar.expert/explorer/testnet/tx/6c8ef8b8e2f280ad3214a1ff331e6594250c77918445c409e26f0b72f20f4eb3 |
+| Source commit | `52a6a39` (`52a6a396be7f8834107a173cefe33163fd99777f`) |
+| Constructor `allowed_tokens` | `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` |
+
+### Scripted live verification
+
+The on-chain WASM was fetched after deployment and matched the hash above.
+
+- `create` escrow 0: Passed, expected Funded; [transaction](https://stellar.expert/explorer/testnet/tx/914577181d6ed1aa7553dc5c58c3ffd0af019401de419b2af363b176ff313a44).
+- `release` escrow 0: Passed, expected Released; [transaction](https://stellar.expert/explorer/testnet/tx/b0ed914cd97919c8f65c8a7cde35a3bcd250fef96f8b0bd8f2aeb866736f90fe).
+- `refund` escrow 1: Passed, expected Refunded; [transaction](https://stellar.expert/explorer/testnet/tx/2d812b32ec87585da094050739af7aa8a655dd62051465f99e2c977daf5ca152).
+- `reject_stranger_release` escrow 2: Passed, expected Error(Contract, #3) Unauthorized; rejected in simulation, not submitted.
+- `reject_double_release` escrow 0: Passed, expected Error(Contract, #4) NotFunded; rejected in simulation, not submitted.
+- `reject_non_positive_amount`: Passed, expected Error(Contract, #2) InvalidAmount; rejected in simulation, not submitted.
 
 ## `docforum_escrow` — 2026-10-24 (`eafe267`, recorded by `scripts/deploy`)
 
