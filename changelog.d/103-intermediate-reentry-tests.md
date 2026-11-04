@@ -1,1 +1,0 @@
-Issue #103 (Phase E4): added `tests/reentry_intermediate.rs`, which proves re-entry through an intermediate contract fails closed for `release`, `refund` and `create_escrow`, including against a different escrow id. No contract change. The threat model's T4 section now records the result, replacing a coverage claim that had no test behind it.

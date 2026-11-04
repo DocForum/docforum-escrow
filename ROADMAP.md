@@ -1093,3 +1093,5 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   preset, README and `fees.test.ts` now use the new id. Exercising
   `pause`/`unpause` live, including a release while paused, is still open under
   Phase E5. docforum-core stays on its own older contract and SDK 0.2.0 for now.
+- 2026-11-04 — Issue #103 (Phase E4): added `tests/reentry_intermediate.rs`, which proves re-entry through an intermediate contract fails closed for `release`, `refund` and `create_escrow`, including against a different escrow id. No contract change. The threat model's T4 section now records the result, replacing a coverage claim that had no test behind it.
+- 2026-11-04 — Issue #52 (Phase E5): the SDK can now read the contract's version on first use and check it against `>=2.0.0 <3.0.0`, the range that has the `create_escrow` arguments it sends. Older deployments with no `version()` are reported as `null` and handled without an opaque error. `docs/testnet-deployments.md` now records each deployment's version.
