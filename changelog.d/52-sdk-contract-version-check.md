@@ -1,1 +1,0 @@
-Issue #52 (Phase E5): the SDK can now read the contract's version on first use and check it against `>=2.0.0 <3.0.0`, the range that has the `create_escrow` arguments it sends. Older deployments with no `version()` are reported as `null` and handled without an opaque error. `docs/testnet-deployments.md` now records each deployment's version.
