@@ -451,6 +451,53 @@ export class NetworkMismatchError extends Error {
 }
 
 /**
+ * Contract versions this SDK can talk to, as reported by the contract's
+ * `version()`: at least `minInclusive` and below `maxExclusive`. 2.0.0 is the
+ * first version whose `create_escrow` takes the fee arguments this SDK sends.
+ */
+export const SUPPORTED_CONTRACT_VERSIONS = { minInclusive: "2.0.0", maxExclusive: "3.0.0" } as const;
+
+function parseContractVersion(version: string): [number, number, number] | null {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+}
+
+function compareContractVersions(a: [number, number, number], b: [number, number, number]): number {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
+
+/** Whether a contract `version()` value is within `SUPPORTED_CONTRACT_VERSIONS`. */
+export function isSupportedContractVersion(version: string): boolean {
+  const parsed = parseContractVersion(version);
+  if (!parsed) return false;
+  const min = parseContractVersion(SUPPORTED_CONTRACT_VERSIONS.minInclusive)!;
+  const max = parseContractVersion(SUPPORTED_CONTRACT_VERSIONS.maxExclusive)!;
+  return compareContractVersions(parsed, min) >= 0 && compareContractVersions(parsed, max) < 0;
+}
+
+/**
+ * Thrown when a contract's version is outside `SUPPORTED_CONTRACT_VERSIONS`.
+ * `version` is `null` for an older deployment with no `version()` function.
+ */
+export class UnsupportedContractVersionError extends Error {
+  readonly name = "UnsupportedContractVersionError";
+  readonly contractId: string;
+  readonly version: string | null;
+  constructor(contractId: string, version: string | null) {
+    const { minInclusive, maxExclusive } = SUPPORTED_CONTRACT_VERSIONS;
+    super(
+      `Contract ${contractId} ${version === null ? "has no version() function" : `is version ${version}`}; ` +
+        `this SDK supports >=${minInclusive} <${maxExclusive}.`,
+    );
+    this.contractId = contractId;
+    this.version = version;
+  }
+}
+
+/** The host's report that a deployment has no such function: not a transient failure. */
+const MISSING_FUNCTION_ERROR = /non-?existent contract function|Error\(WasmVm, MissingValue\)/i;
+
+/**
  * Maximum allowed length of `conditionRef` in bytes — must match the
  * contract's bound (currently 64 bytes, see contracts/escrow/src/lib.rs
  * and docs/threat-model.md T10). Validated client-side so callers fail
@@ -602,6 +649,21 @@ export interface EscrowClientConfig {
    * call. A failed check is not cached, so a transient RPC error is retryable.
    */
   verifyNetwork?: boolean;
+  /**
+   * Controls the contract-version check before the first network call:
+   *
+   * - `true`: check on first use. An unsupported version, an older deployment
+   *   with no `version()`, or a failed lookup rejects the call.
+   * - `false`: never check automatically (`verifyContractVersion()` still works
+   *   on demand).
+   * - unset (default): check only when a `network` preset is selected. Only a
+   *   version known to be unsupported rejects the call. An older deployment or
+   *   a failed lookup doesn't, so existing read paths keep working.
+   *
+   * A successful check is cached for the client. A failed lookup is not, so a
+   * transient RPC error is retryable.
+   */
+  verifyContractVersion?: boolean;
 }
 
 export interface CreateEscrowParams {
@@ -1073,6 +1135,11 @@ export class EscrowClient {
   private readonly networkVerification: "required" | "auto" | "off";
   /** Cached result of the network passphrase verification. */
   private networkVerified?: Promise<void>;
+  /** "required": explicit opt-in; "auto": preset selected; "off": no automatic check. */
+  private readonly contractVersionCheck: "required" | "auto" | "off";
+  /** Cached `version()` result; `null` means the deployment has no `version()`. */
+  private contractVersion?: Promise<string | null>;
+  private contractVersionChecked = false;
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
@@ -1088,6 +1155,14 @@ export class EscrowClient {
       config.verifyNetwork === true
         ? "required"
         : config.verifyNetwork === false
+          ? "off"
+          : config.network
+            ? "auto"
+            : "off";
+    this.contractVersionCheck =
+      config.verifyContractVersion === true
+        ? "required"
+        : config.verifyContractVersion === false
           ? "off"
           : config.network
             ? "auto"
@@ -1164,8 +1239,68 @@ export class EscrowClient {
    * preset only, an RPC without `getNetwork` is skipped rather than failing.
    */
   private async ensureNetworkVerified(): Promise<void> {
+    await this.ensureNetworkPassphrase();
+    await this.ensureContractVersionChecked();
+  }
+
+  private async ensureNetworkPassphrase(): Promise<void> {
     if (this.networkVerification === "off") return;
     await this.runNetworkVerification(this.networkVerification === "required");
+  }
+
+  /**
+   * Reads the contract's semantic version once and caches it. Resolves to `null`
+   * for an older deployment with no `version()` function. A failed lookup
+   * rejects and isn't cached, so a transient RPC failure is retryable.
+   */
+  getContractVersion(): Promise<string | null> {
+    if (!this.contractVersion) {
+      this.contractVersion = (async () => {
+        await this.ensureNetworkPassphrase();
+        try {
+          const tx = await this.contractClient().version();
+          return tx.result;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (MISSING_FUNCTION_ERROR.test(message)) return null;
+          throw error;
+        }
+      })();
+      this.contractVersion.catch(() => {
+        this.contractVersion = undefined;
+      });
+    }
+    return this.contractVersion;
+  }
+
+  /**
+   * Checks the contract against `SUPPORTED_CONTRACT_VERSIONS`. Calling this is
+   * an explicit request, so an older deployment with no `version()` is rejected
+   * with `UnsupportedContractVersionError`, like any unsupported version.
+   */
+  async verifyContractVersion(): Promise<void> {
+    const version = await this.getContractVersion();
+    if (version === null || !isSupportedContractVersion(version)) {
+      throw new UnsupportedContractVersionError(this.contractId, version);
+    }
+  }
+
+  private async ensureContractVersionChecked(): Promise<void> {
+    if (this.contractVersionCheck === "off" || this.contractVersionChecked) return;
+    if (this.contractVersionCheck === "required") {
+      await this.verifyContractVersion();
+    } else {
+      let version: string | null;
+      try {
+        version = await this.getContractVersion();
+      } catch {
+        return; // A failed lookup says nothing about the version; retry next call.
+      }
+      if (version !== null && !isSupportedContractVersion(version)) {
+        throw new UnsupportedContractVersionError(this.contractId, version);
+      }
+    }
+    this.contractVersionChecked = true;
   }
 
   private contractClient(signer?: EscrowSigner): EscrowContractClient {

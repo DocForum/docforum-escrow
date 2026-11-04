@@ -18,6 +18,10 @@ machine-readable `/deployments.json`. Older records were written by hand.
 > what was actually deployed at the time. `scripts/deploy` passes
 > `--pause_admin` (default: the deployer account).
 
+**Contract versions:** the 2026-11-03 deployment reports `version()` = `2.5.1`.
+Every older record has no `version()` function, which is how the SDK identifies
+it (`getContractVersion()` returns `null`).
+
 <!-- scripts/deploy inserts new records below this line -->
 
 ## `docforum_escrow` — 2026-11-03 (`52a6a39`, recorded by `scripts/deploy`)
