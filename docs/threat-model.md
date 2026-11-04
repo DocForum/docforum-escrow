@@ -308,11 +308,11 @@ value. **Reviewers should challenge these ratings.**
   "Contract re-entry is not allowed" — an unrecoverable context error,
   so the entire release invocation aborts and nothing commits
   (`tests/malicious_token.rs`). This pins the behavior for the direct
-  token→escrow path; the through-an-intermediate-contract path below is
-  still open for reviewer verification.
-- **Reviewer, please verify:** the host's re-entry prohibition applies
-  to every path a SEP-41 token could use to reach this contract,
-  including through an intermediate third contract.
+  token→escrow path.
+- **Update (issue #103):** the token→helper→escrow path is blocked too, with
+  every auth mocked so only the host check can stop it
+  (`tests/reentry_intermediate.rs`). See "T4 intermediate-contract re-entry
+  regression coverage" below.
 
 ### T11 — Malicious or failing release callback · **Medium (payee opt-in)**
 - A payee contract that authorizes `create_escrow` while
@@ -902,4 +902,4 @@ A rejected outbound token transfer during `release` returns `Undeliverable` and 
 
 ## T4 intermediate-contract re-entry regression coverage
 
-Token callbacks must be treated as hostile even when they route through another contract. The regression suite exercises a helper contract that attempts to call back into escrow during a token transfer; the invocation must fail closed and leave the escrow status and balance unchanged.
+Token callbacks must be treated as hostile even when they route through another contract. `tests/reentry_intermediate.rs` has a token call a helper contract from inside `transfer`, and the helper calls `release`, `refund` or `create_escrow` on the escrow, including against a different escrow id. In every case the outer call fails, no funds move, and escrow status and balances are unchanged. `release` catches the failed payout and returns `Undeliverable`; `refund` and `create_escrow` abort the whole invocation. Control tests in the same file show the helper's call succeeds when nothing is re-entrant.
