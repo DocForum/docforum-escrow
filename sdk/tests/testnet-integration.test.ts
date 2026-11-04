@@ -27,7 +27,7 @@ import {
   TransactionBuilder,
   nativeToScVal,
 } from "@stellar/stellar-sdk";
-import { EscrowClient, EscrowPreconditionError, FactoryClient, knownContractId, predictInstanceAddress } from "../src/index.js";
+import { EscrowClient, EscrowPreconditionError, FactoryClient, isSupportedContractVersion, UnsupportedContractVersionError, knownContractId, predictInstanceAddress } from "../src/index.js";
 
 // Newest testnet deployment recorded by scripts/deploy (deployments.json), so
 // a redeploy needs no edit here. Overridable via env to test another instance.
@@ -43,6 +43,9 @@ const FACTORY_ID = process.env.TESTNET_FACTORY_ID ?? "CBCYSOQ3HKYQDHLSHTFNIAA7X2
 // The repo ships no factory contract, so the live factory suites only run when
 // a factory is actually deployed and TESTNET_FACTORY_ID points at it.
 const describeFactory = process.env.TESTNET_FACTORY_ID ? describe : describe.skip;
+
+// The 2026-10-24 testnet deployment, which predates `version()`.
+const LEGACY_CONTRACT_ID = "CDX2JEMA5SO7GZVXDNGDDB35GPV43J7BUTYYH77ALAT72S65GOW5KNEO";
 
 async function fundedKeypair(): Promise<Keypair> {
   const kp = Keypair.random();
@@ -90,6 +93,18 @@ describe("EscrowClient against live testnet", () => {
 
     expect(await client.getStatus(escrowId)).toBe("Released");
   });
+
+  it("reads a supported version from the live contract", async () => {
+    const client = new EscrowClient({ contractId: CONTRACT_ID, verifyContractVersion: true });
+    expect(isSupportedContractVersion((await client.getContractVersion())!)).toBe(true);
+    await expect(client.verifyContractVersion()).resolves.toBeUndefined();
+  }, 60_000);
+
+  it("reports an older deployment with no version() as null", async () => {
+    const client = new EscrowClient({ contractId: LEGACY_CONTRACT_ID });
+    expect(await client.getContractVersion()).toBeNull();
+    await expect(client.verifyContractVersion()).rejects.toBeInstanceOf(UnsupportedContractVersionError);
+  }, 60_000);
 
   it("lets a separate relayer submit releaser-authorized release and refund", async () => {
     const [payer, payee, releaser, relayer] = await Promise.all([
