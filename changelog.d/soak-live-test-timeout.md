@@ -1,1 +1,0 @@
-Raised the time limit for `sdk/tests/testnet-integration.test.ts` from 60 to 120 seconds, because the longest live tests were timing out on a slow testnet and failing the nightly soak. Other SDK tests keep their 60-second limit.
