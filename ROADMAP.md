@@ -162,6 +162,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `docs/testnet-deployments.md`.
 ## Phase E5 — Contract features
 
+- [x] **Consented migration between deployments** (issue #117, ADR 0010): payer plus the stored releaser threshold authorize export of a funded non-pooled escrow to a recognized deployment. Import verifies the source allowlist, balance delta, and replay key; migration preserves current escrow settings and updates liability accounting atomically.
 - [x] Batch release and refund (issue #29, `docs/adr/0012`): `settle_many(caller, ops: Vec<(escrow_id, Release|Refund)>)`, best-effort with one result per op, per-op auth against each escrow's own releasers, at most `MAX_SETTLE_OPS` = 20 (measured against the 16 KiB events budget). T1 response guidance updated. Tests: `contracts/escrow/tests/settle_many.rs`. **Not yet on testnet.**
 - [x] Per-token liability accounting and an on-chain solvency view (issue #39): `solvency(token) -> (balance, liabilities)`; the counter moves in the same invocation as every value-moving state change and its TTL is extended on each write. Property test: `contracts/escrow/tests/liabilities.rs`. Monitoring guidance in `docs/threat-model.md`. **Not yet on testnet.**
 - [x] Optional escrow-wide earliest release time (issue #43, ADR 0009); refund path remains independent.

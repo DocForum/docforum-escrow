@@ -200,7 +200,11 @@ fn create_escrow_rejects_lying_transfer() {
     let releaser = Address::generate(&env);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -241,7 +245,11 @@ fn create_escrow_rejects_short_delivery() {
     let releaser = Address::generate(&env);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -286,7 +294,11 @@ fn failed_payout_leaves_the_escrow_funded() {
     let releaser = Address::generate(&env);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -327,7 +339,11 @@ fn reentrant_transfer_cannot_double_release() {
     let releaser = Address::generate(&env);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -401,7 +417,11 @@ fn contribute_rejects_lying_transfer() {
     let releaser = Address::generate(&env);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -434,7 +454,11 @@ fn contribute_rejects_short_delivery() {
     let releaser = Address::generate(&env);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -468,7 +492,11 @@ fn failed_claim_leaves_the_contribution_intact() {
     let releaser = Address::generate(&env);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 

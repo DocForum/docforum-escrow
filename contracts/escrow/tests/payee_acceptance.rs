@@ -30,6 +30,7 @@ fn setup(env: &Env) -> Fixture<'_> {
         EscrowContract,
         (
             soroban_sdk::Vec::<Address>::new(env),
+            soroban_sdk::Vec::<Address>::new(env),
             Address::generate(env),
         ),
     );
@@ -98,6 +99,7 @@ fn legacy_creation_keeps_acceptance_opt_out() {
     let contract_id = env.register(
         EscrowContract,
         (
+            soroban_sdk::Vec::<Address>::new(&env),
             soroban_sdk::Vec::<Address>::new(&env),
             Address::generate(&env),
         ),
