@@ -16,7 +16,7 @@
 //
 // Fresh keypairs are generated and Friendbot-funded per run -- never
 // commit a real secret key, even a testnet one, into a repo.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   Account,
   Address,
@@ -71,6 +71,10 @@ async function fundedKeypair(): Promise<Keypair> {
   }
   throw new Error("Friendbot funding failed after retries");
 }
+
+// These tests fund new accounts and send several real transactions, which can
+// take over a minute on a slow night. This applies to this file only.
+vi.setConfig({ testTimeout: 120_000 });
 
 describe("EscrowClient against live testnet", () => {
   it("creates, funds, and releases an escrow end-to-end", async () => {
