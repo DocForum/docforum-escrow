@@ -40,6 +40,7 @@ fn setup<'a>(env: &Env, release_at: Option<u64>, refund_at: Option<u64>) -> Fixt
         EscrowContract,
         (
             soroban_sdk::Vec::<Address>::new(env),
+            soroban_sdk::Vec::<Address>::new(env),
             Address::generate(env),
         ),
     );
@@ -118,6 +119,7 @@ fn creation_rejects_release_time_in_the_past_or_after_refund_deadline() {
     let contract_id = env.register(
         EscrowContract,
         (
+            soroban_sdk::Vec::<Address>::new(&env),
             soroban_sdk::Vec::<Address>::new(&env),
             Address::generate(&env),
         ),

@@ -44,7 +44,11 @@ fn fund<'a>(env: &'a Env, requires_acceptance: bool, refund_after: Option<u64>) 
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
     );
     let client = EscrowContractClient::new(env, &contract_id);
     let condition = String::from_str(env, "opaque-condition-ref");

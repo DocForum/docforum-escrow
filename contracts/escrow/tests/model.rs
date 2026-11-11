@@ -214,7 +214,11 @@ fn fixture<'a>(env: &'a Env, amount: i128, refund_after: Option<u64>) -> Fixture
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(env), Address::generate(env)),
+        (
+            Vec::<Address>::new(env),
+            Vec::<Address>::new(env),
+            Address::generate(env),
+        ),
     );
     let client = EscrowContractClient::new(env, &contract_id);
     let escrow_id = client.create_escrow(
@@ -249,7 +253,9 @@ fn status_of(client: &EscrowContractClient, escrow_id: u64) -> Phase {
         EscrowStatus::Released => Phase::Released,
         // Cancelled is unreachable for these fixtures (no acceptance gate)
         // and the model has no state for it.
-        EscrowStatus::Refunded | EscrowStatus::Cancelled => Phase::Refunded,
+        EscrowStatus::Refunded | EscrowStatus::Cancelled | EscrowStatus::Migrated => {
+            Phase::Refunded
+        }
     }
 }
 

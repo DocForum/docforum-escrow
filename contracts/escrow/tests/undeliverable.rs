@@ -25,6 +25,7 @@ fn unauthorized_sac_payee_leaves_escrow_funded_and_can_be_retried() {
         EscrowContract,
         (
             soroban_sdk::Vec::<Address>::new(&env),
+            soroban_sdk::Vec::<Address>::new(&env),
             soroban_sdk::Address::generate(&env),
         ),
     );
@@ -142,6 +143,7 @@ fn rejecting_contract_payee_returns_dedicated_error_without_settling() {
     let contract_id = env.register(
         EscrowContract,
         (
+            soroban_sdk::Vec::<Address>::new(&env),
             soroban_sdk::Vec::<Address>::new(&env),
             soroban_sdk::Address::generate(&env),
         ),
