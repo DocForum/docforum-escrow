@@ -92,7 +92,8 @@ jobs:
           CONTRACT_ID=$(stellar contract deploy \
             --wasm contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm \
             --source ci-futurenet \
-            --network futurenet)
+            --network futurenet \
+            -- --allowed_tokens '[]' --pause_admin "$(stellar keys public-key ci-futurenet)")
           echo "contract_id=$CONTRACT_ID" >> "$GITHUB_OUTPUT"
           echo "Deployed contract $CONTRACT_ID"
 

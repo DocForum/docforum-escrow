@@ -1,0 +1,1 @@
+Fixed the weekly Futurenet compatibility check, which had failed since the contract gained a constructor: its deploy step now passes `allowed_tokens` (empty, so any token is allowed) and `pause_admin` (the run's own funded identity).
