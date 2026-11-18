@@ -7,7 +7,7 @@ import {
   networks,
 } from "../src/index.js";
 
-const CONTRACT_ID = "CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E";
+const CONTRACT_ID = "CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H";
 const MISSING_FUNCTION = "HostError: Error(WasmVm, MissingValue)\ntrying to invoke non-existent contract function";
 
 type VersionCall = () => Promise<{ result: string }>;
