@@ -130,7 +130,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   into issues: [#8](https://github.com/DocForum/docforum-escrow/issues/8) write status before transfer + reject
   contract-self addresses (Trivial), [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium — **done**,
   see `contracts/escrow/tests/events.rs` and `ARCHITECTURE_ESSENTIALS.md § Events`),
-  [#10](https://github.com/DocForum/docforum-escrow/issues/10) storage TTL (Medium), [#15](https://github.com/DocForum/docforum-escrow/issues/15) integrator trust-model
+  [#10](https://github.com/DocForum/docforum-escrow/issues/10) storage TTL (Medium — **done**, see `contracts/escrow/tests/ttl.rs` and `ARCHITECTURE_ESSENTIALS.md § Storage TTL & Archival`), [#15](https://github.com/DocForum/docforum-escrow/issues/15) integrator trust-model
   docs (Trivial).
 - [x] Integrator trust-model docs (issue #15): added a "Trust model for
   integrators" section to `README.md` covering T8, T5, T9 and the
