@@ -112,6 +112,11 @@
       "return": "Result<(), Error>"
     },
     {
+      "name": "settle",
+      "args": "env: Env, escrow_id: u64, caller: Address, payee_amount: i128,",
+      "return": "Result<(), Error>"
+    },
+    {
       "name": "top_up",
       "args": "env: Env, escrow_id: u64, payer: Address, amount: i128",
       "return": "Result<(), Error>"
@@ -304,6 +309,14 @@
     {
       "name": "InvalidFundingDeadline",
       "code": 34
+    },
+    {
+      "name": "InvalidSettlementAmount",
+      "code": 4600
+    },
+    {
+      "name": "SettlementNotSupported",
+      "code": 4601
     },
     {
       "name": "InvalidFee",
