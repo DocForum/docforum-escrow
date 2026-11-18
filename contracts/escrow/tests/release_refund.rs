@@ -37,7 +37,10 @@ fn fund_escrow(env: &Env, amount: i128) -> Fixture<'_> {
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
 
     let escrow_id = client.create_escrow(
@@ -81,6 +84,8 @@ fn release_transfers_funds_to_payee_and_marks_released() {
             .filter_by_contract(&f.contract_id)
             .events()
             .len(),
+        // env.events().all() captures only the last invocation's events;
+        // release emits exactly 1 "released" event.
         1
     );
     assert_eq!(f.token.balance(&f.payee), 300);
@@ -130,6 +135,8 @@ fn refund_transfers_funds_back_to_payer_and_marks_refunded() {
             .filter_by_contract(&f.contract_id)
             .events()
             .len(),
+        // env.events().all() captures only the last invocation's events;
+        // refund emits exactly 1 "refunded" event.
         1
     );
     assert_eq!(f.token.balance(&f.payer), 1_000); // full 1,000 minted, 300 returned

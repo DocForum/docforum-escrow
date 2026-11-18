@@ -1,1 +1,0 @@
-Issue #40 (Phase E5): the stored payee can now voluntarily refund a funded escrow with `refund(escrow_id, payee)`. The payout still goes only to the stored `refund_to` (ADR 0009), and the call emits a distinct `payee_refunded` event (ADR 0010). Pooled escrows reject it through `reject_pooled`. Bindings regenerated, and the TLA+ model gained a `PayeeRefund` action.

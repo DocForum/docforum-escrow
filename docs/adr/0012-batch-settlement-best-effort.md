@@ -88,5 +88,9 @@ payload eats the headroom.
   working integration breaks. Bindings are regenerated.
 - The attacker in T1 can use the same entry point. It changes how fast a
   leaked key can act, not what it can do.
-- `create_escrows` still has the same repeated-`require_auth` problem for
-  batches of two or more items. Out of scope here; worth its own issue.
+- `create_escrows` had the same repeated-`require_auth` problem for batches of
+  two or more items. It now authorizes `payer` once for the whole batch and
+  remains atomic. Its `MAX_BATCH_SIZE` dropped from 50 to 16, because the same
+  events budget is its binding limit: each worst-case item emits 684 bytes, so
+  24 items exceed 16,384 bytes. `create_escrows` only ever worked for one item, so
+  no working integration breaks.

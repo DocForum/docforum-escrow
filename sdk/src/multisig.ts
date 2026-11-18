@@ -23,7 +23,9 @@ export const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
 
 // Stellar signer weights and thresholds are unsigned 8-bit integers (0..255).
 // The master key is always identified by the account's own public key.
+/** Lowest valid Stellar signer weight. */
 export const MIN_WEIGHT = 0;
+/** Highest valid Stellar signer weight (and threshold). */
 export const MAX_WEIGHT = 255;
 
 /** A single signer entry in the intended multisig policy. */
@@ -136,6 +138,7 @@ export interface MultisigVerificationResult {
 
 /** Minimal interface for a Horizon server client (subset of `Horizon.Server`). */
 export interface HorizonServerLike {
+  /** Load an account's signers and thresholds. */
   loadAccount(accountId: string): Promise<Pick<Horizon.AccountResponse, "signers" | "thresholds">>;
 }
 
