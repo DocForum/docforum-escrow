@@ -34,6 +34,7 @@ export const CONTRACT_ERROR_NAMES = {
   33: "NotSupportedForPooled",
   34: "InvalidFundingDeadline",
   35: "InvalidFee",
+  4100: "InvalidRefundExtension",
   36: "Undeliverable",
   38: "Paused",
   39: "AlreadyPaused",
