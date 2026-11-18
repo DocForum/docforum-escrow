@@ -1679,6 +1679,11 @@ impl EscrowContract {
                 total_bps = total_bps
                     .checked_add(share.basis_points)
                     .ok_or(Error::InvalidBasisPoints)?;
+                // A share paid to the contract itself would be locked here
+                // forever (same rule as `refund_to` and the fee recipient).
+                if share.payee == env.current_contract_address() {
+                    return Err(Error::InvalidPayeeList);
+                }
                 if Self::contains(&seen, &share.payee) {
                     return Err(Error::DuplicatePayee);
                 }
