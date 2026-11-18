@@ -24,7 +24,7 @@ fn setup(env: &Env) -> Fixture<'_> {
     let payee = Address::generate(env);
     let releaser = Address::generate(env);
     asset.mint(&payer, &500);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env), Address::generate(env)));
     let client = EscrowContractClient::new(env, &contract_id);
     let id = client.create_escrow(
         &payer,
@@ -87,7 +87,7 @@ fn split_settlement_respects_the_release_time_lock() {
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
     StellarAssetClient::new(&env, &token_id).mint(&payer, &500);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), Address::generate(&env)));
     let client = EscrowContractClient::new(&env, &contract_id);
     let id = client.create_escrow_release_time(
         &payer,
@@ -126,7 +126,7 @@ fn split_settlement_rejects_pooled_escrows() {
     let creator = Address::generate(&env);
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), Address::generate(&env)));
     let client = EscrowContractClient::new(&env, &contract_id);
     let id = client.create_pooled_escrow(
         &creator,
