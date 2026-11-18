@@ -60,7 +60,7 @@ use soroban_sdk::{
 
 // Bump this value whenever a contract interface or behavior change is made.
 // CI checks this constant against the base branch when this file changes.
-pub const CONTRACT_VERSION: &str = "2.5.1";
+pub const CONTRACT_VERSION: &str = "3.0.0";
 
 include!(concat!(env!("OUT_DIR"), "/contract_metadata.rs"));
 
@@ -419,33 +419,33 @@ pub enum Error {
     /// The funding deadline was not strictly in the future at creation.
     InvalidFundingDeadline = 34,
     /// A split settlement amount is outside the escrowed range.
-    InvalidSettlementAmount = 4600,
+    InvalidSettlementAmount = 52,
     /// `settle` on a streamed (vesting) or multi-payee split escrow: those
     /// have their own settlement rules, so use `release`/`refund`.
-    SettlementNotSupported = 4601,
+    SettlementNotSupported = 53,
     /// The optional protocol fee was misconfigured at creation: `bps`
     /// above [`MAX_FEE_BPS`] (10 %), a recipient equal to the escrow
     /// contract itself, or an amount that would overflow the fee math —
     /// see docs/adr/0010.
     InvalidFee = 35,
-    InvalidPayeeList = 2200,
-    TooManyPayees = 2201,
-    DuplicatePayee = 2202,
-    InvalidBasisPoints = 2203,
-    SplitAmountOverflow = 2204,
+    InvalidPayeeList = 41,
+    TooManyPayees = 42,
+    DuplicatePayee = 43,
+    InvalidBasisPoints = 44,
+    SplitAmountOverflow = 45,
     /// The contract's token balance is below the requested stream payout.
-    PoolInsufficient = 4400,
+    PoolInsufficient = 47,
     /// `withdraw`/`get_vesting` on an escrow without a schedule.
-    NotStreamed = 4401,
+    NotStreamed = 48,
     /// Invalid start/end order or cliff outside the schedule bounds.
-    InvalidVestingSchedule = 4402,
+    InvalidVestingSchedule = 49,
     /// No vested amount is left to withdraw.
-    NothingToWithdraw = 4403,
+    NothingToWithdraw = 50,
     /// Streams have a fixed total; `top_up` is rejected.
-    StreamTopUpUnsupported = 4404,
+    StreamTopUpUnsupported = 51,
     /// The refund deadline is absent, already elapsed, or the replacement
     /// deadline is not strictly later than the current one (issue #41).
-    InvalidRefundExtension = 4100,
+    InvalidRefundExtension = 46,
     /// An outbound release transfer failed; the funded escrow remains
     /// retryable and may still use its refund path.
     Undeliverable = 36,

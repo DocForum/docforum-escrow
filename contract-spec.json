@@ -312,11 +312,11 @@
     },
     {
       "name": "InvalidSettlementAmount",
-      "code": 4600
+      "code": 52
     },
     {
       "name": "SettlementNotSupported",
-      "code": 4601
+      "code": 53
     },
     {
       "name": "InvalidFee",
@@ -324,47 +324,47 @@
     },
     {
       "name": "InvalidPayeeList",
-      "code": 2200
+      "code": 41
     },
     {
       "name": "TooManyPayees",
-      "code": 2201
+      "code": 42
     },
     {
       "name": "DuplicatePayee",
-      "code": 2202
+      "code": 43
     },
     {
       "name": "InvalidBasisPoints",
-      "code": 2203
+      "code": 44
     },
     {
       "name": "SplitAmountOverflow",
-      "code": 2204
+      "code": 45
     },
     {
       "name": "PoolInsufficient",
-      "code": 4400
+      "code": 47
     },
     {
       "name": "NotStreamed",
-      "code": 4401
+      "code": 48
     },
     {
       "name": "InvalidVestingSchedule",
-      "code": 4402
+      "code": 49
     },
     {
       "name": "NothingToWithdraw",
-      "code": 4403
+      "code": 50
     },
     {
       "name": "StreamTopUpUnsupported",
-      "code": 4404
+      "code": 51
     },
     {
       "name": "InvalidRefundExtension",
-      "code": 4100
+      "code": 46
     },
     {
       "name": "Undeliverable",

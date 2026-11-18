@@ -32,7 +32,7 @@ const rpcDown: VersionCall = async () => {
 const firstCall = (client: EscrowClient) => client.getEvents({ fromLedger: 1 });
 
 describe("isSupportedContractVersion", () => {
-  it.each(["2.0.0", "2.5.1", "2.99.99", "2.5.1-rc.1"])("accepts %s", (version) => {
+  it.each(["2.0.0", "2.5.1", "2.99.99", "2.5.1-rc.1", "3.0.0", "3.9.9"])("accepts %s", (version) => {
     expect(isSupportedContractVersion(version)).toBe(true);
   });
 
