@@ -6,7 +6,7 @@
 // single-signature cold key), verifies the hash against prepared.json, checks
 // the ledger window and the source sequence, then submits and waits.
 import { readFileSync, readdirSync } from "node:fs";
-import { EscrowClient, PreparedTransactionExpiredError, StaleSequenceError } from "../../sdk/dist/index.js";
+import { EscrowClient, PreparedTransactionExpiredError, StaleSequenceError } from "../../sdk/dist/esm/index.js";
 
 const prepared = JSON.parse(readFileSync("prepared.json", "utf8"));
 const signedFiles = readdirSync(".").filter((name) => name.startsWith("signed-") && name.endsWith(".xdr"));

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { EscrowClient, Keypair } from "../dist/index.js";
+import { EscrowClient, Keypair } from "../dist/esm/index.js";
 
 const signer = Keypair.random();
 assert.match(signer.publicKey(), /^G[A-Z2-7]{55}$/);

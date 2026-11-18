@@ -4,7 +4,7 @@
 //
 // Writes prepared.json. No secret key is needed or touched here.
 import { writeFileSync } from "node:fs";
-import { EscrowClient } from "../../sdk/dist/index.js";
+import { EscrowClient } from "../../sdk/dist/esm/index.js";
 
 const [escrowId, releaser] = process.argv.slice(2);
 const refund = process.argv.includes("--refund");

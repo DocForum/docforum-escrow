@@ -1,0 +1,349 @@
+{
+  "format": 1,
+  "functions": [
+    {
+      "name": "__constructor",
+      "args": "env: Env, allowed_tokens: Vec<Address>, pause_admin: Address",
+      "return": ""
+    },
+    {
+      "name": "version",
+      "args": "env: Env",
+      "return": "String"
+    },
+    {
+      "name": "create_escrow",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, notify_payee: bool, refund_to: Option<Address>, fee_recipient: Option<Address>, fee_bps: Option<u32>,",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "create_escrow_release_time",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, notify_payee: bool, refund_to: Option<Address>, release_not_before: Option<u64>, fee_recipient: Option<Address>, fee_bps: Option<u32>,",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "create_escrow_with_acceptance",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, requires_acceptance: bool, refund_to: Option<Address>,",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "accept",
+      "args": "env: Env, escrow_id: u64, payee: Address",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "create_escrow_with_releasers",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releasers: Vec<Address>, threshold: u32, refund_after: Option<u64>, notify_payee: bool, refund_to: Option<Address>,",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "create_escrows",
+      "args": "env: Env, payer: Address, items: Vec<CreateItem>,",
+      "return": "Result<Vec<u64>, Error>"
+    },
+    {
+      "name": "create_streamed_escrow",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, schedule: VestingSchedule,",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "get_vesting",
+      "args": "env: Env, escrow_id: u64",
+      "return": "Result<VestingInfo, Error>"
+    },
+    {
+      "name": "withdraw",
+      "args": "env: Env, escrow_id: u64, payee: Address",
+      "return": "Result<i128, Error>"
+    },
+    {
+      "name": "get_status",
+      "args": "env: Env, escrow_id: u64",
+      "return": "Result<EscrowStatus, Error>"
+    },
+    {
+      "name": "get_escrow",
+      "args": "env: Env, escrow_id: u64",
+      "return": "Result<EscrowData, Error>"
+    },
+    {
+      "name": "extend_refund_after",
+      "args": "env: Env, escrow_id: u64, new_deadline: u64,",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "create_pooled_escrow",
+      "args": "env: Env, creator: Address, payee: Address, token: Address, funding_target: i128, condition_ref: String, releaser: Address, funding_deadline: u64,",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "contribute",
+      "args": "env: Env, escrow_id: u64, payer: Address, amount: i128",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "claim_refund",
+      "args": "env: Env, escrow_id: u64, contributor: Address",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "solvency",
+      "args": "env: Env, token: Address",
+      "return": "(i128, i128)"
+    },
+    {
+      "name": "get_pooled",
+      "args": "env: Env, escrow_id: u64",
+      "return": "Result<PooledData, Error>"
+    },
+    {
+      "name": "get_contribution",
+      "args": "env: Env, escrow_id: u64, contributor: Address,",
+      "return": "Result<Option<Contribution>, Error>"
+    },
+    {
+      "name": "rotate_releaser",
+      "args": "env: Env, escrow_id: u64, caller: Address, new_releaser: Address,",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "top_up",
+      "args": "env: Env, escrow_id: u64, payer: Address, amount: i128",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "release",
+      "args": "env: Env, escrow_id: u64, caller: Address",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "release_with_approvals",
+      "args": "env: Env, escrow_id: u64, approvers: Vec<Address>,",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "settle_many",
+      "args": "env: Env, caller: Address, ops: Vec<(u64, SettleAction",
+      "return": ""
+    },
+    {
+      "name": "refund",
+      "args": "env: Env, escrow_id: u64, caller: Address",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "cancel",
+      "args": "env: Env, escrow_id: u64, payer: Address",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "refund_with_approvals",
+      "args": "env: Env, escrow_id: u64, approvers: Vec<Address>,",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "pause",
+      "args": "env: Env, caller: Address",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "unpause",
+      "args": "env: Env, caller: Address",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "is_paused",
+      "args": "env: Env",
+      "return": "bool"
+    },
+    {
+      "name": "get_pause_admin",
+      "args": "env: Env",
+      "return": "Option<Address>"
+    },
+    {
+      "name": "transfer_payee",
+      "args": "env: Env, escrow_id: u64, current_payee: Address, new_payee: Address,",
+      "return": "Result<(), Error>"
+    }
+  ],
+  "errors": [
+    {
+      "name": "NotFound",
+      "code": 1
+    },
+    {
+      "name": "InvalidAmount",
+      "code": 2
+    },
+    {
+      "name": "Unauthorized",
+      "code": 3
+    },
+    {
+      "name": "NotFunded",
+      "code": 4
+    },
+    {
+      "name": "InvalidRefundAfter",
+      "code": 5
+    },
+    {
+      "name": "BalanceMismatch",
+      "code": 6
+    },
+    {
+      "name": "ConditionRefTooLong",
+      "code": 7
+    },
+    {
+      "name": "DisallowedToken",
+      "code": 8
+    },
+    {
+      "name": "CallbackFailed",
+      "code": 9
+    },
+    {
+      "name": "InvalidNewPayee",
+      "code": 37
+    },
+    {
+      "name": "Overflow",
+      "code": 12
+    },
+    {
+      "name": "InvalidThreshold",
+      "code": 13
+    },
+    {
+      "name": "TooManyReleasers",
+      "code": 14
+    },
+    {
+      "name": "ThresholdNotMet",
+      "code": 15
+    },
+    {
+      "name": "DuplicateApprover",
+      "code": 16
+    },
+    {
+      "name": "DuplicateReleaser",
+      "code": 17
+    },
+    {
+      "name": "AcceptanceRequired",
+      "code": 18
+    },
+    {
+      "name": "AcceptanceNotConfigured",
+      "code": 19
+    },
+    {
+      "name": "AlreadyAccepted",
+      "code": 20
+    },
+    {
+      "name": "InvalidReleaser",
+      "code": 24
+    },
+    {
+      "name": "InvalidRefundTo",
+      "code": 21
+    },
+    {
+      "name": "InvalidReleaseNotBefore",
+      "code": 22
+    },
+    {
+      "name": "ReleaseTooEarly",
+      "code": 23
+    },
+    {
+      "name": "BatchTooLarge",
+      "code": 25
+    },
+    {
+      "name": "NotPooled",
+      "code": 26
+    },
+    {
+      "name": "FundingDeadlinePassed",
+      "code": 27
+    },
+    {
+      "name": "FundingTargetReached",
+      "code": 28
+    },
+    {
+      "name": "FundingIncomplete",
+      "code": 29
+    },
+    {
+      "name": "RefundNotOpen",
+      "code": 30
+    },
+    {
+      "name": "AlreadyRefunded",
+      "code": 31
+    },
+    {
+      "name": "NoContribution",
+      "code": 32
+    },
+    {
+      "name": "NotSupportedForPooled",
+      "code": 33
+    },
+    {
+      "name": "InvalidFundingDeadline",
+      "code": 34
+    },
+    {
+      "name": "InvalidFee",
+      "code": 35
+    },
+    {
+      "name": "PoolInsufficient",
+      "code": 4400
+    },
+    {
+      "name": "NotStreamed",
+      "code": 4401
+    },
+    {
+      "name": "InvalidVestingSchedule",
+      "code": 4402
+    },
+    {
+      "name": "NothingToWithdraw",
+      "code": 4403
+    },
+    {
+      "name": "StreamTopUpUnsupported",
+      "code": 4404
+    },
+    {
+      "name": "InvalidRefundExtension",
+      "code": 4100
+    },
+    {
+      "name": "Undeliverable",
+      "code": 36
+    },
+    {
+      "name": "Paused",
+      "code": 38
+    },
+    {
+      "name": "AlreadyPaused",
+      "code": 39
+    },
+    {
+      "name": "NotPaused",
+      "code": 40
+    }
+  ]
+}
+
