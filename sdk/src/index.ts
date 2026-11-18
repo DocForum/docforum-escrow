@@ -38,6 +38,7 @@ import {
 } from "./instrumentation.js";
 import type { FactoryClient as FactoryClientType } from "./factory.js";
 import { signerAddress, type EscrowSigner } from "./signers/types.js";
+import { NetworkMismatchError, toEscrowError } from "./errors.js";
 import { getTokenInfo as readTokenInfo, rpcTokenInfoSource, type TokenInfo } from "./amounts.js";
 
 export { Keypair };
@@ -56,6 +57,22 @@ export {
   type TokenInfoSourceOptions,
 } from "./amounts.js";
 export { signerAddress, type EscrowSigner } from "./signers/types.js";
+export {
+  BalanceMismatchError,
+  ContractError,
+  EscrowError,
+  InvalidAmountContractError,
+  InvalidRefundAfterError,
+  NetworkMismatchError,
+  NotFoundError,
+  NotFundedError,
+  RequestTimeoutError,
+  SimulationFailure,
+  SubmissionFailure,
+  UnauthorizedError,
+  contractErrorName,
+  toEscrowError,
+} from "./errors.js";
 export {
   otelTracer,
   spanName,
@@ -457,18 +474,6 @@ export class MainnetNotAllowedError extends Error {
         "Hard rule 4 keeps mainnet out of defaults until the security review; " +
         "pass allowMainnet: true to opt in deliberately.",
     );
-  }
-}
-
-/** Thrown when the RPC's reported network passphrase does not match the configured one. */
-export class NetworkMismatchError extends Error {
-  readonly name = "NetworkMismatchError";
-  readonly expected: string;
-  readonly actual: string;
-  constructor(expected: string, actual: string) {
-    super(`RPC network passphrase mismatch: expected "${expected}", got "${actual}".`);
-    this.expected = expected;
-    this.actual = actual;
   }
 }
 
@@ -1383,7 +1388,12 @@ export class EscrowClient {
   ): Promise<SentTransaction<T>> {
     await this.ensureNetworkVerified();
     const attributes = this.spanAttributesIfEnabled(method, escrowId, hooks.address);
-    const tx = await tracePhase(this.instrumentation, "simulate", attributes, build);
+    let tx: AssembledTransaction<T>;
+    try {
+      tx = await tracePhase(this.instrumentation, "simulate", attributes, build);
+    } catch (error) {
+      throw toEscrowError(error, "simulation");
+    }
     if (tx.isReadCall) {
       throw new Error(`${method} was simulated as a read call; no transaction was sent.`);
     }
@@ -1393,7 +1403,11 @@ export class EscrowClient {
     });
 
     if (!this.instrumentation?.tracer && !this.instrumentation?.onEvent) {
-      return tx.send();
+      try {
+        return await tx.send();
+      } catch (error) {
+        throw toEscrowError(error, "submission");
+      }
     }
 
     const submitSpan = beginPhase(this.instrumentation, "submit", attributes);
@@ -1429,7 +1443,7 @@ export class EscrowClient {
     } catch (error) {
       if (!submitted) submitSpan.end(error);
       confirmSpan.end(error);
-      throw error;
+      throw toEscrowError(error, "submission");
     }
   }
 
@@ -1505,6 +1519,19 @@ export class EscrowClient {
 
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
   async getStatus(escrowId: bigint): Promise<EscrowStatus> {
+    try {
+      const client = this.contractClient();
+      const tx = await tracePhase(
+        this.instrumentation,
+        "simulate",
+        this.spanAttributesIfEnabled("get_status", escrowId),
+        () => client.get_status({ escrow_id: escrowId }),
+      );
+      const status: GeneratedEscrowStatus = tx.result.unwrap();
+      return status.tag;
+    } catch (error) {
+      throw toEscrowError(error);
+    }
     await this.ensureNetworkVerified();
     const client = this.contractClient();
     const tx = await tracePhase(
@@ -1580,12 +1607,17 @@ export class EscrowClient {
   async getEscrow(escrowId: bigint): Promise<Escrow> {
     await this.ensureNetworkVerified();
     const client = this.contractClient();
-    const tx = await tracePhase(
-      this.instrumentation,
-      "simulate",
-      this.spanAttributesIfEnabled("get_escrow", escrowId),
-      () => client.get_escrow({ escrow_id: escrowId }),
-    );
+    let tx: Awaited<ReturnType<EscrowContractClient["get_escrow"]>>;
+    try {
+      tx = await tracePhase(
+        this.instrumentation,
+        "simulate",
+        this.spanAttributesIfEnabled("get_escrow", escrowId),
+        () => client.get_escrow({ escrow_id: escrowId }),
+      );
+    } catch (error) {
+      throw toEscrowError(error);
+    }
     let data: GeneratedEscrowData;
     try {
       data = tx.result.unwrap();
