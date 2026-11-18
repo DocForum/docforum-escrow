@@ -38,8 +38,10 @@ function codeFor(name: ContractErrorName): number {
 
 export const NotFoundError = contractErrorClass("NotFound", codeFor("NotFound"));
 export type NotFoundError = InstanceType<typeof NotFoundError>;
-export const InvalidAmountError = contractErrorClass("InvalidAmount", codeFor("InvalidAmount"));
-export type InvalidAmountError = InstanceType<typeof InvalidAmountError>;
+// Named *Contract*Error: `InvalidAmountError` is already the SDK's client-side
+// amount-parsing error (amounts.ts).
+export const InvalidAmountContractError = contractErrorClass("InvalidAmount", codeFor("InvalidAmount"));
+export type InvalidAmountContractError = InstanceType<typeof InvalidAmountContractError>;
 export const UnauthorizedError = contractErrorClass("Unauthorized", codeFor("Unauthorized"));
 export type UnauthorizedError = InstanceType<typeof UnauthorizedError>;
 export const NotFundedError = contractErrorClass("NotFunded", codeFor("NotFunded"));
@@ -52,11 +54,20 @@ export type BalanceMismatchError = InstanceType<typeof BalanceMismatchError>;
 export class SimulationFailure extends EscrowError {}
 export class SubmissionFailure extends EscrowError {}
 export class RequestTimeoutError extends EscrowError {}
-export class NetworkMismatchError extends EscrowError {}
+/** Thrown when the RPC's reported network passphrase does not match the configured one. */
+export class NetworkMismatchError extends EscrowError {
+  readonly expected: string | undefined;
+  readonly actual: string | undefined;
+  constructor(expected?: string, actual?: string, options?: ErrorOptions & { message?: string }) {
+    super(options?.message ?? `RPC network passphrase mismatch: expected "${expected}", got "${actual}".`, options);
+    this.expected = expected;
+    this.actual = actual;
+  }
+}
 
 const knownContractErrors: Record<number, (message: string, options?: ErrorOptions) => ContractError> = {
   [codeFor("NotFound")]: (message, options) => new NotFoundError(message, options),
-  [codeFor("InvalidAmount")]: (message, options) => new InvalidAmountError(message, options),
+  [codeFor("InvalidAmount")]: (message, options) => new InvalidAmountContractError(message, options),
   [codeFor("Unauthorized")]: (message, options) => new UnauthorizedError(message, options),
   [codeFor("NotFunded")]: (message, options) => new NotFundedError(message, options),
   [codeFor("InvalidRefundAfter")]: (message, options) => new InvalidRefundAfterError(message, options),
@@ -89,7 +100,7 @@ export function toEscrowError(error: unknown, stage: "simulation" | "submission"
 
   if (/timeout|timed out|deadline exceeded/i.test(message)) return new RequestTimeoutError(message, cause);
   if (/network.{0,20}(mismatch|passphrase)|passphrase.{0,20}(mismatch|network)/i.test(message)) {
-    return new NetworkMismatchError(message, cause);
+    return new NetworkMismatchError(undefined, undefined, { message, cause: error });
   }
   if (/simulation|simulate|tx_bad_auth|tx_insufficient_balance|diagnostic event/i.test(message)) {
     return new SimulationFailure(message, cause);

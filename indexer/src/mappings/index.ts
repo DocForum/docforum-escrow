@@ -13,8 +13,12 @@ export async function handleEscrowEvent(event: SorobanEvent): Promise<void> {
   if (namespace !== "ESCROW" || typeof action !== "string" || !ACTIONS.has(action)) return;
 
   const raw = scValToNative(event.value);
-  if (!Array.isArray(raw) || raw.length !== 12) return;
-  const [payer, payee, token, rawAmount, conditionRef, rawReleasers, rawThreshold, rawRefundAfter, notifyPayee, requiresAcceptance, rawAcceptedAt, status] = raw;
+  // 13 fields since the optional protocol fee was appended as one nested
+  // (recipient, bps) pair (docs/adr/0010); older 12-field events are still
+  // indexed fee-free.
+  if (!Array.isArray(raw) || (raw.length !== 12 && raw.length !== 13)) return;
+  const [payer, payee, token, rawAmount, conditionRef, rawReleasers, rawThreshold, rawRefundAfter, notifyPayee, requiresAcceptance, rawAcceptedAt, status, rawFee] = raw;
+  const [feeRecipient, rawFeeBps] = Array.isArray(rawFee) ? rawFee : [null, null];
   if (typeof conditionRef !== "string" || typeof status !== "string" || typeof notifyPayee !== "boolean" || typeof requiresAcceptance !== "boolean" || !Array.isArray(rawReleasers)) return;
 
   const escrowId = BigInt(String(rawId));
@@ -32,6 +36,8 @@ export async function handleEscrowEvent(event: SorobanEvent): Promise<void> {
   record.notifyPayee = notifyPayee;
   record.requiresAcceptance = requiresAcceptance;
   record.acceptedAt = rawAcceptedAt == null ? undefined : BigInt(String(rawAcceptedAt));
+  record.feeRecipient = feeRecipient == null ? undefined : String(feeRecipient);
+  record.feeBps = rawFeeBps == null ? undefined : BigInt(String(rawFeeBps));
   record.status = status;
   record.updatedLedger = BigInt(event.ledger);
   await record.save();

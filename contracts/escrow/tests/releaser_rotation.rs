@@ -24,7 +24,10 @@ fn funded_escrow(
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
     let id = client.create_escrow(
         &payer,
@@ -35,6 +38,8 @@ fn funded_escrow(
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
     (client, token, payer, payee, releaser, id)

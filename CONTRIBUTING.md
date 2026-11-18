@@ -72,6 +72,12 @@ verification/release-engineering tracks.
   entry as a new file in `changelog.d/`, in the same PR. Don't append to
   the end of `ROADMAP.md`; that is what made every PR conflict. See
   `changelog.d/README.md`.
+- If you change the contract (`contracts/escrow/src/lib.rs`), add a fragment
+  under `contract-changes.d/` with the bump level and a one-line summary.
+  **Don't edit `CONTRACT_VERSION`**: a maintainer bumps it once per batch.
+  New `Error` variants use a provisional code (your issue number × 100 + n);
+  never renumber or remove an existing one. CI checks all three. See
+  `contract-changes.d/README.md`.
 - Changes to escrow lifecycle semantics must also update the TLA+
   specification under `spec/` and rerun TLC. That includes changes to
   settlement auth, status transitions, timeouts, payee acceptance,

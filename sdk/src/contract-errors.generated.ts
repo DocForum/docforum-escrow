@@ -9,6 +9,7 @@ export const CONTRACT_ERROR_NAMES = {
   7: "ConditionRefTooLong",
   8: "DisallowedToken",
   9: "CallbackFailed",
+  37: "InvalidNewPayee",
   12: "Overflow",
   13: "InvalidThreshold",
   14: "TooManyReleasers",
@@ -32,4 +33,9 @@ export const CONTRACT_ERROR_NAMES = {
   32: "NoContribution",
   33: "NotSupportedForPooled",
   34: "InvalidFundingDeadline",
+  35: "InvalidFee",
+  36: "Undeliverable",
+  38: "Paused",
+  39: "AlreadyPaused",
+  40: "NotPaused",
 } as const;

@@ -9,7 +9,7 @@ error retains the original thrown value in `cause`.
 | Class | Meaning |
 |---|---|
 | `NotFoundError` | The requested escrow ID does not exist (contract code 1). |
-| `InvalidAmountError` | The requested amount is invalid (code 2). |
+| `InvalidAmountContractError` | The contract rejected the amount (code 2). Distinct from the client-side `InvalidAmountError` thrown by `parseAmount`. |
 | `UnauthorizedError` | The caller is not authorized (code 3). |
 | `NotFundedError` | The escrow is no longer funded (code 4). |
 | `InvalidRefundAfterError` | The refund deadline is invalid (code 5). |

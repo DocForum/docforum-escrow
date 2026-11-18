@@ -3,7 +3,7 @@ import { CONTRACT_ERROR_NAMES } from "../src/contract-errors.generated.js";
 import {
   BalanceMismatchError,
   ContractError,
-  InvalidAmountError,
+  InvalidAmountContractError,
   InvalidRefundAfterError,
   NetworkMismatchError,
   NotFoundError,
@@ -17,7 +17,7 @@ import {
 
 const expectedErrors = [
   [1, NotFoundError, "NotFound"],
-  [2, InvalidAmountError, "InvalidAmount"],
+  [2, InvalidAmountContractError, "InvalidAmount"],
   [3, UnauthorizedError, "Unauthorized"],
   [4, NotFundedError, "NotFunded"],
   [5, InvalidRefundAfterError, "InvalidRefundAfter"],
