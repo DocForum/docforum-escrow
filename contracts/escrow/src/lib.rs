@@ -1393,19 +1393,22 @@ impl EscrowContract {
         let notify_payee = data.notify_payee && payee_amount > 0;
 
         data.status = EscrowStatus::Released;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        // Reclaim storage like every other settlement (docs/adr/0013): only
+        // the `Status` entry remains. `settle` rejects pooled escrows, so
+        // there is no pooled record to keep.
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Escrow(escrow_id));
         env.storage()
             .persistent()
             .set(&DataKey::Status(escrow_id), &data.status);
         Self::sub_liability(&env, &data.token, data.amount)?;
         Self::extend_instance_ttl(&env);
-        for key in [DataKey::Escrow(escrow_id), DataKey::Status(escrow_id)] {
-            env.storage().persistent().extend_ttl(
-                &key,
-                SETTLED_ESCROW_TTL_THRESHOLD,
-                SETTLED_ESCROW_EXTEND_TO,
-            );
-        }
+        env.storage().persistent().extend_ttl(
+            &DataKey::Status(escrow_id),
+            SETTLED_ESCROW_TTL_THRESHOLD,
+            SETTLED_ESCROW_EXTEND_TO,
+        );
         let token_client = token::Client::new(&env, &data.token);
         let contract_address = env.current_contract_address();
         if fee > 0 {

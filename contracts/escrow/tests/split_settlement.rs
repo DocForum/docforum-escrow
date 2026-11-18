@@ -236,3 +236,12 @@ fn split_settlement_rejects_multi_payee_escrows() {
         Err(Ok(Error::SettlementNotSupported))
     );
 }
+
+#[test]
+fn split_settlement_reclaims_the_record_like_other_settlements() {
+    let env = Env::default();
+    let f = setup(&env);
+    f.client.settle(&f.id, &f.releaser, &120);
+    assert_eq!(f.client.get_status(&f.id), EscrowStatus::Released);
+    assert!(matches!(f.client.try_get_escrow(&f.id), Err(Ok(Error::NotFound))));
+}
