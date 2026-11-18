@@ -201,9 +201,17 @@ fn run(input: &[u8]) {
             }
         }
 
-        let record = client.get_escrow(&escrow_id);
-        assert_eq!(record.status, phase);
-        assert_eq!(record.amount, amount);
+        assert_eq!(client.get_status(&escrow_id), phase);
+        // A settled escrow's full record is reclaimed (docs/adr/0013): only
+        // a funded one still has it.
+        if phase == EscrowStatus::Funded {
+            assert_eq!(client.get_escrow(&escrow_id).amount, amount);
+        } else {
+            assert!(matches!(
+                client.try_get_escrow(&escrow_id),
+                Err(Ok(Error::NotFound))
+            ));
+        }
         assert_eq!(
             balance(&env, &token_address, &contract_id, token_mode),
             if phase == EscrowStatus::Funded {
