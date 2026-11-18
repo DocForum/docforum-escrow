@@ -16,6 +16,10 @@
         "default": "./dist/cjs/index.js"
       }
     },
+    "./testing": {
+      "types": "./dist/esm/testing.d.ts",
+      "import": "./dist/esm/testing.js"
+    },
     "./signers/wallets-kit": {
       "types": "./dist/signers/wallets-kit.d.ts",
       "import": "./dist/signers/wallets-kit.js"
@@ -26,14 +30,14 @@
   ],
   "scripts": {
     "prepare": "npm run build",
-    "build": "npm run build:esm && npm run build:cjs",
+    "build": "npm run build:esm && npm run build:cjs && tsc -p tsconfig.cli.json",
     "test": "vitest run",
     "test:integration": "vitest run",
     "test:fixtures": "vitest run tests/events.test.ts",
-    "test:unit": "vitest run tests/fees.test.ts tests/signers.test.ts tests/protocol-fee.test.ts tests/amounts.test.ts tests/network-presets.test.ts",
+    "test:unit": "vitest run tests/fees.test.ts tests/signers.test.ts tests/pause.test.ts tests/protocol-fee.test.ts tests/amounts.test.ts tests/network-presets.test.ts tests/contract-version.test.ts",
     "test:milestones": "vitest run tests/milestones.test.ts",
     "test:instrumentation": "vitest run tests/instrumentation.test.ts",
-    "test:offline": "vitest run tests/events.test.ts tests/quorum-validation.test.ts tests/pooled-validation.test.ts tests/instrumentation.test.ts tests/signers.test.ts tests/relayed.test.ts tests/escrow-data.test.ts tests/factory.test.ts tests/multisig.test.ts tests/deployments.test.ts",
+    "test:offline": "vitest run tests/batch.test.ts tests/events.test.ts tests/quorum-validation.test.ts tests/pooled-validation.test.ts tests/instrumentation.test.ts tests/signers.test.ts tests/relayed.test.ts tests/escrow-data.test.ts tests/factory.test.ts tests/multisig.test.ts tests/deployments.test.ts tests/fake-client.test.ts",
     "typecheck": "tsc --noEmit",
     "test:runtime": "node tests/runtime-smoke.mjs",
     "test:browser": "node tests/browser-smoke.mjs",
@@ -67,11 +71,15 @@
     "esbuild": "^0.28.2",
     "typescript": "^5.6.2",
     "vite": "^8.3.4",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "@types/node": "^26.6.5"
   },
   "engines": {
     "node": ">=22"
   },
   "module": "dist/esm/index.js",
-  "browser": "dist/esm/index.js"
+  "browser": "dist/esm/index.js",
+  "bin": {
+    "docforum-escrow": "dist/esm/cli.js"
+  }
 }
