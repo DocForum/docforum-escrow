@@ -9,6 +9,14 @@ on:
     - cron: '0 3 * * *'
 
 jobs:
+  contract-interface:
+    name: Contract interface snapshot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify interface and append-only error codes
+        run: ./scripts/check-contract-interface.sh
+
   contract-fuzz:
     name: Contract cargo-fuzz (${{ github.event_name == 'schedule' && 'nightly' || 'PR' }})
     runs-on: ubuntu-latest
