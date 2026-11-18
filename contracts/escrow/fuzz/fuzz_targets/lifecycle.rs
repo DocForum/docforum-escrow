@@ -175,10 +175,10 @@ fn run(input: &[u8]) {
                     } else {
                         assert_eq!(result, Err(Ok(Error::Unauthorized)));
                     }
-                } else if caller == &releaser {
-                    assert_eq!(result, Err(Ok(Error::NotFunded)));
                 } else {
-                    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+                    // Settled: the record is reclaimed (docs/adr/0013), so
+                    // every caller gets NotFunded before any auth check.
+                    assert_eq!(result, Err(Ok(Error::NotFunded)));
                 }
             }
             _ => {
@@ -193,10 +193,10 @@ fn run(input: &[u8]) {
                     } else {
                         assert_eq!(result, Err(Ok(Error::Unauthorized)));
                     }
-                } else if caller == &releaser || timeout_open {
-                    assert_eq!(result, Err(Ok(Error::NotFunded)));
                 } else {
-                    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+                    // Settled: the record is reclaimed (docs/adr/0013), so
+                    // every caller gets NotFunded before any auth check.
+                    assert_eq!(result, Err(Ok(Error::NotFunded)));
                 }
             }
         }
