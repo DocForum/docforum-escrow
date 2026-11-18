@@ -1,3 +1,4 @@
+/** One escrow record as returned by the indexer (all numeric fields are strings, as GraphQL serializes them). */
 export interface IndexedEscrow {
   id: string;
   escrowId: string;
@@ -16,12 +17,14 @@ export interface IndexedEscrow {
   updatedLedger: string;
 }
 
+/** One page of {@link IndexedEscrow} records plus the cursor to fetch the next page. */
 export interface EscrowPage {
   nodes: IndexedEscrow[];
   endCursor: string | null;
   hasNextPage: boolean;
 }
 
+/** Configuration for an {@link EscrowIndexerClient}. */
 export interface EscrowIndexerClientConfig {
   /** URL for an indexer deployed by the application operator. */
   endpoint: string;
@@ -50,6 +53,7 @@ export class EscrowIndexerClient {
     this.fetcher = config.fetch ?? fetch;
   }
 
+  /** Fetches one page of indexed escrows (`first` between 1 and 100, default 50; `after` is a cursor from a prior page). */
   async listEscrows(options: { first?: number; after?: string | null } = {}): Promise<EscrowPage> {
     const first = options.first ?? 50;
     if (!Number.isInteger(first) || first < 1 || first > 100) {

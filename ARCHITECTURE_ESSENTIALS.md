@@ -10,7 +10,11 @@
 
 ## Contract surface
 ```
-__constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
+__constructor(allowed_tokens: Vec<Address>, pause_admin: Address)    // immutable token allowlist (empty = allow all) + the one pause custodian; no setter, no upgrade
+pause(caller) -> result                // IMPLEMENTED (Phase E5, ADR 0011) — custodian only; blocks every deposit path, never release/refund
+unpause(caller) -> result              // IMPLEMENTED (Phase E5, ADR 0011) — custodian only; re-opens new deposits
+is_paused() -> bool                    // IMPLEMENTED (Phase E5, ADR 0011) — read-only pause flag
+get_pause_admin() -> Option<Address>   // IMPLEMENTED (Phase E5, ADR 0011) — read-only custodian address
 version() -> String    // semantic contract version; source revision and Soroban SDK version are embedded as WASM metadata
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to, fee_recipient, fee_bps) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009) + optional protocol fee (ADR 0010); the fee is not yet on testnet
 create_escrow_release_time(..., fee_recipient, fee_bps) -> escrow_id   // single-releaser creation with an earliest release time; accepts the same optional fee pair
@@ -67,6 +71,26 @@ Other emitted events (not lifecycle):
 - `accepted` — topic `("accepted", escrow_id)`, payload `(payee, accepted_at)`
 
 No new contract-level role came in with the M-of-N work: `releasers` is
+escrow data chosen by the payer at creation and immutable afterwards. There is
+still no admin over funds, no owner and no upgrade path — OpenZeppelin's
+upgradeable/access modules were evaluated and rejected in `docs/adr/0006`
+precisely because they would add one. The one contract-level role is the
+emergency-pause custodian (`pause_admin`, ADR 0011), whose only power is
+refusing **new** deposits; it cannot release, refund, edit an escrow,
+rotate a releaser or upgrade anything, and it never gates an outbound path.
+
+**Emergency pause (Phase E5, `docs/adr/0011`):** one address fixed at
+deployment by `__constructor` may set a flag that makes every deposit path
+(`create_escrow` and its variants, plus `top_up`) fail with `Paused`
+(error 26). That is its *only* power. `release`, `refund` (both the
+releaser and timeout paths), `get_status` and `get_escrow` do not read the
+flag, so a pause can never lock funds that are already escrowed — the
+contract-side tests state that explicitly
+(`contracts/escrow/tests/pause.rs`). `pause`/`unpause` require the
+custodian's signature, are not idempotent (`AlreadyPaused`/`NotPaused`),
+and emit `Paused`/`Unpaused` events. There is no timelock on either
+direction and no unpause backdoor. Any future deposit path **must** apply
+the same check in the same PR.
 escrow data chosen by the payer at creation and immutable afterwards.There is still no admin, no owner, no pause and no upgrade path — OpenZeppelin's
 pausable/upgradeable/access modules were evaluated and rejected in
 `docs/adr/0006` precisely because they would add one.
@@ -191,6 +215,11 @@ await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunde
 await client.getEscrow(escrowId);            // full stored record — incl. releasers + threshold + refundAfter, refundTo, so a payee can check the deal (docs/adr/0004/0007/0009, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair or SEP-43 Signer, must be a releaser and threshold must be 1
 await client.releaseWithApprovals({ escrowId, approvers }); // { txHash } — one Keypair/Signer per approver (>= threshold, distinct)
+await client.refund({ escrowId, caller });   // { txHash } — releaser when threshold is 1; anyone after refundAfter has passed
+await client.isPaused();                     // boolean — are new deposits blocked? release/refund are unaffected
+await client.getPauseAdmin();                // custodian address set at deploy (docs/adr/0011)
+await client.pause(caller);                  // { txHash } — caller: Keypair/Signer, must be the pause custodian
+await client.unpause(caller);                // { txHash } — same authority; re-opens new deposits
 await client.refund({ escrowId, caller });   // { txHash } — releaser (threshold 1), the stored payee voluntarily, or anyone after refundAfter
 await client.refundWithApprovals({ escrowId, approvers });  // { txHash } — M-of-N refund
 await client.getTokenInfo(token);           // { decimals, symbol, name } — cached token metadata read from the SEP-41 contract
@@ -251,6 +280,14 @@ their event type and escrow id; unrecognized topics are returned as
 last handled event's cursor to resume; an expired RPC history cursor throws
 `EventCursorExpiredError`. These helpers require the contract lifecycle
 events tracked by issue #9; the current deployment does not emit them.
+
+SDK failures are exposed as typed `EscrowError` subclasses. Contract
+rejections include their numeric `code` and a named class (`NotFoundError`,
+`UnauthorizedError`, `NotFundedError`, and others); future unknown contract
+codes remain a generic `ContractError`. Simulation, submission, timeout,
+and network-passphrase mismatch failures have separate classes. Original
+exceptions are retained as `cause`. See `docs/sdk-errors.md` for migration
+examples.
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
 for no timeout, which behaves exactly as this contract did before the
@@ -259,6 +296,16 @@ param existed.
 bounds client-side so callers fail fast. `getEscrow()` returns
 `releasers: string[]` and `threshold: number` (`releaser: string` was replaced
 in SDK 0.5.0 when the contract's `EscrowData` changed).
+On the pause custodian: it is the one contract-level role in the design, and
+it is deliberately weaker than the contract-level admin ADR 0002 rejected —
+it cannot release, refund, edit an escrow, rotate a releaser, or upgrade
+anything, so its worst case is "no new deposits on this contract id"
+(threat model T12), never "someone's money is stuck". For mainnet, pass a
+Stellar multisig account (e.g. 2-of-3) as `pause_admin`; `require_auth`
+honours that account's own thresholds, so no contract change is needed.
+Because the constructor is the only place the address is set, changing
+custodians means deploying a new contract id.
+
 `sdk/src/generated/contract-client.ts` is machine-generated
 (`stellar contract bindings typescript --wasm ...`) — never hand-edit it;
 regenerate it whenever the contract's public signatures/types change. CI now
@@ -352,6 +399,28 @@ errors matching the contract's codes, and `big.Int` for i128 amounts. It is an
 additive client — the contract and TypeScript SDK are unchanged by it. Offline
 unit tests run in CI; integration tests are opt-in and run against a local
 quickstart deployment.
+
+## Storage TTL & Archival (issue #10, threat model T6)
+
+To prevent contract instance data (`NextId`, executable reference, `AllowedTokens`)
+and escrow entries (`EscrowData`) from archiving prematurely under Soroban's state
+archival model, the contract manages entry lifetimes automatically:
+
+- **Instance TTL**: Extended on every public contract call (`INSTANCE_TTL_THRESHOLD`
+  = 120,960 ledgers / ~7 days, `INSTANCE_EXTEND_TO` = 518,400 ledgers / ~30 days).
+  Active contracts and the `NextId` generator never archive.
+- **Escrow entry TTL**: Extended at creation in `create_escrow*` to cover the
+  longest expected escrow duration (`ESCROW_EXTEND_TO` = 3,110,400 ledgers / ~180 days;
+  threshold = 518,400 ledgers / ~30 days). When an explicit `refund_after` deadline is
+  configured, the extension dynamically scales to cover up to the deadline plus a
+  30-day grace period, capped by the network maximum (~365 days / 6,312,000 ledgers).
+- **Interim active writes**: `top_up`, `rotate_releaser`, and `accept` refresh the
+  entry's TTL to the target duration whenever it falls below the 30-day threshold.
+- **Settlement retention**: `release` and `refund` do not re-extend the escrow for the
+  full 180 days (which would waste rent on inactive state holding no tokens). Instead,
+  they guarantee a post-settlement audit window (`SETTLED_ESCROW_TTL_THRESHOLD` = 7 days,
+  `SETTLED_ESCROW_EXTEND_TO` = 30 days) so indexers, payees, and payers can retrieve
+  settlement status and receipts without an archival restoration.
 
 ## Hard rules
 1. **No PHI, ever, anywhere in this repo.** Not in tests, not in example

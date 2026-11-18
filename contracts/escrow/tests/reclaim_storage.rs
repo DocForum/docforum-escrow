@@ -26,7 +26,7 @@ fn setup(env: &Env) -> Fixture<'_> {
     let token_id = sac.address();
     let payer = Address::generate(env);
     StellarAssetClient::new(env, &token_id).mint(&payer, &10_000);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env), Address::generate(env)));
     Fixture {
         client: EscrowContractClient::new(env, &contract_id),
         token: TokenClient::new(env, &token_id),
