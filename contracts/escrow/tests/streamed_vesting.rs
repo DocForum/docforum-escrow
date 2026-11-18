@@ -29,7 +29,7 @@ fn fund_stream(env: &Env, amount: i128, schedule: VestingSchedule) -> Fixture<'_
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env), Address::generate(env)));
     let client = EscrowContractClient::new(env, &contract_id);
     let escrow_id = client.create_streamed_escrow(
         &payer,
@@ -168,7 +168,7 @@ fn invalid_stream_schedules_are_rejected_before_funding() {
     let token = TokenClient::new(&env, &token_id);
     let payer = Address::generate(&env);
     asset.mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), Address::generate(&env)));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let invalid = client.try_create_streamed_escrow(

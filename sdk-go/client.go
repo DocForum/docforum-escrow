@@ -369,6 +369,10 @@ func createEscrowWithReleaseTimeArgs(payer, payee, token string, amount *big.Int
 		scvBool(notifyPayee),
 		refundToVal,
 		scvOptionU64(releaseNotBefore),
+		// fee_recipient, fee_bps (docs/adr/0010): this SDK does not yet
+		// expose the optional protocol fee, so always send None (no fee).
+		scvVoid(),
+		scvVoid(),
 	}
 	return args, nil
 }
@@ -451,6 +455,12 @@ func createEscrowArgs(payer, payee, token string, amount *big.Int, conditionRef 
 		args = append(args, releaserVals[0])
 	}
 	args = append(args, scvOptionU64(refundAfter), scvBool(notifyPayee), refundToVal)
+	if !useReleaserVec {
+		// create_escrow also takes fee_recipient and fee_bps
+		// (docs/adr/0010); create_escrow_with_releasers does not. This SDK
+		// does not yet expose the optional protocol fee, so send None (no fee).
+		args = append(args, scvVoid(), scvVoid())
+	}
 	return args, nil
 }
 
