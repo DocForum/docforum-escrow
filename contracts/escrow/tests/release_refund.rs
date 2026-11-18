@@ -7,10 +7,13 @@
 
 use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus, PayeeRefunded};
 use soroban_sdk::{
-    testutils::{Address as _, Events as _},
+    testutils::{Address as _, Events as _, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, Event, String, Vec,
+    Address, Env, Event, IntoVal, String, Vec,
 };
+
+#[path = "common/auth.rs"]
+mod auth;
 
 fn setup<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
     let admin = Address::generate(env);
@@ -68,6 +71,16 @@ fn fund_escrow(env: &Env, amount: i128) -> Fixture<'_> {
     }
 }
 
+fn authorize_settlement(env: &Env, f: &Fixture<'_>, fn_name: &str, caller: &Address) {
+    let invoke = MockAuthInvoke {
+        contract: &f.contract_id,
+        fn_name,
+        args: (f.escrow_id, caller.clone()).into_val(env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth { address: caller, invoke: &invoke }]);
+}
+
 // --- release() ---
 
 #[test]
@@ -76,7 +89,9 @@ fn release_transfers_funds_to_payee_and_marks_released() {
     env.mock_all_auths();
     let f = fund_escrow(&env, 300);
 
+    authorize_settlement(&env, &f, "release", &f.releaser);
     f.client.release(&f.escrow_id, &f.releaser);
+    auth::assert_auth_addresses(&env, &[f.releaser.clone()]);
 
     assert_eq!(
         env.events()
@@ -99,6 +114,7 @@ fn release_rejects_unauthorized_caller() {
     let f = fund_escrow(&env, 300);
     let stranger = Address::generate(&env);
 
+    authorize_settlement(&env, &f, "release", &stranger);
     let result = f.client.try_release(&f.escrow_id, &stranger);
 
     assert!(result.is_err());
@@ -112,7 +128,9 @@ fn release_rejects_double_release() {
     env.mock_all_auths();
     let f = fund_escrow(&env, 300);
 
+    authorize_settlement(&env, &f, "release", &f.releaser);
     f.client.release(&f.escrow_id, &f.releaser);
+    authorize_settlement(&env, &f, "release", &f.releaser);
     let second = f.client.try_release(&f.escrow_id, &f.releaser);
 
     assert!(second.is_err());
@@ -127,7 +145,9 @@ fn refund_transfers_funds_back_to_payer_and_marks_refunded() {
     env.mock_all_auths();
     let f = fund_escrow(&env, 300);
 
+    authorize_settlement(&env, &f, "refund", &f.releaser);
     f.client.refund(&f.escrow_id, &f.releaser);
+    auth::assert_auth_addresses(&env, &[f.releaser.clone()]);
 
     assert_eq!(
         env.events()
@@ -175,6 +195,7 @@ fn refund_rejects_unauthorized_caller() {
     let f = fund_escrow(&env, 300);
     let stranger = Address::generate(&env);
 
+    authorize_settlement(&env, &f, "refund", &stranger);
     let result = f.client.try_refund(&f.escrow_id, &stranger);
 
     assert!(result.is_err());
@@ -187,7 +208,9 @@ fn refund_rejects_after_release() {
     env.mock_all_auths();
     let f = fund_escrow(&env, 300);
 
+    authorize_settlement(&env, &f, "release", &f.releaser);
     f.client.release(&f.escrow_id, &f.releaser);
+    authorize_settlement(&env, &f, "refund", &f.releaser);
     let refund_attempt = f.client.try_refund(&f.escrow_id, &f.releaser);
 
     assert!(refund_attempt.is_err());
@@ -200,7 +223,9 @@ fn release_rejects_after_refund() {
     env.mock_all_auths();
     let f = fund_escrow(&env, 300);
 
+    authorize_settlement(&env, &f, "refund", &f.releaser);
     f.client.refund(&f.escrow_id, &f.releaser);
+    authorize_settlement(&env, &f, "release", &f.releaser);
     let release_attempt = f.client.try_release(&f.escrow_id, &f.releaser);
 
     assert!(release_attempt.is_err());
