@@ -128,6 +128,14 @@ pub enum SettleAction {
     Refund,
 }
 
+/// Direct recipient and share of a split release, in basis points.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayeeShare {
+    pub payee: Address,
+    pub basis_points: u32,
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub struct EscrowData {
@@ -156,6 +164,8 @@ pub struct EscrowData {
     /// anyone — still only to `refund_to`. `None` means no timeout,
     /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
+    /// Direct release recipients; ordinary escrows store one 10,000-bps share.
+    pub payees: Vec<PayeeShare>,
     /// If true, invoke the contract payee's `on_escrow_released` hook after
     /// the payout transfer. A failed callback reverts the whole release.
     pub notify_payee: bool,
@@ -199,6 +209,8 @@ pub struct PayeeRefunded {
 /// = 10 %. A platform fee fixed at creation must be transparent but
 /// cannot be the arrangement itself — see docs/adr/0010.
 pub const MAX_FEE_BPS: u32 = 1_000;
+/// Maximum direct recipients for one escrow release.
+pub const MAX_PAYEES: u32 = 8;
 /// 10 000 basis points = 100 %.
 const BASIS_POINTS: i128 = 10_000;
 /// One entry of a `create_escrows` batch. Mirrors the single-escrow
@@ -408,6 +420,11 @@ pub enum Error {
     /// contract itself, or an amount that would overflow the fee math —
     /// see docs/adr/0010.
     InvalidFee = 35,
+    InvalidPayeeList = 2200,
+    TooManyPayees = 2201,
+    DuplicatePayee = 2202,
+    InvalidBasisPoints = 2203,
+    SplitAmountOverflow = 2204,
     /// The contract's token balance is below the requested stream payout.
     PoolInsufficient = 4400,
     /// `withdraw`/`get_vesting` on an escrow without a schedule.
@@ -505,6 +522,48 @@ impl EscrowContract {
     /// creation and taken at release — never on refund — with `fee_bps ≤`
     /// [`MAX_FEE_BPS`] (10 %), floor rounding, and both given together or
     /// not at all (docs/adr/0010). `None` on both means no fee.
+    /// Creates an escrow that releases directly to up to eight unique
+    /// recipients. Shares must be positive and total exactly 10,000 bps.
+    /// Rounding remainder goes to the final recipient. If the callback is
+    /// enabled, it is invoked on the first recipient; refunds use refund_to.
+    pub fn create_split_escrow(
+        env: Env,
+        payer: Address,
+        payees: Vec<PayeeShare>,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        notify_payee: bool,
+        refund_to: Option<Address>,
+        fee_recipient: Option<Address>,
+        fee_bps: Option<u32>,
+    ) -> Result<u64, Error> {
+        let primary_payee = payees.get(0).ok_or(Error::InvalidPayeeList)?.payee;
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        Self::create_escrow_with_payees_inner(
+            &env,
+            payer,
+            primary_payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            1,
+            refund_after,
+            notify_payee,
+            false,
+            refund_to,
+            None,
+            fee_recipient,
+            fee_bps,
+            false,
+            Some(payees),
+        )
+    }
+
     pub fn create_escrow(
         env: Env,
         payer: Address,
@@ -980,9 +1039,14 @@ impl EscrowContract {
         creator.require_auth();
 
         let id = Self::next_id(&env);
+        let mut pooled_payees = Vec::new(&env);
+        pooled_payees.push_back(PayeeShare {
+            payee: payee.clone(),
+            basis_points: 10_000,
+        });
         let data = EscrowData {
             payer: creator.clone(),
-            payee,
+            payee: payee.clone(),
             token,
             // Grows with accepted contributions; release pays exactly
             // this pooled total.
@@ -994,6 +1058,7 @@ impl EscrowContract {
             // No push timeout exists for pooled escrows, so the field is
             // inert; kept for read-shape compatibility.
             refund_after: None,
+            payees: pooled_payees,
             notify_payee: false,
             requires_acceptance: false,
             accepted_at: None,
@@ -1540,6 +1605,46 @@ impl EscrowContract {
         fee_bps: Option<u32>,
         payer_already_authorized: bool,
     ) -> Result<u64, Error> {
+        Self::create_escrow_with_payees_inner(
+            env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            threshold,
+            refund_after,
+            notify_payee,
+            requires_acceptance,
+            refund_to,
+            release_not_before,
+            fee_recipient,
+            fee_bps,
+            payer_already_authorized,
+            None,
+        )
+    }
+
+    fn create_escrow_with_payees_inner(
+        env: &Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releasers: Vec<Address>,
+        threshold: u32,
+        refund_after: Option<u64>,
+        notify_payee: bool,
+        requires_acceptance: bool,
+        refund_to: Option<Address>,
+        release_not_before: Option<u64>,
+        fee_recipient: Option<Address>,
+        fee_bps: Option<u32>,
+        payer_already_authorized: bool,
+        payee_shares: Option<Vec<PayeeShare>>,
+    ) -> Result<u64, Error> {
         // Every creation entry point funnels through here, so this one
         // check covers all deposit paths: while paused, no new escrow can
         // be created, no id is consumed and no funds move (docs/adr/0011).
@@ -1558,6 +1663,44 @@ impl EscrowContract {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
+        let payees = if let Some(payees) = payee_shares {
+            if payees.is_empty() {
+                return Err(Error::InvalidPayeeList);
+            }
+            if payees.len() > MAX_PAYEES {
+                return Err(Error::TooManyPayees);
+            }
+            let mut total_bps = 0u32;
+            let mut seen = Vec::new(env);
+            for share in payees.iter() {
+                if share.basis_points == 0 {
+                    return Err(Error::InvalidBasisPoints);
+                }
+                total_bps = total_bps
+                    .checked_add(share.basis_points)
+                    .ok_or(Error::InvalidBasisPoints)?;
+                // A share paid to the contract itself would be locked here
+                // forever (same rule as `refund_to` and the fee recipient).
+                if share.payee == env.current_contract_address() {
+                    return Err(Error::InvalidPayeeList);
+                }
+                if Self::contains(&seen, &share.payee) {
+                    return Err(Error::DuplicatePayee);
+                }
+                seen.push_back(share.payee);
+            }
+            if total_bps != 10_000 {
+                return Err(Error::InvalidBasisPoints);
+            }
+            payees
+        } else {
+            let mut shares = Vec::new(env);
+            shares.push_back(PayeeShare {
+                payee: payee.clone(),
+                basis_points: 10_000,
+            });
+            shares
+        };
         if let Some(deadline) = refund_after {
             if deadline <= env.ledger().timestamp() {
                 return Err(Error::InvalidRefundAfter);
@@ -1623,6 +1766,7 @@ impl EscrowContract {
             releasers,
             threshold,
             refund_after,
+            payees,
             notify_payee,
             requires_acceptance,
             accepted_at: None,
@@ -1828,7 +1972,44 @@ impl EscrowContract {
             }
         }
         if payout > 0 {
-            if settled == EscrowStatus::Released {
+            if settled == EscrowStatus::Released && data.payees.len() > 1 {
+                // Split payout (issue #22): each share by basis points, the
+                // last payee taking the rounding remainder so the shares
+                // always sum to `payout`.
+                let mut distributed = 0i128;
+                for index in 0..data.payees.len() {
+                    let share = data.payees.get(index).ok_or(Error::InvalidPayeeList)?;
+                    let amount = if index + 1 == data.payees.len() {
+                        payout
+                            .checked_sub(distributed)
+                            .ok_or(Error::SplitAmountOverflow)?
+                    } else {
+                        let quotient = payout / BASIS_POINTS;
+                        let remainder = payout % BASIS_POINTS;
+                        quotient
+                            .checked_mul(share.basis_points as i128)
+                            .and_then(|whole| {
+                                remainder
+                                    .checked_mul(share.basis_points as i128)
+                                    .map(|fraction| whole + fraction / BASIS_POINTS)
+                            })
+                            .ok_or(Error::SplitAmountOverflow)?
+                    };
+                    distributed = distributed
+                        .checked_add(amount)
+                        .ok_or(Error::SplitAmountOverflow)?;
+                    if amount > 0 {
+                        let transfer = token_client.try_transfer(
+                            &env.current_contract_address(),
+                            &share.payee,
+                            &amount,
+                        );
+                        if !matches!(transfer, Ok(Ok(()))) {
+                            return Err(Error::Undeliverable);
+                        }
+                    }
+                }
+            } else if settled == EscrowStatus::Released {
                 let transfer = token_client.try_transfer(
                     &env.current_contract_address(),
                     &data.payee,
