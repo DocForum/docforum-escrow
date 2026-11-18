@@ -38,14 +38,19 @@ export interface EscrowSpanAttributes {
 
 /** The subset of an OTel `Span` this package uses. */
 export interface EscrowSpan {
+  /** Set a single attribute on the span. */
   setAttribute(key: string, value: string | number | boolean): void;
+  /** Set the span's status (`code` 1 = ok, 2 = error). */
   setStatus(status: { code: number; message?: string }): void;
+  /** Record an exception against the span. */
   recordException(error: Error): void;
+  /** End the span. */
   end(): void;
 }
 
 /** The subset of an OTel `Tracer` this package uses. */
 export interface EscrowTracer {
+  /** Start and return a new {@link EscrowSpan}. */
   startSpan(name: string, options?: { attributes?: Record<string, string | number | boolean> }): EscrowSpan;
 }
 
@@ -66,6 +71,7 @@ export interface EscrowInstrumentationEvent {
   error?: unknown;
 }
 
+/** Optional instrumentation for an {@link EscrowClient}: an OTel tracer and/or a per-phase event hook. */
 export interface InstrumentationOptions {
   /**
    * An OTel-compatible tracer. Passing one enables spans; leaving it out
@@ -87,6 +93,7 @@ export interface InstrumentationOptions {
 
 const SPAN_PREFIX = "escrow.";
 
+/** The full OTel span name for a phase, e.g. `spanName("simulate")` → `"escrow.simulate"`. */
 export function spanName(name: EscrowSpanName): string {
   return `${SPAN_PREFIX}${name}`;
 }
