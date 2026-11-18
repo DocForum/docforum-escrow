@@ -1,0 +1,7 @@
+{
+  "name": "offline-release-example",
+  "private": true,
+  "type": "module",
+  "description": "Air-gapped release/refund example for @docforum/escrow-sdk (issue #59). Testnet only.",
+  "dependencies": { "@stellar/stellar-sdk": "^16.0.1" }
+}

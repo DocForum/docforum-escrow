@@ -143,3 +143,96 @@ fn split_settlement_rejects_pooled_escrows() {
         Err(Ok(Error::NotSupportedForPooled))
     );
 }
+
+/// Escrow of 1_000 with a 10 % (1_000 bps) protocol fee.
+fn setup_with_fee(env: &Env) -> (Fixture<'_>, Address) {
+    env.mock_all_auths();
+    let admin = Address::generate(env);
+    let token_id = env.register_stellar_asset_contract_v2(admin).address();
+    let token = TokenClient::new(env, &token_id);
+    let asset = StellarAssetClient::new(env, &token_id);
+    let payer = Address::generate(env);
+    let payee = Address::generate(env);
+    let releaser = Address::generate(env);
+    let fee_recipient = Address::generate(env);
+    asset.mint(&payer, &1_000);
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env), Address::generate(env)));
+    let client = EscrowContractClient::new(env, &contract_id);
+    let id = client.create_escrow(
+        &payer,
+        &payee,
+        &token_id,
+        &1_000,
+        &String::from_str(env, "split-fee"),
+        &releaser,
+        &None,
+        &false,
+        &None,
+        &Some(fee_recipient.clone()),
+        &Some(1_000u32),
+    );
+    (Fixture { client, token, payer, payee, releaser, id }, fee_recipient)
+}
+
+#[test]
+fn split_settlement_charges_the_fee_on_the_payee_share_only() {
+    let env = Env::default();
+    let (f, fee_recipient) = setup_with_fee(&env);
+    f.client.settle(&f.id, &f.releaser, &400);
+    // 10 % of the 400 payee share; the 600 returned to the payer is untouched.
+    assert_eq!(f.token.balance(&fee_recipient), 40);
+    assert_eq!(f.token.balance(&f.payee), 360);
+    assert_eq!(f.token.balance(&f.payer), 600);
+}
+
+#[test]
+fn split_settlement_of_zero_is_a_fee_free_refund() {
+    let env = Env::default();
+    let (f, fee_recipient) = setup_with_fee(&env);
+    f.client.settle(&f.id, &f.releaser, &0);
+    assert_eq!(f.token.balance(&fee_recipient), 0);
+    assert_eq!(f.token.balance(&f.payer), 1_000);
+}
+
+#[test]
+fn split_settlement_of_everything_matches_release() {
+    let env = Env::default();
+    let (f, fee_recipient) = setup_with_fee(&env);
+    f.client.settle(&f.id, &f.releaser, &1_000);
+    assert_eq!(f.token.balance(&fee_recipient), 100);
+    assert_eq!(f.token.balance(&f.payee), 900);
+    assert_eq!(f.token.balance(&f.payer), 0);
+}
+
+#[test]
+fn split_settlement_rejects_multi_payee_escrows() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract_v2(admin).address();
+    let payer = Address::generate(&env);
+    StellarAssetClient::new(&env, &token_id).mint(&payer, &1_000);
+    let releaser = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), Address::generate(&env)));
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let mut payees = Vec::new(&env);
+    payees.push_back(docforum_escrow::PayeeShare { payee: Address::generate(&env), basis_points: 6_000 });
+    payees.push_back(docforum_escrow::PayeeShare { payee: Address::generate(&env), basis_points: 4_000 });
+    let id = client.create_split_escrow(
+        &payer,
+        &payees,
+        &token_id,
+        &1_000,
+        &String::from_str(&env, "split-multi"),
+        &releaser,
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+    );
+    assert_eq!(
+        client.try_settle(&id, &releaser, &500),
+        Err(Ok(Error::SettlementNotSupported))
+    );
+}
