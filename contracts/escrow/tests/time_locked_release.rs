@@ -36,7 +36,13 @@ fn setup<'a>(env: &Env, release_at: Option<u64>, refund_at: Option<u64>) -> Fixt
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (soroban_sdk::Vec::<Address>::new(env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            soroban_sdk::Vec::<Address>::new(env),
+            Address::generate(env),
+        ),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
     let escrow_id = client.create_escrow_release_time(
         &payer,
@@ -49,6 +55,8 @@ fn setup<'a>(env: &Env, release_at: Option<u64>, refund_at: Option<u64>) -> Fixt
         &false,
         &None,
         &release_at,
+        &None,
+        &None,
     );
 
     Fixture {
@@ -107,7 +115,13 @@ fn creation_rejects_release_time_in_the_past_or_after_refund_deadline() {
     let releaser = Address::generate(&env);
     let asset = StellarAssetClient::new(&env, &token_id);
     asset.mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, (soroban_sdk::Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            soroban_sdk::Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let past = client.try_create_escrow_release_time(
@@ -121,6 +135,8 @@ fn creation_rejects_release_time_in_the_past_or_after_refund_deadline() {
         &false,
         &None,
         &Some(CREATED_AT - 1),
+        &None,
+        &None,
     );
     let after_refund = client.try_create_escrow_release_time(
         &payer,
@@ -133,6 +149,8 @@ fn creation_rejects_release_time_in_the_past_or_after_refund_deadline() {
         &false,
         &None,
         &Some(REFUND_AT + 1),
+        &None,
+        &None,
     );
 
     assert_eq!(past, Err(Ok(Error::InvalidReleaseNotBefore)));
@@ -149,4 +167,18 @@ fn release_time_equal_to_refund_deadline_is_valid() {
         f.client.get_escrow(&f.escrow_id).release_not_before,
         Some(REFUND_AT)
     );
+}
+
+#[test]
+fn release_time_equal_to_creation_time_is_valid_and_releasable_immediately() {
+    let env = Env::default();
+    let f = setup(&env, Some(CREATED_AT), Some(REFUND_AT));
+    assert_eq!(
+        f.client.get_escrow(&f.escrow_id).release_not_before,
+        Some(CREATED_AT)
+    );
+
+    f.client.release(&f.escrow_id, &f.releaser);
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Released);
+    assert_eq!(f.token.balance(&f.payee), 300);
 }

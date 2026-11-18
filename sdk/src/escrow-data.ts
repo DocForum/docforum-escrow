@@ -84,6 +84,11 @@ export function decodeEscrowDataFromScVal(value: xdr.ScVal): Escrow {
     releaseNotBefore: asOptionalBigInt(record.release_not_before, "release_not_before"),
     notifyPayee: asBoolean(record.notify_payee, "notify_payee"),
     refundTo: asString(record.refund_to, "refund_to"),
+    // Deployments that predate the acceptance gate (issue #25) store neither
+    // field; they behave as "no gate, never accepted".
+    requiresAcceptance:
+      record.requires_acceptance === undefined ? false : asBoolean(record.requires_acceptance, "requires_acceptance"),
+    acceptedAt: asOptionalBigInt(record.accepted_at, "accepted_at"),
     status: asStatus(record.status),
   };
 }
