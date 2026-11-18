@@ -52,6 +52,11 @@
       "return": "Result<EscrowData, Error>"
     },
     {
+      "name": "extend_refund_after",
+      "args": "env: Env, escrow_id: u64, new_deadline: u64,",
+      "return": "Result<(), Error>"
+    },
+    {
       "name": "create_pooled_escrow",
       "args": "env: Env, creator: Address, payee: Address, token: Address, funding_target: i128, condition_ref: String, releaser: Address, funding_deadline: u64,",
       "return": "Result<u64, Error>"
@@ -283,6 +288,10 @@
     {
       "name": "InvalidFee",
       "code": 35
+    },
+    {
+      "name": "InvalidRefundExtension",
+      "code": 4100
     },
     {
       "name": "Undeliverable",
