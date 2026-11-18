@@ -81,7 +81,7 @@
       }
     },
     "get_escrow": {
-      "source_bytes": 204,
+      "source_bytes": 245,
       "profile": {
         "before": {
           "cpu_instructions": 92687,
@@ -107,7 +107,7 @@
       }
     },
     "top_up": {
-      "source_bytes": 163,
+      "source_bytes": 204,
       "profile": {
         "before": {
           "cpu_instructions": 499982,

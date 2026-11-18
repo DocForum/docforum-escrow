@@ -14,9 +14,20 @@
 // releaser set (`create_escrow_with_releasers`) — see docs/adr/0007.
 // Single-releaser escrows are stored as a one-address set with threshold 1
 // and behave exactly as before.
+// Phase E5 (issue #35): a narrow emergency pause — see docs/adr/0011. One
+// address set at deploy may flip a flag that blocks NEW deposits
+// (`create_escrow`, `create_escrow_release_time`, `create_escrow_with_*`,
+// `create_pooled_escrow`, `top_up` and `contribute`) only. `release`,
+// `refund`, the timeout refund, `claim_refund` and `settle_many` never read
+// it: a pause can stop new exposure, never lock existing funds.
+// Phase E5 (issue #29): `settle_many(caller, ops)` settles up to
+// `MAX_SETTLE_OPS` escrows (release or refund each) in one transaction,
+// best-effort with per-op results — see docs/adr/0012 and threat model T1.
+//
 // Phase E5 (issue #30): optional protocol fee (`fee_recipient` +
 // `fee_bps`, one off-the-top cut), fixed at creation and taken at
 // release — see docs/adr/0010. Never taken on refund.
+//
 // Phase E5 (issue #113): pooled escrows funded by multiple payers —
 // `create_pooled_escrow` + `contribute` + pull-based `claim_refund`, see
 // docs/adr/0011. Pooled escrows add two storage records (funding config,
@@ -40,13 +51,13 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
-    IntoVal, String, Vec,
+    contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error,
+    symbol_short, token, Address, Env, IntoVal, String, Vec,
 };
 
 // Bump this value whenever a contract interface or behavior change is made.
 // CI checks this constant against the base branch when this file changes.
-pub const CONTRACT_VERSION: &str = "2.1.0";
+pub const CONTRACT_VERSION: &str = "2.5.1";
 
 include!(concat!(env!("OUT_DIR"), "/contract_metadata.rs"));
 
@@ -60,17 +71,41 @@ pub const MAX_RELEASERS: u32 = 10;
 /// Maximum `condition_ref` length in bytes (threat model T10, Phase E5).
 pub const MAX_CONDITION_REF_LEN: u32 = 64;
 
-/// Maximum number of items accepted by `create_escrows` / `settle_many`
-/// in a single call. Callers (including the SDK) must chunk larger
-/// inputs — see docs/adr/0005.
-pub const MAX_BATCH_SIZE: u32 = 50;
+/// Maximum number of items accepted by one `create_escrows` call. Callers
+/// (including the SDK) must chunk larger inputs. Measured, not guessed: each
+/// item emits a full escrow state event plus the token's transfer event, and
+/// the per-transaction contract-events budget (16,384 bytes on Mainnet) is
+/// the first limit a batch hits, at 24 items. 16 leaves about 30% headroom;
+/// `tests/create_escrow.rs::max_create_batch_fits_mainnet_limits` re-measures
+/// it on every `cargo test`. See docs/adr/0012.
+pub const MAX_BATCH_SIZE: u32 = 16;
 
+/// Maximum number of operations accepted by one `settle_many` call (issue
+/// #29). Measured, not guessed: every settled op emits a full escrow state
+/// event plus the token's transfer event, and the per-transaction
+/// contract-events-plus-return-value budget (16,384 bytes on Mainnet) is
+/// the first limit a batch hits. The bound keeps a worst-case batch under
+/// that and every other Mainnet per-transaction limit with headroom;
+/// `tests/settle_many.rs::max_batch_fits_mainnet_limits` re-measures it on
+/// every `cargo test`. See docs/adr/0012.
+pub const MAX_SETTLE_OPS: u32 = 12;
 /// Issue #39: a `Liability(token)` entry is re-extended whenever its
 /// remaining TTL falls below this many ledgers (~30 days at 5 s/ledger)…
 pub const LIABILITY_TTL_THRESHOLD: u32 = 518_400;
 /// …to this many ledgers (~120 days), capped at the network's maximum
 /// entry TTL. See docs/threat-model.md ("Solvency monitoring").
 pub const LIABILITY_TTL_EXTEND_TO: u32 = 2_073_600;
+
+/// Storage TTL parameters (threat model T6, Phase E4), expressed in
+/// ledgers assuming an approximately five-second close time.
+pub const INSTANCE_TTL_THRESHOLD: u32 = 120_960;
+pub const INSTANCE_EXTEND_TO: u32 = 518_400;
+pub const ESCROW_TTL_THRESHOLD: u32 = 518_400;
+pub const ESCROW_EXTEND_TO: u32 = 3_110_400;
+pub const ESCROW_GRACE_PERIOD_LEDGERS: u32 = 518_400;
+pub const MAX_NETWORK_TTL_LEDGERS: u32 = 6_312_000;
+pub const SETTLED_ESCROW_TTL_THRESHOLD: u32 = 120_960;
+pub const SETTLED_ESCROW_EXTEND_TO: u32 = 518_400;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -83,6 +118,16 @@ pub enum EscrowStatus {
     Cancelled,
 }
 
+/// What one `settle_many` operation does to its escrow (issue #29).
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SettleAction {
+    /// Same rules as `release`: pay the stored payee.
+    Release,
+    /// Same rules as `refund`: return the funds to the stored `refund_to`.
+    Refund,
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub struct EscrowData {
@@ -92,6 +137,11 @@ pub struct EscrowData {
     pub payee: Address,
     pub token: Address,
     pub amount: i128,
+    /// Opaque caller-supplied reference the contract stores but never
+    /// interprets (docs/adr/0001). This field is **public on-chain forever**,
+    /// like the rest of `EscrowData` (docs/threat-model.md T9): never put
+    /// private, personal or sensitive data here. Pass an opaque, meaningless
+    /// id such as a UUID or an internal record id.
     pub condition_ref: String,
     pub status: EscrowStatus,
     /// Addresses permitted to settle this escrow — see docs/adr/0002 for the
@@ -133,6 +183,18 @@ pub struct EscrowData {
     pub fee_bps: Option<u32>,
 }
 
+/// Identifies voluntary refunds started by the escrow's stored payee.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayeeRefunded {
+    #[topic]
+    pub escrow_id: u64,
+    #[topic]
+    pub payer: Address,
+    #[topic]
+    pub payee: Address,
+    pub amount: i128,
+}
 /// Maximum `fee_bps`: 1 000 basis points out of [`BASIS_POINTS`] 10 000
 /// = 10 %. A platform fee fixed at creation must be transparent but
 /// cannot be the arrangement itself — see docs/adr/0010.
@@ -184,11 +246,17 @@ pub struct CreateItem {
 }
 
 #[contracttype]
-enum DataKey {
+pub enum DataKey {
     Escrow(u64),
     NextId,
     Status(u64),
     AllowedTokens,
+    /// The one address allowed to `pause`/`unpause` — set once by
+    /// `__constructor`, never changeable afterwards (docs/adr/0011).
+    PauseAdmin,
+    /// The emergency-pause flag. Absent/false = normal operation; only the
+    /// deposit entry points read it (docs/adr/0011).
+    Paused,
     /// Pooled escrows only (issue #113): immutable funding config.
     /// Soroban encodes enum variants by name, so appending these two
     /// variants does not disturb any existing storage entry.
@@ -199,6 +267,23 @@ enum DataKey {
     /// of `amount` over every escrow in that token whose status is
     /// `Funded`. Appended last, so existing entries keep their encoding.
     Liability(Address),
+}
+
+/// Emitted by `pause` (docs/adr/0011). Carries the custodian that flipped
+/// the flag so integrators and monitoring can react without polling.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Paused {
+    #[topic]
+    pub admin: Address,
+}
+
+/// Emitted by `unpause` (docs/adr/0011).
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Unpaused {
+    #[topic]
+    pub admin: Address,
 }
 
 #[contracterror]
@@ -227,6 +312,11 @@ pub enum Error {
     /// The opted-in payee callback returned an error or could not be
     /// invoked. The release transaction (including its transfer) rolls back.
     CallbackFailed = 9,
+    /// `new_payee` is invalid: it is either the contract's own address
+    /// or the payer's address. The contract address can never sign to
+    /// accept a payout; the payer is excluded so a payer cannot redirect
+    /// the release destination to themselves via a colluding payee.
+    InvalidNewPayee = 37,
     Overflow = 12,
     /// The releaser set is empty, or `threshold` is 0 or larger than the
     /// number of releasers — see docs/adr/0007.
@@ -292,6 +382,30 @@ pub enum Error {
     /// contract itself, or an amount that would overflow the fee math —
     /// see docs/adr/0010.
     InvalidFee = 35,
+    /// The refund deadline is absent, already elapsed, or the replacement
+    /// deadline is not strictly later than the current one (issue #41).
+    InvalidRefundExtension = 4100,
+    /// An outbound release transfer failed; the funded escrow remains
+    /// retryable and may still use its refund path.
+    Undeliverable = 36,
+    /// A deposit path was called while the emergency pause is on — see
+    /// docs/adr/0011.
+    Paused = 38,
+    /// `pause` on an already-paused contract. The transition did not
+    /// happen, so no event is emitted.
+    AlreadyPaused = 39,
+    /// `unpause` on a running contract. The transition did not happen, so
+    /// no event is emitted.
+    NotPaused = 40,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundDeadlineExtended {
+    #[topic]
+    pub escrow_id: u64,
+    pub old_deadline: u64,
+    pub new_deadline: u64,
 }
 
 #[contract]
@@ -301,16 +415,32 @@ pub struct EscrowContract;
 impl EscrowContract {
     /// Sets the immutable token allowlist at deployment. An empty list
     /// preserves the legacy behavior and allows any token address.
-    pub fn __constructor(env: Env, allowed_tokens: Vec<Address>) {
+    ///
+    /// Also stores the single address permitted to `pause`/`unpause`
+    /// (docs/adr/0011). There is no setter, so the custodian cannot be
+    /// changed after deployment — a new custodian means a new deployment.
+    /// No auth is required here: the constructor runs as part of deploying
+    /// the instance, before any caller exists.
+    ///
+    /// The custodian is deliberately weak: its only power is to refuse
+    /// **new** deposits. It cannot release, refund, edit an escrow, or
+    /// upgrade anything.
+    pub fn __constructor(env: Env, allowed_tokens: Vec<Address>, pause_admin: Address) {
         env.storage()
             .instance()
             .set(&DataKey::AllowedTokens, &allowed_tokens);
+        Self::extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .set(&DataKey::PauseAdmin, &pause_admin);
+        env.storage().instance().set(&DataKey::Paused, &false);
     }
 
     /// Semantic version of this contract interface and behavior.
     /// Build provenance is available separately in the WASM contract
     /// metadata (`git_sha` and `soroban_sdk_version`).
     pub fn version(env: Env) -> String {
+        Self::extend_instance_ttl(&env);
         String::from_str(&env, CONTRACT_VERSION)
     }
 
@@ -325,8 +455,16 @@ impl EscrowContract {
     /// destination for a sponsored escrow where the funder (`payer`) is
     /// not who should get the money back (docs/adr/0009): `None` means
     /// `payer`; it may not be this contract's own address, and the
-    /// `payer`'s auth on this call covers it. For M-of-N releasers use
-    /// `create_escrow_with_releasers`.
+    /// `payer`'s auth on this call covers it. `condition_ref` is stored
+    /// verbatim and is public on-chain forever (docs/threat-model.md T9):
+    /// pass an opaque id, never private or personal data. For M-of-N
+    /// releasers use `create_escrow_with_releasers`.
+    ///
+    /// This is a deposit path, so it is gated by the emergency pause
+    /// (docs/adr/0011): while paused it fails with `Paused` before any
+    /// funds move, no escrow id is consumed and nothing is stored. The
+    /// same check covers every creation entry point, and `top_up` applies
+    /// it too.
     /// `fee_recipient`/`fee_bps` are the optional protocol fee, fixed at
     /// creation and taken at release — never on refund — with `fee_bps ≤`
     /// [`MAX_FEE_BPS`] (10 %), floor rounding, and both given together or
@@ -363,6 +501,7 @@ impl EscrowContract {
             None,
             fee_recipient,
             fee_bps,
+            false,
         )
     }
 
@@ -403,6 +542,7 @@ impl EscrowContract {
             release_not_before,
             fee_recipient,
             fee_bps,
+            false,
         )
     }
 
@@ -438,11 +578,13 @@ impl EscrowContract {
             None,
             None,
             None,
+            false,
         )
     }
 
     /// Records the payee's acceptance for an opted-in funded escrow.
     pub fn accept(env: Env, escrow_id: u64, payee: Address) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         payee.require_auth();
         let mut data: EscrowData = env
             .storage()
@@ -466,6 +608,7 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), &data);
+        Self::extend_escrow_ttl(&env, escrow_id, data.refund_after);
         env.events()
             .publish((symbol_short!("accepted"), escrow_id), (payee, accepted_at));
         Ok(())
@@ -507,6 +650,7 @@ impl EscrowContract {
             None,
             None,
             None,
+            false,
         )
     }
 
@@ -526,6 +670,7 @@ impl EscrowContract {
         if items.len() > MAX_BATCH_SIZE {
             return Err(Error::BatchTooLarge);
         }
+        payer.require_auth();
 
         let mut ids: Vec<u64> = Vec::new(&env);
         for item in items.iter() {
@@ -547,6 +692,7 @@ impl EscrowContract {
                 None,
                 None,
                 None,
+                true,
             )?;
             ids.push_back(id);
         }
@@ -555,8 +701,8 @@ impl EscrowContract {
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
     pub fn get_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, Error> {
-        env
-            .storage()
+        Self::extend_instance_ttl(&env);
+        env.storage()
             .persistent()
             .get(&DataKey::Status(escrow_id))
             .ok_or(Error::NotFound)
@@ -571,10 +717,45 @@ impl EscrowContract {
     /// (docs/adr/0004, threat model T8; docs/adr/0010). Errors on an
     /// unknown id.
     pub fn get_escrow(env: Env, escrow_id: u64) -> Result<EscrowData, Error> {
+        Self::extend_instance_ttl(&env);
         env.storage()
             .persistent()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::NotFound)
+    }
+
+    /// Moves an active refund deadline later with the payer's and the
+    /// single releaser's consent. Quorum escrows use their threshold path.
+    pub fn extend_refund_after(
+        env: Env,
+        escrow_id: u64,
+        new_deadline: u64,
+    ) -> Result<(), Error> {
+        let mut data = Self::load(&env, escrow_id)?;
+        Self::check_funded(&data)?;
+        let current_deadline = data.refund_after.ok_or(Error::InvalidRefundExtension)?;
+        if env.ledger().timestamp() >= current_deadline || new_deadline <= current_deadline {
+            return Err(Error::InvalidRefundExtension);
+        }
+        if data.threshold != 1 {
+            return Err(Error::ThresholdNotMet);
+        }
+        data.payer.require_auth();
+        let releaser = data.releasers.get(0).ok_or(Error::InvalidReleaser)?;
+        releaser.require_auth();
+        data.refund_after = Some(new_deadline);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        // A later deadline needs the entries to live at least that long.
+        Self::extend_escrow_ttl(&env, escrow_id, data.refund_after);
+        RefundDeadlineExtended {
+            escrow_id,
+            old_deadline: current_deadline,
+            new_deadline,
+        }
+        .publish(&env);
+        Ok(())
     }
 
     /// Creates a pooled escrow funded by many payers (issue #113,
@@ -600,6 +781,14 @@ impl EscrowContract {
         releaser: Address,
         funding_deadline: u64,
     ) -> Result<u64, Error> {
+        // Creating a pooled escrow opens a new deposit target, so the
+        // emergency pause gates it like every other creation entry point
+        // (docs/adr/0011): while paused no id is consumed and nothing is
+        // stored.
+        if Self::is_paused(env.clone()) {
+            return Err(Error::Paused);
+        }
+        Self::extend_instance_ttl(&env);
         // Validate everything before any auth prompt so a malformed
         // request costs the caller nothing on-chain (same convention as
         // `create_escrow_inner`).
@@ -655,7 +844,9 @@ impl EscrowContract {
             fee_bps: None,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        env.storage().persistent().set(&DataKey::Status(id), &data.status);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(id), &data.status);
         env.storage().persistent().set(
             &DataKey::Pooled(id),
             &PooledData {
@@ -686,8 +877,15 @@ impl EscrowContract {
     /// Accounting is updated only after the transfer is verified, so a
     /// failed contribution records nothing (invariant I4).
     pub fn contribute(env: Env, escrow_id: u64, payer: Address, amount: i128) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         if amount <= 0 {
             return Err(Error::InvalidAmount);
+        }
+        // `contribute` is how new money enters a pooled escrow, so the
+        // emergency pause blocks it (docs/adr/0011). `claim_refund` and
+        // `release` never read the flag: a pause cannot trap pooled funds.
+        if Self::is_paused(env.clone()) {
+            return Err(Error::Paused);
         }
         let mut data: EscrowData = Self::load(&env, escrow_id)?;
         let pooled = Self::pooled_data(&env, escrow_id)?;
@@ -707,15 +905,18 @@ impl EscrowContract {
         Self::transfer_in_exact(&env, &data.token, &payer, amount)?;
 
         let key = DataKey::Contribution(escrow_id, payer.clone());
-        let mut contribution: Contribution = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or(Contribution {
-                amount: 0,
-                refunded: false,
-            });
-        contribution.amount = contribution.amount.checked_add(amount).ok_or(Error::Overflow)?;
+        let mut contribution: Contribution =
+            env.storage()
+                .persistent()
+                .get(&key)
+                .unwrap_or(Contribution {
+                    amount: 0,
+                    refunded: false,
+                });
+        contribution.amount = contribution
+            .amount
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
         let funded = data.amount.checked_add(amount).ok_or(Error::Overflow)?;
         data.amount = funded;
         env.storage().persistent().set(&key, &contribution);
@@ -742,11 +943,8 @@ impl EscrowContract {
     /// change anyone's entitlement. Checks-effects-interactions: the
     /// `refunded` flag and the pooled total are written before the
     /// transfer, and a failing transfer rolls the whole claim back.
-    pub fn claim_refund(
-        env: Env,
-        escrow_id: u64,
-        contributor: Address,
-    ) -> Result<(), Error> {
+    pub fn claim_refund(env: Env, escrow_id: u64, contributor: Address) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         contributor.require_auth();
 
         let mut data: EscrowData = Self::load(&env, escrow_id)?;
@@ -775,7 +973,10 @@ impl EscrowContract {
         // the pooled total first, so a failed transfer rolls back
         // atomically and can never double-pay (invariant I3).
         contribution.refunded = true;
-        data.amount = data.amount.checked_sub(refund_amount).ok_or(Error::Overflow)?;
+        data.amount = data
+            .amount
+            .checked_sub(refund_amount)
+            .ok_or(Error::Overflow)?;
         env.storage().persistent().set(&key, &contribution);
         env.storage()
             .persistent()
@@ -809,6 +1010,7 @@ impl EscrowContract {
     /// invocation, so it can never drift from the escrows themselves.
     /// A token never used by this contract reports `0` liabilities.
     pub fn solvency(env: Env, token: Address) -> (i128, i128) {
+        Self::extend_instance_ttl(&env);
         let balance = token::Client::new(&env, &token).balance(&env.current_contract_address());
         (balance, Self::liability(&env, &token))
     }
@@ -819,6 +1021,7 @@ impl EscrowContract {
     /// funding_target` (then `claim_refund` is open to each contributor).
     /// Errors `NotPooled` on a non-pooled or unknown id.
     pub fn get_pooled(env: Env, escrow_id: u64) -> Result<PooledData, Error> {
+        Self::extend_instance_ttl(&env);
         Self::pooled_data(&env, escrow_id)
     }
 
@@ -832,6 +1035,7 @@ impl EscrowContract {
         escrow_id: u64,
         contributor: Address,
     ) -> Result<Option<Contribution>, Error> {
+        Self::extend_instance_ttl(&env);
         let key = DataKey::Contribution(escrow_id, contributor);
         if !env.storage().persistent().has(&key) {
             // Distinguish "no such escrow" from "wrong escrow kind" so
@@ -857,6 +1061,7 @@ impl EscrowContract {
         caller: Address,
         new_releaser: Address,
     ) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         caller.require_auth();
         let mut data: EscrowData = env
             .storage()
@@ -885,6 +1090,7 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), &data);
+        Self::extend_escrow_ttl(&env, escrow_id, data.refund_after);
         env.events().publish(
             (symbol_short!("rotate"), escrow_id),
             (previous_releaser, new_releaser),
@@ -895,8 +1101,15 @@ impl EscrowContract {
     /// Adds funds to a funded escrow without changing its parties or id.
     /// Only its original payer may authorize the transfer.
     pub fn top_up(env: Env, escrow_id: u64, payer: Address, amount: i128) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         if amount <= 0 {
             return Err(Error::InvalidAmount);
+        }
+        // `top_up` is a deposit path, so the emergency pause gates it too
+        // (docs/adr/0011): paused blocks every way new money enters, and
+        // nothing else.
+        if Self::is_paused(env.clone()) {
+            return Err(Error::Paused);
         }
         payer.require_auth();
         let mut data: EscrowData = env
@@ -927,6 +1140,7 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), &data);
+        Self::extend_escrow_ttl(&env, escrow_id, data.refund_after);
         env.events().publish(
             (symbol_short!("top_up"), escrow_id),
             (amount, updated_amount),
@@ -943,18 +1157,18 @@ impl EscrowContract {
     /// the deadline the releaser can still release, racing any timeout
     /// refund — whoever lands first wins and the other fails `NotFunded`.
     ///
+    /// Also deliberately **not** gated by the emergency pause
+    /// (docs/adr/0011): funds must always be able to leave an existing
+    /// escrow, whatever state new deposits are in.
     /// If the escrow was created with a fee (docs/adr/0010), the fee comes
     /// off the top — `⌊amount × fee_bps ÷ 10 000⌋` goes to `fee_recipient`,
     /// the exact remainder to `payee`, so the two transfers always sum to
     /// the escrowed `amount`. No fee is ever taken on `refund`.
     pub fn release(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         caller.require_auth();
 
-        let mut data = Self::load(&env, escrow_id)?;
-        Self::check_single_caller(&data, &caller)?;
-        Self::check_funded(&data)?;
-        Self::check_pooled_fully_funded(&env, escrow_id, &data)?;
-
+        let mut data = Self::release_checks(&env, escrow_id, &caller)?;
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
     }
 
@@ -969,6 +1183,7 @@ impl EscrowContract {
         escrow_id: u64,
         approvers: Vec<Address>,
     ) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         let mut data = Self::load(&env, escrow_id)?;
         Self::check_approvals(&env, &data, &approvers)?;
         Self::check_funded(&data)?;
@@ -977,27 +1192,53 @@ impl EscrowContract {
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
     }
 
-    /// Batch version of `release`: releases each escrow in `escrow_ids` in
-    /// order on behalf of `caller`, which must be a releaser of every one
-    /// of them. Returns a per-op result vector aligned with `escrow_ids`:
-    /// `Ok(())` for a successful release, `Err(e)` for one the contract
-    /// rejected (unknown id, not funded, caller not a releaser, before
-    /// `release_not_before`). A rejected op does not stop the rest — the
-    /// caller can inspect the vector and retry only the failures.
+    /// Settles many escrows in one transaction (issue #29, docs/adr/0012) —
+    /// the fast path for threat model T1's "race the attacker" response and
+    /// for high-volume integrators. Each `(escrow_id, action)` is checked
+    /// exactly like the single-escrow entry point it mirrors:
     ///
-    /// `escrow_ids.len()` must be `<= MAX_BATCH_SIZE` — see docs/adr/0005.
+    /// - `Release`: `caller` must be a releaser of that escrow with
+    ///   threshold 1, the escrow must be `Funded`, a pooled escrow must be
+    ///   fully funded, and `release_not_before`/payee acceptance apply.
+    /// - `Refund`: pooled escrows are rejected; `caller` must be a releaser
+    ///   (threshold 1) unless `refund_after` has passed, in which case
+    ///   anyone may refund — always to the stored `refund_to`.
+    ///
+    /// `caller` authorizes the whole batch once. Per-op authority comes
+    /// only from each escrow's own stored releaser set, so a batch can never
+    /// settle an escrow whose releaser is someone else: that op returns
+    /// `Unauthorized` and touches nothing.
+    ///
+    /// **Best-effort with per-op results:** the returned vector has one
+    /// entry per input op, in input order. `Ok(())` means that escrow was
+    /// settled by this call; `Err(e)` means the op was rejected *before*
+    /// any state changed and that escrow is exactly as it was. The same
+    /// escrow twice in one batch: the first op settles it, the second
+    /// returns `NotFunded`. A failure *after* an op's effects began (a
+    /// failing token transfer or an opted-in payee callback) cannot be
+    /// reported per-op without leaving funds moved under an `Err`, so it
+    /// aborts and reverts the whole batch instead.
+    ///
+    /// `ops.len()` must be `<= MAX_SETTLE_OPS` (`BatchTooLarge`). An empty
+    /// batch returns an empty vector.
+    ///
+    /// Deliberately **not** gated by the emergency pause (docs/adr/0011):
+    /// both ops are outbound, exactly like single `release`/`refund`, and a
+    /// pause stops new deposits only — it must never block funds leaving.
     pub fn settle_many(
         env: Env,
         caller: Address,
-        escrow_ids: Vec<u64>,
+        ops: Vec<(u64, SettleAction)>,
     ) -> Result<Vec<Result<(), Error>>, Error> {
-        if escrow_ids.len() > MAX_BATCH_SIZE {
+        Self::extend_instance_ttl(&env);
+        if ops.len() > MAX_SETTLE_OPS {
             return Err(Error::BatchTooLarge);
         }
+        caller.require_auth();
 
         let mut results: Vec<Result<(), Error>> = Vec::new(&env);
-        for escrow_id in escrow_ids.iter() {
-            results.push_back(Self::release(env.clone(), escrow_id, caller.clone()));
+        for (escrow_id, action) in ops.iter() {
+            results.push_back(Self::settle_one(&env, escrow_id, &caller, action));
         }
         Ok(results)
     }
@@ -1018,28 +1259,39 @@ impl EscrowContract {
     /// a threshold of 1; otherwise use `refund_with_approvals` (the timeout
     /// path stays open to anyone).
     ///
+    /// Deliberately **not** gated by the emergency pause (docs/adr/0011):
+    /// pausing new deposits must never trap funds already escrowed.
     /// A protocol fee (docs/adr/0010) is never taken on the refund path:
     /// the stored `refund_to` receives the full stored `amount`.
+    /// path stays open to anyone). The stored payee may also voluntarily
+    /// refund a funded escrow; that path emits `payee_refunded` (ADR 0010).
+    /// A protocol fee is never taken on the refund path.
     pub fn refund(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         caller.require_auth();
 
-        let mut data = Self::load(&env, escrow_id)?;
-        // A pooled escrow's funds belong to its contributors until the
-        // deadline decides the round; a push refund to one `refund_to`
-        // would violate per-contributor accounting (docs/adr/0011).
-        // Pooled refunds are pull-based: `claim_refund`.
-        Self::reject_pooled(&env, escrow_id)?;
-
-        let timeout_passed = match data.refund_after {
-            Some(deadline) => env.ledger().timestamp() >= deadline,
-            None => false,
+        let loaded = Self::load(&env, escrow_id)?;
+        let payee_initiated = caller == loaded.payee;
+        let mut data = if payee_initiated {
+            // Keep pooled refunds pull-based and require a funded escrow for
+            // the payee-authorized path, which bypasses the releaser check.
+            Self::reject_pooled(&env, escrow_id)?;
+            Self::check_funded(&loaded)?;
+            loaded
+        } else {
+            Self::refund_checks(&env, escrow_id, &caller)?
         };
-        if !timeout_passed {
-            Self::check_single_caller(&data, &caller)?;
+        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)?;
+        if payee_initiated {
+            PayeeRefunded {
+                escrow_id,
+                payer: data.payer,
+                payee: data.payee,
+                amount: data.amount,
+            }
+            .publish(&env);
         }
-        Self::check_funded(&data)?;
-
-        Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
+        Ok(())
     }
 
     /// Lets the payer take the funds back **before the payee accepts**
@@ -1061,6 +1313,7 @@ impl EscrowContract {
     /// have called `accept`. `accept` and `cancel` race on one ledger
     /// state: whichever lands first wins and the other fails.
     pub fn cancel(env: Env, escrow_id: u64, payer: Address) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         payer.require_auth();
 
         let mut data = Self::load(&env, escrow_id)?;
@@ -1092,6 +1345,7 @@ impl EscrowContract {
         escrow_id: u64,
         approvers: Vec<Address>,
     ) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
         let mut data = Self::load(&env, escrow_id)?;
         // See `refund`: pooled escrows never push refunds (docs/adr/0011).
         Self::reject_pooled(&env, escrow_id)?;
@@ -1117,7 +1371,15 @@ impl EscrowContract {
         release_not_before: Option<u64>,
         fee_recipient: Option<Address>,
         fee_bps: Option<u32>,
+        payer_already_authorized: bool,
     ) -> Result<u64, Error> {
+        // Every creation entry point funnels through here, so this one
+        // check covers all deposit paths: while paused, no new escrow can
+        // be created, no id is consumed and no funds move (docs/adr/0011).
+        if Self::is_paused(env.clone()) {
+            return Err(Error::Paused);
+        }
+        Self::extend_instance_ttl(env);
         let allowed_tokens: Vec<Address> = env
             .storage()
             .instance()
@@ -1172,7 +1434,11 @@ impl EscrowContract {
             }
         }
 
-        payer.require_auth();
+        // `require_auth` can only run once per address in a frame, so a batch
+        // authorizes up front instead of once per item.
+        if !payer_already_authorized {
+            payer.require_auth();
+        }
         if notify_payee {
             payee.require_auth();
         }
@@ -1199,7 +1465,10 @@ impl EscrowContract {
             fee_bps,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        env.storage().persistent().set(&DataKey::Status(id), &data.status);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(id), &data.status);
+        Self::extend_escrow_ttl(env, id, refund_after);
         Self::publish_state(env, symbol_short!("created"), id, &data);
         Ok(id)
     }
@@ -1323,7 +1592,7 @@ impl EscrowContract {
         // Effects before interactions: the state write lands before any
         // token call, so a re-entrant token cannot see a still-`Funded`
         // escrow (threat model T4).
-        data.status = settled;
+        data.status = settled.clone();
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), data);
@@ -1333,14 +1602,39 @@ impl EscrowContract {
         // Issue #39: the escrow leaves `Funded` in this same write, so its
         // amount stops being owed here too.
         Self::sub_liability(env, &data.token, data.amount)?;
+        env.storage().persistent().extend_ttl(
+            &DataKey::Escrow(escrow_id),
+            SETTLED_ESCROW_TTL_THRESHOLD,
+            SETTLED_ESCROW_EXTEND_TO,
+        );
+        env.storage().persistent().extend_ttl(
+            &DataKey::Status(escrow_id),
+            SETTLED_ESCROW_TTL_THRESHOLD,
+            SETTLED_ESCROW_EXTEND_TO,
+        );
 
         let token_client = token::Client::new(env, &data.token);
-        if let Some(recipient) = fee_recipient {
-            if fee > 0 {
-                token_client.transfer(&env.current_contract_address(), &recipient, &fee);
+        if settled == EscrowStatus::Released {
+            if let Some(recipient) = fee_recipient {
+                if fee > 0 {
+                    let transfer = token_client.try_transfer(
+                        &env.current_contract_address(),
+                        &recipient,
+                        &fee,
+                    );
+                    if !matches!(transfer, Ok(Ok(()))) {
+                        return Err(Error::Undeliverable);
+                    }
+                }
             }
+            let transfer =
+                token_client.try_transfer(&env.current_contract_address(), &destination, &payout);
+            if !matches!(transfer, Ok(Ok(()))) {
+                return Err(Error::Undeliverable);
+            }
+        } else {
+            token_client.transfer(&env.current_contract_address(), &destination, &payout);
         }
-        token_client.transfer(&env.current_contract_address(), &destination, &payout);
         if notify_payee {
             // The callback reports what the payee actually received — gross
             // minus any protocol fee — not the gross escrowed amount.
@@ -1398,6 +1692,76 @@ impl EscrowContract {
         );
     }
 
+    /// Every check `release` makes before settling, minus the caller's
+    /// `require_auth` (which the entry point does once). Shared by
+    /// `release` and `settle_many` so the two can never disagree.
+    fn release_checks(env: &Env, escrow_id: u64, caller: &Address) -> Result<EscrowData, Error> {
+        let data = Self::load(env, escrow_id)?;
+        Self::check_single_caller(&data, caller)?;
+        Self::check_funded(&data)?;
+        Self::check_pooled_fully_funded(env, escrow_id, &data)?;
+        Ok(data)
+    }
+
+    /// Every check `refund` makes before settling, minus `require_auth`.
+    /// Shared by `refund` and `settle_many`.
+    fn refund_checks(env: &Env, escrow_id: u64, caller: &Address) -> Result<EscrowData, Error> {
+        let data = Self::load(env, escrow_id)?;
+        // A pooled escrow's funds belong to its contributors until the
+        // deadline decides the round; a push refund to one `refund_to`
+        // would violate per-contributor accounting (docs/adr/0011).
+        // Pooled refunds are pull-based: `claim_refund`.
+        Self::reject_pooled(env, escrow_id)?;
+
+        let timeout_passed = match data.refund_after {
+            Some(deadline) => env.ledger().timestamp() >= deadline,
+            None => false,
+        };
+        if !timeout_passed {
+            Self::check_single_caller(&data, caller)?;
+        }
+        Self::check_funded(&data)?;
+        Ok(data)
+    }
+
+    /// One `settle_many` op. Every rejection is returned before any state
+    /// changes: the action's own checks, then `settle()`'s pre-write
+    /// release checks (`release_not_before`, payee acceptance), run here
+    /// so `settle()` can't return them after this op's effects. An error
+    /// `settle()` does return can only come after its status write and
+    /// transfer (a failed payee callback), so it aborts the whole batch
+    /// rather than be reported as a clean per-op `Err` (docs/adr/0012).
+    fn settle_one(
+        env: &Env,
+        escrow_id: u64,
+        caller: &Address,
+        action: SettleAction,
+    ) -> Result<(), Error> {
+        let (mut data, settled) = match action {
+            SettleAction::Release => {
+                let data = Self::release_checks(env, escrow_id, caller)?;
+                if data
+                    .release_not_before
+                    .is_some_and(|release_time| env.ledger().timestamp() < release_time)
+                {
+                    return Err(Error::ReleaseTooEarly);
+                }
+                if data.requires_acceptance && data.accepted_at.is_none() {
+                    return Err(Error::AcceptanceRequired);
+                }
+                (data, EscrowStatus::Released)
+            }
+            SettleAction::Refund => (
+                Self::refund_checks(env, escrow_id, caller)?,
+                EscrowStatus::Refunded,
+            ),
+        };
+        if let Err(error) = Self::settle(env, escrow_id, &mut data, settled) {
+            panic_with_error!(env, error);
+        }
+        Ok(())
+    }
+
     /// The protocol fee taken off the top at release: the escrowed `amount`
     /// scaled by `bps` (of 10 000), rounded **down** so the fee is never
     /// more than its share and fee + payee remainder always equals the
@@ -1439,11 +1803,7 @@ impl EscrowContract {
     /// (push `refund`, `refund_with_approvals`, `cancel`, `top_up` — see
     /// docs/adr/0011 for why each would break per-contributor accounting).
     fn reject_pooled(env: &Env, escrow_id: u64) -> Result<(), Error> {
-        if env
-            .storage()
-            .persistent()
-            .has(&DataKey::Pooled(escrow_id))
-        {
+        if env.storage().persistent().has(&DataKey::Pooled(escrow_id)) {
             return Err(Error::NotSupportedForPooled);
         }
         Ok(())
@@ -1479,6 +1839,131 @@ impl EscrowContract {
             }
         }
         false
+    }
+
+    /// Blocks new deposits (`create_escrow` and its variants,
+    /// `create_pooled_escrow`, `top_up` and `contribute`) until `unpause`
+    /// is called. Callable only by the custodian
+    /// set at deployment, which must sign this call (docs/adr/0011). Emits
+    /// a `Paused` event carrying that address.
+    ///
+    /// Deliberately has no effect on money already escrowed: `release`,
+    /// `refund`, the timeout refund and `claim_refund` do not read the
+    /// flag, so a pause can never lock existing funds. Errors
+    /// `AlreadyPaused` if the contract is already paused.
+    pub fn pause(env: Env, caller: Address) -> Result<(), Error> {
+        caller.require_auth();
+        Self::require_pause_admin(&env, &caller)?;
+        if Self::is_paused(env.clone()) {
+            return Err(Error::AlreadyPaused);
+        }
+
+        env.storage().instance().set(&DataKey::Paused, &true);
+        Paused { admin: caller }.publish(&env);
+        Ok(())
+    }
+
+    /// Re-opens new deposits. Same auth as `pause` — only the custodian
+    /// set at deployment. Emits an `Unpaused` event. Errors `NotPaused` if
+    /// the contract isn't paused.
+    ///
+    /// Unpausing is not timelocked on purpose (docs/adr/0011): it restores
+    /// normal operation and cannot touch a single escrow, so delaying it
+    /// would only delay recovery.
+    pub fn unpause(env: Env, caller: Address) -> Result<(), Error> {
+        caller.require_auth();
+        Self::require_pause_admin(&env, &caller)?;
+        if !Self::is_paused(env.clone()) {
+            return Err(Error::NotPaused);
+        }
+
+        env.storage().instance().set(&DataKey::Paused, &false);
+        Unpaused { admin: caller }.publish(&env);
+        Ok(())
+    }
+
+    /// Read-only: is the emergency pause currently blocking new deposits?
+    /// Says nothing about existing escrows — `release`/`refund` work either
+    /// way (docs/adr/0011).
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
+    /// Read-only: the custodian address that may `pause`/`unpause`, so
+    /// integrators can verify who holds the role without trusting docs
+    /// (docs/adr/0011). `None` only for an instance deployed without a
+    /// constructor, which this contract's WASM does not allow.
+    pub fn get_pause_admin(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::PauseAdmin)
+    }
+
+    fn require_pause_admin(env: &Env, caller: &Address) -> Result<(), Error> {
+        let admin: Option<Address> = env.storage().instance().get(&DataKey::PauseAdmin);
+        match admin {
+            Some(admin) if &admin == caller => Ok(()),
+            _ => Err(Error::Unauthorized),
+        }
+    }
+
+    /// Lets the current `payee` reassign future payout rights to a new
+    /// address. Only the current `payee` may authorise this — no one
+    /// else (not the payer, not the releaser) can redirect where a
+    /// release will go (see invariant I1 and docs/threat-model.md).
+    ///
+    /// Restrictions:
+    /// - Only while the escrow is `Funded` (no effect after release or
+    ///   refund; the transfer is a payout-claim reassignment, not an
+    ///   undo of a settlement).
+    /// - `new_payee` may not be the contract's own address (it can never
+    ///   sign to claim funds) or the `payer`'s address (preventing a
+    ///   payer from using a colluding payee to redirect the escrow to
+    ///   themselves).
+    ///
+    /// This helps a payee who is *rotating* their wallet — it does NOT
+    /// help a payee who has already *lost* their key and can no longer
+    /// sign: they cannot authorise this call. Key loss is an operational
+    /// risk the payee must mitigate off-chain before it happens.
+    ///
+    /// Emits a `pay_xfer` event with `(escrow_id, old_payee, new_payee)`.
+    pub fn transfer_payee(
+        env: Env,
+        escrow_id: u64,
+        current_payee: Address,
+        new_payee: Address,
+    ) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
+        current_payee.require_auth();
+
+        let mut data: EscrowData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::NotFound)?;
+
+        if current_payee != data.payee {
+            return Err(Error::Unauthorized);
+        }
+        if data.status != EscrowStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        if new_payee == env.current_contract_address() || new_payee == data.payer {
+            return Err(Error::InvalidNewPayee);
+        }
+
+        let old_payee = data.payee.clone();
+        data.payee = new_payee.clone();
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+
+        env.events().publish(
+            (symbol_short!("pay_xfer"), escrow_id),
+            (old_payee, new_payee),
+        );
+        Ok(())
     }
 
     fn next_id(env: &Env) -> u64 {
@@ -1547,5 +2032,35 @@ impl EscrowContract {
         storage.set(&key, &value);
         let extend_to = LIABILITY_TTL_EXTEND_TO.min(env.storage().max_ttl());
         storage.extend_ttl(&key, LIABILITY_TTL_THRESHOLD.min(extend_to), extend_to);
+    }
+
+    /// Extends the contract instance and code TTL if it is near expiry.
+    fn extend_instance_ttl(env: &Env) {
+        let extend_to = INSTANCE_EXTEND_TO.min(env.storage().max_ttl());
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD.min(extend_to), extend_to);
+    }
+
+    /// Extends an escrow entry to at least 180 days, or through its refund
+    /// deadline plus a 30-day grace period, capped by the network maximum.
+    fn extend_escrow_ttl(env: &Env, escrow_id: u64, refund_after: Option<u64>) {
+        let deadline_target = refund_after.and_then(|deadline| {
+            deadline
+                .checked_sub(env.ledger().timestamp())
+                .map(|seconds| {
+                    let ledgers = u32::try_from(seconds / 5).unwrap_or(u32::MAX);
+                    ledgers.saturating_add(ESCROW_GRACE_PERIOD_LEDGERS)
+                })
+        });
+        let extend_to = deadline_target
+            .unwrap_or(ESCROW_EXTEND_TO)
+            .max(ESCROW_EXTEND_TO)
+            .min(MAX_NETWORK_TTL_LEDGERS)
+            .min(env.storage().max_ttl());
+        let threshold = ESCROW_TTL_THRESHOLD.min(extend_to);
+        let storage = env.storage().persistent();
+        storage.extend_ttl(&DataKey::Escrow(escrow_id), threshold, extend_to);
+        storage.extend_ttl(&DataKey::Status(escrow_id), threshold, extend_to);
     }
 }

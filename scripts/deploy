@@ -8,7 +8,8 @@
 #
 # Usage:
 #   scripts/deploy [--network testnet] [--wasm PATH] [--expected-wasm-hash HEX]
-#                  [--allowed-tokens C...,C...] [--no-record]
+#                  [--allowed-tokens C...,C...] [--pause-admin G...|C...]
+#                  [--no-record]
 #   scripts/deploy --dry-run        # same flow against a local quickstart
 #
 # Options:
@@ -24,6 +25,10 @@
 #   --allowed-tokens LIST    Comma-separated constructor allowlist. Default:
 #                            the network's native XLM asset contract. Pass an
 #                            empty string to allow any token.
+#   --pause-admin ADDR       Constructor `pause_admin`: the one address that
+#                            may pause/unpause deposits, fixed for the
+#                            instance's lifetime (docs/adr/0011). Default:
+#                            the deployer account.
 #   --no-record              Deploy and verify, but write no record.
 #   -h, --help               Show this help.
 #
@@ -53,6 +58,7 @@ wasm_path=""
 expected_hash=""
 allowed_tokens_set=false
 allowed_tokens=""
+pause_admin=""
 record=true
 
 while [[ $# -gt 0 ]]; do
@@ -62,6 +68,7 @@ while [[ $# -gt 0 ]]; do
     --wasm) wasm_path="${2:?--wasm needs a path}"; shift 2 ;;
     --expected-wasm-hash) expected_hash="${2:?--expected-wasm-hash needs a value}"; shift 2 ;;
     --allowed-tokens) allowed_tokens="${2-}"; allowed_tokens_set=true; shift 2 ;;
+    --pause-admin) pause_admin="${2:?--pause-admin needs an address}"; shift 2 ;;
     --no-record) record=false; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; die "unknown argument: $1" ;;
@@ -209,9 +216,10 @@ upload_tx="$(tx_of_last)"
 [[ "$uploaded_hash" == "$wasm_hash" ]] ||
   die "uploaded WASM hash $uploaded_hash does not match local $wasm_hash."
 
-log "Deploying with allowed_tokens=$allowed_json"
+[[ -n "$pause_admin" ]] || pause_admin="$(addr deployer)"
+log "Deploying with allowed_tokens=$allowed_json pause_admin=$pause_admin"
 contract_id="$(submit contract deploy --wasm-hash "$wasm_hash" --source deployer "${net_args[@]}" \
-  -- --allowed_tokens "$allowed_json" | tail -n 1)"
+  -- --allowed_tokens "$allowed_json" --pause_admin "$pause_admin" | tail -n 1)"
 deploy_tx="$(tx_of_last)"
 [[ "$contract_id" =~ ^C[A-Z2-7]{55}$ ]] || die "unexpected contract id: $contract_id"
 log "Contract $contract_id"

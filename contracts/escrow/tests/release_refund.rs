@@ -5,11 +5,11 @@
 // create_escrow time — docs/adr/0002) may call release/refund, and only
 // while the escrow is still Funded. See issues #2 and #3.
 
-use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
+use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus, PayeeRefunded};
 use soroban_sdk::{
     testutils::{Address as _, Events as _, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, IntoVal, String, Vec,
+    Address, Env, Event, IntoVal, String, Vec,
 };
 
 #[path = "common/auth.rs"]
@@ -24,8 +24,8 @@ fn setup<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
 }
 
 struct Fixture<'a> {
-    client: EscrowContractClient<'a>,
     contract_id: Address,
+    client: EscrowContractClient<'a>,
     token: TokenClient<'a>,
     payer: Address,
     payee: Address,
@@ -40,7 +40,10 @@ fn fund_escrow(env: &Env, amount: i128) -> Fixture<'_> {
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
 
     let escrow_id = client.create_escrow(
@@ -58,8 +61,8 @@ fn fund_escrow(env: &Env, amount: i128) -> Fixture<'_> {
     );
 
     Fixture {
-        client,
         contract_id,
+        client,
         token,
         payer,
         payee,
@@ -96,6 +99,8 @@ fn release_transfers_funds_to_payee_and_marks_released() {
             .filter_by_contract(&f.contract_id)
             .events()
             .len(),
+        // env.events().all() captures only the last invocation's events;
+        // release emits exactly 1 "released" event.
         1
     );
     assert_eq!(f.token.balance(&f.payee), 300);
@@ -150,9 +155,36 @@ fn refund_transfers_funds_back_to_payer_and_marks_refunded() {
             .filter_by_contract(&f.contract_id)
             .events()
             .len(),
+        // env.events().all() captures only the last invocation's events;
+        // refund emits exactly 1 "refunded" event.
         1
     );
     assert_eq!(f.token.balance(&f.payer), 1_000); // full 1,000 minted, 300 returned
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Refunded);
+}
+
+#[test]
+fn payee_can_voluntarily_refund_to_payer_and_emits_distinct_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let f = fund_escrow(&env, 300);
+
+    f.client.refund(&f.escrow_id, &f.payee);
+
+    let expected = PayeeRefunded {
+        escrow_id: f.escrow_id,
+        payer: f.payer.clone(),
+        payee: f.payee.clone(),
+        amount: 300,
+    };
+    let contract_events = env.events().all().filter_by_contract(&f.contract_id);
+    let events = contract_events.events();
+    // The shared refund event records the escrow state transition; this event
+    // additionally records that the payee initiated the refund.
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[1], expected.to_xdr(&env, &f.contract_id));
+    assert_eq!(f.token.balance(&f.payer), 1_000);
+    assert_eq!(f.token.balance(&f.payee), 0);
     assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Refunded);
 }
 
