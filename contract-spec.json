@@ -12,6 +12,11 @@
       "return": "String"
     },
     {
+      "name": "create_split_escrow",
+      "args": "env: Env, payer: Address, payees: Vec<PayeeShare>, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, notify_payee: bool, refund_to: Option<Address>, fee_recipient: Option<Address>, fee_bps: Option<u32>,",
+      "return": "Result<u64, Error>"
+    },
+    {
       "name": "create_escrow",
       "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, notify_payee: bool, refund_to: Option<Address>, fee_recipient: Option<Address>, fee_bps: Option<u32>,",
       "return": "Result<u64, Error>"
@@ -303,6 +308,26 @@
     {
       "name": "InvalidFee",
       "code": 35
+    },
+    {
+      "name": "InvalidPayeeList",
+      "code": 2200
+    },
+    {
+      "name": "TooManyPayees",
+      "code": 2201
+    },
+    {
+      "name": "DuplicatePayee",
+      "code": 2202
+    },
+    {
+      "name": "InvalidBasisPoints",
+      "code": 2203
+    },
+    {
+      "name": "SplitAmountOverflow",
+      "code": 2204
     },
     {
       "name": "PoolInsufficient",
