@@ -38,7 +38,7 @@ export function registerEscrowConformanceSuite(
         payer: fixture.payer.publicKey(),
         payee: fixture.payee,
         amount: fixture.amount,
-        releaser: fixture.releaser.publicKey(),
+        releasers: [fixture.releaser.publicKey()],
         status: "Funded" satisfies EscrowStatus,
       });
     });
