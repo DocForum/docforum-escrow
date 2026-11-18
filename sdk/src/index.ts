@@ -136,6 +136,7 @@ export type {
  */
 export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Cancelled";
 
+/** Arguments for {@link EscrowClient.extendRefundAfter}: both payer and releaser must sign. */
 export interface ExtendRefundAfterParams {
   escrowId: bigint;
   /** New `refund_after`, unix seconds. Must be later than the current one. */
