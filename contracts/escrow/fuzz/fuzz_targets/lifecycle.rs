@@ -175,10 +175,10 @@ fn run(input: &[u8]) {
                     } else {
                         assert_eq!(result, Err(Ok(Error::Unauthorized)));
                     }
-                } else if caller == &releaser {
-                    assert_eq!(result, Err(Ok(Error::NotFunded)));
                 } else {
-                    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+                    // Settled: the record is reclaimed (docs/adr/0013), so
+                    // every caller gets NotFunded before any auth check.
+                    assert_eq!(result, Err(Ok(Error::NotFunded)));
                 }
             }
             _ => {
@@ -193,17 +193,25 @@ fn run(input: &[u8]) {
                     } else {
                         assert_eq!(result, Err(Ok(Error::Unauthorized)));
                     }
-                } else if caller == &releaser || timeout_open {
-                    assert_eq!(result, Err(Ok(Error::NotFunded)));
                 } else {
-                    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+                    // Settled: the record is reclaimed (docs/adr/0013), so
+                    // every caller gets NotFunded before any auth check.
+                    assert_eq!(result, Err(Ok(Error::NotFunded)));
                 }
             }
         }
 
-        let record = client.get_escrow(&escrow_id);
-        assert_eq!(record.status, phase);
-        assert_eq!(record.amount, amount);
+        assert_eq!(client.get_status(&escrow_id), phase);
+        // A settled escrow's full record is reclaimed (docs/adr/0013): only
+        // a funded one still has it.
+        if phase == EscrowStatus::Funded {
+            assert_eq!(client.get_escrow(&escrow_id).amount, amount);
+        } else {
+            assert!(matches!(
+                client.try_get_escrow(&escrow_id),
+                Err(Ok(Error::NotFound))
+            ));
+        }
         assert_eq!(
             balance(&env, &token_address, &contract_id, token_mode),
             if phase == EscrowStatus::Funded {

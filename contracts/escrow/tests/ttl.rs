@@ -225,16 +225,17 @@ fn write_paths_extend_ttl_top_up_rotate_accept_settle() {
     let seq = env.ledger().sequence();
     env.ledger().set_sequence_number(seq + 3_050_000);
 
-    // 3. settle (release) ensures post-settlement audit retention window
+    // 3. settle (release) ensures post-settlement audit retention window.
+    // The full record is reclaimed on settlement (docs/adr/0013), so the
+    // retained entry is `Status`.
     f.client.release(&f.escrow_id, &new_releaser);
     env.as_contract(&f.contract_id, || {
-        let ttl = env
-            .storage()
-            .persistent()
-            .get_ttl(&DataKey::Escrow(f.escrow_id));
+        let storage = env.storage().persistent();
+        assert!(!storage.has(&DataKey::Escrow(f.escrow_id)));
+        let ttl = storage.get_ttl(&DataKey::Status(f.escrow_id));
         assert!(
             ttl >= SETTLED_ESCROW_EXTEND_TO - 1,
-            "settled escrow TTL {} should be >= {}",
+            "settled status TTL {} should be >= {}",
             ttl,
             SETTLED_ESCROW_EXTEND_TO
         );

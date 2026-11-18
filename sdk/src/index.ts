@@ -513,8 +513,10 @@ export class MainnetNotAllowedError extends Error {
  * Contract versions this SDK can talk to, as reported by the contract's
  * `version()`: at least `minInclusive` and below `maxExclusive`. 2.0.0 is the
  * first version whose `create_escrow` takes the fee arguments this SDK sends.
+ * 3.x (issue #48, docs/adr/0013) reclaims a settled escrow's record, so
+ * `getEscrow` fails for settled ids; use `getStatus` for those.
  */
-export const SUPPORTED_CONTRACT_VERSIONS = { minInclusive: "2.0.0", maxExclusive: "3.0.0" } as const;
+export const SUPPORTED_CONTRACT_VERSIONS = { minInclusive: "2.0.0", maxExclusive: "4.0.0" } as const;
 
 function parseContractVersion(version: string): [number, number, number] | null {
   const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version);
@@ -1742,7 +1744,9 @@ export class EscrowClient {
    * Read-only: everything stored about `escrowId` — including the
    * `releasers` set, its `threshold` and `refundAfter`, which payees should
    * check before relying on a `Funded` escrow (docs/adr/0004, threat model
-   * T8). Throws if `escrowId` doesn't exist.
+   * T8). Throws if `escrowId` doesn't exist, **and also once the escrow has
+   * settled**: its record is reclaimed (docs/adr/0013). Use `getStatus` for a
+   * settled id and the `ESCROW` state event for its history.
    */
   async getEscrow(escrowId: bigint): Promise<Escrow> {
     await this.ensureNetworkVerified();

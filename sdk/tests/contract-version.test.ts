@@ -36,12 +36,12 @@ describe("isSupportedContractVersion", () => {
     expect(isSupportedContractVersion(version)).toBe(true);
   });
 
-  it.each(["1.0.0", "1.99.99", "3.0.0", "10.0.0", "2.5", "v2.5.1", "", "latest"])("rejects %s", (version) => {
+  it.each(["1.0.0", "1.99.99", "4.0.0", "10.0.0", "2.5", "v2.5.1", "", "latest"])("rejects %s", (version) => {
     expect(isSupportedContractVersion(version)).toBe(false);
   });
 
   it("exposes the supported range", () => {
-    expect(SUPPORTED_CONTRACT_VERSIONS).toEqual({ minInclusive: "2.0.0", maxExclusive: "3.0.0" });
+    expect(SUPPORTED_CONTRACT_VERSIONS).toEqual({ minInclusive: "2.0.0", maxExclusive: "4.0.0" });
   });
 });
 
@@ -121,7 +121,7 @@ describe("automatic check before the first network call", () => {
   });
 
   it.each([
-    ["an unsupported version", reports("3.0.0")],
+    ["an unsupported version", reports("4.0.0")],
     ["an older deployment", missing],
     ["a failed lookup", rpcDown],
   ])("rejects %s when required, before the RPC call", async (_name, version) => {
