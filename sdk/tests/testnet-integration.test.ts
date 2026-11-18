@@ -16,7 +16,7 @@
 //
 // Fresh keypairs are generated and Friendbot-funded per run -- never
 // commit a real secret key, even a testnet one, into a repo.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   Account,
   Address,
@@ -33,13 +33,16 @@ import {
   FactoryClient,
   PreparedTransactionExpiredError,
   SignedTransactionMismatchError,
+  UnsupportedContractVersionError,
+  isSupportedContractVersion,
+  knownContractId,
   predictInstanceAddress,
 } from "../src/index.js";
 
-// Current upstream-main testnet deployment, including BalanceMismatch
-// and opt-in payee acceptance -- see docs/testnet-deployments.md.
+// Newest testnet deployment recorded by scripts/deploy (deployments.json), so
+// a redeploy needs no edit here. Overridable via env to test another instance.
 // Public contract addresses, not secrets.
-const CONTRACT_ID = "CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR";
+const CONTRACT_ID = process.env.TESTNET_CONTRACT_ID ?? knownContractId("testnet");
 const NATIVE_XLM_SAC = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 // Phase E6 factory contract deployed on testnet alongside the
 // instance contract above. Overridable via env for forks that deploy
@@ -50,6 +53,9 @@ const FACTORY_ID = process.env.TESTNET_FACTORY_ID ?? "CBCYSOQ3HKYQDHLSHTFNIAA7X2
 // The repo ships no factory contract, so the live factory suites only run when
 // a factory is actually deployed and TESTNET_FACTORY_ID points at it.
 const describeFactory = process.env.TESTNET_FACTORY_ID ? describe : describe.skip;
+
+// The 2026-10-24 testnet deployment, which predates `version()`.
+const LEGACY_CONTRACT_ID = "CDX2JEMA5SO7GZVXDNGDDB35GPV43J7BUTYYH77ALAT72S65GOW5KNEO";
 
 async function fundedKeypair(): Promise<Keypair> {
   const kp = Keypair.random();
@@ -76,6 +82,10 @@ async function fundedKeypair(): Promise<Keypair> {
   throw new Error("Friendbot funding failed after retries");
 }
 
+// These tests fund new accounts and send several real transactions, which can
+// take over a minute on a slow night. This applies to this file only.
+vi.setConfig({ testTimeout: 120_000 });
+
 describe("EscrowClient against live testnet", () => {
   it("creates, funds, and releases an escrow end-to-end", async () => {
     const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
@@ -97,6 +107,18 @@ describe("EscrowClient against live testnet", () => {
 
     expect(await client.getStatus(escrowId)).toBe("Released");
   });
+
+  it("reads a supported version from the live contract", async () => {
+    const client = new EscrowClient({ contractId: CONTRACT_ID, verifyContractVersion: true });
+    expect(isSupportedContractVersion((await client.getContractVersion())!)).toBe(true);
+    await expect(client.verifyContractVersion()).resolves.toBeUndefined();
+  }, 60_000);
+
+  it("reports an older deployment with no version() as null", async () => {
+    const client = new EscrowClient({ contractId: LEGACY_CONTRACT_ID });
+    expect(await client.getContractVersion()).toBeNull();
+    await expect(client.verifyContractVersion()).rejects.toBeInstanceOf(UnsupportedContractVersionError);
+  }, 60_000);
 
   it("lets a separate relayer submit releaser-authorized release and refund", async () => {
     const [payer, payee, releaser, relayer] = await Promise.all([

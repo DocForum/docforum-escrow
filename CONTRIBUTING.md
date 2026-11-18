@@ -49,6 +49,18 @@ The SDK is published to npm as `@docforum/escrow-sdk` via an automated,
 provenance-signed release workflow — see [Releasing the SDK](#releasing-the-sdk)
 below. The GitHub Release tarball is still attached for existing consumers.
 
+An HTML API reference is generated from the SDK's doc comments with
+`npm run docs` in `sdk/` (TypeDoc, config in `sdk/typedoc.json`). It also acts
+as a missing-doc lint: every exported symbol must have a doc comment, or the
+command fails — so document new exports as you add them. CI builds the
+reference on every PR and publishes it to GitHub Pages from `main`
+(`.github/workflows/docs.yml`); enabling Pages is a one-time maintainer step,
+documented in that workflow. Runnable examples live in `sdk/examples/`
+(from `sdk/`: `npm run build && node examples/<flow>.ts`) and run against
+testnet with runtime-generated, Friendbot-funded keys — never a committed
+secret; CI type-checks them (`npm run typecheck:examples`) but does not run
+them.
+
 ## 2. Find something to work on
 
 Open issues are scoped, real, and tagged with a complexity/point value
@@ -72,6 +84,12 @@ verification/release-engineering tracks.
   entry as a new file in `changelog.d/`, in the same PR. Don't append to
   the end of `ROADMAP.md`; that is what made every PR conflict. See
   `changelog.d/README.md`.
+- If you change the contract (`contracts/escrow/src/lib.rs`), add a fragment
+  under `contract-changes.d/` with the bump level and a one-line summary.
+  **Don't edit `CONTRACT_VERSION`**: a maintainer bumps it once per batch.
+  New `Error` variants use a provisional code (your issue number × 100 + n);
+  never renumber or remove an existing one. CI checks all three. See
+  `contract-changes.d/README.md`.
 - Changes to escrow lifecycle semantics must also update the TLA+
   specification under `spec/` and rerun TLC. That includes changes to
   settlement auth, status transitions, timeouts, payee acceptance,
