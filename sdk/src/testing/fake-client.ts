@@ -7,15 +7,19 @@ import type {
 } from "../index.js";
 import { signerAddress } from "../signers/types.js";
 
+/** Kinds of failure {@link FakeEscrowClient.failNext} can inject. */
 export type FakeFailureKind = "timeout" | "rpcError" | "notFundedRace";
+/** Client methods a failure can be queued for. */
 export type FakeOperation = "createEscrow" | "getStatus" | "getEscrow" | "release" | "refund";
 
+/** One queued failure for {@link FakeEscrowClient.failNext}. */
 export interface FakeFailure {
   kind: FakeFailureKind;
   /** For a simulated concurrent settlement, the competing transaction's result. */
   winner?: "Released" | "Refunded";
 }
 
+/** Error codes the fake throws, mirroring the contract errors it models plus transport failures. */
 export type FakeEscrowErrorCode =
   | "NotFound"
   | "InvalidAmount"
@@ -25,6 +29,7 @@ export type FakeEscrowErrorCode =
   | "Timeout"
   | "RpcError";
 
+/** Error thrown by {@link FakeEscrowClient}; `code` says which rule or failure triggered it. */
 export class FakeEscrowError extends Error {
   constructor(readonly code: FakeEscrowErrorCode) {
     super(code);
@@ -36,10 +41,12 @@ export class FakeEscrowError extends Error {
 export class FakeClock {
   constructor(private currentTime: bigint) {}
 
+  /** Current time in unix seconds. */
   now(): bigint {
     return this.currentTime;
   }
 
+  /** Move the clock forward by `seconds`; it never moves backwards. */
   advanceBy(seconds: bigint | number): void {
     const interval = BigInt(seconds);
     if (interval < 0n) throw new RangeError("FakeClock cannot move backwards");
@@ -74,6 +81,7 @@ export class FakeEscrowClient {
     this.failures.push({ operation, failure });
   }
 
+  /** Record a new `Funded` escrow, validating amount and `refundAfter` like the contract. */
   async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
     this.maybeFail("createEscrow");
     if (params.amount <= 0n) throw new FakeEscrowError("InvalidAmount");
@@ -103,17 +111,20 @@ export class FakeEscrowClient {
     return { escrowId, txHash: `fake-tx-${++this.nextTx}` };
   }
 
+  /** Status of an escrow; throws `NotFound` for an unknown id. */
   async getStatus(escrowId: bigint): Promise<EscrowStatus> {
     this.maybeFail("getStatus");
     return this.getRecord(escrowId).status;
   }
 
+  /** Full escrow record; throws `NotFound` for an unknown id. */
   async getEscrow(escrowId: bigint): Promise<Escrow> {
     this.maybeFail("getEscrow");
     const { id: _id, ...record } = this.getRecord(escrowId);
     return { ...record };
   }
 
+  /** Release to the payee; only a releaser may, and only while `Funded`. */
   async release(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
     const record = this.getRecord(params.escrowId);
     this.maybeFail("release", record);
@@ -125,6 +136,7 @@ export class FakeEscrowClient {
     return { txHash: `fake-tx-${++this.nextTx}` };
   }
 
+  /** Refund the payer; a releaser may at any time, anyone once `refundAfter` has passed. */
   async refund(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
     const record = this.getRecord(params.escrowId);
     this.maybeFail("refund", record);

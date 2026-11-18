@@ -55,6 +55,7 @@ export interface TokenInfo {
  * inject their own so no network is needed.
  */
 export interface TokenInfoSource {
+  /** Read `decimals`, `symbol` and `name` for the SEP-41 token at `address`. */
   getTokenInfo(address: string): Promise<TokenInfo>;
 }
 
@@ -141,6 +142,7 @@ export function clearTokenInfoCache(): void {
   tokenInfoCache.clear();
 }
 
+/** RPC settings for {@link rpcTokenInfoSource}; both default to testnet. */
 export interface TokenInfoSourceOptions {
   rpcUrl?: string;
   networkPassphrase?: string;

@@ -2,6 +2,7 @@
 // Regenerate with: node scripts/deploy-record.mjs --sync
 import type { DeploymentsDocument } from "./deployments.js";
 
+/** Known contract deployments bundled with the SDK (issue #89); see `deployments.ts`. */
 export const KNOWN_DEPLOYMENTS: DeploymentsDocument = {
   "version": 1,
   "deployments": [

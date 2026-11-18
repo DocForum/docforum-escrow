@@ -129,6 +129,11 @@ export type {
   VerifyMultisigOptions,
 } from "./multisig.js";
 
+/**
+ * The lifecycle state of an escrow, as returned by {@link EscrowClient.getStatus}
+ * and carried on {@link Escrow.status}: `Funded` after creation, then `Released`
+ * (paid to the payee), `Refunded` (returned to `refundTo`), or `Cancelled`.
+ */
 export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Cancelled";
 
 export interface ExtendRefundAfterParams {
@@ -158,6 +163,11 @@ export interface Milestone {
   status: MilestoneStatus;
 }
 
+/**
+ * What a call should do when the contract state it needs has been archived:
+ * `"auto"` attempts an on-chain restore (the signer pays the fee), `"error"`
+ * throws {@link ArchivedEntryError} instead.
+ */
 export type ArchivedEntryBehavior = "auto" | "error";
 
 /** Typed error for contract calls that cannot restore archived ledger entries. */
@@ -174,6 +184,7 @@ export class ArchivedEntryError extends Error {
   }
 }
 
+/** True when `error` is a contract failure caused by archived/expired ledger state. */
 export function isArchivedEntryFailure(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const candidate = error as { name?: unknown; message?: unknown };
@@ -181,6 +192,7 @@ export function isArchivedEntryFailure(error: unknown): boolean {
     (typeof candidate.message === "string" && /expired state|archived (?:contract )?state|automatic restoration attempt limit reached/i.test(candidate.message));
 }
 
+/** The contract lifecycle event a decoded {@link EscrowEvent} describes. */
 export type EscrowEventType = "created" | "released" | "refunded" | "cancelled";
 interface EscrowEventBase {
   ledger: number;
@@ -201,6 +213,12 @@ export type EscrowEvent = (EscrowEventBase & {
   escrowId?: bigint;
   topics: unknown[];
 });
+/**
+ * Which events {@link EscrowClient.getEvents} should return and where to start.
+ * Begin either from a ledger number (`fromLedger`) or from an opaque RPC
+ * `cursor` returned by a prior page — never both — and optionally narrow to
+ * specific event `types` and/or one `escrowId`.
+ */
 export type GetEventsParams = {
   types?: EscrowEventType[];
   escrowId?: bigint;
@@ -208,6 +226,7 @@ export type GetEventsParams = {
   | { /** First ledger to scan (inclusive). */ fromLedger: number; cursor?: never }
   | { /** Opaque RPC cursor returned from a prior page/event. */ cursor: string; fromLedger?: never }
 );
+/** One page of decoded events plus the cursor to resume from on the next call. */
 export interface GetEventsResult { events: EscrowEvent[]; nextCursor: string; }
 
 /** The requested cursor predates the event history retained by the RPC server. */
@@ -216,11 +235,13 @@ export class EventCursorExpiredError extends Error {
   constructor(message = "The event cursor is older than the RPC server's retention window.") { super(message); }
 }
 
+/** Tuning for {@link EscrowClient.subscribe}: where to resume, how often to poll, and how to filter and handle errors. */
 export interface SubscribeOptions {
   cursor?: string;
   pollIntervalMs?: number;
   types?: EscrowEventType[];
   escrowId?: bigint;
+  /** Called with any polling error; if omitted, the error is rethrown and polling stops. */
   onError?: (error: unknown) => void;
 }
 
@@ -423,6 +444,7 @@ export interface NetworkPreset {
 /** The Stellar mainnet passphrase — never a default, only an explicit opt-in. */
 export const MAINNET_NETWORK_PASSPHRASE = Networks.PUBLIC;
 
+/** Built-in network presets (RPC URL, passphrase and known contract ids) keyed by name. */
 export const networks = {
   /** Soroban testnet — the only network wired into defaults (hard rule 4). */
   testnet: {
@@ -569,6 +591,7 @@ export interface BatchItemResult<T> {
   skipped?: boolean;
 }
 
+/** Options for the chunked batch helpers (`createEscrows`, `settleMany`). */
 export interface BatchOptions<T> {
   /**
    * Operations attempted per chunk. Defaults to `MAX_BATCH_SIZE` and is
@@ -612,6 +635,7 @@ function batchErrorMessage(error: unknown): string {
 /** Shared placeholder used on the uninstrumented path (no per-call allocation). */
 const EMPTY_SPAN_ATTRIBUTES = {} as EscrowSpanAttributes;
 
+/** Connection settings for an {@link EscrowClient}: which contract, and (optionally) which network. */
 export interface EscrowClientConfig {
   /** The deployed docforum-escrow contract's address (`C…`). */
   contractId: string;
@@ -681,12 +705,17 @@ export interface EscrowClientConfig {
   verifyContractVersion?: boolean;
 }
 
+/** Parameters for {@link EscrowClient.createEscrow} — a single-releaser escrow. */
 export interface CreateEscrowParams {
   /** Signs and pays for this call; funds are pulled from this account. */
   payer: EscrowSigner;
+  /** Address the funds are released to on `release`. */
   payee: string;
+  /** Address of the SEP-41 token contract to lock (e.g. the native XLM SAC). */
   token: string;
+  /** Amount of `token` to lock, in the token's smallest unit. Must be positive. */
   amount: bigint;
+  /** Opaque reference the contract stores but never interprets; at most {@link MAX_CONDITION_REF_LENGTH} bytes. */
   conditionRef: string;
   /**
    * The only address later permitted to call `release`/`refund` on this
@@ -732,6 +761,7 @@ export interface CreateEscrowParams {
   requiresAcceptance?: boolean;
 }
 
+/** Parameters for {@link EscrowClient.createMilestoneEscrow} — one escrow per tranche. */
 export interface CreateMilestoneEscrowParams extends Omit<CreateEscrowParams, "amount"> {
   /** Total across all tranches; must equal the sum of `milestones`. */
   amount: bigint;
@@ -753,6 +783,7 @@ export interface MilestoneEscrow {
   escrowIds: bigint[];
 }
 
+/** Parameters for {@link EscrowClient.cancel} — the payer cancels an unreleased escrow. */
 export interface CancelParams {
   escrowId: bigint;
   /** The escrow's payer; signs the cancellation. */
@@ -884,6 +915,7 @@ export interface CreatePooledEscrowParams {
   fundingDeadline: bigint;
 }
 
+/** Parameters for {@link EscrowClient.contribute} — one payer funds part of a pooled escrow. */
 export interface ContributeParams {
   escrowId: bigint;
   /** Signs the transfer; the funds come from this account. */
@@ -926,7 +958,9 @@ export interface ContributionRecord {
   refunded: boolean;
 }
 
+/** Parameters for the single-releaser {@link EscrowClient.release} / {@link EscrowClient.refund} calls. */
 export interface ReleaseOrRefundParams {
+  /** The escrow to settle. */
   escrowId: bigint;
   /**
    * Must be one of the escrow's `releasers` (set at creation) — see
@@ -1039,6 +1073,7 @@ export interface FeeEstimate {
   minResourceFee: bigint;
 }
 
+/** Options for {@link EscrowClient.feeBump}: the fee cap and the wrapper's per-operation base fee. */
 export interface FeeBumpOptions {
   /**
    * Hard cap, in stroops, on the fee-bump transaction's fee. If the fee the
@@ -1050,6 +1085,7 @@ export interface FeeBumpOptions {
   baseFee?: bigint;
 }
 
+/** The result of {@link EscrowClient.feeBump}: the signed wrapper, its fee, and the inner tx hash. */
 export interface FeeBumpResult {
   /** Signed fee-bump envelope, base64 XDR. */
   xdr: string;
@@ -1119,11 +1155,6 @@ function contractAddressOf(scAddress: xdr.ScAddress): string | undefined {
   return Address.fromScAddress(scAddress).toString();
 }
 
-/**
- * Thin client for the docforum-escrow Soroban contract. Wraps
- * `create_escrow`/`get_status`/`get_escrow`/`release`/`refund` with plain
- * TypeScript types and no manual XDR/signing plumbing.
- */
 function assertPositiveAmount(call: { method: LifecycleMethod; amount: bigint }): void {
   if (call.amount <= 0n) {
     throw new EscrowPreconditionError(call.method, "InvalidAmount", `amount must be positive, got ${call.amount}.`);
@@ -1135,6 +1166,11 @@ function lifecycleCallSigner(call: LifecycleCall): string {
   return call.method === "accept" ? call.payee : call.payer;
 }
 
+/**
+ * Thin client for the docforum-escrow Soroban contract. Wraps
+ * `create_escrow`/`get_status`/`get_escrow`/`release`/`refund` with plain
+ * TypeScript types and no manual XDR/signing plumbing.
+ */
 export class EscrowClient {
   /** Contract id of the escrow instance this client talks to. */
   readonly contractId: string;
