@@ -33,6 +33,8 @@ export const CONTRACT_ERROR_NAMES = {
   32: "NoContribution",
   33: "NotSupportedForPooled",
   34: "InvalidFundingDeadline",
+  4600: "InvalidSettlementAmount",
+  4601: "SettlementNotSupported",
   35: "InvalidFee",
   2200: "InvalidPayeeList",
   2201: "TooManyPayees",
