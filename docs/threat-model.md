@@ -35,6 +35,12 @@ refund destination that may differ from the funder (`payer`), decided in
 `docs/adr/0006`. Touches §1 (I1, I2), §2 (actors), T1, T2, T8, a new T11
 and §6.*
 
+*Updated 2026-10-20 for issue #35 (Phase E5): the emergency pause from
+`docs/adr/0011` — one deploy-time custodian that can block **new** deposits
+and nothing else. This adds a new actor (§2), a new invariant (I8, §1), a
+new threat (T12), and grows the contract's public surface by
+`pause`/`unpause`/`is_paused`/`get_pause_admin` plus a constructor
+argument. The scope commit above still predates these changes.*
 *Updated 2026-10-22 for issue #113 (Phase E5, `docs/adr/0011`): pooled
 escrows funded by multiple payers. §1 I1–I4 generalize to per-contributor
 accounting; §2 gains the `contributor` actor; new threats T16–T19 cover
@@ -48,13 +54,15 @@ and contributor-resource exhaustion; §8 traceability gains matching rows.*
 
 | # | Invariant | Enforced by |
 |---|---|---|
-| I1 | Funds only leave an escrow to that escrow's `payee` (on release, subject to the `release_not_before` time-lock guard) or the escrow's stored `refund_to` (on refund; equals `payer` unless a different one was set at creation) — or, on a **pooled** escrow (issue #113, ADR 0011), back to each recorded `contributor` in that contributor's exact recorded amount via the pull-based `claim_refund`. No other destination exists in either mode. | Both destinations are written once in `create_escrow` under the funder's auth and read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination, and `refund_to` (issue #28, ADR 0009) is a second stored-at-creation destination, not a payout-time choice: nothing sets it after creation. The `release_not_before` field (issue #43) gates the `release` entry point — release before this time is rejected with `ReleaseTooEarly`. For pooled escrows the push paths (`refund`, `refund_with_approvals`, `cancel`) are rejected outright (`NotSupportedForPooled`), so `refund_to` can never drain a pool; `claim_refund` pays only the calling contributor's own record, under that contributor's `require_auth`, and only while the escrow has not been released. |
+| I1 | Funds only leave an escrow to that escrow's `payee` (on release, subject to the `release_not_before` time-lock guard) or the escrow's stored `refund_to` (on refund; equals `payer` unless a different one was set at creation) — or, on a **pooled** escrow (issue #113, ADR 0011), back to each recorded `contributor` in that contributor's exact recorded amount via the pull-based `claim_refund`. No other destination exists in either mode. | Both destinations are written once in `create_escrow` under the funder's auth and read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination, and `transfer_payee` (issue #45, Phase E5) only reassigns *who* the stored `payee` is — under that payee's own auth — never a destination outside storage; and `refund_to` (issue #28, ADR 0009) is a second stored-at-creation destination, not a payout-time choice: nothing sets it after creation. The `release_not_before` field (issue #43) gates the `release` entry point — release before this time is rejected with `ReleaseTooEarly`. For pooled escrows the push paths (`refund`, `refund_with_approvals`, `cancel`) are rejected outright (`NotSupportedForPooled`), so `refund_to` can never drain a pool; `claim_refund` pays only the calling contributor's own record, under that contributor's `require_auth`, and only while the escrow has not been released. |
 | I2 | Only the escrow's releasers can move funds out — `threshold` distinct ones when the escrow was created M-of-N (ADR 0007); release additionally requires payee acceptance when configured — or, once `refund_after` has passed, anyone at all, and then still only to the stored `refund_to`. Rotate‑releaser changes the stored releaser set only when both the current releaser and the payer authorize the change (`rotate_releaser`). `top_up` adds funds to a `Funded` escrow, authorized only by the stored `payer`. The one non-releaser movement that exists is pooled (issue #113): each `contributor` may pull back **only its own recorded amount** via `claim_refund` under its own signature, only from a failed round (deadline passed, target unmet), never after a release — `top_up`, `cancel` and both push-refund paths are rejected on pooled escrows (`NotSupportedForPooled`). | `require_auth()` per caller/approver + membership in the stored `releasers` set + the threshold check (`check_single_caller`, `check_approvals`), relaxed solely by the deadline check in `refund`. Duplicate approvers are rejected. `rotate_releaser` requires auth from both the current releaser and the payer, and rejects if the new releaser is the contract or the payee (`lib.rs:369-408`). `top_up` reads the stored `payer` from escrow data and rejects if `payer != caller` (`lib.rs:412-439`). |
 | I3 | Each escrow pays out at most once — and on a pooled escrow (issue #113), each contribution is refunded at most once; a release and a refund can never spend the same tokens. | `status == Funded` check and terminal status write before transfer/callback; failures roll back atomically. Additionally, `cancel` (ADR 0010) is a terminal status — once `Cancelled`, `Released`, or `Refunded`, the escrow cannot be settled again. The accept/cancel race is resolved by ledger-order: whichever transaction lands first wins, the other fails. For pooled escrows, `claim_refund` writes the `refunded` flag and decrements the pooled total *before* the transfer (checks-effects-interactions), so a second claim fails `AlreadyRefunded` and a claim after release fails `NotFunded`; release requires `funded == target`, which becomes permanently false after any claim of a failed round. |
 | I4 | An escrow only exists, or grows, if the declared funds were actually transferred in — including every contribution to a pooled escrow. | `payer.require_auth()` + shared exact-balance-delta verification on create/top-up before storage is updated. `top_up` verified the transferred amount matches the top‑up amount before updating `data.amount`. `contribute` (issue #113) routes through the same `transfer_in_exact`, and updates both the per-payer record and the pooled total only after the delta is verified. |
+
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
 | I6 | An escrow created with `requires_acceptance` cannot be settled (released/refunded/canceled) without the payee's explicit `accept` call first. | `release`/`refund`/`cancel` all check `data.accepted_at` — `AcceptanceRequired` if absent, `NotFunded` if already terminal. The accept/cancel race on one ledger state is resolved by ordering: first to commit wins. |
 | I7 | A declared fee takes exactly once per release: `⌊amount × fee_bps ÷ 10 000⌋` (≤ 10 %) to the `fee_recipient` fixed at creation, the remainder to `payee` — the two sum to exactly `amount` — and no fee ever moves on the refund path. | Fee is validated before funds are locked at creation (`InvalidFee` for a half-set pair, `bps` > 1 000 or a self-recipient; overflow rejected via checked math), computed with floor rounding at release (`fee_amount`), re-checked on `top_up` (which grows `amount`, and therefore the fee), and `refund` never reads the fee fields (ADR 0010, issue #30). Split-payout features (if any land later) must divide the fee-free net, not re-charge the bps. |
+| I8 | The emergency pause can never prevent funds from leaving an existing escrow. | Only the deposit paths (`create_escrow_inner`, shared by every creation entry point, and `top_up`) read the pause flag. `release`, `refund` (both paths), `settle_many` (release and refund ops), `get_status` and `get_escrow` never read it; `contracts/escrow/tests/pause.rs` exercises every outbound path while paused, including a release after the deadline and both `settle_many` ops (ADR 0011). |
 
 I1 is the most important property in this design. A full compromise of the
 `releaser` key lets an attacker pick the **wrong outcome** (release when it
@@ -72,19 +80,24 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 | Actor | Can do | Trusted for |
 |---|---|---|
 | `payer` | Create escrows by funding them; chooses `payee`, `token`, `releaser`, and optionally a distinct `refund_to` — all under its single creation signature | Nothing after creation. Has no on-chain power to cancel. |
-| `payee` | Receive funds; optionally accept an escrow before release | Without the opt-in acceptance gate, has no on-chain power to object to release or refund. |
+| `payee` | Receive funds; optionally accept an escrow before release; reassign the future payout destination to another address while `Funded` via `transfer_payee` (issue #45), which needs only its own auth | Nothing beyond the payee-transfer path: it can pick **which** address is paid, never force a release or block a refund. Without the opt-in acceptance gate it has no on-chain power to object to release or refund. |
 | `releaser` (one address, or an M-of-N `releasers` set, ADR 0007) | `release` or `refund` its escrows, once — a quorum escrow needs `threshold` distinct releasers on one call | Choosing the correct outcome. This is the main trust assumption; a quorum splits it across the set. |
+| `pause_admin` (custodian) | Block **new** deposits (`pause`), re-open them (`unpause`), read `is_paused`/`get_pause_admin`. Set once by the constructor; cannot be changed | Nothing about money. Its only power is refusing new deposits, so a compromised or lost key can deny new business but can never touch an existing escrow — see T12. |
 | `rotate_releaser` (single‑releaser escrow only, ADR 0009) | `rotate_releaser` — both the current releaser and the payer must authorize; the replacement cannot be the contract or the payee | Current releaser key safety: the payer's consent prevents a compromised releaser from silently appointing an attacker. |
 | `top_up` (single‑releaser escrow only, Phase E5) | `top_up` — only the original payer may add funds to a `Funded` escrow | Payer‑controlled fund growth; the escrow amount increases but parties and rules remain unchanged. |
 | `contributor` (pooled escrows, issue #113) | `contribute` its own funds to any open pooled escrow before its funding deadline; after a missed deadline, `claim_refund` back its own exact recorded amount | Nothing. Contributions are self-funding (you can only send your own tokens) and claims can only reach the caller's own record. |
+
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |
 | Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds to that escrow's stored `refund_to` | Nothing. |
 | `attester` (**planned**, not implemented) | Would publish signed attestations referenced by an escrow's `condition_ref` | Nothing on-chain; the contract never reads attestations. See T12. |
 
-There is **no admin, no upgrade function, and no pause.** The deployed
-WASM is immutable. Nobody, including the deployer, can change an
-escrow's data or move funds outside `release`/`refund`. This is a chosen
-security property, not an unimplemented recovery mechanism: see
+There is **no admin over funds and no upgrade function.** The deployed
+WASM is immutable; nobody, including the deployer, can change an escrow's
+data or move funds outside `release`/`refund`. Since issue #35 there is one
+contract-level role, the pause custodian (`docs/adr/0011`), which can only
+stop **new** deposits — it has no authority over anything already escrowed
+(invariant I8). This is a chosen security property, not an unimplemented
+recovery mechanism: see
 [`docs/adr/0005`](adr/0005-immutable-contract-and-redeploy-migrations.md)
 for the redeployment and old-escrow settlement procedure.
 
@@ -103,6 +116,37 @@ value. **Reviewers should challenge these ratings.**
   deployment, and settle old escrows under their existing rules before
   retiring the old ID from writes. See ADR 0005. No upgrade key or
   migration hook is introduced to address this operational risk.
+
+### T12 — Pause custodian compromised, lost, or malicious · **Low**
+- **What it can do:** refuse **new** deposits on this contract id. That is
+  the entire scope of `pause` (`docs/adr/0011`, invariant I8). It cannot
+  release, refund, edit an escrow's data, rotate a `releaser`, unpause on
+  someone else's behalf, or upgrade anything. A paused contract still pays
+  out every existing escrow, including timeout refunds after the deadline
+  and releases after it — asserted in `contracts/escrow/tests/pause.rs`.
+- **Actual loss from a compromised key:** none directly. The damage is
+  **liveness/griefing**: no new deposits until the custodian unpauses, so
+  integrators see `Error::Paused` and must either wait, use a fresh
+  deployment, or route around this contract id.
+- **Loss from a *lost* key:** the contract can never be unpaused, so this
+  contract id stops taking new business permanently. Existing escrows are
+  unaffected and settle normally. Operational mitigation is the same as
+  T1/T2: hold the custodian as a multisig (2-of-3) so one lost signer is
+  survivable, and record it somewhere the operator can recover.
+- **Why not worse:** the role was deliberately kept narrower than the
+  contract-level admin ADR 0002 rejected. It gets no say over any existing
+  escrow, so the worst case is "this deployment stops growing", never
+  "someone's money is stuck" or "funds went somewhere else".
+- **Reviewer, please verify:** that no outbound path reads the flag (a
+  grep of `Paused` should only hit the deposit entry points, `pause`,
+  `unpause`, `is_paused`, and the constructor), and that the custodian
+  cannot change itself after deployment (no setter, no upgrade,
+  constructor-only).
+- **Residual, accepted:** the pause is not time-bounded. An auto-expiring
+  pause was considered in ADR 0011 (option 3) and rejected because a pause
+  that silently lapses during an incident is worse than the bounded
+  griefing it prevents. Detection is the mitigation: the `Paused` event,
+  `is_paused`, and the `Paused` error are all observable.
 
 ### T1 — `releaser` key leaked or stolen · **High**
 - **What an attacker can do:** call `release` or `refund` on every
@@ -264,11 +308,11 @@ value. **Reviewers should challenge these ratings.**
   "Contract re-entry is not allowed" — an unrecoverable context error,
   so the entire release invocation aborts and nothing commits
   (`tests/malicious_token.rs`). This pins the behavior for the direct
-  token→escrow path; the through-an-intermediate-contract path below is
-  still open for reviewer verification.
-- **Reviewer, please verify:** the host's re-entry prohibition applies
-  to every path a SEP-41 token could use to reach this contract,
-  including through an intermediate third contract.
+  token→escrow path.
+- **Update (issue #103):** the token→helper→escrow path is blocked too, with
+  every auth mocked so only the host check can stop it
+  (`tests/reentry_intermediate.rs`). See "T4 intermediate-contract re-entry
+  regression coverage" below.
 
 ### T11 — Malicious or failing release callback · **Medium (payee opt-in)**
 - A payee contract that authorizes `create_escrow` while
@@ -401,14 +445,18 @@ TTL-extended (see T6), so the counter can outlive the escrows it sums.
   the instance TTL on each call), sized to the longest expected escrow
   duration.
 
-### T7 — No events emitted · **Low**
-- The contract publishes no events of its own. The only on-chain trace
-  of create/release/refund is the token's `transfer` event plus storage
-  changes. That makes it harder to monitor for T1 (an unexpected burst
-  of releases from a leaked key).
-- **Mitigation:** emit `created`/`released`/`refunded` events with the
-  `escrow_id`. Alert in the consumer on any release/refund it didn't
-  initiate.
+### T7 — No events emitted · **Low — mitigated (issue #9)**
+- **Addressed:** the contract now emits `created`, `released`, and `refunded`
+  events keyed by `escrow_id`. Topic: `("ESCROW", action, escrow_id)`.
+  Payload is the escrow's full state snapshot, including its opaque
+  `condition_ref`; callers must therefore continue to follow T9 and never
+  put sensitive data there. Error paths emit nothing. See `ARCHITECTURE_ESSENTIALS.md §
+  Events` for the full shape, and `contracts/escrow/tests/events.rs` for
+  tests asserting exact topics/payloads on every happy path and nothing on
+  every error path. A consumer can now alert on any `released` or `refunded`
+  event it didn't initiate to detect a leaked releaser key (T1).
+- **Prior state:** the contract published no events; the only trace of
+  create/release/refund was the token's `transfer` event plus storage changes.
 
 ### T8 — Payee has no protection against the releaser · **By design, document it**
 - The `payer` chooses the `releaser`. Nothing stops `releaser == payer`,
@@ -697,7 +745,7 @@ escrow.
 | T4 — Reentrancy | `tests/malicious_token.rs` (failed payout leaves escrow funded), `tests/release_callback.rs` | Covered |
 | T5 — Malicious / non‑standard `token` | `tests/malicious_token.rs` (lying transfer, short delivery, re‑entry attempt); shared-pool shortfall made observable by `solvency(token)` — `tests/liabilities.rs` | Covered (post-creation clawback: detected, not prevented) |
 | T6 — Storage TTL / state archival | — | **Uncovered**: no test extends or checks TTL; mitigation is operational (TTL sized to expected duration) |
-| T7 — No events emitted | — | **Residual risk: accepted (design choice)**: contract deliberately emits no events; consumer monitoring recommended |
+| T7 — No events emitted | `tests/events.rs` (exact lifecycle topics/payloads and error paths) | Covered |
 | T8 — Payee has no protection against the releaser | — | **Residual risk: accepted (by design, ADR 0001)**: payee must read `releasers` + `threshold` + `refundAfter` + `refundBefore`; not a contract bug |
 | T9 — `condition_ref` is public | — | **Residual risk: accepted (privacy constraint)**: contract cannot enforce opacity; consumer passes opaque record id |
 | T10 — Storage spam | — | **Covered (mitigation)**: `condition_ref` bounded to 64 bytes at creation (`Error::ConditionRefTooLong`); SDK client-side validation via `MAX_CONDITION_REF_LENGTH` |
@@ -712,6 +760,44 @@ escrow.
 | T19 — Contributor-resource exhaustion / unbounded refund loops | `tests/pooled.rs::no_contributor_cap_each_claim_is_independent` (bounded per-claim work, no cap by design) | Covered (design) |
 
 *Key: "Covered" = at least one test explicitly exercises the threat and verifies the mitigation. "Residual risk: accepted" = the threat is understood and intentionally tolerated with a documented mitigation. "Uncovered" = no test or mitigation exists — should be evaluated for a future release.*
+
+### T11 — Payee key compromise or loss · **Medium (new surface from issue #45)**
+- **What changed:** `transfer_payee` (Phase E5) gives the current `payee`
+  the ability to redirect the release destination to a new address, while
+  the escrow is `Funded`. This is the first on-chain power the payee has
+  had. It adds a new attack surface.
+- **Key compromised:** if an attacker steals the payee's key they can
+  transfer the payee claim to an address they control, then wait for
+  the releaser to release (or, if a `refund_after` deadline is in the
+  past, call `refund` — still only to the payer, so the payer does not
+  lose funds in the refund path). The realistic theft scenario is:
+  attacker calls `transfer_payee` to their address, releaser then
+  releases normally, attacker gets the payout.
+  - Blast radius: limited to escrows where the attacker knows (or can
+    scan for) the payee address and the escrow is still `Funded`.
+  - The payer's and releaser's keys are unaffected; the releaser can
+    still refund rather than release if they detect the compromise.
+- **Key lost:** if the payee loses their key they **cannot** call
+  `transfer_payee` (they can't sign). This function is a rotation tool,
+  not a recovery tool. A payee who has lost their key cannot reassign
+  their claim. Document this limitation clearly to consumers.
+  - After key loss, the only on-chain resolution is for the `releaser`
+    to refund to the payer, or to wait for a `refund_after` timeout
+    (if one was set). There is no payee-side recovery path.
+- **Mitigations:**
+  - Payees: rotate wallet keys before the old device or key material is
+    compromised — use `transfer_payee` proactively.
+  - Consumers: before relying on a `Funded` escrow, check `get_escrow`
+    to confirm the current `payee` matches your expected address (the
+    payee may have already rotated).
+  - The contract prevents the two most obvious misuse vectors:
+    `new_payee == contract_address` (would lock funds) and
+    `new_payee == payer` (would let a colluding payee redirect to payer,
+    turning a release into a de-facto payer refund that bypasses refund
+    auth). These are rejected with `Error::InvalidNewPayee` (code 37).
+  - The releaser cannot use `transfer_payee` — they have no power over
+    the payee field. This is enforced by `current_payee.require_auth()`
+    plus the `current_payee == data.payee` check.
 
 ## 4. SDK-specific notes (`sdk/src/index.ts`)
 
@@ -775,17 +861,26 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
       covered by `tests/malicious_token.rs` and `tests/sponsored_refund.rs`.
 - [x] ⚙ Optional `refund_to` distinct from the funder, I1 wording
       updated — issue #28, `docs/adr/0006`, `tests/sponsored_refund.rs`.
+- [x] ⚙ Payee-initiated voluntary refund while funded — issue #40 and
+      `docs/adr/0010`; payout remains pinned to the stored `refund_to`.
       Also rejects the contract itself as `refund_to` (T11). Not yet
       deployed to testnet.
 - [ ] ⚙ TTL extension for escrow entries and instance (T6)
-- [ ] ⚙ Emit create/release/refund events (T7)
+- [x] ⚙ Emit create/release/refund events (T7) — issue #9; `contracts/escrow/tests/events.rs`
 - [x] Tests with a malicious mock token: lying transfer, short
       delivery, re-entry attempt (T4, T5) — issue #12,
       `tests/malicious_token.rs`
+- [x] ⚙ Emergency pause that can only stop new deposits (T12, issue #35)
+      — `docs/adr/0011`, constructor-set custodian, tests in
+      `contracts/escrow/tests/pause.rs` including every outbound path
+      while paused. Not yet on testnet: the current deployment predates
+      the constructor, so a redeploy is required.
 - [ ] Releaser held as multisig or in a KMS, not a plain env var (T1, T2)
       — the SDK now builds and verifies the multisig setup
       (`sdk/src/multisig.ts`, offline tests in `sdk/tests/multisig.test.ts`),
       but adopting it operationally is still open.
+- [ ] Pause custodian held as a multisig (T12) — no contract change
+      needed, pass the multisig account as `pause_admin` at deploy time
 - [ ] Consumer funding flow made idempotent + reconcile job (§5)
 - [x] **Traceability table added to threat model** (T1‑T15 mapped to tests
       or residual risk) — this issue
@@ -803,6 +898,8 @@ Leave findings as comments on the PR that adds this file, or on issue #6.
 A review only counts toward E4 if the reviewer is not the implementer
 (see issue #6).
 
+A rejected outbound token transfer during `release` returns `Undeliverable` and leaves the escrow funded. The releaser can retry after the payee becomes reachable or use the existing refund path.
+
 ## T4 intermediate-contract re-entry regression coverage
 
-Token callbacks must be treated as hostile even when they route through another contract. The regression suite exercises a helper contract that attempts to call back into escrow during a token transfer; the invocation must fail closed and leave the escrow status and balance unchanged.
+Token callbacks must be treated as hostile even when they route through another contract. `tests/reentry_intermediate.rs` has a token call a helper contract from inside `transfer`, and the helper calls `release`, `refund` or `create_escrow` on the escrow, including against a different escrow id. In every case the outer call fails, no funds move, and escrow status and balances are unchanged. `release` catches the failed payout and returns `Undeliverable`; `refund` and `create_escrow` abort the whole invocation. Control tests in the same file show the helper's call succeeds when nothing is re-entrant.

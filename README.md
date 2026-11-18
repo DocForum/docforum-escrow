@@ -5,7 +5,7 @@
 ![Stack](https://img.shields.io/badge/contract-Rust%20%2F%20Soroban-orange.svg)
 ![Network](https://img.shields.io/badge/network-testnet%20only-important.svg)
 
-**🔗 Live on testnet:** [`CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR`](https://stellar.expert/explorer/testnet/contract/CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR) — current upstream main deployment, including sponsored refunds (`refund_to`), verified with real create, release, refund, timeout refund, and `BalanceMismatch` calls. History and transaction links: [`docs/testnet-deployments.md`](docs/testnet-deployments.md).
+**🔗 Live on testnet:** [`CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E`](https://stellar.expert/explorer/testnet/contract/CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E) — contract 2.5.1 from upstream main, including sponsored refunds (`refund_to`) and the emergency pause, verified with real create, release and refund calls. History and transaction links: [`docs/testnet-deployments.md`](docs/testnet-deployments.md).
 
 A [Soroban](https://developers.stellar.org/docs/build/smart-contracts) (Stellar) smart contract for conditional payment escrow — lock funds, and release them to the payee only when release is authorized, or return them to the payer on refund. Paired with a TypeScript client SDK, `@docforum/escrow-sdk`.
 
@@ -51,8 +51,34 @@ the top at release and never on a refund — see
 topped up by the original payer, and `get_status`/`get_escrow` are
 read-only. `settle_many` releases or refunds up to 20 escrows in one
 transaction with per-op results (the fast response to a leaked releaser
-key, see [ADR 0012](docs/adr/0012-batch-settlement-best-effort.md)). A
-token allowlist is fixed at deploy time. Pooled escrows — one agreement funded
+key, see [ADR 0012](docs/adr/0012-batch-settlement-best-effort.md)). A token
+allowlist and an optional emergency-pause custodian are fixed at deploy
+time; the custodian can only block **new** deposits, never touch escrowed
+funds (see [Emergency pause](#emergency-pause)).
+
+### Emergency pause
+
+If a bug turns up after mainnet, the alternative to a pause is asking every
+integrator to stop calling the contract. Since issue #35 there is a narrow
+on-chain lever instead: one `pause_admin` address, fixed at deployment by
+the contract's constructor, can flip a flag that makes every deposit path
+fail with `Paused` (error code 38).
+
+Nothing else changes. `release`, `refund`, the timeout refund, and both
+`settle_many` ops (release and refund) never read the flag, so **a pause can never lock funds that are already escrowed** —
+paused means "no new business", never "your money is stuck". The pause has
+no timelock, no second role, and no power over existing escrows; unpausing
+is the same custodian calling `unpause`. See
+[ADR 0011](docs/adr/0011-emergency-pause-for-new-deposits-only.md) for the
+design, the rejected alternatives (permissionless pause, auto-expiring
+pause), and threat model T12 for the residual liveness risk.
+
+For mainnet, pass a Stellar multisig account as `pause_admin` — no contract
+change needed, since `require_auth` honours that account's own signer
+thresholds. **Note:** this changes deployment (the constructor now takes
+both the allowlist and the custodian), so the current testnet deployment
+predates it and cannot pause; a redeploy is the follow-up step.
+Pooled escrows — one agreement funded
 by many payers, with per-payer contribution records and pull-based
 pro-rata refunds — are a separate creation entry point
 (`create_pooled_escrow`, see [ADR 0011](docs/adr/0011-pooled-escrow-funding.md)
@@ -286,7 +312,7 @@ From the repository root, run the verifier with the contract ID. It builds
 the current source and fetches deployed WASM from testnet:
 
 ```bash
-bash scripts/verify-deployment CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR
+bash scripts/verify-deployment CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E
 ```
 
 Matching SHA-256 values mean the deployed bytes equal this source build.

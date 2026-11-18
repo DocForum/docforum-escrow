@@ -405,7 +405,7 @@ export const networks = {
     // Current upstream deployment (docs/testnet-deployments.md) and the
     // testnet native XLM Stellar Asset Contract on its token allowlist.
     contractIds: {
-      escrow: "CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR",
+      escrow: "CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E",
       nativeXlm: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
     },
   } as NetworkPreset,
@@ -451,6 +451,53 @@ export class NetworkMismatchError extends Error {
 }
 
 /**
+ * Contract versions this SDK can talk to, as reported by the contract's
+ * `version()`: at least `minInclusive` and below `maxExclusive`. 2.0.0 is the
+ * first version whose `create_escrow` takes the fee arguments this SDK sends.
+ */
+export const SUPPORTED_CONTRACT_VERSIONS = { minInclusive: "2.0.0", maxExclusive: "3.0.0" } as const;
+
+function parseContractVersion(version: string): [number, number, number] | null {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+}
+
+function compareContractVersions(a: [number, number, number], b: [number, number, number]): number {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
+
+/** Whether a contract `version()` value is within `SUPPORTED_CONTRACT_VERSIONS`. */
+export function isSupportedContractVersion(version: string): boolean {
+  const parsed = parseContractVersion(version);
+  if (!parsed) return false;
+  const min = parseContractVersion(SUPPORTED_CONTRACT_VERSIONS.minInclusive)!;
+  const max = parseContractVersion(SUPPORTED_CONTRACT_VERSIONS.maxExclusive)!;
+  return compareContractVersions(parsed, min) >= 0 && compareContractVersions(parsed, max) < 0;
+}
+
+/**
+ * Thrown when a contract's version is outside `SUPPORTED_CONTRACT_VERSIONS`.
+ * `version` is `null` for an older deployment with no `version()` function.
+ */
+export class UnsupportedContractVersionError extends Error {
+  readonly name = "UnsupportedContractVersionError";
+  readonly contractId: string;
+  readonly version: string | null;
+  constructor(contractId: string, version: string | null) {
+    const { minInclusive, maxExclusive } = SUPPORTED_CONTRACT_VERSIONS;
+    super(
+      `Contract ${contractId} ${version === null ? "has no version() function" : `is version ${version}`}; ` +
+        `this SDK supports >=${minInclusive} <${maxExclusive}.`,
+    );
+    this.contractId = contractId;
+    this.version = version;
+  }
+}
+
+/** The host's report that a deployment has no such function: not a transient failure. */
+const MISSING_FUNCTION_ERROR = /non-?existent contract function|Error\(WasmVm, MissingValue\)/i;
+
+/**
  * Maximum allowed length of `conditionRef` in bytes — must match the
  * contract's bound (currently 64 bytes, see contracts/escrow/src/lib.rs
  * and docs/threat-model.md T10). Validated client-side so callers fail
@@ -469,6 +516,83 @@ export const MAX_CONDITION_REF_LENGTH = 64;
  * semver event (hard rule 3).
  */
 export const MAX_RELEASERS = 10;
+
+/**
+ * Maximum number of items in one batched call — must match the contract's
+ * `MAX_BATCH_SIZE` (currently 16, see docs/adr/0012). `createEscrows` and
+ * `settleMany` chunk larger inputs automatically. Keep in sync with the
+ * contract; a change is an SDK semver event (hard rule 3).
+ */
+export const MAX_BATCH_SIZE = 16;
+
+/** One escrow to create in a batched `createEscrows` call. */
+export interface BatchCreateItem extends CreateEscrowParams {}
+
+/** One operation in a batched `settleMany` call. */
+export interface BatchSettleOperation {
+  escrowId: bigint;
+  /** `release` pays the escrow's payee; `refund` returns the funds to `refundTo`. */
+  kind: "release" | "refund";
+  /** Must be the escrow's `releaser` (docs/adr/0002). */
+  caller: EscrowSigner;
+}
+
+/** Outcome of one batched item; `index` is always the input's position. */
+export interface BatchItemResult<T> {
+  /** Index into the caller-supplied input array. */
+  index: number;
+  /** The original input this result corresponds to. */
+  item: T;
+  ok: boolean;
+  /** Set when `ok`: the transaction hash that carried the operation. */
+  txHash?: string;
+  /** Set when `ok` and the operation created an escrow. */
+  escrowId?: bigint;
+  /** Set when the operation failed: the reason the call threw. */
+  error?: string;
+  /** True when the item was carried over from `resumeFrom` instead of re-sent. */
+  skipped?: boolean;
+}
+
+export interface BatchOptions<T> {
+  /**
+   * Operations attempted per chunk. Defaults to `MAX_BATCH_SIZE` and is
+   * clamped to it, because the contract rejects anything larger.
+   */
+  chunkSize?: number;
+  /**
+   * Results from a previous partial run. Items that already succeeded are
+   * carried over (with `skipped: true`) instead of being sent again, so a
+   * retry after `BatchPartialFailureError` never double-creates or
+   * double-settles anything.
+   */
+  resumeFrom?: BatchItemResult<T>[];
+}
+
+/**
+ * Thrown by `createEscrows`/`settleMany` when at least one item failed.
+ * `results` covers the whole input in order, so items that were already
+ * committed (or settled) before the failure are visible and retryable
+ * through `resumeFrom`.
+ */
+export class BatchPartialFailureError<T> extends Error {
+  readonly name = "BatchPartialFailureError";
+  readonly results: BatchItemResult<T>[];
+  readonly failedIndices: number[];
+
+  constructor(results: BatchItemResult<T>[]) {
+    const failedIndices = results.filter((result) => !result.ok).map((result) => result.index);
+    super(
+      `batch failed for ${failedIndices.length} of ${results.length} item(s) at index ${failedIndices.join(", ")}`,
+    );
+    this.results = results;
+    this.failedIndices = failedIndices;
+  }
+}
+
+function batchErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /** Shared placeholder used on the uninstrumented path (no per-call allocation). */
 const EMPTY_SPAN_ATTRIBUTES = {} as EscrowSpanAttributes;
@@ -525,6 +649,21 @@ export interface EscrowClientConfig {
    * call. A failed check is not cached, so a transient RPC error is retryable.
    */
   verifyNetwork?: boolean;
+  /**
+   * Controls the contract-version check before the first network call:
+   *
+   * - `true`: check on first use. An unsupported version, an older deployment
+   *   with no `version()`, or a failed lookup rejects the call.
+   * - `false`: never check automatically (`verifyContractVersion()` still works
+   *   on demand).
+   * - unset (default): check only when a `network` preset is selected. Only a
+   *   version known to be unsupported rejects the call. An older deployment or
+   *   a failed lookup doesn't, so existing read paths keep working.
+   *
+   * A successful check is cached for the client. A failed lookup is not, so a
+   * transient RPC error is retryable.
+   */
+  verifyContractVersion?: boolean;
 }
 
 export interface CreateEscrowParams {
@@ -996,6 +1135,11 @@ export class EscrowClient {
   private readonly networkVerification: "required" | "auto" | "off";
   /** Cached result of the network passphrase verification. */
   private networkVerified?: Promise<void>;
+  /** "required": explicit opt-in; "auto": preset selected; "off": no automatic check. */
+  private readonly contractVersionCheck: "required" | "auto" | "off";
+  /** Cached `version()` result; `null` means the deployment has no `version()`. */
+  private contractVersion?: Promise<string | null>;
+  private contractVersionChecked = false;
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
@@ -1011,6 +1155,14 @@ export class EscrowClient {
       config.verifyNetwork === true
         ? "required"
         : config.verifyNetwork === false
+          ? "off"
+          : config.network
+            ? "auto"
+            : "off";
+    this.contractVersionCheck =
+      config.verifyContractVersion === true
+        ? "required"
+        : config.verifyContractVersion === false
           ? "off"
           : config.network
             ? "auto"
@@ -1087,8 +1239,68 @@ export class EscrowClient {
    * preset only, an RPC without `getNetwork` is skipped rather than failing.
    */
   private async ensureNetworkVerified(): Promise<void> {
+    await this.ensureNetworkPassphrase();
+    await this.ensureContractVersionChecked();
+  }
+
+  private async ensureNetworkPassphrase(): Promise<void> {
     if (this.networkVerification === "off") return;
     await this.runNetworkVerification(this.networkVerification === "required");
+  }
+
+  /**
+   * Reads the contract's semantic version once and caches it. Resolves to `null`
+   * for an older deployment with no `version()` function. A failed lookup
+   * rejects and isn't cached, so a transient RPC failure is retryable.
+   */
+  getContractVersion(): Promise<string | null> {
+    if (!this.contractVersion) {
+      this.contractVersion = (async () => {
+        await this.ensureNetworkPassphrase();
+        try {
+          const tx = await this.contractClient().version();
+          return tx.result;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (MISSING_FUNCTION_ERROR.test(message)) return null;
+          throw error;
+        }
+      })();
+      this.contractVersion.catch(() => {
+        this.contractVersion = undefined;
+      });
+    }
+    return this.contractVersion;
+  }
+
+  /**
+   * Checks the contract against `SUPPORTED_CONTRACT_VERSIONS`. Calling this is
+   * an explicit request, so an older deployment with no `version()` is rejected
+   * with `UnsupportedContractVersionError`, like any unsupported version.
+   */
+  async verifyContractVersion(): Promise<void> {
+    const version = await this.getContractVersion();
+    if (version === null || !isSupportedContractVersion(version)) {
+      throw new UnsupportedContractVersionError(this.contractId, version);
+    }
+  }
+
+  private async ensureContractVersionChecked(): Promise<void> {
+    if (this.contractVersionCheck === "off" || this.contractVersionChecked) return;
+    if (this.contractVersionCheck === "required") {
+      await this.verifyContractVersion();
+    } else {
+      let version: string | null;
+      try {
+        version = await this.getContractVersion();
+      } catch {
+        return; // A failed lookup says nothing about the version; retry next call.
+      }
+      if (version !== null && !isSupportedContractVersion(version)) {
+        throw new UnsupportedContractVersionError(this.contractId, version);
+      }
+    }
+    this.contractVersionChecked = true;
   }
 
   private contractClient(signer?: EscrowSigner): EscrowContractClient {
@@ -1871,6 +2083,183 @@ export class EscrowClient {
     );
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Blocks **new deposits** — `createEscrow`, its variants and any future
+   * deposit path — until `unpause` is called (docs/adr/0011). Only the
+   * custodian fixed at deployment may call it, and it must sign.
+   *
+   * Deliberately cannot touch money already escrowed: `release`,
+   * `refund` and the timeout refund never read the flag, so a pause can
+   * stop new exposure but never lock existing funds. Returns the
+   * transaction's hash.
+   */
+  async pause(caller: EscrowSigner): Promise<{ txHash: string }> {
+    const client = this.contractClient(caller);
+    const sent = await this.invoke(
+      "pause",
+      undefined,
+      () => client.pause({ caller: signerAddress(caller) }),
+      { address: signerAddress(caller) },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Re-opens new deposits after a pause (docs/adr/0011). Same authority as
+   * `pause` — only the deploy-time custodian, which must sign. Returns the
+   * transaction's hash.
+   */
+  async unpause(caller: EscrowSigner): Promise<{ txHash: string }> {
+    const client = this.contractClient(caller);
+    const sent = await this.invoke(
+      "unpause",
+      undefined,
+      () => client.unpause({ caller: signerAddress(caller) }),
+      { address: signerAddress(caller) },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /** Read-only: is the emergency pause currently blocking new deposits? */
+  async isPaused(): Promise<boolean> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("is_paused"),
+      () => client.is_paused(),
+    );
+    return tx.result;
+  }
+
+  /**
+   * Read-only: the custodian address that may `pause`/`unpause`, so an
+   * integrator can verify who holds the role without trusting docs
+   * (docs/adr/0011). `undefined` only for an instance deployed without a
+   * constructor, which this contract's WASM does not allow.
+   */
+  async getPauseAdmin(): Promise<string | undefined> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("get_pause_admin"),
+      () => client.get_pause_admin(),
+    );
+    return tx.result ?? undefined;
+  }
+
+  /** The contract's limit on items per batched call (docs/adr/0005). */
+  get maxBatchSize(): number {
+    return MAX_BATCH_SIZE;
+  }
+
+  /**
+   * Creates several escrows, chunked to the contract's max batch size and
+   * mapped back to the caller's input order. Each item goes through the
+   * normal single-escrow `create_escrow` path, so validation, auth and
+   * events are identical to `createEscrow`.
+   *
+   * A failure never stops later chunks: every item is attempted, then a
+   * `BatchPartialFailureError` carrying all per-item results is thrown if
+   * any failed. Retry with `{ resumeFrom: error.results }` to send only the
+   * failures.
+   */
+  async createEscrows(
+    items: BatchCreateItem[],
+    options: BatchOptions<BatchCreateItem> = {},
+  ): Promise<BatchItemResult<BatchCreateItem>[]> {
+    const results = this.batchResults(items, options.resumeFrom);
+    const chunkSize = this.resolveChunkSize(options.chunkSize);
+
+    for (let start = 0; start < items.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, items.length);
+      for (let index = start; index < end; index++) {
+        if (results[index].ok) continue;
+        try {
+          const created = await this.createEscrow(items[index]);
+          results[index] = { index, item: items[index], ok: true, skipped: false, ...created };
+        } catch (error) {
+          results[index] = {
+            index,
+            item: items[index],
+            ok: false,
+            skipped: false,
+            error: batchErrorMessage(error),
+          };
+        }
+      }
+    }
+
+    this.throwOnBatchFailure(results);
+    return results;
+  }
+
+  /**
+   * Settles several escrows (`release` or `refund`), chunked to the
+   * contract's max batch size and mapped back to the caller's input order.
+   * Each operation goes through the existing single-op `release`/`refund`
+   * path, so auth and state rules are unchanged.
+   *
+   * A failure never stops later chunks: every operation is attempted, then
+   * a `BatchPartialFailureError` carrying all per-op results is thrown if
+   * any failed. Retry with `{ resumeFrom: error.results }` to send only the
+   * failures — already settled escrows are then skipped, never re-sent.
+   */
+  async settleMany(
+    ops: BatchSettleOperation[],
+    options: BatchOptions<BatchSettleOperation> = {},
+  ): Promise<BatchItemResult<BatchSettleOperation>[]> {
+    const results = this.batchResults(ops, options.resumeFrom);
+    const chunkSize = this.resolveChunkSize(options.chunkSize);
+
+    for (let start = 0; start < ops.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, ops.length);
+      for (let index = start; index < end; index++) {
+        if (results[index].ok) continue;
+        const op = ops[index];
+        try {
+          const settled = op.kind === "release"
+            ? await this.release({ escrowId: op.escrowId, caller: op.caller })
+            : await this.refund({ escrowId: op.escrowId, caller: op.caller });
+          results[index] = { index, item: op, ok: true, skipped: false, ...settled };
+        } catch (error) {
+          results[index] = { index, item: op, ok: false, skipped: false, error: batchErrorMessage(error) };
+        }
+      }
+    }
+
+    this.throwOnBatchFailure(results);
+    return results;
+  }
+
+  /** One not-yet-successful result per input, pre-filled from `resumeFrom`. */
+  private batchResults<T>(items: T[], resumeFrom?: BatchItemResult<T>[]): BatchItemResult<T>[] {
+    const results: BatchItemResult<T>[] = items.map((item, index) => ({
+      index,
+      item,
+      ok: false,
+      skipped: false,
+    }));
+    for (const prior of resumeFrom ?? []) {
+      if (!prior.ok || prior.index < 0 || prior.index >= results.length) continue;
+      results[prior.index] = { ...prior, item: items[prior.index], skipped: true };
+    }
+    return results;
+  }
+
+  private throwOnBatchFailure<T>(results: BatchItemResult<T>[]): void {
+    if (results.some((result) => !result.ok)) throw new BatchPartialFailureError(results);
+  }
+
+  /** Clamp a caller-supplied chunk size to the contract's max batch size. */
+  private resolveChunkSize(requested?: number): number {
+    if (requested === undefined || !Number.isFinite(requested) || requested < 1) return MAX_BATCH_SIZE;
+    return Math.min(Math.floor(requested), MAX_BATCH_SIZE);
   }
 
   /**

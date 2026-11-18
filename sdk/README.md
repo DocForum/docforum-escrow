@@ -87,6 +87,28 @@ printMultisigDryRun(
 );
 ```
 
+## Contract version compatibility
+
+The SDK supports contract versions `>=2.0.0 <3.0.0`, exported as
+`SUPPORTED_CONTRACT_VERSIONS`. Older contracts take fewer `create_escrow`
+arguments than this SDK sends.
+
+```ts
+const client = new EscrowClient({ contractId, verifyContractVersion: true });
+await client.getStatus(escrowId); // First use checks the version once.
+```
+
+| `verifyContractVersion` | When it checks | What rejects the call |
+| --- | --- | --- |
+| `true` | First network call | An unsupported version, a deployment with no `version()`, or a failed lookup |
+| unset, with a `network` preset | First network call | Only a version known to be unsupported |
+| unset, without a preset, or `false` | Never automatically | Nothing |
+
+A rejected check throws `UnsupportedContractVersionError`, whose `version` is
+`null` for a deployment with no `version()`. A failed RPC lookup isn't cached,
+so the next call tries again. On demand, `getContractVersion()` returns the
+version (or `null`) and `verifyContractVersion()` applies the strict check.
+
 ## Verifying on-chain state
 
 `verifyMultisig(policy, { server })` reads the account's on-chain thresholds and
