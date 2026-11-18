@@ -1148,3 +1148,77 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 - 2026-11-04 — Issue #52 (Phase E5): the SDK can now read the contract's version on first use and check it against `>=2.0.0 <3.0.0`, the range that has the `create_escrow` arguments it sends. Older deployments with no `version()` are reported as `null` and handled without an opaque error. `docs/testnet-deployments.md` now records each deployment's version.
 - 2026-11-05 — Raised the time limit for `sdk/tests/testnet-integration.test.ts` from 60 to 120 seconds, because the longest live tests were timing out on a slow testnet and failing the nightly soak. Other SDK tests keep their 60-second limit.
 - 2026-11-11 — Fixed the weekly Futurenet compatibility check, which had failed since the contract gained a constructor: its deploy step now passes `allowed_tokens` (empty, so any token is allowed) and `pause_admin` (the run's own funded identity).
+- 2026-11-18 — Issue #10 (Phase E4, threat model T6): extend contract instance TTL on every call (~30 days, threshold ~7 days) and escrow entry persistent TTL on creation (~180 days default or deadline + 30-day grace, threshold ~30 days). Write paths (`top_up`, `rotate_releaser`, `accept`) extend entry TTL; settlement paths (`release`, `refund`) maintain a 30-day post-settlement audit retention window. Confirmed `NextId` continuity and non-reuse across archival. Added test suite in `contracts/escrow/tests/ttl.rs`, updated `ARCHITECTURE_ESSENTIALS.md § Storage TTL & Archival`, marked T6 mitigated in `docs/threat-model.md`, and updated `ROADMAP.md`.
+- 2026-11-18 — Added explicit Soroban authorization trees for escrow creation, including its nested token transfer, and for release/refund tests. This is an incremental part of issue #105; other contract test modules still use permissive auth mocks.
+- 2026-11-18 — Issue #15 (Phase E4): added a "Trust model for integrators" section to
+  `README.md` covering the four properties integrators need before relying on a
+  `Funded` escrow: releaser control rather than payee commitment (T8), checking
+  the escrow's token rather than only its status (T5), the public and permanent
+  nature of `condition_ref`/`payer`/`payee`/`amount` (T9), and pinning the
+  caller-supplied `contractId` against the deployment record. Also documented the
+  same `condition_ref` privacy warning on `EscrowData`/`create_escrow` in
+  `contracts/escrow/src/lib.rs` and on `createEscrow` in `sdk/src/index.ts`.
+  Docs only — no contract or SDK behavior change. Because the contract's doc
+  comments are part of its on-chain spec, `sdk/src/generated/contract-client.ts`
+  was regenerated with the pinned Stellar CLI; review it as generated output, not
+  a hand edit.
+- 2026-11-18 — Issue #22 adds immutable split recipients to escrow creation. Release deducts any
+  protocol fee first, distributes the remaining amount by basis-point shares,
+  and sends rounding remainder to the final recipient. Refund destinations and
+  authorization rules are unchanged.
+- 2026-11-18 — Issue #41 (Phase E5): mutually consented refund deadline extension, ADR 0004.
+  `extend_refund_after(escrow_id, new_deadline)` moves a `Funded`,
+  single-releaser escrow's `refund_after` later, requiring both the payer's
+  and the releaser's authorization. Rejects a missing deadline, a deadline
+  that has already passed, or a proposed deadline that is not strictly later.
+  Emits `refund_deadline_extended`. New error `InvalidRefundExtension` (code
+  35, appended after the pooled-escrow variants so their discriminants keep
+  their on-chain values). SDK `client.extendRefundAfter()` accepts any
+  `EscrowSigner` for both parties; bindings regenerated. Not yet on testnet.
+- 2026-11-18 — Issue #44 (Phase E5): added fixed-total linear vesting streams
+  (`create_streamed_escrow`, `withdraw`, `get_vesting`; ADR 0012). The payee
+  withdraws vested funds while the escrow is funded; `release` pays whatever is
+  still unwithdrawn; a refund splits vested-but-unwithdrawn funds to the payee
+  and the unvested remainder to `refund_to`. Streams reject `top_up`. New
+  contract errors 35–39 are appended after main's codes. The generated SDK
+  bindings were regenerated.
+- 2026-11-18 — Issue #46 (Phase E5): added `settle(escrow_id, caller, payee_amount)`. A single
+  releaser pays `payee_amount` (0 to the full amount) to the payee and the rest to the
+  escrow's `refund_to`. Quorum escrows must use the approval path. The split applies the
+  same release-time and payee-acceptance gates as `release`, and pooled escrows are rejected
+  (`NotSupportedForPooled`). Out-of-range amounts return the new `InvalidSettlementAmount` (35).
+  Contract bindings regenerated; the TLA+ spec under `spec/` does not model `settle` yet.
+- 2026-11-18 — Issue #48 (Phase E5), `docs/adr/0013`: settled escrows (released, refunded or cancelled) are reclaimed from persistent storage and reduced to its `Status` entry; the existing `ESCROW` state event is the history. `get_status` still answers for settled ids (`NotFound` now means "never created"), `get_escrow` returns `NotFound` once settled, and mutating calls on a settled id still return `NotFunded`. Pooled escrows keep their full record (their contributions and refunds read it). Needs a contract redeploy and an SDK release.
+- 2026-11-18 — Issue #58 (Phase E6): the SDK can split signing from building and submitting. `prepareCreateEscrow` builds and simulates an unsigned `create_escrow` for a public key, bounded by ledger bounds; `submitSigned` verifies the hash, expiry and source sequence, optionally fee-bumps under a hard cap, and polls to completion. SDK minor; no contract change.
+- 2026-11-18 — Issue #59 (Phase E6): offline signing for release and refund. `prepareRelease` / `prepareRefund` build an unsigned transaction for a cold or classic-multisig releaser (about a one-day window), `mergeSignatures` combines separately signed copies, and `signAuthEntries` covers a hot fee payer with a cold releaser. Staleness (moved sequence, expiry) is detected before sending. Example scripts in `examples/offline-release/`. SDK minor; no contract change.
+- 2026-11-18 — Issue #61 (Phase E6): the SDK now surfaces failures as typed `EscrowError`
+  subclasses. Contract rejections carry their numeric `code` and a named class
+  (`NotFoundError`, `UnauthorizedError`, `NotFundedError`, …); codes without a
+  dedicated class fall back to a generic `ContractError`. Simulation,
+  submission, timeout and network-passphrase mismatch failures have separate
+  classes, and the original exception is kept as `cause`. The code→name
+  mapping in `sdk/src/contract-errors.generated.ts` is generated from the Rust
+  `Error` enum and checked for drift in CI. Consumer migration notes live in
+  `docs/sdk-errors.md`.
+- 2026-11-18 — Issue #79 (Phase E6): published SDK API reference and runnable examples.
+  Added `sdk/typedoc.json` to generate an HTML reference for every exported
+  symbol, with a missing-doc lint — `npm run docs` fails on undocumented
+  exports, broken doc links, or unexpectedly non-exported types
+  (`treatValidationWarningsAsErrors`). Added doc comments to the exported
+  symbols that lacked them. New `sdk/examples/` directory with one runnable,
+  secret-free script per major flow (create/release, timeout refund, M-of-N
+  quorum, and the estimate → prepare/sign → guard → fee-bump → submit
+  sponsorship flow): every keypair is generated at runtime and Friendbot-funded,
+  testnet only. CI type-checks the examples (`typecheck:examples`) and adds an
+  `sdk-docs` job; a new `.github/workflows/docs.yml` publishes the reference to GitHub Pages
+  (enabling Pages is a one-time human step). Docs-only: no contract or SDK API
+  change, so the generated bindings and the SDK version are unchanged.
+- 2026-11-18 — Contract 3.0.0 (was 2.5.1), folded from 7 change(s):
+  - Issue #10: storage TTL management (threat model T6). Every entry point extends the instance TTL; escrow and status entries are extended to at least ~180 days or through `refund_after` plus a 30-day grace (capped at the network maximum), and settled escrows keep a shorter TTL. `DataKey` is now public so tests can inspect entry TTLs.
+  - Issue #15: doc comments only. `condition_ref` on `EscrowData` and `create_escrow` now warns that it is public on-chain forever and must be an opaque id (docs/threat-model.md T9). No behaviour or interface change; the SDK bindings pick up the new doc text.
+  - Issue #22: split payouts (ADR 0014). New `create_split_escrow` releases one escrow to up to `MAX_PAYEES` (8) payees by basis points (unique recipients, shares totalling 10 000 bps, rounding dust to the last payee; fees come off first). `EscrowData` gains a `payees` list (a single entry for ordinary escrows). New errors `InvalidPayeeList`, `TooManyPayees`, `DuplicatePayee`, `InvalidBasisPoints`, `SplitAmountOverflow` (41-45). Each share is sent with the same checked transfer as ordinary releases (`Undeliverable` on failure).
+  - Issue #41: let the payer and first releaser jointly extend an active single-releaser escrow refund deadline, with a dedicated update event and visible deadline in escrow reads.
+  - Issue #44: add fixed-total linear vesting escrows with start/end/cliff schedules, payee withdrawals, and settlement that routes unpaid vested value to the payee and unvested value to the stored refund destination.
+  - Issue #46: releaser-authorized split settlement. New `settle(escrow_id, caller, payee_amount)` pays a chosen gross amount to the payee and returns the rest to `refund_to`, under the same release-time and acceptance gates as `release`. A protocol fee applies to the payee share only, never to the refunded part (ADR 0010), so `settle(0)` matches `refund` and `settle(amount)` matches `release`. Streamed and multi-payee escrows are rejected with `SettlementNotSupported`. New errors `InvalidSettlementAmount` (52) and `SettlementNotSupported` (53).
+  - Issue #48: reclaim storage for settled escrows (docs/adr/0013). Settling a non-pooled escrow removes its full `EscrowData` record and keeps only the `Status` entry (whose TTL is extended as before); `get_escrow` on a settled id now returns `NotFound` and mutating calls return `NotFunded`. Pooled escrows keep their full record, and a settled stream stays readable through `get_vesting`. Breaking for callers that read `get_escrow` after settlement; the SDK accepts contract 3.x (`SUPPORTED_CONTRACT_VERSIONS` < 4.0.0).
+  Final error codes: Error::InvalidSettlementAmount 4600 -> 52, Error::SettlementNotSupported 4601 -> 53, Error::InvalidPayeeList 2200 -> 41, Error::TooManyPayees 2201 -> 42, Error::DuplicatePayee 2202 -> 43, Error::InvalidBasisPoints 2203 -> 44, Error::SplitAmountOverflow 2204 -> 45, Error::PoolInsufficient 4400 -> 47, Error::NotStreamed 4401 -> 48, Error::InvalidVestingSchedule 4402 -> 49, Error::NothingToWithdraw 4403 -> 50, Error::StreamTopUpUnsupported 4404 -> 51, Error::InvalidRefundExtension 4100 -> 46.
