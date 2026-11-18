@@ -5,7 +5,7 @@ import type {
   EscrowStatus,
   ReleaseOrRefundParams,
 } from "../index.js";
-import type { Keypair } from "@stellar/stellar-sdk";
+import { signerAddress } from "../signers/types.js";
 
 export type FakeFailureKind = "timeout" | "rpcError" | "notFundedRace";
 export type FakeOperation = "createEscrow" | "getStatus" | "getEscrow" | "release" | "refund";
@@ -92,7 +92,12 @@ export class FakeEscrowClient {
       releasers: [params.releaser],
       threshold: 1,
       refundAfter: params.refundAfter,
+      releaseNotBefore: params.releaseNotBefore,
+      feeRecipient: params.feeRecipient,
+      feeBps: params.feeBps,
       notifyPayee: params.notifyPayee ?? false,
+      refundTo: params.refundTo ?? signerAddress(params.payer),
+      requiresAcceptance: params.requiresAcceptance ?? false,
       status: "Funded",
     });
     return { escrowId, txHash: `fake-tx-${++this.nextTx}` };
@@ -157,6 +162,3 @@ export class FakeEscrowClient {
   }
 }
 
-function signerAddress(signer: Keypair): string {
-  return signer.publicKey();
-}
