@@ -167,10 +167,12 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `docs/testnet-deployments.md`.
 ## Phase E5 — Contract features
 
+- [x] Split one escrow release across up to eight unique payees (issue #22, ADR 0014): positive basis-point shares total 10,000; fees are taken first, then rounding dust goes to the final payee. Tests: contracts/escrow/tests/split_payouts.rs. Not yet on testnet.
 - [x] Batch release and refund (issue #29, `docs/adr/0012`): `settle_many(caller, ops: Vec<(escrow_id, Release|Refund)>)`, best-effort with one result per op, per-op auth against each escrow's own releasers, at most `MAX_SETTLE_OPS` = 20 (measured against the 16 KiB events budget). T1 response guidance updated. Tests: `contracts/escrow/tests/settle_many.rs`. **Not yet on testnet.**
 - [x] Per-token liability accounting and an on-chain solvency view (issue #39): `solvency(token) -> (balance, liabilities)`; the counter moves in the same invocation as every value-moving state change and its TTL is extended on each write. Property test: `contracts/escrow/tests/liabilities.rs`. Monitoring guidance in `docs/threat-model.md`. **Not yet on testnet.**
 - [x] Optional escrow-wide earliest release time (issue #43, ADR 0009); refund path remains independent.
 - [x] Two-party releaser rotation (issue #23): current releaser and payer authorize; only funded single-releaser escrows can rotate. Contract and payee addresses are rejected.
+- [x] Fixed-total linear vesting streams with payee withdrawals and vested/unvested refund settlement (issue #44, ADR 0012).
 - [x] Undeliverable payee handling (issue #55): a rejected outbound release transfer (deauthorised SAC trustline, rejecting contract payee) returns append-only `Error::Undeliverable = 35` and leaves the escrow `Funded`, so the releaser can retry or refund. Tests: `tests/undeliverable.rs`.
 
 - [x] **OpenZeppelin Stellar library evaluation** (issue #118) —
@@ -348,6 +350,19 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   codes remain generic `ContractError` instances and causes are preserved.
   Consumer migration guidance: `docs/sdk-errors.md`.
 - [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
+- [x] **Prepare / sign elsewhere / submit** (issue #58): `prepareCreateEscrow`
+  builds and simulates an unsigned `create_escrow` for a public key (no secret),
+  bounded by ledger bounds (`validUntilLedger`); `submitSigned` verifies the
+  hash, expiry and source sequence, optionally fee-bumps under a hard cap, and
+  polls to completion. Typed `PreparedTransactionExpiredError`,
+  `StaleSequenceError`, `SignedTransactionMismatchError`. SDK minor, additive.
+- [x] **Offline prepare / submit for release and refund** (issue #59):
+  `prepareRelease` / `prepareRefund` return an unsigned envelope for cold keys
+  and classic multisig releasers (about a one-day window); `mergeSignatures`
+  combines separately signed copies of one transaction; `signAuthEntries`
+  covers a hot fee payer with a cold releaser. `submitSigned` detects sequence
+  staleness and expiry. Air-gapped example in `examples/offline-release/`.
+  SDK minor, additive.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
   triggered by an `sdk-v*` tag: builds, typechecks, tests, runs
   `npm publish --provenance`, and attaches the tarball to the GitHub
@@ -442,6 +457,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   contract or SDK API change, so bindings and the SDK version are unchanged.
 
 ## Phase E7 — Verification, testing & release engineering
+- [ ] Assert exact auth trees throughout contract tests (issue #105). This contribution covers `create_escrow`, `release`, and `refund`, including nested token-transfer auth on creation; remaining contract-test modules still need conversion.
 - [x] Contract version and reproducible build provenance exposed in the
   contract interface and WASM metadata (issue #52).
 - [x] **Storage and resource optimisation guided by benchmarks (issue #98)** — `get_status` reads a dedicated persistent status value instead of decoding `EscrowData`. Benchmarks showed that moving `NextId` to persistent storage raised creation costs, so it remains in instance storage. The added status record improves `get_status` while adding writes to creation and settlement. Storage layout changed, so deploy as a new testnet contract ID under ADR 0005 and let existing escrows settle on their original contract.

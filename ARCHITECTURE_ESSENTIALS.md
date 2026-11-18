@@ -17,6 +17,7 @@ is_paused() -> bool                    // IMPLEMENTED (Phase E5, ADR 0011) — r
 get_pause_admin() -> Option<Address>   // IMPLEMENTED (Phase E5, ADR 0011) — read-only custodian address
 version() -> String    // semantic contract version; source revision and Soroban SDK version are embedded as WASM metadata
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to, fee_recipient, fee_bps) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009) + optional protocol fee (ADR 0010); the fee is not yet on testnet
+create_split_escrow(payer, payees, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to, fee_recipient, fee_bps) -> escrow_id // at most 8 unique recipients; positive shares total 10,000 bps; release pays the fee-free net with rounding dust to the last recipient (ADR 0014)
 create_escrow_release_time(..., fee_recipient, fee_bps) -> escrow_id   // single-releaser creation with an earliest release time; accepts the same optional fee pair
 create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id   // optional payee acceptance gate; deployed on testnet
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
@@ -123,6 +124,8 @@ code 8); an empty list preserves the prior open-token behavior. The
 current testnet deployment includes the native XLM SAC and the
 BalanceMismatch test token in its immutable allowlist; see
 `docs/testnet-deployments.md`.
+
+Linear vesting streams pay only accrued amounts, reduce outstanding token liabilities on withdrawal, and refund unvested funds to the stored refund destination.
 
 `create_escrow`'s param order in code is `(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to, fee_recipient, fee_bps)`.
 `notify_payee` opts a contract payee into `on_escrow_released(escrow_id,
@@ -232,6 +235,11 @@ await client.getMilestones(group);           // [{ index, amount, escrowId, stat
 await client.estimate({ source, method, args }); // { resourceFee, inclusionFee, total, minResourceFee } — simulation only, 20% resource buffer
 client.guardSponsorship(signedXdr);          // { ok, reasons, invokedContracts } — every op + contract auth entry must target this escrow
 client.feeBump(signedXdr, sponsor, { maxFee, baseFee? }); // { xdr, fee, innerTxHash } — throws MaxFeeExceededError, never overshoots the cap
+client.prepareCreateEscrow({ payer: publicKey, ... });       // { xdr, hash, validUntilLedger, source, authSigners, authValidUntilLedger } — unsigned, no secret key (issue #58)
+client.submitSigned(signedXdr, { expectedHash?, feeBumpSigner?, maxFee? }); // { txHash, innerTxHash, escrowId? } — throws PreparedTransactionExpiredError / StaleSequenceError / SignedTransactionMismatchError
+client.prepareRelease({ escrowId, releaser }); client.prepareRefund(...);  // unsigned, for cold keys / multisig releasers; ~1 day window (issue #59)
+client.mergeSignatures([signedXdr, ...]);                         // one envelope from separately signed copies; rejects a different transaction
+client.signAuthEntries(preparedXdr, keypair, { validUntilLedger? }); // when source != releaser; returns { xdr, hash, signedEntries }
 ```
 
 Milestones are an SDK-level grouping, not a contract entry point: the

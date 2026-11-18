@@ -131,6 +131,14 @@ pub enum SettleAction {
     Refund,
 }
 
+/// Direct recipient and share of a split release, in basis points.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayeeShare {
+    pub payee: Address,
+    pub basis_points: u32,
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub struct EscrowData {
@@ -159,6 +167,8 @@ pub struct EscrowData {
     /// anyone — still only to `refund_to`. `None` means no timeout,
     /// behaviour identical to before this field existed — see docs/adr/0004.
     pub refund_after: Option<u64>,
+    /// Direct release recipients; ordinary escrows store one 10,000-bps share.
+    pub payees: Vec<PayeeShare>,
     /// If true, invoke the contract payee's `on_escrow_released` hook after
     /// the payout transfer. A failed callback reverts the whole release.
     pub notify_payee: bool,
@@ -202,6 +212,8 @@ pub struct PayeeRefunded {
 /// = 10 %. A platform fee fixed at creation must be transparent but
 /// cannot be the arrangement itself — see docs/adr/0010.
 pub const MAX_FEE_BPS: u32 = 1_000;
+/// Maximum direct recipients for one escrow release.
+pub const MAX_PAYEES: u32 = 8;
 /// 10 000 basis points = 100 %.
 const BASIS_POINTS: i128 = 10_000;
 /// One entry of a `create_escrows` batch. Mirrors the single-escrow
@@ -248,6 +260,26 @@ pub struct CreateItem {
     pub refund_after: Option<u64>,
 }
 
+/// A stream vests linearly from `start` through `end`; an optional cliff
+/// delays availability until its timestamp.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VestingSchedule {
+    pub start: u64,
+    pub end: u64,
+    pub cliff: Option<u64>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VestingInfo {
+    pub schedule: VestingSchedule,
+    pub total_amount: i128,
+    pub vested_amount: i128,
+    pub withdrawn_amount: i128,
+    pub claimable_amount: i128,
+}
+
 #[contracttype]
 pub enum DataKey {
     Escrow(u64),
@@ -270,6 +302,12 @@ pub enum DataKey {
     /// of `amount` over every escrow in that token whose status is
     /// `Funded`. Appended last, so existing entries keep their encoding.
     Liability(Address),
+    /// Streamed escrows only (issue #44): immutable vesting schedule.
+    Vesting(u64),
+    /// Streamed escrows only (issue #44): total paid to the payee so far.
+    Withdrawn(u64),
+    /// Streamed escrows only (issue #44): immutable original amount.
+    TotalAmount(u64),
 }
 
 /// Emitted by `pause` (docs/adr/0011). Carries the custodian that flipped
@@ -385,6 +423,21 @@ pub enum Error {
     /// contract itself, or an amount that would overflow the fee math —
     /// see docs/adr/0010.
     InvalidFee = 35,
+    InvalidPayeeList = 2200,
+    TooManyPayees = 2201,
+    DuplicatePayee = 2202,
+    InvalidBasisPoints = 2203,
+    SplitAmountOverflow = 2204,
+    /// The contract's token balance is below the requested stream payout.
+    PoolInsufficient = 4400,
+    /// `withdraw`/`get_vesting` on an escrow without a schedule.
+    NotStreamed = 4401,
+    /// Invalid start/end order or cliff outside the schedule bounds.
+    InvalidVestingSchedule = 4402,
+    /// No vested amount is left to withdraw.
+    NothingToWithdraw = 4403,
+    /// Streams have a fixed total; `top_up` is rejected.
+    StreamTopUpUnsupported = 4404,
     /// The refund deadline is absent, already elapsed, or the replacement
     /// deadline is not strictly later than the current one (issue #41).
     InvalidRefundExtension = 4100,
@@ -472,6 +525,48 @@ impl EscrowContract {
     /// creation and taken at release — never on refund — with `fee_bps ≤`
     /// [`MAX_FEE_BPS`] (10 %), floor rounding, and both given together or
     /// not at all (docs/adr/0010). `None` on both means no fee.
+    /// Creates an escrow that releases directly to up to eight unique
+    /// recipients. Shares must be positive and total exactly 10,000 bps.
+    /// Rounding remainder goes to the final recipient. If the callback is
+    /// enabled, it is invoked on the first recipient; refunds use refund_to.
+    pub fn create_split_escrow(
+        env: Env,
+        payer: Address,
+        payees: Vec<PayeeShare>,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        notify_payee: bool,
+        refund_to: Option<Address>,
+        fee_recipient: Option<Address>,
+        fee_bps: Option<u32>,
+    ) -> Result<u64, Error> {
+        let primary_payee = payees.get(0).ok_or(Error::InvalidPayeeList)?.payee;
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        Self::create_escrow_with_payees_inner(
+            &env,
+            payer,
+            primary_payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            1,
+            refund_after,
+            notify_payee,
+            false,
+            refund_to,
+            None,
+            fee_recipient,
+            fee_bps,
+            false,
+            Some(payees),
+        )
+    }
+
     pub fn create_escrow(
         env: Env,
         payer: Address,
@@ -698,6 +793,144 @@ impl EscrowContract {
         Ok(ids)
     }
 
+    /// Creates a fixed-total escrow with a linear vesting schedule.
+    pub fn create_streamed_escrow(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        schedule: VestingSchedule,
+    ) -> Result<u64, Error> {
+        if schedule.start >= schedule.end
+            || schedule
+                .cliff
+                .is_some_and(|cliff| cliff < schedule.start || cliff > schedule.end)
+        {
+            return Err(Error::InvalidVestingSchedule);
+        }
+        let id = Self::create_escrow(
+            env.clone(),
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releaser,
+            refund_after,
+            false,
+            None,
+            None,
+            None,
+        )?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Vesting(id), &schedule);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Withdrawn(id), &0_i128);
+        env.storage()
+            .persistent()
+            .set(&DataKey::TotalAmount(id), &amount);
+        Ok(id)
+    }
+
+    /// Returns current vested, withdrawn, and claimable amounts for a stream.
+    pub fn get_vesting(env: Env, escrow_id: u64) -> Result<VestingInfo, Error> {
+        // A settled stream's record is reclaimed (docs/adr/0013); its schedule
+        // and withdrawal totals live in their own entries and stay readable.
+        let funded = match env
+            .storage()
+            .persistent()
+            .get::<_, EscrowData>(&DataKey::Escrow(escrow_id))
+        {
+            Some(data) => data.status == EscrowStatus::Funded,
+            None if env.storage().persistent().has(&DataKey::Status(escrow_id)) => false,
+            None => return Err(Error::NotFound),
+        };
+        let schedule: VestingSchedule = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Vesting(escrow_id))
+            .ok_or(Error::NotStreamed)?;
+        let withdrawn: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Withdrawn(escrow_id))
+            .unwrap_or(0);
+        let total: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TotalAmount(escrow_id))
+            .ok_or(Error::NotStreamed)?;
+        let vested = Self::vested_amount(total, &schedule, env.ledger().timestamp());
+        let claimable = if funded {
+            vested.saturating_sub(withdrawn)
+        } else {
+            0
+        };
+        Ok(VestingInfo {
+            schedule,
+            total_amount: total,
+            vested_amount: vested,
+            withdrawn_amount: withdrawn,
+            claimable_amount: claimable,
+        })
+    }
+
+    /// Transfers vested tokens to the payee and reduces the remaining
+    /// escrow amount and per-token liability by the same amount.
+    pub fn withdraw(env: Env, escrow_id: u64, payee: Address) -> Result<i128, Error> {
+        payee.require_auth();
+        let mut data = Self::load(&env, escrow_id)?;
+        Self::check_funded(&data)?;
+        if payee != data.payee {
+            return Err(Error::Unauthorized);
+        }
+        let schedule: VestingSchedule = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Vesting(escrow_id))
+            .ok_or(Error::NotStreamed)?;
+        let withdrawn: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Withdrawn(escrow_id))
+            .unwrap_or(0);
+        let total: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TotalAmount(escrow_id))
+            .ok_or(Error::NotStreamed)?;
+        let claimable = Self::vested_amount(total, &schedule, env.ledger().timestamp())
+            .saturating_sub(withdrawn);
+        if claimable <= 0 {
+            return Err(Error::NothingToWithdraw);
+        }
+        if claimable > data.amount {
+            return Err(Error::Overflow);
+        }
+        let contract_address = env.current_contract_address();
+        let token_client = token::Client::new(&env, &data.token);
+        if token_client.balance(&contract_address) < claimable {
+            return Err(Error::PoolInsufficient);
+        }
+        let updated_withdrawn = withdrawn.checked_add(claimable).ok_or(Error::Overflow)?;
+        data.amount = data.amount.checked_sub(claimable).ok_or(Error::Overflow)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Withdrawn(escrow_id), &updated_withdrawn);
+        Self::sub_liability(&env, &data.token, claimable)?;
+        token_client.transfer(&contract_address, &payee, &claimable);
+        Ok(claimable)
+    }
+
 
     /// Read-only status query. Reads the lightweight `Status` entry, which
     /// outlives the full record: a settled escrow keeps answering after its
@@ -821,9 +1054,14 @@ impl EscrowContract {
         creator.require_auth();
 
         let id = Self::next_id(&env);
+        let mut pooled_payees = Vec::new(&env);
+        pooled_payees.push_back(PayeeShare {
+            payee: payee.clone(),
+            basis_points: 10_000,
+        });
         let data = EscrowData {
             payer: creator.clone(),
-            payee,
+            payee: payee.clone(),
             token,
             // Grows with accepted contributions; release pays exactly
             // this pooled total.
@@ -835,6 +1073,7 @@ impl EscrowContract {
             // No push timeout exists for pooled escrows, so the field is
             // inert; kept for read-shape compatibility.
             refund_after: None,
+            payees: pooled_payees,
             notify_payee: false,
             requires_acceptance: false,
             accepted_at: None,
@@ -1119,6 +1358,9 @@ impl EscrowContract {
         // A bare top-up would raise `data.amount` without a contribution
         // record, breaking "funded == sum of unclaimed contributions".
         Self::reject_pooled(&env, escrow_id)?;
+        if env.storage().persistent().has(&DataKey::Vesting(escrow_id)) {
+            return Err(Error::StreamTopUpUnsupported);
+        }
         if data.payer != payer {
             return Err(Error::Unauthorized);
         }
@@ -1370,6 +1612,46 @@ impl EscrowContract {
         fee_bps: Option<u32>,
         payer_already_authorized: bool,
     ) -> Result<u64, Error> {
+        Self::create_escrow_with_payees_inner(
+            env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            threshold,
+            refund_after,
+            notify_payee,
+            requires_acceptance,
+            refund_to,
+            release_not_before,
+            fee_recipient,
+            fee_bps,
+            payer_already_authorized,
+            None,
+        )
+    }
+
+    fn create_escrow_with_payees_inner(
+        env: &Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releasers: Vec<Address>,
+        threshold: u32,
+        refund_after: Option<u64>,
+        notify_payee: bool,
+        requires_acceptance: bool,
+        refund_to: Option<Address>,
+        release_not_before: Option<u64>,
+        fee_recipient: Option<Address>,
+        fee_bps: Option<u32>,
+        payer_already_authorized: bool,
+        payee_shares: Option<Vec<PayeeShare>>,
+    ) -> Result<u64, Error> {
         // Every creation entry point funnels through here, so this one
         // check covers all deposit paths: while paused, no new escrow can
         // be created, no id is consumed and no funds move (docs/adr/0011).
@@ -1388,6 +1670,44 @@ impl EscrowContract {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
+        let payees = if let Some(payees) = payee_shares {
+            if payees.is_empty() {
+                return Err(Error::InvalidPayeeList);
+            }
+            if payees.len() > MAX_PAYEES {
+                return Err(Error::TooManyPayees);
+            }
+            let mut total_bps = 0u32;
+            let mut seen = Vec::new(env);
+            for share in payees.iter() {
+                if share.basis_points == 0 {
+                    return Err(Error::InvalidBasisPoints);
+                }
+                total_bps = total_bps
+                    .checked_add(share.basis_points)
+                    .ok_or(Error::InvalidBasisPoints)?;
+                // A share paid to the contract itself would be locked here
+                // forever (same rule as `refund_to` and the fee recipient).
+                if share.payee == env.current_contract_address() {
+                    return Err(Error::InvalidPayeeList);
+                }
+                if Self::contains(&seen, &share.payee) {
+                    return Err(Error::DuplicatePayee);
+                }
+                seen.push_back(share.payee);
+            }
+            if total_bps != 10_000 {
+                return Err(Error::InvalidBasisPoints);
+            }
+            payees
+        } else {
+            let mut shares = Vec::new(env);
+            shares.push_back(PayeeShare {
+                payee: payee.clone(),
+                basis_points: 10_000,
+            });
+            shares
+        };
         if let Some(deadline) = refund_after {
             if deadline <= env.ledger().timestamp() {
                 return Err(Error::InvalidRefundAfter);
@@ -1453,6 +1773,7 @@ impl EscrowContract {
             releasers,
             threshold,
             refund_after,
+            payees,
             notify_payee,
             requires_acceptance,
             accepted_at: None,
@@ -1556,11 +1877,35 @@ impl EscrowContract {
         {
             return Err(Error::ReleaseTooEarly);
         }
-        let notify_payee = data.notify_payee && settled == EscrowStatus::Released;
-        let destination = match settled {
-            EscrowStatus::Released => data.payee.clone(),
-            _ => data.refund_to.clone(),
+        let schedule: Option<VestingSchedule> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Vesting(escrow_id));
+        let withdrawn: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Withdrawn(escrow_id))
+            .unwrap_or(0);
+        let total: i128 = if schedule.is_some() {
+            env.storage()
+                .persistent()
+                .get(&DataKey::TotalAmount(escrow_id))
+                .ok_or(Error::NotStreamed)?
+        } else {
+            data.amount
         };
+        let (payee_amount, refund_amount) = match (&settled, &schedule) {
+            (EscrowStatus::Released, Some(_)) => (data.amount, 0),
+            (EscrowStatus::Refunded | EscrowStatus::Cancelled, Some(schedule)) => {
+                let vested = Self::vested_amount(total, schedule, env.ledger().timestamp());
+                let unpaid_vested = vested.saturating_sub(withdrawn).min(data.amount);
+                (unpaid_vested, data.amount - unpaid_vested)
+            }
+            (EscrowStatus::Released, None) => (data.amount, 0),
+            (EscrowStatus::Refunded | EscrowStatus::Cancelled, None) => (0, data.amount),
+            (EscrowStatus::Funded, _) => return Err(Error::NotFunded),
+        };
+        let notify_payee = data.notify_payee && settled == EscrowStatus::Released;
         if settled == EscrowStatus::Released
             && data.requires_acceptance
             && data.accepted_at.is_none()
@@ -1584,7 +1929,7 @@ impl EscrowContract {
             },
             _ => (0, None),
         };
-        let payout = data.amount - fee;
+        let payout = payee_amount - fee;
 
         // Effects before interactions: the state write lands before any
         // token call, so a re-entrant token cannot see a still-`Funded`
@@ -1593,6 +1938,14 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Status(escrow_id), &data.status);
+        if schedule.is_some() {
+            let settled_withdrawn = withdrawn
+                .checked_add(payee_amount)
+                .ok_or(Error::Overflow)?;
+            env.storage()
+                .persistent()
+                .set(&DataKey::Withdrawn(escrow_id), &settled_withdrawn);
+        }
         // Issue #39: the escrow leaves `Funded` in this same write, so its
         // amount stops being owed here too.
         Self::sub_liability(env, &data.token, data.amount)?;
@@ -1638,13 +1991,64 @@ impl EscrowContract {
                     }
                 }
             }
-            let transfer =
-                token_client.try_transfer(&env.current_contract_address(), &destination, &payout);
-            if !matches!(transfer, Ok(Ok(()))) {
-                return Err(Error::Undeliverable);
+        }
+        if payout > 0 {
+            if settled == EscrowStatus::Released && data.payees.len() > 1 {
+                // Split payout (issue #22): each share by basis points, the
+                // last payee taking the rounding remainder so the shares
+                // always sum to `payout`.
+                let mut distributed = 0i128;
+                for index in 0..data.payees.len() {
+                    let share = data.payees.get(index).ok_or(Error::InvalidPayeeList)?;
+                    let amount = if index + 1 == data.payees.len() {
+                        payout
+                            .checked_sub(distributed)
+                            .ok_or(Error::SplitAmountOverflow)?
+                    } else {
+                        let quotient = payout / BASIS_POINTS;
+                        let remainder = payout % BASIS_POINTS;
+                        quotient
+                            .checked_mul(share.basis_points as i128)
+                            .and_then(|whole| {
+                                remainder
+                                    .checked_mul(share.basis_points as i128)
+                                    .map(|fraction| whole + fraction / BASIS_POINTS)
+                            })
+                            .ok_or(Error::SplitAmountOverflow)?
+                    };
+                    distributed = distributed
+                        .checked_add(amount)
+                        .ok_or(Error::SplitAmountOverflow)?;
+                    if amount > 0 {
+                        let transfer = token_client.try_transfer(
+                            &env.current_contract_address(),
+                            &share.payee,
+                            &amount,
+                        );
+                        if !matches!(transfer, Ok(Ok(()))) {
+                            return Err(Error::Undeliverable);
+                        }
+                    }
+                }
+            } else if settled == EscrowStatus::Released {
+                let transfer = token_client.try_transfer(
+                    &env.current_contract_address(),
+                    &data.payee,
+                    &payout,
+                );
+                if !matches!(transfer, Ok(Ok(()))) {
+                    return Err(Error::Undeliverable);
+                }
+            } else {
+                token_client.transfer(&env.current_contract_address(), &data.payee, &payout);
             }
-        } else {
-            token_client.transfer(&env.current_contract_address(), &destination, &payout);
+        }
+        if refund_amount > 0 {
+            token_client.transfer(
+                &env.current_contract_address(),
+                &data.refund_to,
+                &refund_amount,
+            );
         }
         if notify_payee {
             // The callback reports what the payee actually received — gross
@@ -2049,6 +2453,20 @@ impl EscrowContract {
         storage.set(&key, &value);
         let extend_to = LIABILITY_TTL_EXTEND_TO.min(env.storage().max_ttl());
         storage.extend_ttl(&key, LIABILITY_TTL_THRESHOLD.min(extend_to), extend_to);
+    }
+
+    fn vested_amount(total: i128, schedule: &VestingSchedule, now: u64) -> i128 {
+        if now < schedule.start || schedule.cliff.is_some_and(|cliff| now < cliff) {
+            return 0;
+        }
+        if now >= schedule.end {
+            return total;
+        }
+        let duration = (schedule.end - schedule.start) as i128;
+        let elapsed = (now - schedule.start) as i128;
+        let whole = total / duration;
+        let remainder = (total % duration) as u128;
+        whole * elapsed + (remainder * elapsed as u128 / duration as u128) as i128
     }
 
     /// Extends the contract instance and code TTL if it is near expiry.
