@@ -18,7 +18,10 @@ fn issued_assets_are_isolated_between_escrows() {
     let rel = Address::generate(&env);
     StellarAssetClient::new(&env, &a.address()).mint(&payer, &100);
     StellarAssetClient::new(&env, &b.address()).mint(&payer, &200);
-    let id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let c = EscrowContractClient::new(&env, &id);
     c.create_escrow(
         &payer,

@@ -58,7 +58,10 @@ fn setup(env: &Env, target: i128) -> Fixture<'_> {
     let payee = Address::generate(env);
     let releaser = Address::generate(env);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
     let id = client.create_pooled_escrow(
         &creator,
@@ -465,7 +468,10 @@ fn pooled_creation_validation() {
     let creator = Address::generate(&env);
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
     let ref_str = String::from_str(&env, "pooled");
 
@@ -557,7 +563,7 @@ fn pooled_creation_respects_the_token_allowlist() {
 
     let mut allowlist = Vec::new(&env);
     allowlist.push_back(allowed.clone());
-    let contract_id = env.register(EscrowContract, (allowlist,));
+    let contract_id = env.register(EscrowContract, (allowlist, Address::generate(&env)));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     assert_eq!(
@@ -747,7 +753,10 @@ fn ordinary_escrows_are_unaffected() {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
     let id = client.create_escrow(
         &payer,
@@ -855,4 +864,23 @@ fn claim_refund_emits_an_event() {
             ),
         ]
     );
+}
+
+#[test]
+fn create_pooled_escrow_accepts_a_condition_ref_at_the_length_limit() {
+    let env = Env::default();
+    let f = setup(&env, 100);
+    let at_limit = String::from_str(&env, &"x".repeat(64));
+
+    let id = f.client.create_pooled_escrow(
+        &f.creator,
+        &f.payee,
+        &f.token.address,
+        &100,
+        &at_limit,
+        &f.releaser,
+        &DEADLINE,
+    );
+
+    assert_eq!(f.client.get_status(&id), EscrowStatus::Funded);
 }

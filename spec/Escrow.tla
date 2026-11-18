@@ -108,6 +108,12 @@ RefundEscrow(caller) ==
   /\ paidTo' = {refundToVar}
   /\ UNCHANGED <<ledgerTime, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, accepted, payeeSet>>
 
+PayeeRefund(caller) ==
+  /\ state = "Funded"
+  /\ caller = payeeVar
+  /\ state' = "Refunded"
+  /\ UNCHANGED <<ledgerTime, amount, payerVar, payeeVar, releaserSet, threshold, refundAfter, releaseNotBefore, refundToVar, requiresAcceptance, accepted>>
+
 TimeoutRefund(caller) ==
   /\ state = "Funded"
   /\ refundAfter # NoDeadline
@@ -164,6 +170,7 @@ Next ==
   CreateEscrow
   \/ (\E caller \in Actors : ReleaseEscrow(caller))
   \/ (\E caller \in Actors : RefundEscrow(caller))
+  \/ (\E caller \in Actors : PayeeRefund(caller))
   \/ (\E caller \in Actors : TimeoutRefund(caller))
   \/ (\E approvers \in SUBSET Actors : ReleaseWithApprovals(approvers))
   \/ (\E approvers \in SUBSET Actors : RefundWithApprovals(approvers))

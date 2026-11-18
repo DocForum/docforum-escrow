@@ -128,9 +128,15 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   has not been run or recorded yet.
 - [ ] Rest of the `docs/threat-model.md` §6 pre-mainnet checklist, scoped
   into issues: [#8](https://github.com/DocForum/docforum-escrow/issues/8) write status before transfer + reject
-  contract-self addresses (Trivial), [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium),
-  [#10](https://github.com/DocForum/docforum-escrow/issues/10) storage TTL (Medium), [#15](https://github.com/DocForum/docforum-escrow/issues/15) integrator trust-model
+  contract-self addresses (Trivial), [#9](https://github.com/DocForum/docforum-escrow/issues/9) events (Medium — **done**,
+  see `contracts/escrow/tests/events.rs` and `ARCHITECTURE_ESSENTIALS.md § Events`),
+  [#10](https://github.com/DocForum/docforum-escrow/issues/10) storage TTL (Medium — **done**, see `contracts/escrow/tests/ttl.rs` and `ARCHITECTURE_ESSENTIALS.md § Storage TTL & Archival`), [#15](https://github.com/DocForum/docforum-escrow/issues/15) integrator trust-model
   docs (Trivial).
+- [x] Integrator trust-model docs (issue #15): added a "Trust model for
+  integrators" section to `README.md` covering T8, T5, T9 and the
+  caller-supplied `contractId`, plus `condition_ref` privacy warnings on
+  `EscrowData`/`create_escrow` in the contract and `createEscrow` in the SDK.
+  Docs only — no behavior change.
 - [ ] Related, not in the checklist: [#13](https://github.com/DocForum/docforum-escrow/issues/13) `get_escrow`
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
@@ -166,6 +172,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 - [x] Per-token liability accounting and an on-chain solvency view (issue #39): `solvency(token) -> (balance, liabilities)`; the counter moves in the same invocation as every value-moving state change and its TTL is extended on each write. Property test: `contracts/escrow/tests/liabilities.rs`. Monitoring guidance in `docs/threat-model.md`. **Not yet on testnet.**
 - [x] Optional escrow-wide earliest release time (issue #43, ADR 0009); refund path remains independent.
 - [x] Two-party releaser rotation (issue #23): current releaser and payer authorize; only funded single-releaser escrows can rotate. Contract and payee addresses are rejected.
+- [x] Undeliverable payee handling (issue #55): a rejected outbound release transfer (deauthorised SAC trustline, rejecting contract payee) returns append-only `Error::Undeliverable = 35` and leaves the escrow `Funded`, so the releaser can retry or refund. Tests: `tests/undeliverable.rs`.
 
 - [x] **OpenZeppelin Stellar library evaluation** (issue #118) —
   `docs/adr/0006`: all six candidate modules checked against ADR 0001/0002
@@ -212,8 +219,8 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   the recipient only receives and need not sign). **Implementation:**
   optional `refund_to` on `create_escrow`, `create_escrow_with_acceptance` and `create_escrow_with_releasers` (default `payer`, so omitted =
   unchanged), stored in `EscrowData`, used by every refund path (releaser
-  and timeout share one transfer; there is no payee-initiated refund in
-  this contract yet — any future one must use `refund_to`), rejected with
+  and timeout share one transfer; payee-initiated voluntary refunds (issue
+  #40, ADR 0010) also use the same stored `refund_to` destination), rejected with
   new `Error::InvalidRefundTo = 21` if it is the contract itself.
   **Tests:** 16 in `contracts/escrow/tests/sponsored_refund.rs` — releaser
   refund, timeout refund (stranger, funder, exactly at the deadline), no
@@ -255,6 +262,33 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   invariant I7, 17 tests in `tests/protocol_fee.rs`. Breaking read shape
   and creation signature → SDK minor changeset and regenerated bindings.
   **Not yet on testnet** — the live deployment predates the fee.
+- [x] Emergency pause that can only stop new deposits — issue #35.
+  `docs/adr/0011`: one `pause_admin` address fixed at deployment by
+  `__constructor(allowed_tokens, pause_admin)`, which may `pause`/`unpause`
+  a flag that blocks **every deposit path** — `create_escrow` and its
+  variants (they share `create_escrow_inner`), `top_up`, and the pooled
+  `create_pooled_escrow`/`contribute` — and nothing else. `release`,
+  `refund`, the timeout refund and pooled `claim_refund` never read it, so a
+  pause can never lock existing funds (invariant I8, threat model T12).
+  Alternatives rejected in the ADR: permissionless pause (trivial
+  griefing), auto-expiring pause (silently lapses mid-incident), token
+  allowlist (a different problem), and doing nothing. New error codes
+  `Paused`, `AlreadyPaused` and `NotPaused`, with codes
+  38–40 (contract 2.5.0);
+  `Paused`/`Unpaused` events carry the custodian. 20 tests in
+  `contracts/escrow/tests/pause.rs`, including release, releaser refund,
+  stranger timeout refund, and release-after-deadline while paused, plus a
+  year-long pause leaving nothing stuck, `top_up` blocked, and pooled
+  contributions blocked while pooled claims and releases still pay out. SDK minor
+  changeset with `pause`/`unpause`/`isPaused`/`getPauseAdmin` and
+  regenerated bindings. Not yet redeployed to testnet — the current
+  deployment predates the constructor and cannot pause.
+- [ ] Redeploy to testnet with the new constructor (`allowed_tokens`,
+  `pause_admin`) and verify `pause`/`unpause` live, including a release
+  while paused.
+- [ ] Decide the mainnet custodian: a Stellar multisig account (2-of-3)
+  held in a KMS/HSM — no contract change needed, it is the deploy-time
+  `pause_admin` argument (threat model T12).
 - [x] **Pooled escrows funded by multiple payers** (issue #113) —
   `docs/adr/0011`: open contributions until an explicit
   `funding_target` (fixed contributor list rejected — see ADR table),
@@ -275,7 +309,32 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   (scenarios A–M) + 3 malicious-token contribution tests; existing
   suites and snapshots unchanged. SDK `0.7.0 → 0.8.0` (additive).
   **Not yet on testnet** — the live deployment predates it.
+
+- [x] Payee rights transfer (issue #45): `transfer_payee(escrow_id,
+  current_payee, new_payee)` lets the current payee reassign the release
+  destination to a new address while the escrow is `Funded`. Only the
+  current payee may authorise this call — the payer and releaser have no
+  power to redirect funds via this path. `new_payee` may not be the
+  contract's own address (would permanently lock funds) or the payer
+  (would let a colluding payee redirect a release to the payer, bypassing
+  refund auth). Emits a `pay_xfer` event. This is a rotation tool: a
+  payee who has already lost their key cannot use it (they cannot sign).
+  Key loss remains an operational risk the payee must mitigate off-chain.
+  12 tests in `contracts/escrow/tests/transfer_payee.rs` covering the
+  happy path, release/refund after transfer, chained transfers,
+  auth rejection for stranger/payer/releaser, and both rejected
+  `new_payee` targets. Rejected with `Error::InvalidNewPayee`.
+  Threat model
+  I1 updated; T11 added covering the new payee-key attack surface.
+  `ARCHITECTURE_ESSENTIALS.md` contract surface updated.
+  Closes issue #45.
 ## Phase E6 — SDK & integrator tooling
+- [x] Typed SDK errors mapped from the contract error enum (issue #61):
+  named classes for each current contract error and distinct simulation,
+  submission, timeout, and network mismatch errors. The generated mapping
+  is checked in CI against `contracts/escrow/src/lib.rs`; unknown future
+  codes remain generic `ContractError` instances and causes are preserved.
+  Consumer migration guidance: `docs/sdk-errors.md`.
 - [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),
   triggered by an `sdk-v*` tag: builds, typechecks, tests, runs
@@ -359,8 +418,19 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   for parties on different machines. SDK `0.7.0 → 0.8.0`. Waiting on the
   contract: `extendRefundAfter` (#41) and `refundByPayee` (#40) need their
   contract functions merged first.
+- [x] Published API reference (TypeDoc) and runnable examples (issue #79).
+  `sdk/typedoc.json` generates an HTML reference for every exported symbol and
+  enforces a missing-doc lint (undocumented exports, broken doc links and
+  unexpected non-exported types fail `npm run docs`); a new `sdk/examples/`
+  directory has one runnable, secret-free script per major flow
+  (create/release, timeout refund, M-of-N quorum, and the estimate →
+  prepare/sign → guard → fee-bump → submit sponsorship flow). CI type-checks
+  the examples and builds the reference; a `docs` workflow publishes it to
+  GitHub Pages (Pages enablement is a one-time human step). Docs-only — no
+  contract or SDK API change, so bindings and the SDK version are unchanged.
 
 ## Phase E7 — Verification, testing & release engineering
+- [ ] Assert exact auth trees throughout contract tests (issue #105). This contribution covers `create_escrow`, `release`, and `refund`, including nested token-transfer auth on creation; remaining contract-test modules still need conversion.
 - [x] Contract version and reproducible build provenance exposed in the
   contract interface and WASM metadata (issue #52).
 - [x] **Storage and resource optimisation guided by benchmarks (issue #98)** — `get_status` reads a dedicated persistent status value instead of decoding `EscrowData`. Benchmarks showed that moving `NextId` to persistent storage raised creation costs, so it remains in instance storage. The added status record improves `get_status` while adding writes to creation and settlement. Storage layout changed, so deploy as a new testnet contract ID under ADR 0005 and let existing escrows settle on their original contract.
@@ -929,3 +999,124 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `scripts/test_settle_outcomes.py` run by a new CI job. The 50+ escrow testnet
   drill is still to be run and recorded in the runbook. No contract or SDK
   change.
+- 2026-10-27 — Issue #29 (Phase E5): batch release and refund. `settle_many` now takes
+  `ops: Vec<(escrow_id, SettleAction)>` (`Release` | `Refund`) instead of
+  release-only `escrow_ids`, and `caller` authorizes the batch once (the
+  old version called `release` per id, so any batch of two or more failed
+  `Error(Auth, ExistingValue)`). Each op runs exactly the checks of
+  `release`/`refund` against that escrow's own releaser set, shared through
+  `release_checks`/`refund_checks` so the paths can't diverge. Best-effort,
+  decided in `docs/adr/0012`: one result per op in input order, `Err` means
+  untouched, the same escrow twice gives `NotFunded` on the second op, and
+  a failure after an op's transfer (a failing payee callback) reverts the
+  whole batch. Bound `MAX_SETTLE_OPS` = 20, measured: 656 bytes of events
+  per release against the 16,384-byte events budget (13,120 at 20).
+  Existing error codes unchanged (`BatchTooLarge` = 25 reused). T1
+  response guidance in `docs/threat-model.md`. 13 tests in
+  `tests/settle_many.rs`. Bindings regenerated (SDK patch). Not yet
+  deployed to testnet.
+- 2026-10-27 — Issue #30 (Phase E5): optional protocol fee taken at release. `create_escrow`
+  (and `create_escrow_release_time`) accept an optional `fee_recipient`/`fee_bps`
+  pair, fixed at creation, capped at 10 % and floor-rounded; `release` pays that
+  share to `fee_recipient` and the exact remainder to the payee, while refunds
+  still return the full amount. `get_escrow` exposes the pair, the `ESCROW`
+  event snapshot appends it as one nested pair, and `top_up` re-checks the fee
+  math as the amount grows. Decided in `docs/adr/0010`; new invariant I7 in the
+  threat model; new append-only error `InvalidFee = 35`. The SDK gains
+  `feeRecipient`/`feeBps` on `createEscrow` (minor changeset) and regenerated
+  bindings. Not yet redeployed to testnet.
+- 2026-10-27 — Issue #39 (Phase E5): per-token liability accounting and an on-chain
+  solvency view. New read-only `solvency(token) -> (balance, liabilities)`;
+  `liabilities` is the sum of `amount` over every `Funded` escrow in that
+  token, kept in a new persistent `DataKey::Liability(token)` entry
+  (appended last, so existing storage encodings are unchanged) whose TTL is
+  re-extended on every write. The counter is increased in
+  `transfer_in_exact` (the single inbound path for every creation entry
+  point, `top_up` and `contribute`) and decreased in `settle()` and
+  `claim_refund`, always in the same invocation as the state change.
+  `tests/liabilities.rs`: 14 tests, including a proptest that runs random
+  sequences over every state-changing entry point and checks, after each
+  step, that liabilities equal the per-token sum of `Funded` amounts and the
+  contract balance. Monitoring guidance in `docs/threat-model.md`. Existing
+  test snapshots change only by the new `Liability` storage entry. SDK:
+  `client.getSolvency(token)` and regenerated bindings (minor). Not yet
+  deployed to testnet.
+- 2026-10-27 — The SDK now publishes ESM and CommonJS builds with matching declarations and a browser-compatible ESM entry. CI smoke checks exercise Node imports and a browser bundle.
+- 2026-10-27 — Phase E6 (issue #247): added multisig releaser setup helpers to the SDK.
+  `buildMultisigSetup` returns one atomic `setOptions` transaction (thresholds,
+  one operation per signer, master key weight zeroed last) and refuses any
+  configuration that would lock the account out; `dryRunMultisigSetup` and
+  `verifyMultisig` cover review and on-chain verification. Client-side only — no
+  contract change, so the generated bindings are unchanged.
+- 2026-10-28 — Issue #55 (Phase E5): `release` now uses `try_transfer` for the payout. If the
+  token rejects the transfer (for example a SAC payee whose trustline was
+  deauthorised, or a contract payee that rejects the funds), the call returns the
+  new append-only `Error::Undeliverable = 35` and the escrow stays `Funded` with
+  its balance intact, so the releaser can retry once the payee is reachable or
+  use the refund path. Refund transfers are unchanged. Tests in
+  `contracts/escrow/tests/undeliverable.rs`; generated SDK bindings regenerated
+  for the new error code.
+- 2026-10-28 — Contract changes now use fragments in `contract-changes.d/` instead of each
+  PR bumping `CONTRACT_VERSION`, which put every open contract PR into conflict
+  on each contract merge. New `Error` variants use provisional codes
+  (issue number × 100 + n) until the maintainer fold
+  (`scripts/fold-contract-changes.mjs`) bumps the version once per batch and
+  assigns final codes. CI's "Contract changes use a fragment, not a version
+  bump" step (`scripts/check-contract-change.mjs`) replaces the old
+  "Require a contract version bump" step. The version test now compares with
+  `CONTRACT_VERSION` instead of a literal.
+- 2026-10-28 — Issue #40 (Phase E5): the stored payee can now voluntarily refund a funded escrow with `refund(escrow_id, payee)`. The payout still goes only to the stored `refund_to` (ADR 0009), and the call emits a distinct `payee_refunded` event (ADR 0010). Pooled escrows reject it through `reject_pooled`. Bindings regenerated, and the TLA+ model gained a `PayeeRefund` action.
+- 2026-10-28 — Issue #45 (Phase E5): added `transfer_payee(escrow_id, current_payee, new_payee)` — restricted to the current payee (require_auth), only while Funded; `new_payee` may not be the contract address or the payer. Rotation tool, not key-loss recovery. 12 tests in `contracts/escrow/tests/transfer_payee.rs`. New error `Error::InvalidNewPayee` (code 37). Contract surface updated in `ARCHITECTURE_ESSENTIALS.md`; threat model I1 updated and T11 added. `CONTRACT_VERSION` is left for the maintainer fold, per `contract-changes.d/README.md`.
+- 2026-10-28 — Issue #9 (Phase E4, T7): cover the contract's full-state lifecycle events on create, release, refund, and cancel, keyed by escrow_id. Error paths emit nothing. Added contract tests in `contracts/escrow/tests/events.rs`, documented the indexer-compatible payload in `ARCHITECTURE_ESSENTIALS.md § Events`, and marked T7 mitigated in `docs/threat-model.md`.
+- 2026-10-30 — Contract 2.4.0 (was 2.3.0), folded from 2 change(s):
+  - Issue #40: allow the stored payee to authorize a voluntary full refund of a funded single-payee escrow to its stored payer destination, and emit a distinct `payee_refunded` event.
+  - Issue #45 (Phase E5): new `transfer_payee(escrow_id, current_payee, new_payee)` entry point — only the current payee may authorize it, only while the escrow is `Funded`, and `new_payee` may be neither the contract address nor the payer. Emits a `pay_xfer` event and adds `Error::InvalidNewPayee` (code 37). Rotation tool, not key-loss recovery; covered by `contracts/escrow/tests/transfer_payee.rs`.
+  Final error codes: Error::InvalidNewPayee 4500 -> 37.
+- 2026-10-31 — Issue #35 (Phase E5): deposit-only emergency pause. The contract's
+  `__constructor` now also takes a `pause_admin` address; only that custodian
+  can call `pause`/`unpause`, and while paused every deposit path fails with
+  `Paused` before any funds move — including pooled `create_pooled_escrow`
+  and `contribute` (`Paused`, plus `AlreadyPaused`/`NotPaused` for the
+  transition guards — codes 38–40). `release`, `refund`, the timeout refund and pooled
+  `claim_refund` never read the flag, so a
+  pause can stop new exposure but never lock escrowed funds (invariant I8,
+  threat model T12, `docs/adr/0011`). The SDK gains `pause`/`unpause`/
+  `isPaused`/`getPauseAdmin` (minor changeset) and regenerated bindings. This
+  is a deployment change: the live testnet contract predates the constructor
+  and cannot pause until it is redeployed.
+- 2026-10-31 — Contract 2.5.0 (was 2.4.0), folded from 1 change(s):
+  - Issue #35 (Phase E5): deposit-only emergency pause (ADR 0011). The constructor gains a second argument (`pause_admin`) and the contract gains `pause`/`unpause`/`is_paused`/`get_pause_admin` entry points plus the `Paused`/`Unpaused` events and the `Paused`, `AlreadyPaused`, `NotPaused` errors (codes 38–40). Every deposit path is gated — `create_escrow` and its variants, `top_up`, and pooled `create_pooled_escrow`/`contribute` — while `release`, `refund`, the timeout refund, pooled `claim_refund` and both `settle_many` ops never read the flag, so a pause can never lock funds already escrowed.
+  Final error codes: Error::Paused 3500 -> 38, Error::AlreadyPaused 3501 -> 39, Error::NotPaused 3502 -> 40.
+- 2026-11-01 — Contract 2.5.1 (was 2.5.0), folded from 1 change(s):
+  - `create_escrows` now works for more than one item: `payer` authorizes once for the whole batch instead of once per item, which aborted with `Error(Auth, ExistingValue)`. `MAX_BATCH_SIZE` drops from 50 to 16, because 24 items already exceed Mainnet's 16,384-byte contract events limit (docs/adr/0012).
+- 2026-11-01 — `create_escrows` now works for batches of more than one item, and stays atomic.
+  `MAX_BATCH_SIZE` drops from 50 to 16 in the contract and the SDK, because 24
+  items exceed Mainnet's contract events limit. See the amended consequences in
+  `docs/adr/0012-batch-settlement-best-effort.md`.
+- 2026-11-01 — Added contract tests for the five mutants the nightly mutation run missed: the
+  `create_escrows` batch limit, a pooled `condition_ref` of exactly 64 bytes, no
+  fee transfer when the fee is zero, and `settle_many` at exactly `release_time`.
+  Tests only, so no contract change.
+- 2026-11-01 — Restored the SDK's batch helpers (`createEscrows`, `settleMany`,
+  `BatchPartialFailureError`, `MAX_BATCH_SIZE` and the related types), which #248
+  removed by accident when it merged from a stale branch, and put
+  `tests/batch.test.ts` back in `test:offline` so CI catches this if it happens
+  again. No contract change, so the generated bindings are unchanged.
+- 2026-11-01 — Nightly soak: failures are now classified correctly. The old check matched bare
+  words such as "network", which `tests/network-presets.test.ts` always printed,
+  so every failure was reported as `INFRASTRUCTURE_FAILURE`. Added a
+  `DEPLOYMENT_OUTDATED` result for a contract whose function arguments no longer
+  match the SDK. The live suite now reads its contract id from `deployments.json`
+  through `knownContractId("testnet")`, or from `TESTNET_CONTRACT_ID`.
+- 2026-11-03 — Redeployed contract 2.5.1 to testnet as
+  `CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E` with `scripts/deploy`
+  (source `52a6a39`), so the deployment now matches the SDK's `create_escrow` and
+  has the emergency pause. All six scripted live checks passed; `pause_admin` is
+  `GDJBRSDH4OARYUYDUDUXYTELZQMIJVZBLL4H2CDQFOHMNKNGE4ILUM7T`. The SDK testnet
+  preset, README and `fees.test.ts` now use the new id. Exercising
+  `pause`/`unpause` live, including a release while paused, is still open under
+  Phase E5. docforum-core stays on its own older contract and SDK 0.2.0 for now.
+- 2026-11-04 — Issue #103 (Phase E4): added `tests/reentry_intermediate.rs`, which proves re-entry through an intermediate contract fails closed for `release`, `refund` and `create_escrow`, including against a different escrow id. No contract change. The threat model's T4 section now records the result, replacing a coverage claim that had no test behind it.
+- 2026-11-04 — Issue #52 (Phase E5): the SDK can now read the contract's version on first use and check it against `>=2.0.0 <3.0.0`, the range that has the `create_escrow` arguments it sends. Older deployments with no `version()` are reported as `null` and handled without an opaque error. `docs/testnet-deployments.md` now records each deployment's version.
+- 2026-11-05 — Raised the time limit for `sdk/tests/testnet-integration.test.ts` from 60 to 120 seconds, because the longest live tests were timing out on a slow testnet and failing the nightly soak. Other SDK tests keep their 60-second limit.
+- 2026-11-11 — Fixed the weekly Futurenet compatibility check, which had failed since the contract gained a constructor: its deploy step now passes `allowed_tokens` (empty, so any token is allowed) and `pause_admin` (the run's own funded identity).

@@ -22,7 +22,10 @@ fn fixture() -> Fixture<'static> {
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
     asset.mint(&payer, &10_000);
-    let contract = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    // The constructor also takes the immutable pause admin (docs/adr/0011);
+    // the profile never pauses, so any address will do.
+    let pause_admin = Address::generate(&env);
+    let contract = env.register(EscrowContract, (Vec::<Address>::new(&env), pause_admin));
     let client = EscrowContractClient::new(&env, &contract);
     Fixture {
         env,
@@ -45,6 +48,8 @@ impl Fixture<'_> {
             &self.releaser,
             &None,
             &false,
+            &None,
+            &None,
             &None,
         )
     }
@@ -79,6 +84,8 @@ fn main() {
             &false,
             &None,
             &Some(1_000),
+            &None,
+            &None,
         );
     });
 
