@@ -22,6 +22,32 @@ machine-readable `/deployments.json`. Older records were written by hand.
 Every older record has no `version()` function, which is how the SDK identifies
 it (`getContractVersion()` returns `null`).
 
+## Operator CLI
+
+The SDK package installs the `docforum-escrow` command. From this repository,
+run `npm ci && npm link` in `sdk/` to use it locally. The current deployment
+is testnet only; the CLI defaults to the Stellar testnet RPC and passphrase.
+Create a signer file with restrictive permissions (`chmod 600`) or set
+`DOCFORUM_SECRET_KEY`; the CLI also accepts `--signer-env NAME` to select a
+different environment variable. Without either source it prompts with hidden
+input. Do not put secret keys in argv.
+
+```bash
+docforum-escrow create --contract-id CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E \
+  --payee G... --token CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC \
+  --amount 1000000 --condition-ref order-123 --releaser G... --json
+docforum-escrow status --contract-id CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E --escrow-id 0 --json
+docforum-escrow show --contract-id CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E --escrow-id 0 --json
+docforum-escrow release --contract-id CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E --escrow-id 0 --yes
+docforum-escrow refund --contract-id CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E --escrow-id 0 --dry-run --json
+docforum-escrow list --contract-id CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E --from-events --start-ledger 1 --json
+```
+
+`--dry-run` performs Soroban simulation and skips submission. Mutating commands
+require interactive confirmation; use `--yes` for automated submitters.
+Mainnet passphrases are rejected unless `--allow-mainnet` is passed explicitly.
+`list --from-events` returns contract events in the selected ledger range.
+
 <!-- scripts/deploy inserts new records below this line -->
 
 ## `docforum_escrow` — 2026-11-03 (`52a6a39`, recorded by `scripts/deploy`)

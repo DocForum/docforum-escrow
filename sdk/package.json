@@ -26,7 +26,7 @@
   ],
   "scripts": {
     "prepare": "npm run build",
-    "build": "npm run build:esm && npm run build:cjs",
+    "build": "npm run build:esm && npm run build:cjs && tsc -p tsconfig.cli.json",
     "test": "vitest run",
     "test:integration": "vitest run",
     "test:fixtures": "vitest run tests/events.test.ts",
@@ -67,11 +67,15 @@
     "esbuild": "^0.28.2",
     "typescript": "^5.6.2",
     "vite": "^8.3.4",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "@types/node": "^26.6.5"
   },
   "engines": {
     "node": ">=22"
   },
   "module": "dist/esm/index.js",
-  "browser": "dist/esm/index.js"
+  "browser": "dist/esm/index.js",
+  "bin": {
+    "docforum-escrow": "dist/esm/cli.js"
+  }
 }
