@@ -1,5 +1,6 @@
 import { CONTRACT_ERROR_NAMES } from "./contract-errors.generated.js";
 
+/** Base class for every error the SDK throws from a contract call. */
 export class EscrowError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
@@ -7,6 +8,7 @@ export class EscrowError extends Error {
   }
 }
 
+/** The contract returned `Error(Contract, #code)`; `code` is the contract's error number. */
 export class ContractError extends EscrowError {
   readonly code: number;
 
@@ -36,23 +38,38 @@ function codeFor(name: ContractErrorName): number {
   return Number(match[0]);
 }
 
+/** No escrow exists with the given id (contract code 1). */
 export const NotFoundError = contractErrorClass("NotFound", codeFor("NotFound"));
+/** Instance type of {@link NotFoundError}. */
 export type NotFoundError = InstanceType<typeof NotFoundError>;
 // Named *Contract*Error: `InvalidAmountError` is already the SDK's client-side
 // amount-parsing error (amounts.ts).
+/** The contract rejected the amount (contract code 2). */
 export const InvalidAmountContractError = contractErrorClass("InvalidAmount", codeFor("InvalidAmount"));
+/** Instance type of {@link InvalidAmountContractError}. */
 export type InvalidAmountContractError = InstanceType<typeof InvalidAmountContractError>;
+/** The caller isn't allowed to perform this action (contract code 3). */
 export const UnauthorizedError = contractErrorClass("Unauthorized", codeFor("Unauthorized"));
+/** Instance type of {@link UnauthorizedError}. */
 export type UnauthorizedError = InstanceType<typeof UnauthorizedError>;
+/** The escrow isn't in the `Funded` state (contract code 4). */
 export const NotFundedError = contractErrorClass("NotFunded", codeFor("NotFunded"));
+/** Instance type of {@link NotFundedError}. */
 export type NotFundedError = InstanceType<typeof NotFundedError>;
+/** `refund_after` isn't in the future (contract code 5). */
 export const InvalidRefundAfterError = contractErrorClass("InvalidRefundAfter", codeFor("InvalidRefundAfter"));
+/** Instance type of {@link InvalidRefundAfterError}. */
 export type InvalidRefundAfterError = InstanceType<typeof InvalidRefundAfterError>;
+/** The token transfer didn't move the expected amount (contract code 6). */
 export const BalanceMismatchError = contractErrorClass("BalanceMismatch", codeFor("BalanceMismatch"));
+/** Instance type of {@link BalanceMismatchError}. */
 export type BalanceMismatchError = InstanceType<typeof BalanceMismatchError>;
 
+/** Simulating the transaction failed for a reason other than a contract error. */
 export class SimulationFailure extends EscrowError {}
+/** Submitting the signed transaction failed. */
 export class SubmissionFailure extends EscrowError {}
+/** The RPC request timed out. */
 export class RequestTimeoutError extends EscrowError {}
 /** Thrown when the RPC's reported network passphrase does not match the configured one. */
 export class NetworkMismatchError extends EscrowError {
@@ -108,6 +125,7 @@ export function toEscrowError(error: unknown, stage: "simulation" | "submission"
   return stage === "submission" ? new SubmissionFailure(message, cause) : new SimulationFailure(message, cause);
 }
 
+/** The contract's name for an error `code`, e.g. `NotFound` for 1, or `undefined`. */
 export function contractErrorName(code: number): ContractErrorName | undefined {
   return (CONTRACT_ERROR_NAMES as Record<number, ContractErrorName | undefined>)[code];
 }
