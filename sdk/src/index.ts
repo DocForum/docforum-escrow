@@ -13,6 +13,7 @@ import {
   FeeBumpTransaction,
   Keypair,
   Operation,
+  Networks,
   Transaction,
   TransactionBuilder,
   scValToNative,
@@ -80,6 +81,36 @@ export {
   type DeploymentsDocument,
 } from "./deployments.js";
 export type { FactoryClientConfig, DeployInstanceParams, DeployInstanceResult, FactoryInstance } from "./factory.js";
+
+// Multisig releaser account helpers (T1 mitigation). Client-side only: they
+// build classic `setOptions` transactions for the releaser account itself and
+// never touch the escrow contract.
+export {
+  buildMultisigSetup,
+  dryRunMultisigSetup,
+  printMultisigDryRun,
+  readOnChainMultisig,
+  resolveMultisigPolicy,
+  validateMultisigPolicy,
+  verifyMultisig,
+  MultisigLockOutError,
+  MultisigValidationError,
+  MAX_WEIGHT,
+  MIN_WEIGHT,
+  TESTNET_PASSPHRASE,
+} from "./multisig.js";
+export type {
+  BuildMultisigSetupOptions,
+  HorizonServerLike,
+  MultisigDryRun,
+  MultisigOnState,
+  MultisigPolicy,
+  MultisigSetupResult,
+  MultisigSigner,
+  MultisigVerificationResult,
+  ResolvedMultisigPolicy,
+  VerifyMultisigOptions,
+} from "./multisig.js";
 
 /**
  * The lifecycle state of an escrow, as returned by {@link EscrowClient.getStatus}
@@ -225,6 +256,19 @@ export interface Escrow {
   refundAfter?: bigint;
   /** Earliest ledger timestamp at which release is allowed. Omit for immediate release. */
   releaseNotBefore?: bigint;
+  /**
+   * Optional protocol-fee recipient, fixed at creation (docs/adr/0010).
+   * Set together with `feeBps`; at release `feeBps` basis points of the
+   * escrowed amount go here and the remainder to the payee. Refunds never
+   * take a fee. `undefined` means no fee.
+   */
+  feeRecipient?: string;
+  /**
+   * Optional protocol-fee rate in basis points of the escrowed amount,
+   * capped at 1 000 (10 %) and floored at release (docs/adr/0010). Must be
+   * set together with `feeRecipient`.
+   */
+  feeBps?: number;
   /** Whether to call the contract payee's on_escrow_released hook. Defaults to false. */
   notifyPayee: boolean;
   /**
@@ -263,6 +307,15 @@ export class MilestoneScheduleError extends Error {
     this.reason = reason;
   }
 }
+
+/**
+ * Maximum protocol-fee rate in basis points of the escrowed amount — must
+ * match the contract's `MAX_FEE_BPS` (1 000 = 10 %, see docs/adr/0010).
+ * Validated client-side so callers fail fast instead of paying network
+ * fees for a rejected transaction. Keep in sync with the contract; a
+ * change is an SDK semver event (hard rule 3).
+ */
+export const MAX_FEE_BPS = 1_000;
 
 /**
  * `amount` must be positive, the schedule non-empty, every tranche positive,
@@ -342,6 +395,131 @@ const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
 const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
 
 /**
+ * Named network presets (Phase E6). Each preset bundles the RPC URL, the
+ * network passphrase and the known contract ids for that network. Hard rule
+ * 4: testnet only until the security review — mainnet is deliberately not a
+ * preset, and constructing a client against the mainnet passphrase throws
+ * unless the caller passes `allowMainnet: true`.
+ */
+export interface NetworkPreset {
+  /** Human-readable network name. */
+  name: string;
+  /** Soroban RPC endpoint for this network. */
+  rpcUrl: string;
+  /** Stellar network passphrase. */
+  networkPassphrase: string;
+  /** Known docforum-escrow contract ids deployed on this network. */
+  contractIds: Record<string, string>;
+  /** Plain-HTTP RPC is allowed (local quickstart only). Defaults to `false`. */
+  allowHttp?: boolean;
+}
+
+/** The Stellar mainnet passphrase — never a default, only an explicit opt-in. */
+export const MAINNET_NETWORK_PASSPHRASE = Networks.PUBLIC;
+
+/** Built-in network presets (RPC URL, passphrase and known contract ids) keyed by name. */
+export const networks = {
+  /** Soroban testnet — the only network wired into defaults (hard rule 4). */
+  testnet: {
+    name: "testnet",
+    rpcUrl: TESTNET_RPC_URL,
+    networkPassphrase: TESTNET_NETWORK_PASSPHRASE,
+    // Current upstream deployment (docs/testnet-deployments.md) and the
+    // testnet native XLM Stellar Asset Contract on its token allowlist.
+    contractIds: {
+      escrow: "CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E",
+      nativeXlm: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+    },
+  } as NetworkPreset,
+  /** Stellar futurenet — an experimental testnet, still not mainnet. */
+  futurenet: {
+    name: "futurenet",
+    rpcUrl: "https://rpc-futurenet.stellar.org",
+    networkPassphrase: Networks.FUTURENET,
+    contractIds: {},
+  } as NetworkPreset,
+  /** A local quickstart node (private network). */
+  local: {
+    name: "local",
+    rpcUrl: "http://localhost:8000/soroban/rpc",
+    networkPassphrase: "Standalone Network ; February 2017",
+    contractIds: {},
+    allowHttp: true,
+  } as NetworkPreset,
+} as const;
+
+/** Thrown when a client is configured for mainnet without the explicit opt-in. */
+export class MainnetNotAllowedError extends Error {
+  readonly name = "MainnetNotAllowedError";
+  constructor() {
+    super(
+      "Refusing to construct a client against the Stellar mainnet passphrase. " +
+        "Hard rule 4 keeps mainnet out of defaults until the security review; " +
+        "pass allowMainnet: true to opt in deliberately.",
+    );
+  }
+}
+
+/** Thrown when the RPC's reported network passphrase does not match the configured one. */
+export class NetworkMismatchError extends Error {
+  readonly name = "NetworkMismatchError";
+  readonly expected: string;
+  readonly actual: string;
+  constructor(expected: string, actual: string) {
+    super(`RPC network passphrase mismatch: expected "${expected}", got "${actual}".`);
+    this.expected = expected;
+    this.actual = actual;
+  }
+}
+
+/**
+ * Contract versions this SDK can talk to, as reported by the contract's
+ * `version()`: at least `minInclusive` and below `maxExclusive`. 2.0.0 is the
+ * first version whose `create_escrow` takes the fee arguments this SDK sends.
+ */
+export const SUPPORTED_CONTRACT_VERSIONS = { minInclusive: "2.0.0", maxExclusive: "3.0.0" } as const;
+
+function parseContractVersion(version: string): [number, number, number] | null {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+}
+
+function compareContractVersions(a: [number, number, number], b: [number, number, number]): number {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
+
+/** Whether a contract `version()` value is within `SUPPORTED_CONTRACT_VERSIONS`. */
+export function isSupportedContractVersion(version: string): boolean {
+  const parsed = parseContractVersion(version);
+  if (!parsed) return false;
+  const min = parseContractVersion(SUPPORTED_CONTRACT_VERSIONS.minInclusive)!;
+  const max = parseContractVersion(SUPPORTED_CONTRACT_VERSIONS.maxExclusive)!;
+  return compareContractVersions(parsed, min) >= 0 && compareContractVersions(parsed, max) < 0;
+}
+
+/**
+ * Thrown when a contract's version is outside `SUPPORTED_CONTRACT_VERSIONS`.
+ * `version` is `null` for an older deployment with no `version()` function.
+ */
+export class UnsupportedContractVersionError extends Error {
+  readonly name = "UnsupportedContractVersionError";
+  readonly contractId: string;
+  readonly version: string | null;
+  constructor(contractId: string, version: string | null) {
+    const { minInclusive, maxExclusive } = SUPPORTED_CONTRACT_VERSIONS;
+    super(
+      `Contract ${contractId} ${version === null ? "has no version() function" : `is version ${version}`}; ` +
+        `this SDK supports >=${minInclusive} <${maxExclusive}.`,
+    );
+    this.contractId = contractId;
+    this.version = version;
+  }
+}
+
+/** The host's report that a deployment has no such function: not a transient failure. */
+const MISSING_FUNCTION_ERROR = /non-?existent contract function|Error\(WasmVm, MissingValue\)/i;
+
+/**
  * Maximum allowed length of `conditionRef` in bytes — must match the
  * contract's bound (currently 64 bytes, see contracts/escrow/src/lib.rs
  * and docs/threat-model.md T10). Validated client-side so callers fail
@@ -360,6 +538,84 @@ export const MAX_CONDITION_REF_LENGTH = 64;
  * semver event (hard rule 3).
  */
 export const MAX_RELEASERS = 10;
+
+/**
+ * Maximum number of items in one batched call — must match the contract's
+ * `MAX_BATCH_SIZE` (currently 16, see docs/adr/0012). `createEscrows` and
+ * `settleMany` chunk larger inputs automatically. Keep in sync with the
+ * contract; a change is an SDK semver event (hard rule 3).
+ */
+export const MAX_BATCH_SIZE = 16;
+
+/** One escrow to create in a batched `createEscrows` call. */
+export interface BatchCreateItem extends CreateEscrowParams {}
+
+/** One operation in a batched `settleMany` call. */
+export interface BatchSettleOperation {
+  escrowId: bigint;
+  /** `release` pays the escrow's payee; `refund` returns the funds to `refundTo`. */
+  kind: "release" | "refund";
+  /** Must be the escrow's `releaser` (docs/adr/0002). */
+  caller: EscrowSigner;
+}
+
+/** Outcome of one batched item; `index` is always the input's position. */
+export interface BatchItemResult<T> {
+  /** Index into the caller-supplied input array. */
+  index: number;
+  /** The original input this result corresponds to. */
+  item: T;
+  ok: boolean;
+  /** Set when `ok`: the transaction hash that carried the operation. */
+  txHash?: string;
+  /** Set when `ok` and the operation created an escrow. */
+  escrowId?: bigint;
+  /** Set when the operation failed: the reason the call threw. */
+  error?: string;
+  /** True when the item was carried over from `resumeFrom` instead of re-sent. */
+  skipped?: boolean;
+}
+
+/** Options for the chunked batch helpers (`createEscrows`, `settleMany`). */
+export interface BatchOptions<T> {
+  /**
+   * Operations attempted per chunk. Defaults to `MAX_BATCH_SIZE` and is
+   * clamped to it, because the contract rejects anything larger.
+   */
+  chunkSize?: number;
+  /**
+   * Results from a previous partial run. Items that already succeeded are
+   * carried over (with `skipped: true`) instead of being sent again, so a
+   * retry after `BatchPartialFailureError` never double-creates or
+   * double-settles anything.
+   */
+  resumeFrom?: BatchItemResult<T>[];
+}
+
+/**
+ * Thrown by `createEscrows`/`settleMany` when at least one item failed.
+ * `results` covers the whole input in order, so items that were already
+ * committed (or settled) before the failure are visible and retryable
+ * through `resumeFrom`.
+ */
+export class BatchPartialFailureError<T> extends Error {
+  readonly name = "BatchPartialFailureError";
+  readonly results: BatchItemResult<T>[];
+  readonly failedIndices: number[];
+
+  constructor(results: BatchItemResult<T>[]) {
+    const failedIndices = results.filter((result) => !result.ok).map((result) => result.index);
+    super(
+      `batch failed for ${failedIndices.length} of ${results.length} item(s) at index ${failedIndices.join(", ")}`,
+    );
+    this.results = results;
+    this.failedIndices = failedIndices;
+  }
+}
+
+function batchErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /** Shared placeholder used on the uninstrumented path (no per-call allocation). */
 const EMPTY_SPAN_ATTRIBUTES = {} as EscrowSpanAttributes;
@@ -382,6 +638,56 @@ export interface EscrowClientConfig {
   /** Use the restore signer to authorize calls that automatically restore archived entries. */
   archivalBehavior?: ArchivedEntryBehavior;
   restoreSigner?: Keypair;
+  /**
+   * Named network preset (Phase E6). Supplies `rpcUrl` and `networkPassphrase`
+   * defaults; explicit `rpcUrl`/`networkPassphrase` still win. Custom networks
+   * (e.g. a private quickstart) can be configured without a preset.
+   */
+  network?: NetworkPreset;
+  /**
+   * Explicit opt-in required to construct a client against the Stellar
+   * mainnet passphrase (hard rule 4). Defaults to `false`.
+   */
+  allowMainnet?: boolean;
+  /**
+   * Allow a plain-HTTP `rpcUrl` (e.g. a private quickstart node). Defaults to
+   * the preset's `allowHttp` (only `networks.local` sets it), else `false`.
+   */
+  allowHttp?: boolean;
+  /**
+   * Verify the RPC's reported network passphrase against the configured one,
+   * lazily and once, before the client's first network call, and throw
+   * `NetworkMismatchError` on a mismatch. Never runs during construction.
+   *
+   * - `true`: always verify. An RPC that cannot report its network (no
+   *   `getNetwork`) is an error, since verification was explicitly asked for.
+   *   Recommended with a custom `rpcUrl`, so it cannot silently point the
+   *   client at a different network (including mainnet) than its passphrase.
+   * - `false`: never verify automatically (`verifyNetwork()` still works on
+   *   demand).
+   * - unset (default): verify only when a `network` preset is selected, and
+   *   skip the check if the RPC has no `getNetwork` (e.g. an offline test
+   *   double).
+   *
+   * The result is cached: one `getNetwork` round trip per client, not per
+   * call. A failed check is not cached, so a transient RPC error is retryable.
+   */
+  verifyNetwork?: boolean;
+  /**
+   * Controls the contract-version check before the first network call:
+   *
+   * - `true`: check on first use. An unsupported version, an older deployment
+   *   with no `version()`, or a failed lookup rejects the call.
+   * - `false`: never check automatically (`verifyContractVersion()` still works
+   *   on demand).
+   * - unset (default): check only when a `network` preset is selected. Only a
+   *   version known to be unsupported rejects the call. An older deployment or
+   *   a failed lookup doesn't, so existing read paths keep working.
+   *
+   * A successful check is cached for the client. A failed lookup is not, so a
+   * transient RPC error is retryable.
+   */
+  verifyContractVersion?: boolean;
 }
 
 /** Parameters for {@link EscrowClient.createEscrow} — a single-releaser escrow. */
@@ -423,6 +729,15 @@ export interface CreateEscrowParams {
   refundTo?: string;
   /** Earliest ledger timestamp at which release is allowed; omit for immediate release. */
   releaseNotBefore?: bigint;
+  /**
+   * Optional protocol fee, fixed at creation and taken at release
+   * (docs/adr/0010). `feeRecipient` and `feeBps` are one atomic pair: give
+   * both or neither, and `feeBps` may not exceed 1 000 (10 %). Omit both
+   * for no fee — the payee then receives the full amount, as before.
+   */
+  feeRecipient?: string;
+  /** Fee rate in basis points of the escrowed amount; see `feeRecipient`. */
+  feeBps?: number;
   /**
    * Require the payee to `accept` before release (issue #25). Until they
    * do, the payer may `cancel`. Cannot be combined with `notifyPayee` or
@@ -605,6 +920,19 @@ export interface ClaimRefundParams {
 export interface PooledEscrow {
   fundingTarget: bigint;
   fundingDeadline: bigint;
+}
+
+/**
+ * Per-token solvency reading (`getSolvency`, issue #39). `liabilities` is
+ * the on-chain sum of `amount` over every `Funded` escrow in that token.
+ */
+export interface SolvencyReport {
+  /** The escrow contract's current balance of the token. */
+  balance: bigint;
+  /** Total the contract owes in that token across all `Funded` escrows. */
+  liabilities: bigint;
+  /** `balance >= liabilities`. */
+  solvent: boolean;
 }
 
 /** One contributor's record on a pooled escrow (`getContribution`). */
@@ -837,12 +1165,46 @@ export class EscrowClient {
   private readonly instrumentation?: InstrumentationOptions;
   private readonly archivalBehavior: ArchivedEntryBehavior;
   private readonly restoreSigner?: Keypair;
+  private readonly allowMainnet: boolean;
+  private readonly allowHttp: boolean;
+  /** "required": explicit opt-in; "auto": preset selected; "off": no automatic check. */
+  private readonly networkVerification: "required" | "auto" | "off";
+  /** Cached result of the network passphrase verification. */
+  private networkVerified?: Promise<void>;
+  /** "required": explicit opt-in; "auto": preset selected; "off": no automatic check. */
+  private readonly contractVersionCheck: "required" | "auto" | "off";
+  /** Cached `version()` result; `null` means the deployment has no `version()`. */
+  private contractVersion?: Promise<string | null>;
+  private contractVersionChecked = false;
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
-    this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
-    this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
-    this.rpc = new RpcServer(this.rpcUrl);
+    this.rpcUrl = config.rpcUrl ?? config.network?.rpcUrl ?? TESTNET_RPC_URL;
+    this.networkPassphrase =
+      config.networkPassphrase ?? config.network?.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
+    this.allowMainnet = config.allowMainnet === true;
+    if (this.networkPassphrase === MAINNET_NETWORK_PASSPHRASE && !this.allowMainnet) {
+      throw new MainnetNotAllowedError();
+    }
+    // No network I/O here: verification is lazy (see ensureNetworkVerified).
+    this.networkVerification =
+      config.verifyNetwork === true
+        ? "required"
+        : config.verifyNetwork === false
+          ? "off"
+          : config.network
+            ? "auto"
+            : "off";
+    this.contractVersionCheck =
+      config.verifyContractVersion === true
+        ? "required"
+        : config.verifyContractVersion === false
+          ? "off"
+          : config.network
+            ? "auto"
+            : "off";
+    this.allowHttp = config.allowHttp ?? config.network?.allowHttp ?? false;
+    this.rpc = new RpcServer(this.rpcUrl, { allowHttp: this.allowHttp });
     this.instrumentation = config.onEvent
       ? { ...config.instrumentation, onEvent: config.onEvent }
       : config.instrumentation;
@@ -870,12 +1232,120 @@ export class EscrowClient {
     });
   }
 
+  /**
+   * Verifies once (and caches) that the RPC's reported network passphrase
+   * matches the configured one. A mismatch throws `NetworkMismatchError` so a
+   * custom `rpcUrl` cannot silently point a client at another network. Calling
+   * this is an explicit request, so an RPC without `getNetwork` is an error. A
+   * rejection is not cached, so a transient RPC failure is retryable.
+   */
+  verifyNetwork(): Promise<void> {
+    return this.runNetworkVerification(true);
+  }
+
+  private runNetworkVerification(required: boolean): Promise<void> {
+    if (!this.networkVerified) {
+      const rpc = this.rpc as Partial<Pick<RpcServer, "getNetwork">>;
+      if (typeof rpc.getNetwork !== "function") {
+        // Not cached: a later explicit request must still fail loudly.
+        return required
+          ? Promise.reject(
+              new Error("Cannot verify the network: the RPC client does not implement getNetwork()."),
+            )
+          : Promise.resolve();
+      }
+      const getNetwork = rpc.getNetwork.bind(rpc);
+      this.networkVerified = (async () => {
+        const rpcNetwork = await getNetwork();
+        if (rpcNetwork.passphrase !== this.networkPassphrase) {
+          throw new NetworkMismatchError(this.networkPassphrase, rpcNetwork.passphrase);
+        }
+      })();
+      this.networkVerified.catch(() => {
+        this.networkVerified = undefined;
+      });
+    }
+    return this.networkVerified;
+  }
+
+  /**
+   * Gate on every network call path: lazily verifies the RPC's passphrase once
+   * (see `verifyNetwork()`), then reuses the cached result. A no-op unless a
+   * `network` preset was selected or `verifyNetwork: true` was passed; with a
+   * preset only, an RPC without `getNetwork` is skipped rather than failing.
+   */
+  private async ensureNetworkVerified(): Promise<void> {
+    await this.ensureNetworkPassphrase();
+    await this.ensureContractVersionChecked();
+  }
+
+  private async ensureNetworkPassphrase(): Promise<void> {
+    if (this.networkVerification === "off") return;
+    await this.runNetworkVerification(this.networkVerification === "required");
+  }
+
+  /**
+   * Reads the contract's semantic version once and caches it. Resolves to `null`
+   * for an older deployment with no `version()` function. A failed lookup
+   * rejects and isn't cached, so a transient RPC failure is retryable.
+   */
+  getContractVersion(): Promise<string | null> {
+    if (!this.contractVersion) {
+      this.contractVersion = (async () => {
+        await this.ensureNetworkPassphrase();
+        try {
+          const tx = await this.contractClient().version();
+          return tx.result;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (MISSING_FUNCTION_ERROR.test(message)) return null;
+          throw error;
+        }
+      })();
+      this.contractVersion.catch(() => {
+        this.contractVersion = undefined;
+      });
+    }
+    return this.contractVersion;
+  }
+
+  /**
+   * Checks the contract against `SUPPORTED_CONTRACT_VERSIONS`. Calling this is
+   * an explicit request, so an older deployment with no `version()` is rejected
+   * with `UnsupportedContractVersionError`, like any unsupported version.
+   */
+  async verifyContractVersion(): Promise<void> {
+    const version = await this.getContractVersion();
+    if (version === null || !isSupportedContractVersion(version)) {
+      throw new UnsupportedContractVersionError(this.contractId, version);
+    }
+  }
+
+  private async ensureContractVersionChecked(): Promise<void> {
+    if (this.contractVersionCheck === "off" || this.contractVersionChecked) return;
+    if (this.contractVersionCheck === "required") {
+      await this.verifyContractVersion();
+    } else {
+      let version: string | null;
+      try {
+        version = await this.getContractVersion();
+      } catch {
+        return; // A failed lookup says nothing about the version; retry next call.
+      }
+      if (version !== null && !isSupportedContractVersion(version)) {
+        throw new UnsupportedContractVersionError(this.contractId, version);
+      }
+    }
+    this.contractVersionChecked = true;
+  }
+
   private contractClient(signer?: EscrowSigner): EscrowContractClient {
     const effectiveSigner = signer ?? (this.archivalBehavior === "auto" ? this.restoreSigner : undefined);
     return new EscrowContractClient({
       contractId: this.contractId,
       rpcUrl: this.rpcUrl,
       networkPassphrase: this.networkPassphrase,
+      allowHttp: this.allowHttp,
       ...(effectiveSigner
         ? { publicKey: signerAddress(effectiveSigner), signTransaction: effectiveSigner }
         : {}),
@@ -911,6 +1381,7 @@ export class EscrowClient {
     build: () => Promise<AssembledTransaction<T>>,
     hooks: { beforeSign?: (tx: AssembledTransaction<T>) => Promise<void>; address?: string } = {},
   ): Promise<SentTransaction<T>> {
+    await this.ensureNetworkVerified();
     const attributes = this.spanAttributesIfEnabled(method, escrowId, hooks.address);
     const tx = await tracePhase(this.instrumentation, "simulate", attributes, build);
     if (tx.isReadCall) {
@@ -969,6 +1440,12 @@ export class EscrowClient {
         `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
       );
     }
+    if ((params.feeRecipient === undefined) !== (params.feeBps === undefined)) {
+      throw new TypeError("feeRecipient and feeBps must be given together, or both omitted");
+    }
+    if (params.feeBps !== undefined && (!Number.isInteger(params.feeBps) || params.feeBps < 0 || params.feeBps > MAX_FEE_BPS)) {
+      throw new RangeError(`feeBps must be an integer between 0 and ${MAX_FEE_BPS} (10 %)`);
+    }
     const client = this.contractClient(params.payer);
     const createParams = {
       payer: signerAddress(params.payer),
@@ -980,6 +1457,8 @@ export class EscrowClient {
       refund_after: params.refundAfter,
       notify_payee: params.notifyPayee ?? false,
       refund_to: params.refundTo,
+      fee_recipient: params.feeRecipient,
+      fee_bps: params.feeBps,
     };
     if (params.requiresAcceptance && (params.notifyPayee || params.releaseNotBefore !== undefined)) {
       throw new Error("requiresAcceptance cannot be combined with notifyPayee or releaseNotBefore.");
@@ -1017,6 +1496,7 @@ export class EscrowClient {
    * assuming 7.
    */
   async getTokenInfo(token: string): Promise<TokenInfo> {
+    await this.ensureNetworkVerified();
     return readTokenInfo(
       token,
       rpcTokenInfoSource({ rpcUrl: this.rpcUrl, networkPassphrase: this.networkPassphrase }),
@@ -1025,6 +1505,7 @@ export class EscrowClient {
 
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
   async getStatus(escrowId: bigint): Promise<EscrowStatus> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient();
     const tx = await tracePhase(
       this.instrumentation,
@@ -1097,6 +1578,7 @@ export class EscrowClient {
    * T8). Throws if `escrowId` doesn't exist.
    */
   async getEscrow(escrowId: bigint): Promise<Escrow> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient();
     const tx = await tracePhase(
       this.instrumentation,
@@ -1137,6 +1619,8 @@ export class EscrowClient {
       notifyPayee: data.notify_payee,
       refundTo: data.refund_to,
       releaseNotBefore: data.release_not_before ?? undefined,
+      feeRecipient: data.fee_recipient ?? undefined,
+      feeBps: data.fee_bps ?? undefined,
       requiresAcceptance: data.requires_acceptance,
       acceptedAt: data.accepted_at ?? undefined,
       status: data.status.tag,
@@ -1258,6 +1742,7 @@ export class EscrowClient {
    * transaction's hash.
    */
   async cancel(params: CancelParams): Promise<{ txHash: string }> {
+    await this.ensureNetworkVerified();
     const payer = signerAddress(params.payer);
     const call: LifecycleCall = { method: "cancel", escrowId: params.escrowId, payer };
     if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
@@ -1325,6 +1810,7 @@ export class EscrowClient {
   async prepareLifecycleCall(params: PrepareLifecycleParams): Promise<PreparedLifecycleCall> {
     const { call } = params;
     if (call.method === "top_up") assertPositiveAmount(call);
+    await this.ensureNetworkVerified();
     if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
     const source = params.source ?? lifecycleCallSigner(call);
     const client = this.contractClientForAddress(source);
@@ -1391,6 +1877,7 @@ export class EscrowClient {
     if (signerAddress(source) !== prepared.source) {
       throw new Error(`Prepared call must be submitted by its source ${prepared.source}.`);
     }
+    await this.ensureNetworkVerified();
     const client = this.contractClient(source);
     const tx = client.txFromJSON<Result<void>>(prepared.transaction);
     const missing = tx.needsNonInvokerSigningBy();
@@ -1408,6 +1895,7 @@ export class EscrowClient {
       contractId: this.contractId,
       rpcUrl: this.rpcUrl,
       networkPassphrase: this.networkPassphrase,
+      allowHttp: this.allowHttp,
       publicKey: address,
     });
   }
@@ -1556,6 +2044,7 @@ export class EscrowClient {
    * `NotPooled` (error 26) on a non-pooled or unknown id.
    */
   async getPooled(escrowId: bigint): Promise<PooledEscrow> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient();
     const tx = await tracePhase(
       this.instrumentation,
@@ -1580,6 +2069,7 @@ export class EscrowClient {
     escrowId: bigint,
     contributor: string
   ): Promise<ContributionRecord | undefined> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient();
     const tx = await tracePhase(
       this.instrumentation,
@@ -1590,6 +2080,26 @@ export class EscrowClient {
     const record: GeneratedContribution | undefined = tx.result.unwrap();
     if (record == null) return undefined;
     return { amount: record.amount, refunded: record.refunded };
+  }
+
+  /**
+   * Read-only solvency check for one token (issue #39): the contract's
+   * balance of `token` and its total outstanding liability in it (the sum
+   * of `amount` over every `Funded` escrow, maintained on-chain in the
+   * same invocation as each state change). `solvent` is false only when
+   * the contract holds less than it owes, e.g. after an issuer clawback
+   * (threat model T5). A token never used reports zero liabilities.
+   */
+  async getSolvency(token: string): Promise<SolvencyReport> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("solvency"),
+      () => client.solvency({ token }),
+    );
+    const [balance, liabilities] = tx.result;
+    return { balance, liabilities, solvent: balance >= liabilities };
   }
 
   /**
@@ -1609,6 +2119,183 @@ export class EscrowClient {
     );
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Blocks **new deposits** — `createEscrow`, its variants and any future
+   * deposit path — until `unpause` is called (docs/adr/0011). Only the
+   * custodian fixed at deployment may call it, and it must sign.
+   *
+   * Deliberately cannot touch money already escrowed: `release`,
+   * `refund` and the timeout refund never read the flag, so a pause can
+   * stop new exposure but never lock existing funds. Returns the
+   * transaction's hash.
+   */
+  async pause(caller: EscrowSigner): Promise<{ txHash: string }> {
+    const client = this.contractClient(caller);
+    const sent = await this.invoke(
+      "pause",
+      undefined,
+      () => client.pause({ caller: signerAddress(caller) }),
+      { address: signerAddress(caller) },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Re-opens new deposits after a pause (docs/adr/0011). Same authority as
+   * `pause` — only the deploy-time custodian, which must sign. Returns the
+   * transaction's hash.
+   */
+  async unpause(caller: EscrowSigner): Promise<{ txHash: string }> {
+    const client = this.contractClient(caller);
+    const sent = await this.invoke(
+      "unpause",
+      undefined,
+      () => client.unpause({ caller: signerAddress(caller) }),
+      { address: signerAddress(caller) },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /** Read-only: is the emergency pause currently blocking new deposits? */
+  async isPaused(): Promise<boolean> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("is_paused"),
+      () => client.is_paused(),
+    );
+    return tx.result;
+  }
+
+  /**
+   * Read-only: the custodian address that may `pause`/`unpause`, so an
+   * integrator can verify who holds the role without trusting docs
+   * (docs/adr/0011). `undefined` only for an instance deployed without a
+   * constructor, which this contract's WASM does not allow.
+   */
+  async getPauseAdmin(): Promise<string | undefined> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("get_pause_admin"),
+      () => client.get_pause_admin(),
+    );
+    return tx.result ?? undefined;
+  }
+
+  /** The contract's limit on items per batched call (docs/adr/0005). */
+  get maxBatchSize(): number {
+    return MAX_BATCH_SIZE;
+  }
+
+  /**
+   * Creates several escrows, chunked to the contract's max batch size and
+   * mapped back to the caller's input order. Each item goes through the
+   * normal single-escrow `create_escrow` path, so validation, auth and
+   * events are identical to `createEscrow`.
+   *
+   * A failure never stops later chunks: every item is attempted, then a
+   * `BatchPartialFailureError` carrying all per-item results is thrown if
+   * any failed. Retry with `{ resumeFrom: error.results }` to send only the
+   * failures.
+   */
+  async createEscrows(
+    items: BatchCreateItem[],
+    options: BatchOptions<BatchCreateItem> = {},
+  ): Promise<BatchItemResult<BatchCreateItem>[]> {
+    const results = this.batchResults(items, options.resumeFrom);
+    const chunkSize = this.resolveChunkSize(options.chunkSize);
+
+    for (let start = 0; start < items.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, items.length);
+      for (let index = start; index < end; index++) {
+        if (results[index].ok) continue;
+        try {
+          const created = await this.createEscrow(items[index]);
+          results[index] = { index, item: items[index], ok: true, skipped: false, ...created };
+        } catch (error) {
+          results[index] = {
+            index,
+            item: items[index],
+            ok: false,
+            skipped: false,
+            error: batchErrorMessage(error),
+          };
+        }
+      }
+    }
+
+    this.throwOnBatchFailure(results);
+    return results;
+  }
+
+  /**
+   * Settles several escrows (`release` or `refund`), chunked to the
+   * contract's max batch size and mapped back to the caller's input order.
+   * Each operation goes through the existing single-op `release`/`refund`
+   * path, so auth and state rules are unchanged.
+   *
+   * A failure never stops later chunks: every operation is attempted, then
+   * a `BatchPartialFailureError` carrying all per-op results is thrown if
+   * any failed. Retry with `{ resumeFrom: error.results }` to send only the
+   * failures — already settled escrows are then skipped, never re-sent.
+   */
+  async settleMany(
+    ops: BatchSettleOperation[],
+    options: BatchOptions<BatchSettleOperation> = {},
+  ): Promise<BatchItemResult<BatchSettleOperation>[]> {
+    const results = this.batchResults(ops, options.resumeFrom);
+    const chunkSize = this.resolveChunkSize(options.chunkSize);
+
+    for (let start = 0; start < ops.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, ops.length);
+      for (let index = start; index < end; index++) {
+        if (results[index].ok) continue;
+        const op = ops[index];
+        try {
+          const settled = op.kind === "release"
+            ? await this.release({ escrowId: op.escrowId, caller: op.caller })
+            : await this.refund({ escrowId: op.escrowId, caller: op.caller });
+          results[index] = { index, item: op, ok: true, skipped: false, ...settled };
+        } catch (error) {
+          results[index] = { index, item: op, ok: false, skipped: false, error: batchErrorMessage(error) };
+        }
+      }
+    }
+
+    this.throwOnBatchFailure(results);
+    return results;
+  }
+
+  /** One not-yet-successful result per input, pre-filled from `resumeFrom`. */
+  private batchResults<T>(items: T[], resumeFrom?: BatchItemResult<T>[]): BatchItemResult<T>[] {
+    const results: BatchItemResult<T>[] = items.map((item, index) => ({
+      index,
+      item,
+      ok: false,
+      skipped: false,
+    }));
+    for (const prior of resumeFrom ?? []) {
+      if (!prior.ok || prior.index < 0 || prior.index >= results.length) continue;
+      results[prior.index] = { ...prior, item: items[prior.index], skipped: true };
+    }
+    return results;
+  }
+
+  private throwOnBatchFailure<T>(results: BatchItemResult<T>[]): void {
+    if (results.some((result) => !result.ok)) throw new BatchPartialFailureError(results);
+  }
+
+  /** Clamp a caller-supplied chunk size to the contract's max batch size. */
+  private resolveChunkSize(requested?: number): number {
+    if (requested === undefined || !Number.isFinite(requested) || requested < 1) return MAX_BATCH_SIZE;
+    return Math.min(Math.floor(requested), MAX_BATCH_SIZE);
   }
 
   /**
@@ -1635,6 +2322,7 @@ export class EscrowClient {
     settlement: "release" | "refund",
     params: RelayedAuthorizationParams,
   ): Promise<RelayedAuthorization> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient(params.relayer);
     const tx = settlement === "release"
       ? await client.release({ escrow_id: params.escrowId, caller: params.releaser.publicKey() })
@@ -1682,6 +2370,7 @@ export class EscrowClient {
       );
     }
 
+    await this.ensureNetworkVerified();
     const client = this.contractClient(relayer);
     const tx = client.txFromJSON<Result<void>>(authorization.transaction);
     const sent = await tx.signAndSend();
@@ -1700,6 +2389,7 @@ export class EscrowClient {
    * — fee-bump it with `maxFee` set to the most they are willing to pay.
    */
   async estimate(call: EstimateCallParams): Promise<FeeEstimate> {
+    await this.ensureNetworkVerified();
     const contractId = call.contractId ?? this.contractId;
     const account = await this.rpc.getAccount(signerAddress(call.source));
     const transaction = new TransactionBuilder(account, {
@@ -1900,6 +2590,9 @@ export class EscrowClient {
     if (params.fromLedger !== undefined && (!Number.isSafeInteger(params.fromLedger) || params.fromLedger < 1)) {
       throw new RangeError("fromLedger must be a positive safe integer.");
     }
+    // Validate the arguments before any network work, so a bad call fails
+    // fast and never depends on RPC availability.
+    await this.ensureNetworkVerified();
     const filter: Api.EventFilter = { type: "contract", contractIds: [this.contractId] };
     const request: Api.GetEventsRequest = "cursor" in params && params.cursor !== undefined
       ? { cursor: params.cursor, filters: [filter], limit: 100 }

@@ -10,7 +10,7 @@
 // This is the only example that reaches below the SDK to build a raw
 // transaction with @stellar/stellar-sdk, because the sponsor needs the
 // releaser's *signed XDR* to wrap — exactly what a real relayer would receive.
-import { EscrowClient } from "../dist/index.js";
+import { EscrowClient } from "../dist/esm/index.js";
 import {
   Address,
   Asset,

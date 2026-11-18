@@ -12,7 +12,7 @@
 // without editing code:
 //   ESCROW_CONTRACT_ID   the deployed escrow contract (C…)
 //   ESCROW_TOKEN         a token in the contract's allowlist (C…); default: native XLM SAC
-import { Keypair } from "../dist/index.js";
+import { Keypair } from "../dist/esm/index.js";
 
 /**
  * Escrow contract to exercise. Defaults to the deployment recorded in

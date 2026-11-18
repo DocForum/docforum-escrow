@@ -5,7 +5,7 @@
 // stored refund destination (the payer here).
 //
 //   npm run build && node examples/timeout-refund.ts   (from sdk/)
-import { EscrowClient } from "../dist/index.js";
+import { EscrowClient } from "../dist/esm/index.js";
 import { AMOUNT, CONTRACT_ID, TOKEN, fundedKeypair, run, step } from "./_shared.ts";
 
 run(async () => {

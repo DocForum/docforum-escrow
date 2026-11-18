@@ -6,7 +6,7 @@
 // Note: the escrow contract this points at must be a build that includes the
 // quorum entry points. Against a deployment without them, creation reverts —
 // point ESCROW_CONTRACT_ID at a quorum-capable deployment.
-import { EscrowClient } from "../dist/index.js";
+import { EscrowClient } from "../dist/esm/index.js";
 import { AMOUNT, CONTRACT_ID, TOKEN, fundedKeypair, run, step } from "./_shared.ts";
 
 run(async () => {

@@ -5,7 +5,7 @@
 //
 // Fresh payer/payee/releaser keypairs are generated and Friendbot-funded at
 // runtime — no secrets anywhere.
-import { EscrowClient } from "../dist/index.js";
+import { EscrowClient } from "../dist/esm/index.js";
 import { AMOUNT, CONTRACT_ID, TOKEN, fundedKeypair, run, step } from "./_shared.ts";
 
 run(async () => {
