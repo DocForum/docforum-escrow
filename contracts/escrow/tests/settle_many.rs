@@ -56,7 +56,10 @@ fn fixture(env: &Env) -> Fixture<'_> {
         .address();
     let payer = Address::generate(env);
     StellarAssetClient::new(env, &token_id).mint(&payer, &1_000_000);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
     Fixture {
         env,
         client: EscrowContractClient::new(env, &contract_id),
@@ -537,4 +540,33 @@ fn max_batch_fits_mainnet_limits() {
     // write entries/bytes) are enforced on the invocation itself by
     // `Env::default()`; the WASM measurement in docs/adr/0012 shows each
     // well under 25% at this size.
+}
+
+#[test]
+fn settle_many_releases_a_time_locked_escrow_at_the_exact_boundary() {
+    let env = Env::default();
+    let f = fixture(&env);
+    let release_at = CREATED_AT + 100;
+    let locked = f.client.create_escrow_release_time(
+        &f.payer,
+        &f.payee,
+        &f.token_id,
+        &3,
+        &f.cond(),
+        &f.releaser,
+        &None,
+        &false,
+        &None,
+        &Some(release_at),
+        &None,
+        &None,
+    );
+
+    env.ledger().set_timestamp(release_at);
+    let results = f
+        .client
+        .settle_many(&f.releaser, &f.ops(&[(locked, SettleAction::Release)]));
+
+    assert_eq!(results, soroban_sdk::vec![&env, ok()]);
+    assert_eq!(f.status(locked), EscrowStatus::Released);
 }

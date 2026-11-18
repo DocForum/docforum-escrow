@@ -164,7 +164,10 @@ fn fixture(env: &Env) -> Fixture<'_> {
 
     let hook_id = env.register(PayeeHook, ());
     let hook = PayeeHookClient::new(&env, &hook_id);
-    let escrow_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let escrow_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let escrow = EscrowContractClient::new(&env, &escrow_id);
     let id = escrow.create_escrow(
         &payer,
@@ -216,7 +219,13 @@ fn quorum_release_invokes_opted_in_contract_payee() {
     asset.mint(&payer, &1_000);
     let hook_id = env.register(PayeeHook, ());
     let hook = PayeeHookClient::new(&env, &hook_id);
-    let escrow_id = env.register(EscrowContract, (soroban_sdk::Vec::<Address>::new(&env),));
+    let escrow_id = env.register(
+        EscrowContract,
+        (
+            soroban_sdk::Vec::<Address>::new(&env),
+            Address::generate(&env),
+        ),
+    );
     let escrow = EscrowContractClient::new(&env, &escrow_id);
     let id = escrow.create_escrow_with_releasers(
         &payer,

@@ -101,7 +101,9 @@ export function predictInstanceAddress(
   if (!StrKey.isValidContract(factoryId)) {
     throw new TypeError("predictInstanceAddress: factoryId must be a contract id (C...)");
   }
-  const saltBytes = Uint8Array.from(salt ?? []);
+  // Plain Uint8Array keeps this browser-safe; stellar-base's typings say
+  // Buffer, which only conflicts once @types/node is installed (the CLI needs it).
+  const saltBytes = Uint8Array.from(salt ?? []) as unknown as Buffer;
   if (saltBytes.length !== SALT_LENGTH) {
     throw new TypeError(
       `predictInstanceAddress: salt must be ${SALT_LENGTH} bytes, got ${saltBytes.length}`,
@@ -109,7 +111,7 @@ export function predictInstanceAddress(
   }
 
   const preimage = new xdr.HashIdPreimageContractId({
-    networkId: hash(new TextEncoder().encode(networkPassphrase)),
+    networkId: hash(new TextEncoder().encode(networkPassphrase) as unknown as Buffer),
     contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
       new xdr.ContractIdPreimageFromAddress({
         address: new Address(factoryId).toScAddress(),
