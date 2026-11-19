@@ -42,7 +42,7 @@ The error discriminants each property relies on (`Unauthorized` 3,
 `NotFunded` 4, `ThresholdNotMet` 15, `DuplicateApprover` 16,
 `AcceptanceRequired` 18, `AcceptanceNotConfigured` 19, `AlreadyAccepted` 20,
 `ReleaseTooEarly` 23) are part of the ABI — see the `Error` enum in
-`contracts/escrow/src/lib.rs`. A renumbering is a breaking change and requires
+`contracts/escrow/src/errors.rs`. A renumbering is a breaking change and requires
 updating both the spec and this document.
 
 ## Out of scope
@@ -90,7 +90,7 @@ silently skips is worse than an honest manual step.
 
 ## Maintaining this spike
 
-The spec names paths inside `lib.rs` (`settle`, `check_funded`,
+The spec names paths inside the contract source (`settle`, `check_funded`,
 `check_single_caller`, `check_approvals`) and error discriminants. If you
 change the settlement state machine, update `certora/escrow.spec` and this
 document in the same PR; a stale property list is worse than none, because it

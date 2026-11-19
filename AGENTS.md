@@ -13,10 +13,17 @@ the change belongs in `docforum-core` instead, not here.
   anywhere in this repo — see `ARCHITECTURE_ESSENTIALS.md` hard rule 1.
 - Contract changes need contract tests in the same PR, always.
 - Never edit `CONTRACT_VERSION` or renumber an `Error` code. A PR that
-  changes `contracts/escrow/src/lib.rs` adds a fragment under
+  changes the contract (`contracts/escrow/src/`) adds a fragment under
   `contract-changes.d/`, and new `Error` variants use a provisional code
   (issue number × 100 + n). A maintainer bumps the version and assigns final
   codes. See `contract-changes.d/README.md`; CI enforces it.
+- The contract is split into modules under `contracts/escrow/src/`, one
+  per area (`create.rs`, `pooled.rs`, `release_refund.rs`, `pause.rs`, …),
+  each with its own `#[contractimpl] impl EscrowContract` block. Put a new
+  feature's entry points in a new module (or the module for its area), not
+  in `lib.rs`. `lib.rs` only declares the modules; keep `CONTRACT_VERSION`
+  there, and the `Error` enum in `errors.rs`. Keep the `mod` list
+  alphabetical, and regenerate the SDK bindings after adding a module.
 - Testnet only, per `ARCHITECTURE_ESSENTIALS.md` hard rule 4, until an
   explicit security-review milestone (ROADMAP.md Phase E4) is marked done.
 - Update `ROADMAP.md` on every contribution — org-wide rule, applies here

@@ -1,7 +1,7 @@
 # contract-changes.d
 
 One new file per PR that changes the escrow contract
-(`contracts/escrow/src/lib.rs`).
+(anything under `contracts/escrow/src/`).
 
 When every contract PR bumped `CONTRACT_VERSION` itself, all of them edited
 the same line and picked the same "next" version, so each contract merge put
@@ -9,7 +9,7 @@ every other contract PR into conflict. Now you describe the change in a
 fragment, and a maintainer bumps the version once for a whole batch.
 
 CI (`scripts/check-contract-change.mjs`) enforces this on every PR that
-touches `lib.rs`.
+touches the contract source.
 
 ## Adding your fragment
 

@@ -3,7 +3,7 @@
 //
 // Contributors no longer edit CONTRACT_VERSION. When nine open PRs each bumped
 // that one line, every contract merge put all the others into conflict. Now a
-// PR that changes contracts/escrow/src/lib.rs adds a fragment under
+// PR that changes the contract source (contracts/escrow/src/) adds a fragment under
 // contract-changes.d/ instead, and a maintainer bumps the version once per
 // batch with scripts/fold-contract-changes.mjs (see contract-changes.d/README.md).
 //
@@ -11,7 +11,7 @@
 // (issue number × 100 + n, so they can't collide between PRs), and the fold
 // renumbers them to the next free codes.
 //
-// Fails when lib.rs changed and:
+// Fails when the contract source changed and:
 //   - no fragment was added, or
 //   - CONTRACT_VERSION changed (only a fold PR, which deletes fragments, may), or
 //   - an existing `Error` variant was renumbered or removed, or
@@ -20,7 +20,7 @@
 //   node scripts/check-contract-change.mjs <base-ref>   # e.g. origin/main
 import { execFileSync } from 'node:child_process';
 
-const LIB = 'contracts/escrow/src/lib.rs';
+const SRC = 'contracts/escrow/src/';
 const FRAGMENTS = 'contract-changes.d/';
 const PROVISIONAL_MIN = 1000;
 
@@ -32,9 +32,16 @@ if (!base) {
 
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' });
 const mergeBase = git('merge-base', base, 'HEAD').trim();
-const show = (rev) => git('show', `${rev}:${LIB}`);
+// Every .rs file under SRC at `rev`, concatenated. CONTRACT_VERSION lives in
+// lib.rs and the Error enum in errors.rs (lib.rs before the module split).
+const show = (rev) =>
+  git('ls-tree', '-r', '--name-only', rev, '--', SRC)
+    .split('\n')
+    .filter((f) => f.endsWith('.rs'))
+    .map((f) => git('show', `${rev}:${f}`))
+    .join('\n');
 
-if (!git('diff', '--name-only', mergeBase, 'HEAD', '--', LIB).trim()) process.exit(0);
+if (!git('diff', '--name-only', mergeBase, 'HEAD', '--', SRC).trim()) process.exit(0);
 
 const changed = git('diff', '--name-status', mergeBase, 'HEAD', '--', FRAGMENTS)
   .split('\n')
@@ -57,7 +64,7 @@ const problems = [];
 
 if (!isFold && added.length === 0) {
   problems.push(
-    `${LIB} changed, but no fragment was added under ${FRAGMENTS}. ` +
+    `The contract source (${SRC}) changed, but no fragment was added under ${FRAGMENTS}. ` +
       `Add ${FRAGMENTS}<issue>-<slug>.md (see ${FRAGMENTS}README.md).`,
   );
 }
