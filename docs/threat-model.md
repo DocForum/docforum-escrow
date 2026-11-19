@@ -32,7 +32,7 @@ in this document still describes the same design.*
 
 *Updated 2026-10-16 for issue #28 (Phase E5): optional `refund_to`, a
 refund destination that may differ from the funder (`payer`), decided in
-`docs/adr/0006`. Touches §1 (I1, I2), §2 (actors), T1, T2, T8, a new T11
+`docs/adr/0006`. Touches §1 (I1, I2), §2 (actors), T1, T2, T8, a new T11 (now T21)
 and §6.*
 
 *Updated 2026-10-20 for issue #35 (Phase E5): the emergency pause from
@@ -89,7 +89,7 @@ escrow; the integrity of each escrow's stored `EscrowData`.
 
 | `token` contract | Executes transfers | Behaving like a standard SEP-41 token (see T5). |
 | Anyone | Call `create_escrow` with their own funds, call `get_status`/`get_escrow`, and — on an escrow whose `refund_after` has passed — call `refund`, which can only send funds to that escrow's stored `refund_to` | Nothing. |
-| `attester` (**planned**, not implemented) | Would publish signed attestations referenced by an escrow's `condition_ref` | Nothing on-chain; the contract never reads attestations. See T12. |
+| `attester` (**planned**, not implemented) | Would publish signed attestations referenced by an escrow's `condition_ref` | Nothing on-chain; the contract never reads attestations. See T23. |
 
 There is **no admin over funds and no upgrade function.** The deployed
 WASM is immutable; nobody, including the deployer, can change an escrow's
@@ -106,7 +106,18 @@ for the redeployment and old-escrow settlement procedure.
 Severity is the author's estimate for a mainnet deployment with real
 value. **Reviewers should challenge these ratings.**
 
-### T11 — Multiple contract deployments · **Medium (operational)**
+**Threat IDs are unique and never reused.** They are cited across the repo
+("threat model T12"), so a number always means one threat. A PR that adds a
+threat uses a provisional ID, `T<issue>` (for example `T345` for issue
+#345), so two open PRs can never pick the same next number; a maintainer
+assigns the final ID when folding. On 2026-11-19, threats that parallel PRs
+had all numbered T11 or T12 were renumbered: deployments T11 → T20,
+`refund_to` T11 → T21, payee key T11 → T22, planned Phase E5 features
+T12 → T23, front-running `cancel` T12 → T24, and a duplicated copy of T11
+(release callback) was removed. T11 stays the release callback and T12 the
+pause custodian.
+
+### T20 — Multiple contract deployments · **Medium (operational)**
 - **What can go wrong:** after a redeployment, an integrator may query or
   operate only the newest contract ID and lose track of still-funded
   escrows held by an older deployment.
@@ -317,7 +328,8 @@ value. **Reviewers should challenge these ratings.**
 ### T11 — Malicious or failing release callback · **Medium (payee opt-in)**
 - A payee contract that authorizes `create_escrow` while
   `notify_payee` is true opts in to the callback. The payer cannot opt a
-  payee in without its authorization. The payee can still make its callback
+  payee in without its authorization: both single-releaser and quorum
+  creation call `payee.require_auth()`. The payee can still make its callback
   expensive, return an error, or attempt to re-enter `release`, `refund`, or
   `create_escrow`.
 - Callback errors fail `release` atomically (`CallbackFailed`); token movement
@@ -325,7 +337,8 @@ value. **Reviewers should challenge these ratings.**
   anyone can refund after `refund_after`. Refund never invokes the payee.
 - Soroban rejects re-entry while the escrow is already on the call stack.
   Tests in `tests/release_callback.rs` attempt all three state-changing
-  entry points. A transaction budget exhaustion also fails release; the hook
+  entry points; the same settlement helper handles single and quorum
+  releases. A transaction budget exhaustion also fails release; the hook
   is synchronous and must stay bounded. The escrow makes one callback with
   fixed arguments and does not retry or loop.
 - The payee must authorize creation when `notify_payee` is true. Only use it
@@ -523,20 +536,7 @@ TTL-extended (see T6), so the counter can outlive the escrows it sums.
   for integrators passing longer refs — checked `docforum-core`'s usage
   pattern (opaque record id) and it stays well within the bound.
 
-### T11 — Malicious or failing release callback · **Medium (payee opt-in)**
-- The payer cannot opt a payee into callbacks without its authorization:
-  when `notify_payee` is true, both single-releaser and quorum creation call
-  `payee.require_auth()`. The payee contract can still consume transaction
-  budget, fail, or attempt to re-enter `release`, `refund`, or `create_escrow`.
-- Callback errors fail `release` atomically (`CallbackFailed`); token movement
-  and the `Released` state do not persist. The releaser can still refund, and
-  anyone can refund after `refund_after`. Refund never invokes the payee.
-- Soroban rejects re-entry while the escrow is on the call stack. Tests in
-  `tests/release_callback.rs` cover release/refund/create attempts; the same
-  settlement helper handles single and quorum releases. The callback is one
-  synchronous call with fixed arguments and no retries or loops. See ADR 0005.
-
-### T11 — `refund_to` unable to receive, or set wrongly · **Low–Medium (funder error), document it**
+### T21 — `refund_to` unable to receive, or set wrongly · **Low–Medium (funder error), document it**
 - **Immutable by design (I1):** the funder signs `refund_to` at creation
   and there is no setter and no payout-time fallback. A typo'd or
   uncontrolled address means refunds go there.
@@ -554,7 +554,7 @@ TTL-extended (see T6), so the counter can outlive the escrows it sums.
 - **Residual risk:** none that I1 doesn't already cover — no one but the
   funder chooses the address, and only at creation.
 
-### T12 — Planned Phase E5 features would change the trust model · **Medium per feature**
+### T23 — Planned Phase E5 features would change the trust model · **Medium per feature**
 
 **Nothing in this section is implemented in the reviewed commit.** It exists
 so the analysis is ready when a feature is proposed, and so a reviewer knows
@@ -584,7 +584,7 @@ payouts bounded by `amount`; a disputed escrow settled only by its resolver;
 immutable split set and payee list; and no attestation read anywhere in the
 escrow.
 
-### T12 — Front-running `cancel` against `accept` · **High**
+### T24 — Front-running `cancel` against `accept` · **High**
 - **What an attacker can do:** if the payee and payer both act on the same
   ledger, an attacker observing the escrow state could attempt to `cancel`
   before the payee's `accept` lands, or vice‑versa. The race is resolved by
@@ -758,7 +758,7 @@ escrow.
 | T9 — `condition_ref` is public | — | **Residual risk: accepted (privacy constraint)**: contract cannot enforce opacity; consumer passes opaque record id |
 | T10 — Storage spam | — | **Covered (mitigation)**: `condition_ref` bounded to 64 bytes at creation (`Error::ConditionRefTooLong`); SDK client-side validation via `MAX_CONDITION_REF_LENGTH` |
 | T11 — Malicious or failing release callback | `tests/release_callback.rs` (all three state‑changing entry points) | Covered |
-| T12 — Front‑running `cancel` against `accept` | `cancel.rs::race_accept_lands_first_then_cancel_fails`, `cancel.rs::race_cancel_lands_first_then_accept_fails` | Covered |
+| T24 — Front‑running `cancel` against `accept` | `cancel.rs::race_accept_lands_first_then_cancel_fails`, `cancel.rs::race_cancel_lands_first_then_accept_fails` | Covered |
 | T13 — `top_up` landing after a release is approved | `top_up.rs::top_up_rejects_invalid_payer_amount_overflow_and_settled_state` (covers post‑release rejection) | Covered |
 | T14 — Rotating to a colluding releaser | — | **Residual risk: accepted (reason)**: rotation requires both current releaser and payer auth; collusion is a consumer‑level trust assumption |
 | T15 — Time‑lock bypass through the quorum path or the timeout path | — | **Residual risk: accepted (reason)**: `release_with_approvals` does not check `release_not_before` (quorum design); `refund_after` path is separate. Consumers requiring time‑bounded release should use single‑releaser path. |
@@ -769,7 +769,7 @@ escrow.
 
 *Key: "Covered" = at least one test explicitly exercises the threat and verifies the mitigation. "Residual risk: accepted" = the threat is understood and intentionally tolerated with a documented mitigation. "Uncovered" = no test or mitigation exists — should be evaluated for a future release.*
 
-### T11 — Payee key compromise or loss · **Medium (new surface from issue #45)**
+### T22 — Payee key compromise or loss · **Medium (new surface from issue #45)**
 - **What changed:** `transfer_payee` (Phase E5) gives the current `payee`
   the ability to redirect the release destination to a new address, while
   the escrow is `Funded`. This is the first on-chain power the payee has
@@ -871,7 +871,7 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
       updated — issue #28, `docs/adr/0006`, `tests/sponsored_refund.rs`.
 - [x] ⚙ Payee-initiated voluntary refund while funded — issue #40 and
       `docs/adr/0010`; payout remains pinned to the stored `refund_to`.
-      Also rejects the contract itself as `refund_to` (T11). Not yet
+      Also rejects the contract itself as `refund_to` (T21). Not yet
       deployed to testnet.
 - [x] ⚙ Emit create/release/refund events (T7) — issue #9; `contracts/escrow/tests/events.rs`
 - [x] ⚙ TTL extension for escrow entries and instance (T6) — issue #10; `contracts/escrow/tests/ttl.rs`
