@@ -50,6 +50,32 @@ Mainnet passphrases are rejected unless `--allow-mainnet` is passed explicitly.
 
 <!-- scripts/deploy inserts new records below this line -->
 
+## `docforum_escrow` — 2026-11-18 (`2bbc6b1`, recorded by `scripts/deploy`)
+
+| | |
+|---|---|
+| Network | testnet (`Test SDF Network ; September 2015`) |
+| Contract ID | `CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H` |
+| Explorer | https://stellar.expert/explorer/testnet/contract/CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H |
+| WASM hash | `774709b5de18420ba16b890a90759affa1ae795b7622e51f9b1cee2dbf5ea6e0` |
+| WASM upload tx | https://stellar.expert/explorer/testnet/tx/1e4f2817f105608031c5277f9150e9b7d3481d1eb91dceb980ef68ffa2e73d17 |
+| Deploy tx | https://stellar.expert/explorer/testnet/tx/c4a03c6b302d30bc0d73eaf773b1812d1057e664fc1a5e58b3207ea635824e6b |
+| Source commit | `2bbc6b1` (`2bbc6b1cb9182eed70e25af84b2bac6758a1ba22`) |
+| Constructor `allowed_tokens` | `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` |
+| Constructor `pause_admin` | `GDJBRSDH4OARYUYDUDUXYTELZQMIJVZBLL4H2CDQFOHMNKNGE4ILUM7T` |
+| `version()` | `3.0.0` |
+
+### Scripted live verification
+
+The on-chain WASM was fetched after deployment and matched the hash above.
+
+- `create` escrow 0: Passed, expected Funded; [transaction](https://stellar.expert/explorer/testnet/tx/89a61376b4913e3b5c79a434bf292ced1e596a636ad65c83a486eeb86086b72c).
+- `release` escrow 0: Passed, expected Released; [transaction](https://stellar.expert/explorer/testnet/tx/d97ae2c2cb261f97ab98d2ca58d18bd67b51176020d89c6d13a9dfc6eda129a7).
+- `refund` escrow 1: Passed, expected Refunded; [transaction](https://stellar.expert/explorer/testnet/tx/398773340d8cd868471ef4f90c69af07fa2d5d66c249670eba16ebf711a4a276).
+- `reject_stranger_release` escrow 2: Passed, expected Error(Contract, #3) Unauthorized; rejected in simulation, not submitted.
+- `reject_double_release` escrow 0: Passed, expected Error(Contract, #4) NotFunded; rejected in simulation, not submitted.
+- `reject_non_positive_amount`: Passed, expected Error(Contract, #2) InvalidAmount; rejected in simulation, not submitted.
+
 ## `docforum_escrow` — 2026-11-03 (`52a6a39`, recorded by `scripts/deploy`)
 
 | | |

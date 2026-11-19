@@ -5,7 +5,7 @@
 ![Stack](https://img.shields.io/badge/contract-Rust%20%2F%20Soroban-orange.svg)
 ![Network](https://img.shields.io/badge/network-testnet%20only-important.svg)
 
-**🔗 Live on testnet:** [`CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E`](https://stellar.expert/explorer/testnet/contract/CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E) — contract 2.5.1 from upstream main, including sponsored refunds (`refund_to`) and the emergency pause, verified with real create, release and refund calls. History and transaction links: [`docs/testnet-deployments.md`](docs/testnet-deployments.md).
+**🔗 Live on testnet:** [`CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H`](https://stellar.expert/explorer/testnet/contract/CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H) — contract 3.0.0 from upstream main (storage reclaim for settled escrows, split payouts, vesting, split settlement, storage TTL, refund-deadline extension), verified with real create, release and refund calls. History and transaction links: [`docs/testnet-deployments.md`](docs/testnet-deployments.md).
 
 A [Soroban](https://developers.stellar.org/docs/build/smart-contracts) (Stellar) smart contract for conditional payment escrow — lock funds, and release them to the payee only when release is authorized, or return them to the payer on refund. Paired with a TypeScript client SDK, `@docforum/escrow-sdk`.
 
@@ -353,7 +353,7 @@ From the repository root, run the verifier with the contract ID. It builds
 the current source and fetches deployed WASM from testnet:
 
 ```bash
-bash scripts/verify-deployment CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E
+bash scripts/verify-deployment CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H
 ```
 
 Matching SHA-256 values mean the deployed bytes equal this source build.
