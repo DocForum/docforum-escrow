@@ -1237,3 +1237,23 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `README.md` or `docs/threat-model.md`. Maintainers fold them with
   `node scripts/docs-fragments.mjs fold`. The new `Docs fragments` CI job fails
   PRs that add lines to those docs directly or whose fragments don't fold.
+- 2026-11-19 — Generated files (SDK bindings, `contract-errors.generated.ts`,
+  `deployments.generated.ts`, `contract-spec.json`, contract test snapshots) are
+  marked `linguist-generated` in `.gitattributes`, so GitHub collapses them in PR
+  diffs; each entry names the command that regenerates it. CI now also checks
+  that `sdk/src/deployments.generated.ts` matches `deployments.json`.
+- 2026-11-19 — The SDK's `src/index.ts` no longer holds every public type: its top-level types,
+  constants and errors moved into topical modules (`escrow-types`, `events`,
+  `milestones`, `networks`, `contract-version`, `batch`, `client-config`,
+  `lifecycle`, `pooled`, `relayed-auth`, `prepare-submit`, `fees`,
+  `archived-entries`), re-exported from `index.ts`, which keeps the
+  `EscrowClient` class. Private helpers shared between them are in
+  `internal.ts`. The package's exports are unchanged (all 170, with identical
+  types).
+- 2026-11-19 — Threat model IDs are unique again. Parallel PRs had each numbered their new
+  threat T11 or T12, leaving five T11s (one a duplicated copy of the release
+  callback) and three T12s. Renumbered: deployments T20, `refund_to` T21, payee
+  key T22, planned Phase E5 features T23, front-running `cancel` T24; T11 stays
+  the release callback and T12 the pause custodian. References across the docs
+  point at the right threat, and new threats now use a provisional `T<issue>`
+  ID until a maintainer folds them.
