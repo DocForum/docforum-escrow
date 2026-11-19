@@ -84,6 +84,11 @@ verification/release-engineering tracks.
   entry as a new file in `changelog.d/`, in the same PR. Don't append to
   the end of `ROADMAP.md`; that is what made every PR conflict. See
   `changelog.d/README.md`.
+- Don't add new lines to `ROADMAP.md`, `ARCHITECTURE_ESSENTIALS.md`,
+  `README.md` or `docs/threat-model.md`. Put new items, rows, paragraphs and
+  sections in a fragment under `docs.d/` that names the doc and the heading
+  (or line) they go under; a maintainer folds them in. Editing existing
+  lines in place is fine. CI enforces this. See `docs.d/README.md`.
 - If you change the contract (`contracts/escrow/src/lib.rs`), add a fragment
   under `contract-changes.d/` with the bump level and a one-line summary.
   **Don't edit `CONTRACT_VERSION`**: a maintainer bumps it once per batch.
@@ -94,8 +99,8 @@ verification/release-engineering tracks.
   specification under `spec/` and rerun TLC. That includes changes to
   settlement auth, status transitions, timeouts, payee acceptance,
   release/refund rules, or quorum behavior.
-- Keep doc edits to your own lines: add rows and lines, don't rewrite
-  other people's paragraphs. See `AGENTS.md` → "Shared docs".
+- Keep doc edits to your own lines: new lines go in `docs.d/`, and don't
+  rewrite other people's paragraphs. See `AGENTS.md` → "Shared docs".
 - Run `cargo test` and `cargo build --target wasm32v1-none --release`
   locally — this is exactly what CI checks.
 - `cargo test` also rewrites `contracts/escrow/test_snapshots/`. Review that
