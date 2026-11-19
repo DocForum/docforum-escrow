@@ -1229,3 +1229,11 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   reports `3.0.0`. The SDK testnet preset, README and SDK tests now use the new
   id. The 2.5.1 deployment `CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E` stays
   recorded in `docs/testnet-deployments.md`.
+- 2026-11-19 — Contract 3.0.1 (was 3.0.0), folded from 1 change(s):
+  - No behaviour or interface change: `contracts/escrow/src/lib.rs` is split into one module per area (`create.rs`, `pooled.rs`, `release_refund.rs`, `errors.rs`, …) so contract PRs stop editing the same file. The contract spec is entry-for-entry identical; only the WASM's internal function and spec-entry order changes, so the WASM hash differs from 3.0.0.
+- 2026-11-19 — Shared docs now take new content as fragments: a PR adds a file under
+  `docs.d/` naming the doc and the heading (or line) its text goes under,
+  instead of adding lines to `ROADMAP.md`, `ARCHITECTURE_ESSENTIALS.md`,
+  `README.md` or `docs/threat-model.md`. Maintainers fold them with
+  `node scripts/docs-fragments.mjs fold`. The new `Docs fragments` CI job fails
+  PRs that add lines to those docs directly or whose fragments don't fold.
