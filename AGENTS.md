@@ -16,7 +16,9 @@ the change belongs in `docforum-core` instead, not here.
   changes the contract (`contracts/escrow/src/`) adds a fragment under
   `contract-changes.d/`, and new `Error` variants use a provisional code
   (issue number × 100 + n). A maintainer bumps the version and assigns final
-  codes. See `contract-changes.d/README.md`; CI enforces it.
+  codes. The same goes for a new threat in `docs/threat-model.md`: give it a
+  provisional ID `T<issue>`, never the "next free" number; existing IDs are
+  never reused or renumbered. See `contract-changes.d/README.md`; CI enforces it.
 - The contract is split into modules under `contracts/escrow/src/`, one
   per area (`create.rs`, `pooled.rs`, `release_refund.rs`, `pause.rs`, …),
   each with its own `#[contractimpl] impl EscrowContract` block. Put a new

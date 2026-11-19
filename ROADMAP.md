@@ -229,7 +229,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   authority from being funder/recipient, release unaffected, default
   unchanged, contract-self rejected, funder auth required, recipient never
   signs. **I1 wording** updated in `docs/threat-model.md` (plus actors, T1,
-  T2, T8, new T11 and §6). **Breaking change:** `create_escrow` gains a
+  T2, T8, new T21 and §6). **Breaking change:** `create_escrow` gains a
   parameter and `EscrowData` a field; `@docforum/escrow-sdk` 0.5.0 →
   0.6.0 (bindings regenerated, never hand-edited; adds `refundTo` on
   `createEscrow` and `getEscrow`). The current contract was deployed on
@@ -327,7 +327,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   auth rejection for stranger/payer/releaser, and both rejected
   `new_payee` targets. Rejected with `Error::InvalidNewPayee`.
   Threat model
-  I1 updated; T11 added covering the new payee-key attack surface.
+  I1 updated; T22 added covering the new payee-key attack surface.
   `ARCHITECTURE_ESSENTIALS.md` contract surface updated.
   Closes issue #45.
 - [x] **Reclaim storage for settled escrows** (issue #48) —
@@ -811,7 +811,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   tests in `tests/sponsored_refund.rs`; 47/47 contract tests pass
   repo-wide, wasm release build succeeds. SDK bindings regenerated;
   `@docforum/escrow-sdk` 0.5.0 → 0.6.0 (breaking). I1 wording, actors, T1,
-  T2, T8, new T11 and §6 in the threat model, `README.md` and
+  T2, T8, new T11 (now T21) and §6 in the threat model, `README.md` and
   `ARCHITECTURE_ESSENTIALS.md` updated. **Not done:** testnet redeploy and
   the `sdk-v0.6.0` release tarball.
 - 2026-10-20 — Issue #109: deployed current upstream main to Stellar testnet and verified
@@ -953,7 +953,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `docs/audit/` records the reviewed commit, the in- and out-of-scope files, and
   reproducible test/build results; `CONTRIBUTING.md` explains how contributors
   report privately and respect the reviewed scope; the threat model gains a
-  clearly-labelled planned-features section (T12) and states that milestones,
+  clearly-labelled planned-features section (T12, now T23) and states that milestones,
   disputes, splits and attestations are not implemented yet. No contract, SDK or
   CI change.
 - 2026-10-24 — Issue #50 (Phase E5): documented the optional M-of-N custom releaser account in `ARCHITECTURE_ESSENTIALS.md`, `docs/threat-model.md` (T1) and `ROADMAP.md`. The account contract already on `main` (`contracts/releaser-account/`, ADR 0005) is unchanged; this PR resolves the duplicate add/add conflicts by keeping `main`'s newer implementation. No escrow contract change, so generated bindings are unaffected. Not deployed to testnet.
@@ -1094,7 +1094,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   "Require a contract version bump" step. The version test now compares with
   `CONTRACT_VERSION` instead of a literal.
 - 2026-10-28 — Issue #40 (Phase E5): the stored payee can now voluntarily refund a funded escrow with `refund(escrow_id, payee)`. The payout still goes only to the stored `refund_to` (ADR 0009), and the call emits a distinct `payee_refunded` event (ADR 0010). Pooled escrows reject it through `reject_pooled`. Bindings regenerated, and the TLA+ model gained a `PayeeRefund` action.
-- 2026-10-28 — Issue #45 (Phase E5): added `transfer_payee(escrow_id, current_payee, new_payee)` — restricted to the current payee (require_auth), only while Funded; `new_payee` may not be the contract address or the payer. Rotation tool, not key-loss recovery. 12 tests in `contracts/escrow/tests/transfer_payee.rs`. New error `Error::InvalidNewPayee` (code 37). Contract surface updated in `ARCHITECTURE_ESSENTIALS.md`; threat model I1 updated and T11 added. `CONTRACT_VERSION` is left for the maintainer fold, per `contract-changes.d/README.md`.
+- 2026-10-28 — Issue #45 (Phase E5): added `transfer_payee(escrow_id, current_payee, new_payee)` — restricted to the current payee (require_auth), only while Funded; `new_payee` may not be the contract address or the payer. Rotation tool, not key-loss recovery. 12 tests in `contracts/escrow/tests/transfer_payee.rs`. New error `Error::InvalidNewPayee` (code 37). Contract surface updated in `ARCHITECTURE_ESSENTIALS.md`; threat model I1 updated and T11 added (now T22). `CONTRACT_VERSION` is left for the maintainer fold, per `contract-changes.d/README.md`.
 - 2026-10-28 — Issue #9 (Phase E4, T7): cover the contract's full-state lifecycle events on create, release, refund, and cancel, keyed by escrow_id. Error paths emit nothing. Added contract tests in `contracts/escrow/tests/events.rs`, documented the indexer-compatible payload in `ARCHITECTURE_ESSENTIALS.md § Events`, and marked T7 mitigated in `docs/threat-model.md`.
 - 2026-10-30 — Contract 2.4.0 (was 2.3.0), folded from 2 change(s):
   - Issue #40: allow the stored payee to authorize a voluntary full refund of a funded single-payee escrow to its stored payer destination, and emit a distinct `payee_refunded` event.

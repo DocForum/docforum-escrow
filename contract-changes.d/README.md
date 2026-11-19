@@ -52,6 +52,14 @@ tests and the SDK, never by number.
 If two PRs append to the end of the enum, git may still show a conflict
 there. Keep both sides: their codes don't clash.
 
+## New threats
+
+A contract change that adds a threat to `docs/threat-model.md` uses the same
+idea: name it `T<issue>` (for example `### T345 — …` for issue #345), never
+the next free number, because other open PRs may take that number too. A
+maintainer assigns the final ID when folding. Never renumber or reuse an
+existing ID; other docs cite them.
+
 ## What the maintainer fold does
 
 `node scripts/fold-contract-changes.mjs` bumps `CONTRACT_VERSION` by the
