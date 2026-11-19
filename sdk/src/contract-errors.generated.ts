@@ -1,4 +1,4 @@
-// Generated from contracts/escrow/src/lib.rs by sdk/scripts/check-contract-errors.mjs. Do not edit.
+// Generated from contracts/escrow/src/errors.rs by sdk/scripts/check-contract-errors.mjs. Do not edit.
 export const CONTRACT_ERROR_NAMES = {
   1: "NotFound",
   2: "InvalidAmount",

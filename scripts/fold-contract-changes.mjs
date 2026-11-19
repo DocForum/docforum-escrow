@@ -25,6 +25,7 @@ const dryRun = process.argv.includes('--dry-run');
 const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
 const dir = path.join(root, 'contract-changes.d');
 const libPath = path.join(root, 'contracts/escrow/src/lib.rs');
+const errorsPath = path.join(root, 'contracts/escrow/src/errors.rs');
 const PROVISIONAL_MIN = 1000;
 const LEVELS = ['patch', 'minor', 'major'];
 
@@ -62,8 +63,9 @@ const oldVersion = vm.slice(1).join('.');
 const newVersion = `${major}.${minor}.${patch}`;
 lib = lib.replace(versionRe, `pub const CONTRACT_VERSION: &str = "${newVersion}";`);
 
+let errorsSrc = fs.readFileSync(errorsPath, 'utf8');
 const enumRe = /^pub enum Error \{([\s\S]*?)^\}/m;
-const body = lib.match(enumRe)[1];
+const body = errorsSrc.match(enumRe)[1];
 const variants = [...body.matchAll(/^(\s*)([A-Z][A-Za-z0-9]*)(\s*=\s*)(\d+)(\s*,)/gm)];
 let next = Math.max(0, ...variants.map((v) => Number(v[4])).filter((c) => c < PROVISIONAL_MIN)) + 1;
 const renumbered = [];
@@ -74,7 +76,7 @@ const newBody = body.replace(/^(\s*)([A-Z][A-Za-z0-9]*)(\s*=\s*)(\d+)(\s*,)/gm, 
   renumbered.push(`Error::${name} ${code} -> ${finalCode.get(name)}`);
   return `${ws}${name}${eq}${finalCode.get(name)}${comma}`;
 });
-lib = lib.replace(enumRe, (all) => all.replace(body, newBody));
+errorsSrc = errorsSrc.replace(enumRe, (all) => all.replace(body, newBody));
 
 const entry = [
   `Contract ${newVersion} (was ${oldVersion}), folded from ${files.length} change(s):`,
@@ -90,6 +92,7 @@ for (const f of fragments) console.log(`  ${f.bump.padEnd(5)}  ${f.file}`);
 if (dryRun) process.exit(0);
 
 fs.writeFileSync(libPath, lib);
+fs.writeFileSync(errorsPath, errorsSrc);
 fs.writeFileSync(path.join(root, 'changelog.d', `contract-${newVersion}.md`), entry);
 for (const f of files) fs.rmSync(path.join(dir, f));
 console.log(`\nFolded ${files.length} fragment(s). Now run cargo test (snapshots) and regenerate the SDK bindings.`);

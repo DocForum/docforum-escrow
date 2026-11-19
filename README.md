@@ -164,7 +164,8 @@ reasoning and threat ids are in [`docs/threat-model.md`](docs/threat-model.md).
 
 ```
 contracts/escrow/
-  src/lib.rs             Contract implementation
+  src/lib.rs             Contract entry: CONTRACT_VERSION, module list, re-exports
+  src/*.rs               One module per area (create, pooled, release_refund, pause, …); Error enum in errors.rs
   tests/                 Integration tests (soroban-sdk testutils) — required for any contract change
   test_snapshots/        Committed Soroban snapshots (events/auth/storage) per test — issue #120
   Cargo.toml

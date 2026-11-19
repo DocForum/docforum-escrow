@@ -89,7 +89,7 @@ verification/release-engineering tracks.
   sections in a fragment under `docs.d/` that names the doc and the heading
   (or line) they go under; a maintainer folds them in. Editing existing
   lines in place is fine. CI enforces this. See `docs.d/README.md`.
-- If you change the contract (`contracts/escrow/src/lib.rs`), add a fragment
+- If you change the contract (`contracts/escrow/src/`), add a fragment
   under `contract-changes.d/` with the bump level and a one-line summary.
   **Don't edit `CONTRACT_VERSION`**: a maintainer bumps it once per batch.
   New `Error` variants use a provisional code (your issue number × 100 + n);
@@ -147,7 +147,8 @@ snapshot. CI's snapshot step catches both drift and nondeterminism.
 
 `sdk/src/generated/contract-client.ts` is machine-generated from the compiled
 WASM and must never be hand-edited (issue #121). After any change to
-`contracts/escrow/src/lib.rs`'s public functions, types or doc comments:
+the contract's public functions, types or doc comments
+(`contracts/escrow/src/`):
 
 ```bash
 # Uses the Stellar CLI version pinned in scripts/stellar-cli-version.

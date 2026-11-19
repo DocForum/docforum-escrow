@@ -52,28 +52,28 @@
       "return": "Result<u64, Error>"
     },
     {
-      "name": "get_vesting",
-      "args": "env: Env, escrow_id: u64",
-      "return": "Result<VestingInfo, Error>"
+      "name": "pause",
+      "args": "env: Env, caller: Address",
+      "return": "Result<(), Error>"
     },
     {
-      "name": "withdraw",
-      "args": "env: Env, escrow_id: u64, payee: Address",
-      "return": "Result<i128, Error>"
+      "name": "unpause",
+      "args": "env: Env, caller: Address",
+      "return": "Result<(), Error>"
     },
     {
-      "name": "get_status",
-      "args": "env: Env, escrow_id: u64",
-      "return": "Result<EscrowStatus, Error>"
+      "name": "is_paused",
+      "args": "env: Env",
+      "return": "bool"
     },
     {
-      "name": "get_escrow",
-      "args": "env: Env, escrow_id: u64",
-      "return": "Result<EscrowData, Error>"
+      "name": "get_pause_admin",
+      "args": "env: Env",
+      "return": "Option<Address>"
     },
     {
-      "name": "extend_refund_after",
-      "args": "env: Env, escrow_id: u64, new_deadline: u64,",
+      "name": "transfer_payee",
+      "args": "env: Env, escrow_id: u64, current_payee: Address, new_payee: Address,",
       "return": "Result<(), Error>"
     },
     {
@@ -107,18 +107,18 @@
       "return": "Result<Option<Contribution>, Error>"
     },
     {
-      "name": "rotate_releaser",
-      "args": "env: Env, escrow_id: u64, caller: Address, new_releaser: Address,",
-      "return": "Result<(), Error>"
+      "name": "get_status",
+      "args": "env: Env, escrow_id: u64",
+      "return": "Result<EscrowStatus, Error>"
     },
     {
-      "name": "settle",
-      "args": "env: Env, escrow_id: u64, caller: Address, payee_amount: i128,",
-      "return": "Result<(), Error>"
+      "name": "get_escrow",
+      "args": "env: Env, escrow_id: u64",
+      "return": "Result<EscrowData, Error>"
     },
     {
-      "name": "top_up",
-      "args": "env: Env, escrow_id: u64, payer: Address, amount: i128",
+      "name": "extend_refund_after",
+      "args": "env: Env, escrow_id: u64, new_deadline: u64",
       "return": "Result<(), Error>"
     },
     {
@@ -152,29 +152,29 @@
       "return": "Result<(), Error>"
     },
     {
-      "name": "pause",
-      "args": "env: Env, caller: Address",
+      "name": "rotate_releaser",
+      "args": "env: Env, escrow_id: u64, caller: Address, new_releaser: Address,",
       "return": "Result<(), Error>"
     },
     {
-      "name": "unpause",
-      "args": "env: Env, caller: Address",
+      "name": "settle",
+      "args": "env: Env, escrow_id: u64, caller: Address, payee_amount: i128,",
       "return": "Result<(), Error>"
     },
     {
-      "name": "is_paused",
-      "args": "env: Env",
-      "return": "bool"
-    },
-    {
-      "name": "get_pause_admin",
-      "args": "env: Env",
-      "return": "Option<Address>"
-    },
-    {
-      "name": "transfer_payee",
-      "args": "env: Env, escrow_id: u64, current_payee: Address, new_payee: Address,",
+      "name": "top_up",
+      "args": "env: Env, escrow_id: u64, payer: Address, amount: i128",
       "return": "Result<(), Error>"
+    },
+    {
+      "name": "get_vesting",
+      "args": "env: Env, escrow_id: u64",
+      "return": "Result<VestingInfo, Error>"
+    },
+    {
+      "name": "withdraw",
+      "args": "env: Env, escrow_id: u64, payee: Address",
+      "return": "Result<i128, Error>"
     }
   ],
   "errors": [

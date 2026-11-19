@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const contractSource = readFileSync(resolve(root, "contracts/escrow/src/lib.rs"), "utf8");
+const contractSource = readFileSync(resolve(root, "contracts/escrow/src/errors.rs"), "utf8");
 const enumMatch = contractSource.match(/pub enum Error\s*\{([\s\S]*?)\n\}/);
 if (!enumMatch) throw new Error("Could not find `pub enum Error` in the contract source");
 
@@ -13,7 +13,7 @@ if (entries.length === 0) throw new Error("No explicitly numbered contract error
 const codes = entries.map(([code]) => code);
 if (new Set(codes).size !== codes.length) throw new Error("Duplicate contract error code found");
 
-const generated = `// Generated from contracts/escrow/src/lib.rs by sdk/scripts/check-contract-errors.mjs. Do not edit.\n` +
+const generated = `// Generated from contracts/escrow/src/errors.rs by sdk/scripts/check-contract-errors.mjs. Do not edit.\n` +
   `export const CONTRACT_ERROR_NAMES = {\n${entries.map(([code, name]) => `  ${code}: "${name}",`).join("\n")}\n` +
   `} as const;\n`;
 const output = resolve(root, "sdk/src/contract-errors.generated.ts");
