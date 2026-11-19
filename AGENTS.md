@@ -59,6 +59,9 @@ Edits to shared lines are what put PRs into merge conflict with each other.
   a new type in its feature's module (or a new module plus one `export *`
   line in `index.ts`); shared private helpers go in `internal.ts`, which is
   not exported.
+- Generated files are listed in `.gitattributes` (GitHub collapses them in
+  PR diffs). Never hand-edit or hand-merge one: on a conflict take main's
+  version and rerun the command noted there.
 - `sdk/src/generated/contract-client.ts` is generated. If it conflicts after
   a rebase, don't hand-merge it: take `main`'s version, then regenerate it
   from your contract (`CONTRIBUTING.md` → Generated SDK bindings).

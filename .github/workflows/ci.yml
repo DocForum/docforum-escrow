@@ -16,6 +16,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify interface and append-only error codes
         run: ./scripts/check-contract-interface.sh
+      - name: SDK deployments module matches deployments.json
+        run: |
+          node scripts/deploy-record.mjs --sync
+          git diff --exit-code -- sdk/src/deployments.generated.ts || {
+            echo "::error::sdk/src/deployments.generated.ts is out of date. Run: node scripts/deploy-record.mjs --sync"
+            exit 1
+          }
 
   contract-fuzz:
     name: Contract cargo-fuzz (${{ github.event_name == 'schedule' && 'nightly' || 'PR' }})
