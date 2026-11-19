@@ -53,6 +53,12 @@ Edits to shared lines are what put PRs into merge conflict with each other.
 - The contract surface is listed in one place: `ARCHITECTURE_ESSENTIALS.md`
   → "Contract surface". `README.md` only summarizes it and links there, so
   a new contract function is one `docs.d/` fragment, not two.
+- SDK public types, constants and errors live in topical modules under
+  `sdk/src/` (`escrow-types.ts`, `events.ts`, `fees.ts`, `lifecycle.ts`, …),
+  re-exported from `index.ts`, which keeps only the `EscrowClient` class. Put
+  a new type in its feature's module (or a new module plus one `export *`
+  line in `index.ts`); shared private helpers go in `internal.ts`, which is
+  not exported.
 - `sdk/src/generated/contract-client.ts` is generated. If it conflicts after
   a rebase, don't hand-merge it: take `main`'s version, then regenerate it
   from your contract (`CONTRIBUTING.md` → Generated SDK bindings).
