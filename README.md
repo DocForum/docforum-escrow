@@ -172,7 +172,7 @@ contracts/escrow/
 certora/
   escrow.spec            Property list for invariants I1–I3 and the timeout rule (see docs/formal-verification.md)
 sdk/
-  src/index.ts           @docforum/escrow-sdk — hand-written public surface
+  src/index.ts           @docforum/escrow-sdk — EscrowClient + re-exports of the public modules (escrow-types, events, fees, …)
   src/generated/         Machine-generated contract bindings — never hand-edit (issue #121)
   src/signers/           SEP-43 signer types + optional Stellar Wallets Kit adapter
   typedoc.json           Generated API reference config + missing-doc lint (issue #79)
