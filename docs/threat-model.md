@@ -766,27 +766,8 @@ escrow.
 | T17 — Pooled double refund / claim theft / ordering | `tests/pooled.rs::double_claim_is_rejected`, `::contributor_cannot_claim_another_contributors_funds`, `::claiming_requires_the_contributors_signature`, `::refund_entitlements_are_order_independent`, `::release_and_refund_can_never_share_funds` | Covered |
 | T18 — Pooled funding-window manipulation | `tests/pooled.rs::reaching_the_target_releases_the_pooled_total` (late + overfunding + post-success claim), `::partial_funding_records_and_blocks_release` (premature release), `::pooled_creation_validation` (deadline at creation) | Covered |
 | T19 — Contributor-resource exhaustion / unbounded refund loops | `tests/pooled.rs::no_contributor_cap_each_claim_is_independent` (bounded per-claim work, no cap by design) | Covered (design) |
-| T25 — Fee recipient cannot receive at release | `tests/undeliverable.rs::unauthorized_sac_fee_recipient_blocks_release_atomically_and_can_be_retried` | Covered: the fee-first transfer fails atomically with `Undeliverable`; the escrow remains funded for retry |
 
 *Key: "Covered" = at least one test explicitly exercises the threat and verifies the mitigation. "Residual risk: accepted" = the threat is understood and intentionally tolerated with a documented mitigation. "Uncovered" = no test or mitigation exists — should be evaluated for a future release.*
-
-### T25 — Fee recipient cannot receive at release · **Medium (liveness), document and retry**
-
-- **What can go wrong:** the fixed fee destination can be deauthorized, lose
-  its trustline, or otherwise reject the token transfer after the escrow was
-  funded.
-- **Effect:** release returns `Undeliverable` before the payee is paid. Soroban
-  transaction atomicity restores the pre-call state: the escrow remains
-  `Funded`, the full liability remains recorded, and no destination receives
-  a partial payout.
-- **Decision:** keep the release blocked until the fee recipient can receive.
-  Paying the payee alone would leave the declared fee unpaid and violate I7's
-  exact conservation rule. The releaser can retry once the recipient is
-  reachable; a `fee_bps` of zero skips the fee transfer entirely.
-- **Consumer mitigation:** validate the fee recipient's trustline and
-  authorization before creating an escrow, monitor failed `Undeliverable`
-  releases, and repair the destination before retrying. A payer who needs
-  independent payee liveness should create a fee-free escrow.
 
 ### T22 — Payee key compromise or loss · **Medium (new surface from issue #45)**
 - **What changed:** `transfer_payee` (Phase E5) gives the current `payee`
