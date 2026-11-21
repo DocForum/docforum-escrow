@@ -20,11 +20,17 @@ impl EscrowContract {
     /// off the top — `⌊amount × fee_bps ÷ 10 000⌋` goes to `fee_recipient`,
     /// the exact remainder to `payee`, so the two transfers always sum to
     /// the escrowed `amount`. No fee is ever taken on `refund`.
+    ///
+    /// If the escrow declares a `depends_on` dependency (Phase E5), the
+    /// dependency's status must match the required status first; otherwise
+    /// the call fails with `DependencyNotSatisfied`. Refunds are never
+    /// blocked by dependencies.
     pub fn release(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         Self::extend_instance_ttl(&env);
         caller.require_auth();
 
         let mut data = Self::release_checks(&env, escrow_id, &caller)?;
+        Self::check_dependency(&env, &data)?;
         Self::settle_full(&env, escrow_id, &mut data, EscrowStatus::Released)
     }
 
@@ -44,6 +50,7 @@ impl EscrowContract {
         Self::check_approvals(&env, &data, &approvers)?;
         Self::check_funded(&data)?;
         Self::check_pooled_fully_funded(&env, escrow_id, &data)?;
+        Self::check_dependency(&env, &data)?;
 
         Self::settle_full(&env, escrow_id, &mut data, EscrowStatus::Released)
     }
@@ -55,10 +62,12 @@ impl EscrowContract {
     ///
     /// - `Release`: `caller` must be a releaser of that escrow with
     ///   threshold 1, the escrow must be `Funded`, a pooled escrow must be
-    ///   fully funded, and `release_not_before`/payee acceptance apply.
+    ///   fully funded, `release_not_before`/payee acceptance apply, and any
+    ///   `depends_on` dependency must be satisfied.
     /// - `Refund`: pooled escrows are rejected; `caller` must be a releaser
     ///   (threshold 1) unless `refund_after` has passed, in which case
-    ///   anyone may refund — always to the stored `refund_to`.
+    ///   anyone may refund — always to the stored `refund_to`. Dependencies
+    ///   never apply to refunds.
     ///
     /// `caller` authorizes the whole batch once. Per-op authority comes
     /// only from each escrow's own stored releaser set, so a batch can never
@@ -106,7 +115,13 @@ impl EscrowContract {
     ///
     /// - the escrow's releaser (docs/adr/0002), always; or
     /// - **anyone**, once `refund_after` has been reached — the timeout
-    ///   refund path for a lost/unsignable releaser key (docs/adr/0004).
+        /// refund path for a lost/unsignable releaser key (docs/adr/0004).
+    ///
+    /// Refunds are never blocked by a `depends_on` dependency (Phase E5).
+    /// A dependency that settles as `Refunded` rather than `Released` makes
+    /// the dependent permanently unreleasable; the dependent can still be
+    /// refunded through this path. Cross-contract dependencies are out of
+    /// scope.
     ///
     /// The destination never changes: timeout or not, funds only ever go
     /// to the stored `refund_to`, which no caller can influence. With no
@@ -122,6 +137,11 @@ impl EscrowContract {
     /// path stays open to anyone). The stored payee may also voluntarily
     /// refund a funded escrow; that path emits `payee_refunded` (ADR 0010).
     /// A protocol fee is never taken on the refund path.
+    ///
+    /// Refunds are never blocked by a `depends_on` dependency. Note that a
+    /// dependency which settles as `Refunded` (rather than `Released`) makes
+    /// any dependent escrow permanently unreleasable; the dependent can still
+    /// be refunded through this path.
     pub fn refund(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         Self::extend_instance_ttl(&env);
         caller.require_auth();
