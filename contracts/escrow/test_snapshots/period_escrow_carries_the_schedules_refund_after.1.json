@@ -104,7 +104,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
                 },
                 {
-                  "u64": "110000"
+                  "u64": "100000"
                 },
                 {
                   "u64": "1000"
@@ -534,10 +534,10 @@
                   },
                   {
                     "key": {
-                      "symbol": "refund_after"
+                      "symbol": "refund_after_seconds"
                     },
                     "val": {
-                      "u64": "110000"
+                      "u64": "100000"
                     }
                   },
                   {

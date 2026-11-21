@@ -230,7 +230,7 @@
                   },
                   {
                     "key": {
-                      "symbol": "refund_after"
+                      "symbol": "refund_after_seconds"
                     },
                     "val": "void"
                   },

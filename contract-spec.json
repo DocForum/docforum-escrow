@@ -118,7 +118,7 @@
     },
     {
       "name": "create_schedule",
-      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, period_seconds: u64, total_periods: u32, first_due: u64,",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after_seconds: Option<u64>, period_seconds: u64, total_periods: u32, first_due: u64,",
       "return": "Result<u64, Error>"
     },
     {
