@@ -133,4 +133,12 @@ pub enum Error {
     /// `unpause` on a running contract. The transition did not happen, so
     /// no event is emitted.
     NotPaused = 40,
+    /// `depends_on` referenced an escrow id that does not exist, is not
+    /// strictly lower than the new escrow's id (cycle prevention), or the
+    /// dependency's `required_status` is not a valid terminal status.
+    InvalidDependency = 54,
+    /// `release` was attempted while the escrow's dependency has not yet
+    /// reached its `required_status`. Refunds are never blocked by a
+    /// dependency.
+    DependencyNotSatisfied = 55,
 }

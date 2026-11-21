@@ -2,6 +2,13 @@
 
 One new file per PR for the `ROADMAP.md` changelog.
 
+For issue #E5 (dependent escrows), the fragment is
+`changelog.d/E5-dependent-escrows.md`. It covers the optional
+`depends_on: (escrow_id, required_status)` at creation, the release-time
+dependency check, refunds never being blocked by dependencies, and the
+rule that dependencies may only point at existing, lower escrow ids (so
+cycles are impossible). Cross-contract dependencies are out of scope.
+
 When every PR appended its entry to the end of `ROADMAP.md`, any two open PRs
 edited the same lines, so each merge put most of the other PRs into conflict.
 A new file per PR never collides with anyone else's.

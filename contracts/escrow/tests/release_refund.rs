@@ -203,6 +203,118 @@ fn refund_rejects_unauthorized_caller() {
 }
 
 #[test]
+fn release_blocked_by_unsatisfied_dependency() {
+    // Dependency edits are scoped to the contract; this test asserts that a
+    // dependent escrow cannot release while its dependency is still Funded.
+    let env = Env::default();
+    env.mock_all_auths();
+    let f = fund_escrow(&env, 300);
+    let dependent = f.client.create_escrow(
+        &f.payer,
+        &f.payee,
+        &f.token.address,
+        &100,
+        &String::from_str(&env, "dependent-condition-ref"),
+        &f.releaser,
+        &None,
+        &false,
+        &None,
+        &None,
+        &Some((f.escrow_id, EscrowStatus::Released)),
+    );
+
+    authorize_settlement(&env, &f, "release", &f.releaser);
+    let attempt = f.client.try_release(&dependent, &f.releaser);
+
+    assert!(attempt.is_err());
+    assert_eq!(f.client.get_status(&dependent), EscrowStatus::Funded);
+}
+
+#[test]
+fn release_allowed_when_dependency_satisfied() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let f = fund_escrow(&env, 300);
+
+    authorize_settlement(&env, &f, "release", &f.releaser);
+    f.client.release(&f.escrow_id, &f.releaser);
+
+    let dependent = f.client.create_escrow(
+        &f.payer,
+        &f.payee,
+        &f.token.address,
+        &100,
+        &String::from_str(&env, "dependent-condition-ref"),
+        &f.releaser,
+        &None,
+        &false,
+        &None,
+        &None,
+        &Some((f.escrow_id, EscrowStatus::Released)),
+    );
+
+    authorize_settlement(&env, &f, "release", &f.releaser);
+    f.client.release(&dependent, &f.releaser);
+
+    assert_eq!(f.client.get_status(&dependent), EscrowStatus::Released);
+}
+
+#[test]
+fn refund_not_blocked_by_dependency() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let f = fund_escrow(&env, 300);
+    let dependent = f.client.create_escrow(
+        &f.payer,
+        &f.payee,
+        &f.token.address,
+        &100,
+        &String::from_str(&env, "dependent-condition-ref"),
+        &f.releaser,
+        &None,
+        &false,
+        &None,
+        &None,
+        &Some((f.escrow_id, EscrowStatus::Released)),
+    );
+
+    authorize_settlement(&env, &f, "refund", &f.releaser);
+    f.client.refund(&dependent, &f.releaser);
+
+    assert_eq!(f.client.get_status(&dependent), EscrowStatus::Refunded);
+}
+
+#[test]
+fn release_blocked_when_dependency_refunded() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let f = fund_escrow(&env, 300);
+
+    authorize_settlement(&env, &f, "refund", &f.releaser);
+    f.client.refund(&f.escrow_id, &f.releaser);
+
+    let dependent = f.client.create_escrow(
+        &f.payer,
+        &f.payee,
+        &f.token.address,
+        &100,
+        &String::from_str(&env, "dependent-condition-ref"),
+        &f.releaser,
+        &None,
+        &false,
+        &None,
+        &None,
+        &Some((f.escrow_id, EscrowStatus::Released)),
+    );
+
+    authorize_settlement(&env, &f, "release", &f.releaser);
+    let attempt = f.client.try_release(&dependent, &f.releaser);
+
+    assert!(attempt.is_err());
+    assert_eq!(f.client.get_status(&dependent), EscrowStatus::Funded);
+}
+
+#[test]
 fn refund_rejects_after_release() {
     let env = Env::default();
     env.mock_all_auths();

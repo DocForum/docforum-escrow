@@ -31,6 +31,19 @@ pub struct PayeeShare {
     pub basis_points: u32,
 }
 
+/// Optional dependency on another escrow (issue E5). `release` of the
+/// dependent escrow is only allowed once the referenced escrow has reached
+/// `required_status`. Refunds are never blocked by a dependency. The
+/// referenced id must already exist and be strictly lower than the
+/// dependent's own id, which makes dependency cycles impossible.
+/// Cross-contract dependencies are out of scope.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Dependency {
+    pub escrow_id: u64,
+    pub required_status: EscrowStatus,
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub struct EscrowData {
@@ -86,6 +99,10 @@ pub struct EscrowData {
     /// = 10 %), taken once at release, rounded **down** with the
     /// remainder to the payee — see docs/adr/0010.
     pub fee_bps: Option<u32>,
+    /// Optional dependency on another escrow (issue E5). When set, `release`
+    /// requires the referenced escrow to currently have `required_status`.
+    /// Refunds ignore this field entirely.
+    pub depends_on: Option<Dependency>,
 }
 
 /// Identifies voluntary refunds started by the escrow's stored payee.

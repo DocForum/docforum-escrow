@@ -29,6 +29,11 @@ impl EscrowContract {
     /// creation and taken at release — never on refund — with `fee_bps ≤`
     /// [`MAX_FEE_BPS`] (10 %), floor rounding, and both given together or
     /// not at all (docs/adr/0010). `None` on both means no fee.
+    /// `depends_on` optionally gates release on another escrow in this
+    /// contract having reached a required status (ROADMAP.md Phase E5).
+    /// The dependency must reference an existing escrow with a strictly
+    /// lower id, which rules out cycles. Refunds are never blocked by a
+    /// dependency. Cross-contract dependencies are out of scope.
     /// Creates an escrow that releases directly to up to eight unique
     /// recipients. Shares must be positive and total exactly 10,000 bps.
     /// Rounding remainder goes to the final recipient. If the callback is
