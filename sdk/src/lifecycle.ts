@@ -22,10 +22,18 @@ export const DEFAULT_LIFECYCLE_OPTIONS: Required<TransactionLifecycleOptions> = 
   maxTryAgainLaterAttempts: 5,
 };
 
-/** Callback invoked as soon as the transaction hash is known. */
+/**
+ * Callback invoked as soon as the transaction hash is known. Consumers should
+ * persist the hash here, before the confirmation wait begins, so a timeout
+ * never loses track of a transaction that may already have landed.
+ */
 export type OnTransactionHash = (hash: string) => void | Promise<void>;
 
-/** Thrown when a transaction does not confirm within its configured timeout. */
+/**
+ * Thrown when a transaction does not confirm within its configured timeout.
+ * When `hash` is set the transaction may still land; poll `getTransaction`
+ * by that hash rather than resubmitting.
+ */
 export class TransactionTimeoutError extends Error {
   readonly name = "TransactionTimeoutError";
   readonly hash: string | undefined;

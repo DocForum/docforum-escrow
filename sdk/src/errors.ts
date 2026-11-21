@@ -68,6 +68,7 @@ export type BalanceMismatchError = InstanceType<typeof BalanceMismatchError>;
 /** Simulating the transaction failed for a reason other than a contract error. */
 export class SimulationFailure extends EscrowError {}
 
+
 /**
  * Canonical names for the lifecycle error classes. These classes are defined in this
  * module; other modules (including transaction-lifecycle.ts) must import them from here
@@ -80,10 +81,13 @@ export type LifecycleErrorName =
   | "TransactionPendingError"
   | "TransactionFailedError";
 
-/** Submitting the signed transaction failed. */
+/** Submitting the signed transaction failed before the network accepted it. */
 export class SubmissionFailure extends EscrowError {}
 
-/** The RPC request timed out. */
+/**
+ * An RPC request exceeded its configured timeout. Note that for submission this does not
+ * imply the transaction was rejected: check {@link TransactionPendingError} and poll by hash.
+ */
 export class RequestTimeoutError extends EscrowError {}
 
 /**

@@ -296,6 +296,6 @@ describe("prepare → sign → submit", () => {
       call: { method: "top_up", escrowId: 3n, payer: payer.publicKey(), amount: 10n },
       source: relayer.publicKey(),
     });
-    await expect(client.submitLifecycleCall(prepared, Keypair.random())).rejects.toThrow(/prepared by/);
+    await expect(client.submitLifecycleCall(prepared, Keypair.random())).rejects.toThrow(/source/);
   });
 });

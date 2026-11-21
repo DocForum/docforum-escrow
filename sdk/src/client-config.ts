@@ -76,7 +76,10 @@ export interface EscrowClientConfig {
    * Transaction lifecycle tuning (Phase E6): timeouts for simulate, send and
    * confirm, plus `TRY_AGAIN_LATER` backoff. Defaults are applied per field,
    * so partial overrides are fine. Retry semantics are documented in
-   * `sdk/README.md` ("Transaction lifecycle").
+   * `sdk/README.md` ("Transaction lifecycle"). The fake test client that
+   * consumes this config is exported from `testing/fake-client.ts`; it must be
+   * included in the API reference so TypeDoc does not warn on its
+   * constructor config type.
    */
   transaction?: TransactionLifecycleOptions;
 }

@@ -6,8 +6,13 @@ import type {
 } from "../index.js";
 import { signerAddress } from "../signers/types.js";
 
-/** Config accepted by the fake; only the injectable clock is used in-memory. */
+/**
+ * Configuration accepted by {@link FakeEscrowClient}. Mirrors the shape of
+ * `EscrowClientConfig` so tests can swap the real client for the fake.
+ * Only the injectable clock is used by the in-memory implementation.
+ */
 export interface FakeEscrowClientConfig {
+  /** Returns the current time in unix seconds. Defaults to the wall clock. */
   clock?: () => bigint;
   [key: string]: unknown;
 }
@@ -75,9 +80,11 @@ export class FakeEscrowClient {
   private nextTx = 0;
   private readonly clock: () => bigint;
 
+  /**
+   * @param config - See {@link FakeEscrowClientConfig}. Only `clock` is read;
+   * other keys are accepted for signature compatibility with `EscrowClient`.
+   */
   constructor(config: FakeEscrowClientConfig) {
-    // Keep constructor shape compatible with EscrowClient; no config values
-    // are needed by the in-memory implementation.
     this.clock = config.clock ?? (() => BigInt(Math.floor(Date.now() / 1000)));
   }
 
