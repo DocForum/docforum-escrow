@@ -1,0 +1,154 @@
+name: Load test (local network)
+
+# Manual only. This is a throughput harness, not a correctness gate: it
+# boots a throwaway local Stellar network, deploys the contract with an
+# empty allowlist, runs the create/settle load test, and verifies every
+# escrow's final state before publishing the report as an artifact.
+#
+# It never targets public testnet or mainnet — the script itself refuses
+# any non-loopback RPC URL.
+on:
+  workflow_dispatch:
+    inputs:
+      escrows:
+        description: "Escrows to create and settle"
+        required: false
+        default: "2000"
+      channels:
+        description: "Channel/source accounts (also the concurrency ceiling)"
+        required: false
+        default: "20"
+      payees:
+        description: "Distinct payee accounts"
+        required: false
+        default: "5"
+      refund_share:
+        description: "Fraction refunded instead of released (0–1)"
+        required: false
+        default: "0.1"
+      amount_stroops:
+        description: "Amount per escrow, in stroops"
+        required: false
+        default: "1000"
+
+permissions:
+  contents: read
+
+env:
+  STELLAR_CLI_VERSION: "30.0.1"
+  NETWORK_PASSPHRASE: "Standalone Network ; February 2017"
+
+jobs:
+  load:
+    name: Create + settle at volume, then verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start local Stellar network (Quickstart)
+        run: |
+          set -euo pipefail
+          docker run --rm -d --name stellar -p 8000:8000 stellar/quickstart:latest --local
+          for attempt in $(seq 1 90); do
+            if curl -sf -H 'Content-Type: application/json' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger"}' \
+              http://localhost:8000/soroban/rpc | grep -q result; then
+              echo "local RPC ready after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "local RPC never became ready" >&2
+          docker logs stellar >&2
+          exit 1
+
+      - name: Install Rust toolchain (wasm32v1-none)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      - name: Build contract wasm
+        working-directory: contracts/escrow
+        run: cargo build --target wasm32v1-none --release
+
+      - name: Install Stellar CLI
+        run: |
+          set -euo pipefail
+          curl -sSL -o /tmp/stellar-cli.tar.gz \
+            "https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_CLI_VERSION}/stellar-cli-${STELLAR_CLI_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          tar xzf /tmp/stellar-cli.tar.gz -C /tmp stellar
+          sudo install /tmp/stellar /usr/local/bin/stellar
+          stellar --version
+
+      - name: Deploy contract and resolve token
+        id: deploy
+        run: |
+          set -euo pipefail
+          stellar network add local \
+            --rpc-url http://localhost:8000/soroban/rpc \
+            --network-passphrase "$NETWORK_PASSPHRASE"
+          stellar keys generate deployer --network local
+          curl -sf "http://localhost:8000/friendbot?addr=$(stellar keys address deployer)" >/dev/null
+
+          # Empty allowlist = accept any token, matching the pre-allowlist
+          # behaviour these throughput numbers are about.
+          CONTRACT_ID=$(stellar contract deploy \
+            --wasm contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm \
+            --source deployer \
+            --network local \
+            -- --allowed_tokens '[]' 2>/dev/null | tail -n1)
+          TOKEN_ID=$(stellar contract id asset --asset native --network local | tail -n1)
+
+          test -n "$CONTRACT_ID"
+          test -n "$TOKEN_ID"
+          echo "contract_id=$CONTRACT_ID" >> "$GITHUB_OUTPUT"
+          echo "token_id=$TOKEN_ID" >> "$GITHUB_OUTPUT"
+          echo "Deployed $CONTRACT_ID with native token $TOKEN_ID"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install SDK and load-test dependencies
+        run: |
+          set -euo pipefail
+          npm ci --prefix sdk
+          npm run build --prefix sdk
+          npm ci --prefix scripts/load
+
+      - name: Run load test
+        run: |
+          set -euo pipefail
+          npm run load --prefix scripts/load -- \
+            --contract-id "${{ steps.deploy.outputs.contract_id }}" \
+            --token "${{ steps.deploy.outputs.token_id }}" \
+            --escrows "${{ inputs.escrows }}" \
+            --channels "${{ inputs.channels }}" \
+            --payees "${{ inputs.payees }}" \
+            --amount "${{ inputs.amount_stroops }}" \
+            --refund-share "${{ inputs.refund_share }}" \
+            --rpc-url http://localhost:8000/soroban/rpc \
+            --friendbot-url http://localhost:8000/friendbot \
+            --network-passphrase "$NETWORK_PASSPHRASE"
+
+      - name: Publish report to the job summary
+        if: always()
+        run: |
+          if [ -f scripts/load/out/load-report.md ]; then
+            cat scripts/load/out/load-report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No report was produced — the run failed before writing one." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-report
+          path: scripts/load/out/
+          if-no-files-found: warn
+
+      - name: Stop local network
+        if: always()
+        run: docker rm -f stellar || true

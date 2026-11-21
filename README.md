@@ -95,6 +95,7 @@ contracts/escrow/
 sdk/
   src/index.ts      @docforum/escrow-sdk — TypeScript client (not yet implemented, see issue #4)
   package.json
+scripts/load/       Local-network load test (create + settle at volume; see docs/performance.md)
 docs/adr/           Architecture decision records
 .github/            CI workflow, issue/PR templates
 ```
@@ -129,6 +130,7 @@ The TypeScript SDK (`sdk/`) is still a placeholder — see
 | Doc | Purpose |
 |---|---|
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
+| [`docs/performance.md`](docs/performance.md) | Local-network load test: how to run it, what it measures, correctness verification, and channel-account guidance. |
 | [`ROADMAP.md`](ROADMAP.md) | Phase E1–E4 breakdown and current status. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |

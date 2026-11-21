@@ -49,6 +49,12 @@ await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunde
 await client.getEscrow(escrowId);            // full stored record — incl. releaser + refundAfter, so a payee can check the deal (docs/adr/0004, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
 await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter has passed
+
+// Channel accounts (issue #132): one in-flight transaction per source
+// key. Used by scripts/load/ and exported for integrators doing volume.
+import { ChannelAccountPool } from "@docforum/escrow-sdk";
+const pool = new ChannelAccountPool(channelKeypairs);
+await pool.run(async (channel) => client.createEscrow({ payer: channel, releaser: channel.publicKey(), ... }));
 ```
 `refundAfter` on `createEscrow` is optional (unix seconds, must be strictly
 in the future or the contract rejects with `InvalidRefundAfter`); omit it
@@ -60,6 +66,12 @@ regenerate it whenever the contract's public signatures/types change.
 `sdk/src/index.ts` is the actual public surface (hand-written, ergonomic
 wrapper) — consumers import from the package root, never from
 `src/generated/` directly.
+
+`ChannelAccountPool` (`sdk/src/channel-accounts.ts`) hands out exclusive
+use of funded source accounts so concurrent submissions do not contend
+on one sequence number; it does no network I/O itself. `scripts/load/`
+is the local-network throughput harness built on it — local only, never
+public testnet (see `docs/performance.md`).
 
 `condition_ref` is an **opaque string/id** the contract does not interpret
 — it's the caller's job (e.g. `docforum-core`) to decide when release is

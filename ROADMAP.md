@@ -122,6 +122,22 @@
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
 
+## Phase E7 — Verification, testing & release engineering
+- [x] Local-network load test: high-volume create and settle (issue
+  #132). `scripts/load/` creates and settles thousands of escrows using
+  multiple channel accounts (one in-flight transaction per source, via
+  the new SDK `ChannelAccountPool`), records throughput, per-operation
+  latency percentiles and classified failures, and re-reads every
+  escrow afterwards, failing the run unless each is in its expected
+  terminal state. Runs in the manual `Load test (local network)`
+  workflow, which boots Quickstart, deploys with an empty allowlist and
+  uploads the report. Refuses any non-loopback RPC URL — local only,
+  never public testnet. Results and recommendations:
+  `docs/performance.md`. SDK additive surface → `0.4.0`.
+- [ ] Record a reference run's numbers in `docs/performance.md` (one
+  single-channel baseline and one multi-channel run) and link the
+  workflow artifact.
+
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
 - Fiat on/off-ramp, KYC — that's `docforum-core`'s concern if/when it
@@ -296,6 +312,21 @@
   succeeds. **Not yet done:** the current testnet deployment (source
   `7a595d8`) predates #17, so it doesn't include the balance-delta check
   — needs a redeploy.
+- 2026-11-21 — Closed issue #132 (Phase E7): added a local-network load
+  test. `scripts/load/` funds N channel accounts and M payees from the
+  local Friendbot, creates the requested number of escrows through
+  concurrent source accounts, settles each escrow with its own releaser
+  channel, then re-reads every escrow and fails the run unless the final
+  state matches what was intended. It measures create/settle throughput,
+  latency percentiles (p50/p90/p99/max) and classified failures, writing
+  JSON + Markdown reports. Local only by construction: a non-loopback
+  RPC URL is rejected. Added `ChannelAccountPool` to the SDK (additive,
+  `0.3.0` → `0.4.0`, 8 offline tests) and a manual
+  `.github/workflows/load-test.yml` that boots Quickstart, deploys with
+  an empty allowlist, runs the harness and publishes the report.
+  Methodology and recommendations are in `docs/performance.md`; a
+  reference run has not been recorded yet (the authoring environment had
+  no Docker daemon), so that follow-up is tracked separately.
 - 2026-10-08 — Restored two sets of ROADMAP entries lost in merge
   conflict resolution: #17's (issue #12, balance-delta check — Phase E4
   item and its 2026-10-07 changelog entry, summarised here: contract

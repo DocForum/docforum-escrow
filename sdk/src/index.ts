@@ -11,6 +11,8 @@ import { Keypair } from "@stellar/stellar-sdk";
 import { Client as EscrowContractClient, type EscrowStatus as GeneratedEscrowStatus } from "./generated/contract-client.js";
 
 export { Keypair };
+export { ChannelAccountPool } from "./channel-accounts.js";
+export type { ChannelAccountPoolOptions } from "./channel-accounts.js";
 
 export type EscrowStatus = "Funded" | "Released" | "Refunded";
 
