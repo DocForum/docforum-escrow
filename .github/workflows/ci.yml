@@ -95,6 +95,9 @@ jobs:
         working-directory: .
         run: node scripts/check-contract-change.mjs "origin/${{ github.base_ref }}"
 
+      - name: Test contract-change tooling
+        run: node --test scripts/contract-change.test.mjs
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.96.0
         with:
