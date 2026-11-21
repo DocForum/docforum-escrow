@@ -836,6 +836,23 @@ export interface Client {
   get_status: ({escrow_id}: {escrow_id: u64}, options?: MethodOptions) => Promise<AssembledTransaction<Result<EscrowStatus>>>
 
   /**
+   * Construct and simulate a get_escrows transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Reads up to `MAX_GET_ESCROWS` funded escrow records in one call.
+   * Unknown ids and settled ids whose full records were reclaimed return
+   * `None`; use `get_status` for a settled id's terminal status. The
+   * over-cap case returns `BatchTooLarge` before any persistent read.
+   */
+  get_escrows: ({ids}: {ids: Array<u64>}, options?: MethodOptions) => Promise<AssembledTransaction<Result<Array<Option<EscrowData>>>>>
+
+  /**
+   * Construct and simulate a next_escrow_id transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Returns the next id that a creation entry point will assign. It is a
+   * read-only view of the instance counter; an undeployed or untouched
+   * contract reports zero.
+   */
+  next_escrow_id: (options?: MethodOptions) => Promise<AssembledTransaction<u64>>
+
+  /**
    * Construct and simulate a withdraw transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Transfers vested tokens to the payee and reduces the remaining
    * escrow amount and per-token liability by the same amount.
@@ -944,6 +961,8 @@ export class Client extends ContractClient {
         "AAAAAAAAAHVBZGRzIGZ1bmRzIHRvIGEgZnVuZGVkIGVzY3JvdyB3aXRob3V0IGNoYW5naW5nIGl0cyBwYXJ0aWVzIG9yIGlkLgpPbmx5IGl0cyBvcmlnaW5hbCBwYXllciBtYXkgYXV0aG9yaXplIHRoZSB0cmFuc2Zlci4AAAAAAAAGdG9wX3VwAAAAAAADAAAAAAAAAAllc2Nyb3dfaWQAAAAAAAAGAAAAAAAAAAVwYXllcgAAAAAAABMAAAAAAAAABmFtb3VudAAAAAAACwAAAAEAAAPpAAAAAgAAAAM=",
         "AAAAAAAAAqBSZWFkLW9ubHkgYWNjZXNzb3IgZm9yIGV2ZXJ5dGhpbmcgc3RvcmVkIGFib3V0IGBlc2Nyb3dfaWRgIOKAlCBwYXllciwKcGF5ZWUsIHRva2VuLCBhbW91bnQsIGBjb25kaXRpb25fcmVmYCwgc3RhdHVzLCB0aGUgcmVsZWFzZXIgc2V0IHdpdGgKaXRzIHRocmVzaG9sZCwgYHJlZnVuZF9hZnRlcmAsIGByZWZ1bmRfdG9gIGFuZCB0aGUgb3B0aW9uYWwgZmVlCihgZmVlX3JlY2lwaWVudGAvYGZlZV9icHNgLCBleGFjdGx5IGFzIGRlY2xhcmVkIGF0IGNyZWF0aW9uKS4gRXhpc3RzCnNvIHBheWVlcyBhbmQgaW50ZWdyYXRvcnMgY2FuIGNoZWNrIHdobyBjYW4gc2V0dGxlLCB3aGVuLCB3aGVyZSBhCnJlZnVuZCBnb2VzIGFuZCB0aGUgZXhhY3QgZmVlIGJlZm9yZSByZWx5aW5nIG9uIGEgYEZ1bmRlZGAgZXNjcm93Cihkb2NzL2Fkci8wMDA0LCB0aHJlYXQgbW9kZWwgVDg7IGRvY3MvYWRyLzAwMTApLiBFcnJvcnMgb24gYW4KdW5rbm93biBpZC4gT25seSBgRnVuZGVkYCBlc2Nyb3dzIGhhdmUgYSBmdWxsIHJlY29yZDogb25jZSBzZXR0bGVkIGl0CmlzIHJlY2xhaW1lZCAoZG9jcy9hZHIvMDAxMykgYW5kIHRoaXMgcmV0dXJucyBgTm90Rm91bmRgIOKAlCB1c2UKYGdldF9zdGF0dXNgIGZvciBhIHNldHRsZWQgaWQgYW5kIHRoZSBzZXR0bGVtZW50IGV2ZW50IGZvciBpdHMgaGlzdG9yeS4AAAAKZ2V0X2VzY3JvdwAAAAAAAQAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAEAAAPpAAAH0AAAAApFc2Nyb3dEYXRhAAAAAAAD",
         "AAAAAAAAAO9SZWFkLW9ubHkgc3RhdHVzIHF1ZXJ5LiBSZWFkcyB0aGUgbGlnaHR3ZWlnaHQgYFN0YXR1c2AgZW50cnksIHdoaWNoCm91dGxpdmVzIHRoZSBmdWxsIHJlY29yZDogYSBzZXR0bGVkIGVzY3JvdyBrZWVwcyBhbnN3ZXJpbmcgYWZ0ZXIgaXRzCnJlY29yZCBpcyByZWNsYWltZWQgKGRvY3MvYWRyLzAwMTMpLCBzbyBgTm90Rm91bmRgIG1lYW5zIGV4YWN0bHkgb25lCnRoaW5nOiB0aGlzIGlkIHdhcyBuZXZlciBjcmVhdGVkLgAAAAAKZ2V0X3N0YXR1cwAAAAAAAQAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAEAAAPpAAAH0AAAAAxFc2Nyb3dTdGF0dXMAAAAD",
+        "AAAAAAAAAQhSZWFkcyB1cCB0byBgTUFYX0dFVF9FU0NST1dTYCBmdW5kZWQgZXNjcm93IHJlY29yZHMgaW4gb25lIGNhbGwuClVua25vd24gaWRzIGFuZCBzZXR0bGVkIGlkcyB3aG9zZSBmdWxsIHJlY29yZHMgd2VyZSByZWNsYWltZWQgcmV0dXJuCmBOb25lYDsgdXNlIGBnZXRfc3RhdHVzYCBmb3IgYSBzZXR0bGVkIGlkJ3MgdGVybWluYWwgc3RhdHVzLiBUaGUKb3Zlci1jYXAgY2FzZSByZXR1cm5zIGBCYXRjaFRvb0xhcmdlYCBiZWZvcmUgYW55IHBlcnNpc3RlbnQgcmVhZC4AAAALZ2V0X2VzY3Jvd3MAAAAAAQAAAAAAAAADaWRzAAAAA+oAAAAGAAAAAQAAA+kAAAPqAAAD6AAAB9AAAAAKRXNjcm93RGF0YQAAAAAAAw==",
+        "AAAAAAAAAJ5SZXR1cm5zIHRoZSBuZXh0IGlkIHRoYXQgYSBjcmVhdGlvbiBlbnRyeSBwb2ludCB3aWxsIGFzc2lnbi4gSXQgaXMgYQpyZWFkLW9ubHkgdmlldyBvZiB0aGUgaW5zdGFuY2UgY291bnRlcjsgYW4gdW5kZXBsb3llZCBvciB1bnRvdWNoZWQKY29udHJhY3QgcmVwb3J0cyB6ZXJvLgAAAAAADm5leHRfZXNjcm93X2lkAAAAAAAAAAAAAQAAAAY=",
         "AAAAAAAAAHhUcmFuc2ZlcnMgdmVzdGVkIHRva2VucyB0byB0aGUgcGF5ZWUgYW5kIHJlZHVjZXMgdGhlIHJlbWFpbmluZwplc2Nyb3cgYW1vdW50IGFuZCBwZXItdG9rZW4gbGlhYmlsaXR5IGJ5IHRoZSBzYW1lIGFtb3VudC4AAAAId2l0aGRyYXcAAAACAAAAAAAAAAllc2Nyb3dfaWQAAAAAAAAGAAAAAAAAAAVwYXllZQAAAAAAABMAAAABAAAD6QAAAAsAAAAD",
         "AAAAAAAAAEZSZXR1cm5zIGN1cnJlbnQgdmVzdGVkLCB3aXRoZHJhd24sIGFuZCBjbGFpbWFibGUgYW1vdW50cyBmb3IgYSBzdHJlYW0uAAAAAAALZ2V0X3Zlc3RpbmcAAAAAAQAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAEAAAPpAAAH0AAAAAtWZXN0aW5nSW5mbwAAAAAD",
         "AAAAAAAAAPhSb3RhdGVzIGEgZnVuZGVkIGVzY3JvdydzIHJlbGVhc2VyLiBCb3RoIHRoZSBjdXJyZW50IHJlbGVhc2VyIGFuZApwYXllciBtdXN0IGF1dGhvcml6ZSB0aGUgY2hhbmdlOyB0aGUgcGF5ZXIncyBjb25zZW50IHByZXZlbnRzIGEKY29tcHJvbWlzZWQgcmVsZWFzZXIgZnJvbSBzaWxlbnRseSBhcHBvaW50aW5nIGFuIGF0dGFja2VyLiBUaGUKcmVwbGFjZW1lbnQgY2Fubm90IGJlIHRoZSBjb250cmFjdCBpdHNlbGYgb3IgdGhlIHBheWVlLgAAAA9yb3RhdGVfcmVsZWFzZXIAAAAAAwAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAAAAAAGY2FsbGVyAAAAAAATAAAAAAAAAAxuZXdfcmVsZWFzZXIAAAATAAAAAQAAA+kAAAACAAAAAw==",
@@ -983,6 +1002,8 @@ export class Client extends ContractClient {
         top_up: this.txFromJSON<Result<void>>,
         get_escrow: this.txFromJSON<Result<EscrowData>>,
         get_status: this.txFromJSON<Result<EscrowStatus>>,
+        get_escrows: this.txFromJSON<Result<Array<Option<EscrowData>>>>,
+        next_escrow_id: this.txFromJSON<u64>,
         withdraw: this.txFromJSON<Result<i128>>,
         get_vesting: this.txFromJSON<Result<VestingInfo>>,
         rotate_releaser: this.txFromJSON<Result<void>>,

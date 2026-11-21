@@ -107,6 +107,16 @@
       "return": "Result<Option<Contribution>, Error>"
     },
     {
+      "name": "next_escrow_id",
+      "args": "env: Env",
+      "return": "u64"
+    },
+    {
+      "name": "get_escrows",
+      "args": "env: Env, ids: Vec<u64>,",
+      "return": "Result<Vec<Option<EscrowData>>, Error>"
+    },
+    {
       "name": "get_status",
       "args": "env: Env, escrow_id: u64",
       "return": "Result<EscrowStatus, Error>"
