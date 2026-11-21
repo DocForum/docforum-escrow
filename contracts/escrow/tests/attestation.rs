@@ -181,15 +181,15 @@ fn release_with_attestation_rejects_cross_contract_replay() {
     // release here, because the message binds the contract id.
     let other_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(env), Address::generate(env)),
+        (Vec::<Address>::new(&env), Address::generate(&env)),
     );
-    let other = EscrowContractClient::new(env, &other_id);
+    let other = EscrowContractClient::new(&env, &other_id);
     let other_escrow = other.create_escrow_with_attester(
         &f.payer,
         &f.payee,
         &f.token_id,
         &300,
-        &String::from_str(env, "opaque-condition-ref"),
+        &String::from_str(&env, "opaque-condition-ref"),
         &f.releaser,
         &None,
         &false,
@@ -236,7 +236,7 @@ fn release_with_attestation_needs_an_attester() {
         &f.payee,
         &f.token_id,
         &100,
-        &String::from_str(env, "opaque-condition-ref"),
+        &String::from_str(&env, "opaque-condition-ref"),
         &f.releaser,
         &None,
         &false,
@@ -266,7 +266,7 @@ fn attester_is_stored_and_plain_escrows_have_none() {
         &f.payee,
         &f.token_id,
         &100,
-        &String::from_str(env, "opaque-condition-ref"),
+        &String::from_str(&env, "opaque-condition-ref"),
         &f.releaser,
         &None,
         &false,
