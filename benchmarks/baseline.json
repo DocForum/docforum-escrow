@@ -54,6 +54,19 @@
         }
       }
     },
+    "create_escrows": {
+      "source_bytes": 219,
+      "profile": {
+        "before": {
+          "cpu_instructions": 8867986,
+          "memory_bytes": 2048839
+        },
+        "after": {
+          "cpu_instructions": 8867986,
+          "memory_bytes": 2048839
+        }
+      }
+    },
     "accept": {
       "source_bytes": 358,
       "profile": {
@@ -168,6 +181,123 @@
         "after": {
           "cpu_instructions": 405382,
           "memory_bytes": 153081
+        }
+      }
+    },
+    "settle_many": {
+      "source_bytes": 277,
+      "profile": {
+        "before": {
+          "cpu_instructions": 10263023,
+          "memory_bytes": 2290599
+        },
+        "after": {
+          "cpu_instructions": 10263023,
+          "memory_bytes": 2290599
+        }
+      }
+    },
+    "create_pooled_escrow": {
+      "source_bytes": 588,
+      "profile": {
+        "before": {
+          "cpu_instructions": 238018,
+          "memory_bytes": 111082
+        },
+        "after": {
+          "cpu_instructions": 238018,
+          "memory_bytes": 111082
+        }
+      }
+    },
+    "contribute": {
+      "source_bytes": 208,
+      "profile": {
+        "before": {
+          "cpu_instructions": 656604,
+          "memory_bytes": 228857
+        },
+        "after": {
+          "cpu_instructions": 656604,
+          "memory_bytes": 228857
+        }
+      }
+    },
+    "claim_refund": {
+      "source_bytes": 437,
+      "profile": {
+        "before": {
+          "cpu_instructions": 539726,
+          "memory_bytes": 201949
+        },
+        "after": {
+          "cpu_instructions": 539726,
+          "memory_bytes": 201949
+        }
+      }
+    },
+    "cancel": {
+      "source_bytes": 526,
+      "profile": {
+        "before": {
+          "cpu_instructions": 461137,
+          "memory_bytes": 152639
+        },
+        "after": {
+          "cpu_instructions": 461137,
+          "memory_bytes": 152639
+        }
+      }
+    },
+    "transfer_payee": {
+      "source_bytes": 492,
+      "profile": {
+        "before": {
+          "cpu_instructions": 187243,
+          "memory_bytes": 86254
+        },
+        "after": {
+          "cpu_instructions": 187243,
+          "memory_bytes": 86254
+        }
+      }
+    },
+    "pause": {
+      "source_bytes": 232,
+      "profile": {
+        "before": {
+          "cpu_instructions": 86391,
+          "memory_bytes": 28102
+        },
+        "after": {
+          "cpu_instructions": 86391,
+          "memory_bytes": 28102
+        }
+      }
+    },
+    "unpause": {
+      "source_bytes": 231,
+      "profile": {
+        "before": {
+          "cpu_instructions": 87250,
+          "memory_bytes": 27950
+        },
+        "after": {
+          "cpu_instructions": 87250,
+          "memory_bytes": 27950
+        }
+      }
+    },
+    "solvency": {
+      "source_bytes": 246,
+      "profile": {
+        "before": {
+          "cpu_instructions": 168457,
+          "memory_bytes": 76963
+        },
+        "after": {
+          "cpu_instructions": 168457,
+          "memory_bytes": 76963
         }
       }
     }
