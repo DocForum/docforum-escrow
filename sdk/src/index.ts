@@ -166,6 +166,7 @@ export * from "./networks.js";
 export * from "./pooled.js";
 export * from "./prepare-submit.js";
 export * from "./relayed-auth.js";
+export * from "./solvency.js";
 
 import { type ArchivedEntryBehavior } from "./archived-entries.js";
 import { type BatchCreateItem, type BatchItemResult, type BatchOptions, BatchPartialFailureError, type BatchSettleOperation, MAX_BATCH_SIZE } from "./batch.js";
