@@ -28,7 +28,14 @@ import { EscrowIndexerClient } from "@docforum/escrow-sdk";
 
 const indexer = new EscrowIndexerClient({ endpoint: process.env.ESCROW_INDEXER_URL! });
 const page = await indexer.listEscrows({ first: 50 });
+
+// Everything a given address is the payer or payee of:
+const mine = await indexer.listEscrows({ payer: address, first: 50 });
 ```
+
+Pass `payer` and/or `payee` to restrict a page to one address's escrows
+(ADR 0015). Both filter the `Escrow` entity's existing fields, so the indexer
+needs no change; there is no on-chain `list_by_payer` / `list_by_payee`.
 
 Do not point this project at mainnet before the repository's security review.
 
