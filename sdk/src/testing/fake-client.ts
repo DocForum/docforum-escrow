@@ -1,11 +1,16 @@
 import type {
   CreateEscrowParams,
   Escrow,
-  EscrowClientConfig,
   EscrowStatus,
   ReleaseOrRefundParams,
 } from "../index.js";
 import { signerAddress } from "../signers/types.js";
+
+/** Config accepted by the fake; only the injectable clock is used in-memory. */
+export interface FakeEscrowClientConfig {
+  clock?: () => bigint;
+  [key: string]: unknown;
+}
 
 /** Kinds of failure {@link FakeEscrowClient.failNext} can inject. */
 export type FakeFailureKind = "timeout" | "rpcError" | "notFundedRace";
@@ -70,7 +75,7 @@ export class FakeEscrowClient {
   private nextTx = 0;
   private readonly clock: () => bigint;
 
-  constructor(config: EscrowClientConfig & { clock?: () => bigint } ) {
+  constructor(config: FakeEscrowClientConfig) {
     // Keep constructor shape compatible with EscrowClient; no config values
     // are needed by the in-memory implementation.
     this.clock = config.clock ?? (() => BigInt(Math.floor(Date.now() / 1000)));
@@ -173,4 +178,3 @@ export class FakeEscrowClient {
     throw new FakeEscrowError(failure.kind === "timeout" ? "Timeout" : "RpcError");
   }
 }
-
