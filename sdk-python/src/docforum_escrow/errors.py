@@ -86,6 +86,11 @@ __all__ = [
     "StreamTopUpUnsupportedError",
     "InvalidSettlementAmountError",
     "SettlementNotSupportedError",
+    "ScheduleTooEarlyError",
+    "ScheduleCompleteError",
+    "ScheduleCancelledError",
+    "AllowanceExhaustedError",
+    "InvalidScheduleError",
 ]
 
 # The contract's `Error` enum. tests/test_errors.py checks this against
@@ -142,6 +147,11 @@ CONTRACT_ERROR_NAMES: dict[int, str] = {
     51: "StreamTopUpUnsupported",
     52: "InvalidSettlementAmount",
     53: "SettlementNotSupported",
+    11500: "ScheduleTooEarly",
+    11501: "ScheduleComplete",
+    11502: "ScheduleCancelled",
+    11503: "AllowanceExhausted",
+    11504: "InvalidSchedule",
 }
 
 
@@ -564,6 +574,41 @@ class SettlementNotSupportedError(ContractError):
 
     code = 53
     contract_error = "SettlementNotSupported"
+
+
+class ScheduleTooEarlyError(ContractError):
+    """Contract error 11500: ``ScheduleTooEarly``."""
+
+    code = 11500
+    contract_error = "ScheduleTooEarly"
+
+
+class ScheduleCompleteError(ContractError):
+    """Contract error 11501: ``ScheduleComplete``."""
+
+    code = 11501
+    contract_error = "ScheduleComplete"
+
+
+class ScheduleCancelledError(ContractError):
+    """Contract error 11502: ``ScheduleCancelled``."""
+
+    code = 11502
+    contract_error = "ScheduleCancelled"
+
+
+class AllowanceExhaustedError(ContractError):
+    """Contract error 11503: ``AllowanceExhausted``."""
+
+    code = 11503
+    contract_error = "AllowanceExhausted"
+
+
+class InvalidScheduleError(ContractError):
+    """Contract error 11504: ``InvalidSchedule``."""
+
+    code = 11504
+    contract_error = "InvalidSchedule"
 
 
 _CLASSES: dict[int, type[ContractError]] = {
