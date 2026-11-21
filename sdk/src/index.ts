@@ -486,6 +486,9 @@ export class EscrowClient {
     if (params.feeBps !== undefined && (!Number.isInteger(params.feeBps) || params.feeBps < 0 || params.feeBps > MAX_FEE_BPS)) {
       throw new RangeError(`feeBps must be an integer between 0 and ${MAX_FEE_BPS} (10 %)`);
     }
+    if (params.requiresAcceptance && (params.feeRecipient !== undefined || params.feeBps !== undefined)) {
+      throw new TypeError("requiresAcceptance cannot be combined with feeRecipient or feeBps.");
+    }
     const client = this.contractClient(params.payer);
     const createParams = {
       payer: signerAddress(params.payer),
