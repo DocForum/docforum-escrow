@@ -1,0 +1,1 @@
+Issue #96 (Phase E7): contract interface snapshot and breaking ABI guard. Added committed `contract-spec.json` parity check, append-only error code enforcement, and interface change classification (additive vs breaking) requiring semver bump notes.
