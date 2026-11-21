@@ -206,6 +206,7 @@ fn refund_rejects_unauthorized_caller() {
 fn release_blocked_by_unsatisfied_dependency() {
     // Dependency edits are scoped to the contract; this test asserts that a
     // dependent escrow cannot release while its dependency is still Funded.
+    // Expected error: DependencyNotSatisfied (code 55) — see contract-spec.json.
     let env = Env::default();
     env.mock_all_auths();
     let f = fund_escrow(&env, 300);

@@ -115,7 +115,13 @@ impl EscrowContract {
     ///
     /// - the escrow's releaser (docs/adr/0002), always; or
     /// - **anyone**, once `refund_after` has been reached — the timeout
-    ///   refund path for a lost/unsignable releaser key (docs/adr/0004).
+        /// refund path for a lost/unsignable releaser key (docs/adr/0004).
+    ///
+    /// Refunds are never blocked by a `depends_on` dependency (Phase E5).
+    /// A dependency that settles as `Refunded` rather than `Released` makes
+    /// the dependent permanently unreleasable; the dependent can still be
+    /// refunded through this path. Cross-contract dependencies are out of
+    /// scope.
     ///
     /// The destination never changes: timeout or not, funds only ever go
     /// to the stored `refund_to`, which no caller can influence. With no

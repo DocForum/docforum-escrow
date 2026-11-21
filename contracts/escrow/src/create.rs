@@ -346,4 +346,57 @@ impl EscrowContract {
             .set(&DataKey::TotalAmount(id), &amount);
         Ok(id)
     }
+
+    /// Creates an escrow that is releasable only after the escrow `depends_on`
+    /// (in this contract) has reached `required_status` (ROADMAP.md Phase E5).
+    /// The dependency must be an existing escrow with a strictly lower id,
+    /// which rules out cycles. Refunds are never blocked by a dependency; if
+    /// the dependency is refunded instead of released, this escrow can no
+    /// longer be released and must be refunded. Cross-contract dependencies
+    /// are out of scope.
+    pub fn create_escrow_with_dependency(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        refund_to: Option<Address>,
+        depends_on: (u64, EscrowStatus),
+    ) -> Result<u64, Error> {
+        let (dep_id, required_status) = depends_on;
+        let next_id = Self::next_escrow_id(&env);
+        if dep_id >= next_id {
+            return Err(Error::InvalidDependency);
+        }
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        Self::create_escrow_inner(
+            &env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            1,
+            refund_after,
+            false,
+            false,
+            refund_to,
+            None,
+            None,
+            None,
+            false,
+        )
+        .and_then(|id| {
+            env.storage().persistent().set(
+                &DataKey::Dependency(id),
+                &(dep_id, required_status),
+            );
+            Ok(id)
+        })
+    }
 }
