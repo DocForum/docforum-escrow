@@ -15,7 +15,7 @@ impl EscrowContract {
         token: Address,
         amount: i128,
         condition_ref: String,
-        options: EscrowOptions,
+        query_options: EscrowOptions,
     ) -> Result<u64, Error> {
         let EscrowOptions {
             releasers,
@@ -27,7 +27,7 @@ impl EscrowContract {
             refund_to,
             fee_recipient,
             fee_bps,
-        } = options;
+        } = query_options;
         Self::create_escrow_inner(
             &env,
             payer,
