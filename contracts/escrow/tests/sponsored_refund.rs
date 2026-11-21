@@ -187,6 +187,47 @@ fn refund_to_is_fixed_at_creation_and_visible_via_get_escrow() {
 }
 
 #[test]
+fn a_sponsor_refund_to_cannot_top_up() {
+    // Being the refund destination grants no funding authority: only the
+    // stored payer may grow the escrow, exactly as for a plain escrow.
+    let env = Env::default();
+    env.mock_all_auths();
+    let f = fund(&env, true, None);
+
+    assert_eq!(
+        f.client.try_top_up(&f.escrow_id, &f.refund_to, &100),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(f.client.get_escrow(&f.escrow_id).amount, 300);
+    assert_eq!(f.token.balance(&f.contract_id), 300);
+
+    f.client.top_up(&f.escrow_id, &f.payer, &100);
+    assert_eq!(f.client.get_escrow(&f.escrow_id).amount, 400);
+}
+
+#[test]
+fn refund_after_a_top_up_returns_the_full_new_total_to_refund_to() {
+    // A top-up grows the refundable total; the refund still pays the
+    // stored `refund_to`, and the liability counter follows both moves
+    // (issue #39).
+    let env = Env::default();
+    env.mock_all_auths();
+    let f = fund(&env, true, None);
+
+    f.client.top_up(&f.escrow_id, &f.payer, &200);
+    assert_eq!(f.client.solvency(&f.token.address), (500, 500));
+
+    f.client.refund(&f.escrow_id, &f.releaser);
+
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Refunded);
+    assert_eq!(f.token.balance(&f.refund_to), 500);
+    assert_eq!(f.token.balance(&f.payer), 500);
+    assert_eq!(f.token.balance(&f.payee), 0);
+    assert_eq!(f.token.balance(&f.contract_id), 0);
+    assert_eq!(f.client.solvency(&f.token.address), (0, 0));
+}
+
+#[test]
 fn release_still_pays_the_payee_not_refund_to() {
     let env = Env::default();
     env.mock_all_auths();
