@@ -24,6 +24,28 @@ describe("EscrowIndexerClient", () => {
     );
   });
 
+  it("filters the page by payer and payee", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      data: {
+        escrows: {
+          nodes: [{ id: "8", escrowId: "8", payer: "GPAYER", payee: "GPAYEE", status: "Released" }],
+          pageInfo: { endCursor: null, hasNextPage: false },
+        },
+      },
+    }), { status: 200 }));
+    const client = new EscrowIndexerClient({ endpoint: "https://indexer.example.test/graphql", fetch: fetchMock as unknown as typeof fetch });
+
+    await expect(client.listEscrows({ payer: "GPAYER", payee: "GPAYEE" })).resolves.toMatchObject({
+      nodes: [{ escrowId: "8", status: "Released" }],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      new URL("https://indexer.example.test/graphql"),
+      expect.objectContaining({
+        body: expect.stringContaining('"filter":{"payer":{"equalTo":"GPAYER"},"payee":{"equalTo":"GPAYEE"}}'),
+      }),
+    );
+  });
+
   it("rejects insecure endpoints and invalid page sizes", async () => {
     expect(() => new EscrowIndexerClient({ endpoint: "http://indexer.example.test" })).toThrow("must use HTTPS");
     const client = new EscrowIndexerClient({ endpoint: "http://localhost:3000/graphql" });
