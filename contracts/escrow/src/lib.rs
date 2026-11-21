@@ -36,6 +36,10 @@
 // docs/adr/0011. Pooled escrows add two storage records (funding config,
 // per-payer contributions); `EscrowData` and every pre-existing entry
 // point keep their exact meaning.
+// Phase E5 (issue #115): recurring escrows funded through SEP-41 token
+// allowances — `create_schedule` + keeper-triggered `fund_next` +
+// `cancel_schedule`, see docs/adr/0015. Each due period pulls exactly
+// one period's amount with `transfer_from` and creates a normal escrow.
 //
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
@@ -87,6 +91,7 @@ mod pause;
 mod payee_transfer;
 mod pooled;
 mod queries;
+mod recurring;
 mod refund_extension;
 mod release_refund;
 mod releasers;

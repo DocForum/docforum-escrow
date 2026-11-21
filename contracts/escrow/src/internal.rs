@@ -2,6 +2,19 @@
 
 use crate::*;
 
+/// How an escrow's funds arrive (issue #115): a normal creation pulls
+/// them with `transfer` under the payer's signature; a recurring period
+/// pulls them with `transfer_from` under the payer's pre-granted
+/// allowance, so the keeper triggering it needs no signature.
+pub(crate) enum Funding {
+    /// Pull with `token.transfer`, payer authorizes this invocation.
+    Transfer,
+    /// Pull with `token.transfer_from` under an existing allowance.
+    /// The payer does not authorize this invocation; the allowance is
+    /// the authorization.
+    Allowance,
+}
+
 impl EscrowContract {
     pub(crate) fn create_escrow_inner(
         env: &Env,
@@ -39,6 +52,7 @@ impl EscrowContract {
             fee_bps,
             payer_already_authorized,
             None,
+            Funding::Transfer,
         )
     }
 
@@ -60,6 +74,7 @@ impl EscrowContract {
         fee_bps: Option<u32>,
         payer_already_authorized: bool,
         payee_shares: Option<Vec<PayeeShare>>,
+        funding: Funding,
     ) -> Result<u64, Error> {
         // Every creation entry point funnels through here, so this one
         // check covers all deposit paths: while paused, no new escrow can
@@ -169,7 +184,10 @@ impl EscrowContract {
             payee.require_auth();
         }
 
-        Self::transfer_in_exact(env, &token, &payer, amount)?;
+        match funding {
+            Funding::Transfer => Self::transfer_in_exact(env, &token, &payer, amount)?,
+            Funding::Allowance => Self::transfer_from_exact(env, &token, &payer, amount)?,
+        }
 
         let id = Self::next_id(env);
         let data = EscrowData {
