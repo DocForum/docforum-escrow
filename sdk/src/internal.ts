@@ -52,7 +52,9 @@ export function assertPositiveAmount(call: { method: LifecycleMethod; amount: bi
 
 /** The party whose signature a lifecycle call needs. */
 export function lifecycleCallSigner(call: LifecycleCall): string {
-  return call.method === "accept" ? call.payee : call.payer;
+  if (call.method === "accept") return call.payee;
+  if (call.method === "transfer_payee") return call.currentPayee;
+  return call.payer;
 }
 
 /** Throws unless `value` is a positive whole number of ledgers. */
