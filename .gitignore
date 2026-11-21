@@ -8,3 +8,4 @@ sdk/docs-api/
 .env.local
 *.log
 .DS_Store
+scripts/load/out/

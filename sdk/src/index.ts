@@ -154,6 +154,7 @@ export type {
 // feature); index.ts re-exports them all and keeps the EscrowClient class.
 export * from "./archived-entries.js";
 export * from "./batch.js";
+export * from "./channel-accounts.js";
 export * from "./client-config.js";
 export * from "./contract-version.js";
 export * from "./escrow-types.js";
