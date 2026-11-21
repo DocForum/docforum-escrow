@@ -208,7 +208,7 @@ fn fund_next_creates_one_normal_escrow_per_period() {
     asset.mint(&payer, &1_000);
     let contract_id = deploy(&env);
     let client = EscrowContractClient::new(&env, &contract_id);
-    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &u32::MAX);
+    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &(env.ledger().get().sequence_number + 100_000));
 
     let schedule_id = create_schedule(&client, &env, &payer, &payee, &token_id, &releaser);
     env.ledger().set_timestamp(FIRST_DUE);
@@ -240,7 +240,7 @@ fn fund_next_rejects_an_early_trigger() {
     asset.mint(&payer, &1_000);
     let contract_id = deploy(&env);
     let client = EscrowContractClient::new(&env, &contract_id);
-    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &u32::MAX);
+    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &(env.ledger().get().sequence_number + 100_000));
 
     let schedule_id = create_schedule(&client, &env, &payer, &payee, &token_id, &releaser);
     env.ledger().set_timestamp(FIRST_DUE - 1);
@@ -265,7 +265,7 @@ fn fund_next_stops_when_the_allowance_runs_out() {
     asset.mint(&payer, &1_000);
     let contract_id = deploy(&env);
     let client = EscrowContractClient::new(&env, &contract_id);
-    asset.approve(&payer, &contract_id, &AMOUNT, &u32::MAX);
+    asset.approve(&payer, &contract_id, &AMOUNT, &(env.ledger().get().sequence_number + 100_000));
 
     let schedule_id = create_schedule(&client, &env, &payer, &payee, &token_id, &releaser);
     env.ledger().set_timestamp(FIRST_DUE);
@@ -322,7 +322,7 @@ fn fund_next_needs_no_signature_from_keeper_or_payer() {
     asset.mint(&payer, &1_000);
     let contract_id = deploy(&env);
     let client = EscrowContractClient::new(&env, &contract_id);
-    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &u32::MAX);
+    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &(env.ledger().get().sequence_number + 100_000));
 
     let schedule_id = create_schedule(&client, &env, &payer, &payee, &token_id, &releaser);
     env.set_auths(&[]);
@@ -345,7 +345,7 @@ fn late_trigger_funds_one_period_at_a_time() {
     asset.mint(&payer, &1_000);
     let contract_id = deploy(&env);
     let client = EscrowContractClient::new(&env, &contract_id);
-    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &u32::MAX);
+    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &(env.ledger().get().sequence_number + 100_000));
 
     let schedule_id = create_schedule(&client, &env, &payer, &payee, &token_id, &releaser);
     env.ledger().set_timestamp(FIRST_DUE + 3 * PERIOD);
@@ -372,7 +372,7 @@ fn cancel_stops_future_periods_and_leaves_escrows_alone() {
     asset.mint(&payer, &1_000);
     let contract_id = deploy(&env);
     let client = EscrowContractClient::new(&env, &contract_id);
-    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &u32::MAX);
+    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &(env.ledger().get().sequence_number + 100_000));
 
     let schedule_id = create_schedule(&client, &env, &payer, &payee, &token_id, &releaser);
     env.ledger().set_timestamp(FIRST_DUE);
@@ -404,7 +404,7 @@ fn cancel_requires_the_payer() {
     asset.mint(&payer, &1_000);
     let contract_id = deploy(&env);
     let client = EscrowContractClient::new(&env, &contract_id);
-    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &u32::MAX);
+    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &(env.ledger().get().sequence_number + 100_000));
 
     let schedule_id = create_schedule(&client, &env, &payer, &payee, &token_id, &releaser);
     let stranger = Address::generate(&env);
@@ -430,7 +430,7 @@ fn complete_schedule_rejects_further_funding() {
     asset.mint(&payer, &1_000);
     let contract_id = deploy(&env);
     let client = EscrowContractClient::new(&env, &contract_id);
-    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &u32::MAX);
+    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &(env.ledger().get().sequence_number + 100_000));
 
     let schedule_id = create_schedule(&client, &env, &payer, &payee, &token_id, &releaser);
     for period in 0..TOTAL_PERIODS {
@@ -459,7 +459,7 @@ fn period_escrow_carries_the_schedules_refund_after() {
     asset.mint(&payer, &1_000);
     let contract_id = deploy(&env);
     let client = EscrowContractClient::new(&env, &contract_id);
-    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &u32::MAX);
+    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &(env.ledger().get().sequence_number + 100_000));
 
     let deadline = FIRST_DUE + 100_000;
     let schedule_id = client.create_schedule(
@@ -490,7 +490,7 @@ fn fund_next_uses_the_payers_signature_tree() {
     asset.mint(&payer, &1_000);
     let contract_id = deploy(&env);
     let client = EscrowContractClient::new(&env, &contract_id);
-    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &u32::MAX);
+    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &(env.ledger().get().sequence_number + 100_000));
 
     let schedule_id = create_schedule(&client, &env, &payer, &payee, &token_id, &releaser);
     env.ledger().set_timestamp(FIRST_DUE);
