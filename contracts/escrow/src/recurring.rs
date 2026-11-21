@@ -30,7 +30,7 @@ impl EscrowContract {
         amount: i128,
         condition_ref: String,
         releaser: Address,
-        refund_after: Option<u64>,
+        refund_after_seconds: Option<u64>,
         period_seconds: u64,
         total_periods: u32,
         first_due: u64,
@@ -47,11 +47,6 @@ impl EscrowContract {
         }
         if condition_ref.len() > MAX_CONDITION_REF_LEN {
             return Err(Error::ConditionRefTooLong);
-        }
-        if let Some(deadline) = refund_after {
-            if deadline <= env.ledger().timestamp() {
-                return Err(Error::InvalidRefundAfter);
-            }
         }
         let allowed_tokens: Vec<Address> = env
             .storage()
@@ -78,7 +73,7 @@ impl EscrowContract {
             amount,
             condition_ref,
             releaser,
-            refund_after,
+            refund_after_seconds,
             period_seconds,
             total_periods,
             periods_funded: 0,
@@ -133,6 +128,20 @@ impl EscrowContract {
         if env.ledger().timestamp() < schedule.next_due {
             return Err(Error::ScheduleTooEarly);
         }
+        // Each period escrow gets its own refund deadline: now plus the
+        // schedule's relative window. An absolute deadline stored at
+        // creation would pass while periods remain, and every later
+        // fund_next would fail the creation path's refund_after <= now
+        // check — the schedule could never complete.
+        let refund_after = match schedule.refund_after_seconds {
+            Some(seconds) => Some(
+                env.ledger()
+                    .timestamp()
+                    .checked_add(seconds)
+                    .ok_or(Error::Overflow)?,
+            ),
+            None => None,
+        };
         let mut releasers = Vec::new(&env);
         releasers.push_back(schedule.releaser.clone());
         let escrow_id = Self::create_escrow_with_payees_inner(
@@ -144,7 +153,7 @@ impl EscrowContract {
             schedule.condition_ref.clone(),
             releasers,
             1,
-            schedule.refund_after,
+            refund_after,
             false,
             false,
             None,

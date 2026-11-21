@@ -44,7 +44,7 @@ pub struct RecurringSchedule {
     pub amount: i128,              // pulled for each period
     pub condition_ref: String,     // stored verbatim on every period escrow
     pub releaser: Address,         // single releaser of every period escrow
-    pub refund_after: Option<u64>, // passed through to every period escrow
+    pub refund_after_seconds: Option<u64>, // relative refund window, applied per period at funding time
     pub period_seconds: u64,       // seconds between period due times
     pub total_periods: u32,        // how many periods the schedule funds
     pub periods_funded: u32,
@@ -57,10 +57,19 @@ Stored under `DataKey::RecurringSchedule(schedule_id)`, with ids from a
 separate `DataKey::NextScheduleId` counter so schedule ids never consume
 escrow ids. `create_schedule` validates the terms before any auth
 prompt: positive `amount`, non-zero `period_seconds` and `total_periods`,
-`condition_ref` within the 64-byte bound, a `refund_after` strictly in
-the future when given, and the token on the deploy-time allowlist when
-one is configured. Only the payer may create a schedule, and the payer
-signs that call.
+`condition_ref` within the 64-byte bound, and the token on the deploy-time
+allowlist when one is configured. Only the payer may create a schedule,
+and the payer signs that call.
+
+The refund window is relative, not an absolute deadline. `fund_next`
+sets each period escrow's `refund_after` to the ledger timestamp at
+funding plus `refund_after_seconds` (checked addition), or no deadline
+when the schedule stores `None`. An absolute deadline stored at creation
+would pass while periods remain, and every later `fund_next` would fail
+the creation path's `refund_after <= now` check, so a schedule whose
+periods run past its deadline could never complete — and earlier periods
+would get much longer refund windows than later ones. A relative window
+gives every period the same length of window no matter when it is funded.
 
 Period escrows are plain single-releaser escrows: no fee, no callback,
 no acceptance gate, no release time. They are created through the

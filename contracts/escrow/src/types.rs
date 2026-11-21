@@ -157,8 +157,14 @@ pub struct RecurringSchedule {
     pub condition_ref: String,
     /// Single releaser of every period escrow.
     pub releaser: Address,
-    /// Passed through to every period escrow.
-    pub refund_after: Option<u64>,
+    /// Relative refund window, in seconds, applied to each period escrow
+    /// when it is funded: the period escrow's `refund_after` is the
+    /// ledger timestamp at funding plus this window. `None` means no
+    /// refund deadline. Relative on purpose: an absolute deadline stored
+    /// at creation would pass while periods remain, and every later
+    /// `fund_next` would fail the creation path's `refund_after <= now`
+    /// check, so the schedule could never complete.
+    pub refund_after_seconds: Option<u64>,
     /// Seconds between period due times.
     pub period_seconds: u64,
     /// How many periods the schedule funds in total.

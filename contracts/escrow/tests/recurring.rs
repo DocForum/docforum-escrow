@@ -151,21 +151,6 @@ fn create_schedule_rejects_invalid_terms() {
         ),
         Err(Ok(docforum_escrow::Error::ConditionRefTooLong))
     );
-    assert_eq!(
-        client.try_create_schedule(
-            &payer,
-            &payee,
-            &token_id,
-            &AMOUNT,
-            &condition_ref,
-            &releaser,
-            &Some(0),
-            &PERIOD,
-            &TOTAL_PERIODS,
-            &FIRST_DUE,
-        ),
-        Err(Ok(docforum_escrow::Error::InvalidRefundAfter))
-    );
 }
 
 #[test]
@@ -461,7 +446,9 @@ fn period_escrow_carries_the_schedules_refund_after() {
     let client = EscrowContractClient::new(&env, &contract_id);
     asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &(env.ledger().get().sequence_number + 100_000));
 
-    let deadline = FIRST_DUE + 100_000;
+    // The window is relative: funded at FIRST_DUE, the period escrow's
+    // deadline is FIRST_DUE + window.
+    let window: u64 = 100_000;
     let schedule_id = client.create_schedule(
         &payer,
         &payee,
@@ -469,14 +456,99 @@ fn period_escrow_carries_the_schedules_refund_after() {
         &AMOUNT,
         &String::from_str(&env, "subscription-1"),
         &releaser,
-        &Some(deadline),
+        &Some(window),
         &PERIOD,
         &TOTAL_PERIODS,
         &FIRST_DUE,
     );
     env.ledger().set_timestamp(FIRST_DUE);
     let escrow_id = client.fund_next(&schedule_id);
-    assert_eq!(client.get_escrow(&escrow_id).refund_after, Some(deadline));
+    assert_eq!(
+        client.get_escrow(&escrow_id).refund_after,
+        Some(FIRST_DUE + window)
+    );
+}
+
+#[test]
+fn fund_next_succeeds_after_first_period_refund_deadline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (token_id, _token, asset) = setup(&env);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    asset.mint(&payer, &1_000);
+    let contract_id = deploy(&env);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &(env.ledger().get().sequence_number + 100_000));
+
+    // A short refund window: the first period's deadline passes before
+    // the second period is due. With the old absolute deadline, the
+    // second fund_next would have failed with InvalidRefundAfter.
+    let window: u64 = 500;
+    let schedule_id = client.create_schedule(
+        &payer,
+        &payee,
+        &token_id,
+        &AMOUNT,
+        &String::from_str(&env, "subscription-1"),
+        &releaser,
+        &Some(window),
+        &PERIOD,
+        &TOTAL_PERIODS,
+        &FIRST_DUE,
+    );
+    env.ledger().set_timestamp(FIRST_DUE);
+    let first = client.fund_next(&schedule_id);
+    assert_eq!(
+        client.get_escrow(&first).refund_after,
+        Some(FIRST_DUE + window)
+    );
+
+    // Past the first period's refund deadline, the next period still
+    // funds — it gets a fresh deadline of its own.
+    env.ledger().set_timestamp(FIRST_DUE + PERIOD);
+    let second = client.fund_next(&schedule_id);
+    assert_eq!(
+        client.get_escrow(&second).refund_after,
+        Some(FIRST_DUE + PERIOD + window)
+    );
+}
+
+#[test]
+fn fund_next_with_zero_refund_window_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (token_id, _token, asset) = setup(&env);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    asset.mint(&payer, &1_000);
+    let contract_id = deploy(&env);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    asset.approve(&payer, &contract_id, &(AMOUNT * TOTAL_PERIODS as i128), &(env.ledger().get().sequence_number + 100_000));
+
+    // A zero window is accepted at creation but can never fund: the
+    // period escrow's deadline would be now, which the creation path
+    // rejects.
+    let schedule_id = client.create_schedule(
+        &payer,
+        &payee,
+        &token_id,
+        &AMOUNT,
+        &String::from_str(&env, "subscription-1"),
+        &releaser,
+        &Some(0),
+        &PERIOD,
+        &TOTAL_PERIODS,
+        &FIRST_DUE,
+    );
+    env.ledger().set_timestamp(FIRST_DUE);
+    assert_eq!(
+        client.try_fund_next(&schedule_id),
+        Err(Ok(docforum_escrow::Error::InvalidRefundAfter))
+    );
+    assert_eq!(client.get_schedule(&schedule_id).periods_funded, 0);
 }
 
 #[test]
