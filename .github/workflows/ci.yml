@@ -140,6 +140,9 @@ jobs:
           fi
           echo "Committed test snapshots match this run."
 
+      - name: Fail if test snapshots are orphaned
+        run: node scripts/check-orphaned-snapshots.mjs
+
       - name: cargo build --release (wasm)
         run: cargo build --target wasm32v1-none --release
 
