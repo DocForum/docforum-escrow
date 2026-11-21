@@ -157,6 +157,11 @@
       "return": "Result<(), Error>"
     },
     {
+      "name": "rotate_releaser_with_approvals",
+      "args": "env: Env, escrow_id: u64, approvers: Vec<Address>, old_releaser: Address, new_releaser: Address,",
+      "return": "Result<(), Error>"
+    },
+    {
       "name": "settle",
       "args": "env: Env, escrow_id: u64, caller: Address, payee_amount: i128,",
       "return": "Result<(), Error>"
