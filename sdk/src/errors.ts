@@ -67,10 +67,47 @@ export type BalanceMismatchError = InstanceType<typeof BalanceMismatchError>;
 
 /** Simulating the transaction failed for a reason other than a contract error. */
 export class SimulationFailure extends EscrowError {}
+
+/**
+ * Canonical names for the lifecycle error classes. These classes are defined in this
+ * module; other modules (including transaction-lifecycle.ts) must import them from here
+ * rather than re-declaring them.
+ */
+export type LifecycleErrorName =
+  | "SimulationFailure"
+  | "SubmissionFailure"
+  | "RequestTimeoutError"
+  | "TransactionPendingError"
+  | "TransactionFailedError";
+
 /** Submitting the signed transaction failed. */
 export class SubmissionFailure extends EscrowError {}
+
 /** The RPC request timed out. */
 export class RequestTimeoutError extends EscrowError {}
+
+/**
+ * The transaction was submitted (it has a hash) but its final status could not be
+ * determined before the confirmation deadline. Consumers should persist `hash` and
+ * query it later instead of resubmitting.
+ */
+export class TransactionPendingError extends EscrowError {
+  readonly hash: string;
+  constructor(hash: string, message?: string, options?: ErrorOptions) {
+    super(message ?? `Transaction ${hash} was submitted but its status is not yet known`, options);
+    this.hash = hash;
+  }
+}
+
+/** The network reported a transaction failure status on confirmation. */
+export class TransactionFailedError extends EscrowError {
+  readonly hash: string;
+  constructor(hash: string, message?: string, options?: ErrorOptions) {
+    super(message ?? `Transaction ${hash} failed on-chain`, options);
+    this.hash = hash;
+  }
+}
+
 /** Thrown when the RPC's reported network passphrase does not match the configured one. */
 export class NetworkMismatchError extends EscrowError {
   readonly expected: string | undefined;

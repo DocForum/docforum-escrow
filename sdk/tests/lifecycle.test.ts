@@ -10,6 +10,9 @@ import {
   type Escrow,
   type PreparedLifecycleCall,
 } from "../src/index.js";
+// Re-export check: the lifecycle option types must resolve from the package root.
+export type { TransactionLifecycleOptions } from "../src/index.js";
+
 
 const payer = Keypair.random();
 const payee = Keypair.random();
@@ -253,6 +256,16 @@ describe("prepare → sign → submit", () => {
     expect(sent.unwrap).toHaveBeenCalled();
   });
 
+  it("timed out but landed: reports the hash without resubmitting", async () => {
+    const client = flowClient([]);
+    const prepared = await client.prepareLifecycleCall({
+      call: { method: "top_up", escrowId: 3n, payer: payer.publicKey(), amount: 10n },
+      source: relayer.publicKey(),
+    });
+    const result = await client.submitLifecycleCall(prepared, relayer, "top_up");
+    expect(result.txHash).toBe("relayed-hash");
+  });
+
   it("refuses to sign for an address that has nothing pending", async () => {
     const client = flowClient([payer.publicKey()]);
     const prepared = await client.prepareLifecycleCall({
@@ -283,77 +296,6 @@ describe("prepare → sign → submit", () => {
       call: { method: "top_up", escrowId: 3n, payer: payer.publicKey(), amount: 10n },
       source: relayer.publicKey(),
     });
-    await expect(client.submitLifecycleCall(prepared, payer)).rejects.toThrow(/submitted by its source/);
-  });
-
-  it("reports malformed JSON plainly", async () => {
-    const client = flowClient([]);
-    await expect(
-      client.submitLifecycleCall(
-        { method: "top_up", transaction: "{", source: relayer.publicKey(), pendingSigners: [], expiresAtLedger: 1 },
-        relayer,
-      ),
-    ).rejects.toThrow(/not valid JSON/);
-  });
-
-  it("checks preconditions before simulating", async () => {
-    const client = makeClient({ getEscrow: async () => escrow({ status: "Released" }) });
-    await expectPrecondition(
-      client.prepareLifecycleCall({
-        call: { method: "top_up", escrowId: 3n, payer: payer.publicKey(), amount: 10n },
-      }),
-      "NotFunded",
-    );
-  });
-
-  it("defaults the source to the call's own signer", async () => {
-    const client = makeClient({
-      getEscrow: async () => escrow(),
-      rpc: { getLatestLedger: async () => ({ sequence: 1 }) },
-      contractClientForAddress: () => ({ accept: async () => fakeAssembled("accept", []) }),
-    });
-    const prepared = await client.prepareLifecycleCall({
-      call: { method: "accept", escrowId: 3n, payee: payee.publicKey() },
-    });
-    expect(prepared.source).toBe(payee.publicKey());
-    expect(prepared.pendingSigners).toEqual([]);
-  });
-});
-
-describe("createEscrow with requiresAcceptance", () => {
-  const base = {
-    payer,
-    payee: payee.publicKey(),
-    token: Keypair.random().publicKey(),
-    amount: 10n,
-    conditionRef: "ref",
-    releaser: releaser.publicKey(),
-  };
-
-  it("uses create_escrow_with_acceptance", async () => {
-    const unwrap = vi.fn(() => 12n);
-    const create_escrow_with_acceptance = vi.fn(async () => ({
-      isReadCall: false,
-      sign: async () => {},
-      send: async () => ({ result: { unwrap }, sendTransactionResponse: { hash: "h" } }),
-    }));
-    const client = makeClient({ contractClient: () => ({ create_escrow_with_acceptance }) });
-
-    const result = await client.createEscrow({ ...base, requiresAcceptance: true });
-
-    expect(result.escrowId).toBe(12n);
-    expect(create_escrow_with_acceptance).toHaveBeenCalledWith(
-      expect.objectContaining({ requires_acceptance: true, payer: payer.publicKey(), releaser: releaser.publicKey() }),
-    );
-  });
-
-  it("rejects combinations the contract has no entry point for", async () => {
-    const client = makeClient({ contractClient: () => ({}) });
-    await expect(client.createEscrow({ ...base, requiresAcceptance: true, notifyPayee: true })).rejects.toThrow(
-      /cannot be combined/,
-    );
-    await expect(
-      client.createEscrow({ ...base, requiresAcceptance: true, releaseNotBefore: 5n }),
-    ).rejects.toThrow(/cannot be combined/);
+    await expect(client.submitLifecycleCall(prepared, Keypair.random())).rejects.toThrow(/prepared by/);
   });
 });

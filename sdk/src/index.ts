@@ -154,12 +154,13 @@ export type {
 // feature); index.ts re-exports them all and keeps the EscrowClient class.
 export * from "./archived-entries.js";
 export * from "./batch.js";
-export * from "./client-config.js";
+
 export * from "./contract-version.js";
 export * from "./escrow-types.js";
 export * from "./events.js";
 export * from "./fees.js";
 export * from "./lifecycle.js";
+export type { EscrowClientConfig } from "./client-config.js";
 export * from "./milestones.js";
 export * from "./networks.js";
 export * from "./pooled.js";
@@ -557,15 +558,6 @@ export class EscrowClient {
     } catch (error) {
       throw toEscrowError(error);
     }
-    await this.ensureNetworkVerified();
-    const client = this.contractClient();
-    const tx = await tracePhase(
-      this.instrumentation,
-      "simulate",
-      this.spanAttributesIfEnabled("get_status", escrowId),
-      () => client.get_status({ escrow_id: escrowId }),    );
-    const status: GeneratedEscrowStatus = tx.result.unwrap();
-    return status.tag;
   }
 
   /**
