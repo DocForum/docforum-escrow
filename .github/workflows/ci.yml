@@ -117,11 +117,22 @@ jobs:
           PROPTEST_CASES: '64'
         run: cargo test --test model -- --nocapture
 
+      - name: cargo test (proptest pooled-escrow state-machine, bounded)
+        env:
+          PROPTEST_CASES: '64'
+        run: cargo test --test model pooled -- --nocapture
+
       - name: cargo test (proptest state-machine, nightly)
         if: github.event_name == 'schedule'
         env:
           PROPTEST_CASES: '4096'
         run: cargo test --test model -- --nocapture
+
+      - name: cargo test (proptest pooled-escrow state-machine, nightly)
+        if: github.event_name == 'schedule'
+        env:
+          PROPTEST_CASES: '4096'
+        run: cargo test --test model pooled -- --nocapture
 
       # Issue #120: test snapshots are committed so events, storage and auth
       # changes show up as reviewable diffs. `cargo test` above rewrites them;
