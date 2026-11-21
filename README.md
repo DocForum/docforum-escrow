@@ -43,6 +43,7 @@ Two reasons, stated plainly rather than blended together:
 | `create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id` | ✅ Implemented | Pulls `amount` of `token` from `payer` (requires `payer` auth), stores an opaque `condition_ref`, sets status `Funded`. Rejects non-positive amounts, and any `refund_after` that isn't strictly in the future. |
 | `get_status(escrow_id) -> EscrowStatus` | ✅ Implemented | Read-only. Errors on an unknown id. |
 | `get_escrow(escrow_id) -> EscrowData` | ✅ Implemented | Read-only: everything stored about the escrow, including `releaser` and `refund_after`, so payees can check the deal before relying on it. |
+| `get_allowed_tokens() -> Vec<Address>` | ✅ Implemented | Read-only: the immutable token allowlist this instance was deployed with. An empty list means any token is accepted. Takes no caller — anyone can verify it on-chain. |
 | `release(escrow_id, caller) -> Result<()>` | ✅ Implemented | Restricted to the escrow's designated `releaser`; moves funds to `payee`. Never gated by `refund_after`. |
 | `refund(escrow_id, caller) -> Result<()>` | ✅ Implemented | Returns funds to `payer`. The `releaser` may always call it; once `refund_after` has passed, anyone may — still only back to `payer` (see [ADR 0004](docs/adr/0004-timeout-refund-path.md)). |
 
@@ -56,6 +57,31 @@ That's the answer to "what if the releaser's key is lost?" (threat model
 T2): instead of locking funds permanently, a deadline lets anyone return
 them to the payer. See [ADR 0004](docs/adr/0004-timeout-refund-path.md)
 for the decision and what it means for payees.
+
+### Token allowlist (deploy-time, immutable)
+
+A deployment can restrict which SEP-41 tokens `create_escrow` accepts by
+passing `allowed_tokens` to the contract constructor. The list is stored
+once and has no setter, so it cannot change for the lifetime of the
+instance. An **empty** list means any token is accepted — that is the
+pre-allowlist behaviour and remains the default when no restriction is
+wanted. Creating an escrow with an unlisted token fails with
+`Error::TokenNotAllowed` before any funds move.
+
+**Verify the allowlist on-chain — don't trust a deployment note or this
+README.** `get_allowed_tokens()` is read-only, takes no caller, and
+reads the exact value `create_escrow` enforces:
+
+```ts
+const allowed = await client.getAllowedTokens(); // string[]
+if (allowed.length > 0 && !allowed.includes(token)) {
+  throw new Error("this contract does not accept that token");
+}
+```
+
+The same getter is callable directly on the contract
+(`get_allowed_tokens` → `Vec<Address>`), so non-SDK integrators can check
+it with `stellar contract invoke`.
 
 **Design rule, enforced deliberately:** the contract decides **who** may
 call `release`/`refund`, never **why**. `condition_ref` is an opaque
@@ -107,7 +133,7 @@ Requires a Rust toolchain with the `wasm32v1-none` target.
 git clone https://github.com/DocForum/docforum-escrow.git
 cd docforum-escrow/contracts/escrow
 
-# Run the test suite (28 tests, all passing today)
+# Run the test suite (35 tests, all passing today)
 cargo test
 
 # Build the deployable contract

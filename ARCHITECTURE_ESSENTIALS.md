@@ -13,6 +13,7 @@
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after) -> escrow_id   // IMPLEMENTED + LIVE ON TESTNET (Phase E1 + E2 + E4)
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded — IMPLEMENTED + LIVE ON TESTNET (Phase E1)
 get_escrow(escrow_id) -> EscrowData    // read-only: payer, payee, token, amount, condition_ref, status, releaser, refund_after — IMPLEMENTED + LIVE ON TESTNET (Phase E4)
+get_allowed_tokens() -> Vec<Address>   // read-only: immutable deploy-time token allowlist (issue #299); empty = any token — IMPLEMENTED (Phase E5, not yet redeployed)
 release(escrow_id, caller) -> result   // IMPLEMENTED + LIVE ON TESTNET (Phase E2) — only escrow_id's `releaser` may call this, only while Funded
 refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E2 + E4) — releaser always; anyone too, once refund_after has passed, and then still only back to payer
 ```
@@ -21,7 +22,17 @@ refund(escrow_id, caller) -> result    // IMPLEMENTED + LIVE ON TESTNET (Phase E
 by Phase E4, both last; no behavioral difference beyond the added
 params, just noting it so this doc and `src/lib.rs` don't drift.
 
-All five functions are proven live on testnet as of the Phase E4
+`__constructor(allowed_tokens: Vec<Address>)` stores the token
+allowlist once at deployment (no setter); `create_escrow` rejects a
+token that is not on a non-empty list with `TokenNotAllowed` (29901,
+provisional: issue × 100 + 1). The allowlist is readable with
+`get_allowed_tokens()`; an empty list means any token is accepted, and
+an absent storage key also reads as empty rather than trapping. Add
+`allowed_tokens` to the deploy arguments (e.g. `-- --allowed_tokens '[]'`
+with the `stellar` CLI) — a deployment without constructor arguments
+fails to instantiate.
+
+All five pre-E5 functions are proven live on testnet as of the Phase E4
 redeployment (`docs/testnet-deployments.md`, 2026-10-08 entry) — including
 a real timeout refund triggered by a non-releaser after its deadline, a
 real `release` after the deadline, and real rejections of a
@@ -47,6 +58,7 @@ const client = new EscrowClient({ contractId }); // defaults: testnet RPC + pass
 const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter });
 await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
 await client.getEscrow(escrowId);            // full stored record — incl. releaser + refundAfter, so a payee can check the deal (docs/adr/0004, threat model T8)
+await client.getAllowedTokens();             // string[] — deploy-time token allowlist; [] = any token (issue #299)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair, must equal the escrow's releaser
 await client.refund({ escrowId, caller });   // { txHash } — releaser always; anyone after refundAfter has passed
 ```

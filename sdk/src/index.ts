@@ -36,6 +36,13 @@ export interface Escrow {
   status: EscrowStatus;
 }
 
+/**
+ * The token address list this contract instance accepts, fixed at
+ * deployment (issue #299). An **empty** array means any SEP-41 token is
+ * accepted — the pre-allowlist behaviour.
+ */
+export type AllowedTokens = string[];
+
 const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
 const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
 
@@ -116,6 +123,22 @@ export class EscrowClient {
     });
     const sent = await tx.signAndSend();
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Read-only: the immutable token allowlist this instance was deployed
+   * with (issue #299). An **empty** array means any token is accepted.
+   *
+   * This is the authoritative answer — it reads the same on-chain value
+   * `createEscrow` enforces, so integrators should call it instead of
+   * trusting deployment notes or the docs. The list cannot change after
+   * deployment, so one successful read holds for the instance's whole
+   * lifetime.
+   */
+  async getAllowedTokens(): Promise<AllowedTokens> {
+    const client = this.contractClient();
+    const tx = await client.get_allowed_tokens();
+    return tx.result;
   }
 
   /** Read-only status query. Throws if `escrowId` doesn't exist. */

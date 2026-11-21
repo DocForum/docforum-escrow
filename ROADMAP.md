@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E5 (contract features) has started: the deploy-time token allowlist is now inspectable with a read-only `get_allowed_tokens()` (issue #299, not yet redeployed to testnet).**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -121,6 +121,20 @@
 - [ ] Related, not in the checklist: [#13](https://github.com/DocForum/docforum-escrow/issues/13) `get_escrow`
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
+
+## Phase E5 — Contract features
+- [x] Expose the deploy-time token allowlist with a read-only
+  `get_allowed_tokens() -> Vec<Address>` — issue #299. The constructor
+  (`__constructor(allowed_tokens: Vec<Address>)`) stores an immutable
+  allowlist; `create_escrow` rejects an unlisted token with
+  `TokenNotAllowed` (provisional code 29901) before any funds move, and
+  an empty list keeps the legacy allow-any-token behaviour. The getter
+  is total (an absent key reads as empty) and SDK
+  `getAllowedTokens()` wraps it. 4 new contract tests in
+  `contracts/escrow/tests/token_allowlist.rs`, 3 offline mocked SDK
+  tests in `sdk/tests/allowlist.test.ts` (now run in CI), bindings
+  regenerated from the wasm. **Not yet redeployed to testnet** — the
+  live deployment predates the constructor.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -305,3 +319,19 @@
   #12 were opened and closed in between). #16 merged with an empty diff
   because its branch's merge from `main` kept `main`'s ROADMAP.md
   wholesale.
+- 2026-11-21 — Closed issue #299 (Phase E5): the token allowlist is now
+  inspectable on-chain. Added `__constructor(allowed_tokens)` storing an
+  immutable list, enforcement in `create_escrow` (`TokenNotAllowed`,
+  provisional 29901, rejected before the funding transfer), and the
+  read-only `get_allowed_tokens()` getter — empty list means any token,
+  including when the storage key is absent, so the getter never traps.
+  No `CONTRACT_VERSION` exists in this repo, so none was edited. 4 new
+  contract tests (`tests/token_allowlist.rs`: configured accept/reject,
+  empty list, multi-token getter, no funds moved on rejection), SDK
+  `getAllowedTokens()` with 3 offline mocked-simulation tests wired into
+  CI (`npm test`), generated bindings regenerated from the wasm (which
+  also restored the missing `BalanceMismatch` error to the generated
+  `Errors` map). Existing test registrations now pass an explicit empty
+  allowlist; behaviour is unchanged. README/ARCHITECTURE_ESSENTIALS now
+  tell integrators to verify with the getter. **Not yet on testnet** —
+  the live deployment predates the constructor.

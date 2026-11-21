@@ -7,14 +7,17 @@
 // Phase E4 (issue #11): optional `refund_after` timeout refund — see
 // docs/adr/0004. After that deadline anyone may refund, but only back to
 // the payer, so a lost `releaser` key can no longer lock funds forever.
-//
+// Phase E5 (issue #299): immutable deploy-time token allowlist, readable
+// through `get_allowed_tokens()`. An empty list keeps the legacy
+// allow-any-token behaviour.
+
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
 // never interprets it. Keep it that way; domain logic belongs in the
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Vec};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -46,6 +49,11 @@ pub struct EscrowData {
 enum DataKey {
     Escrow(u64),
     NextId,
+    /// Immutable token allowlist, set once by the constructor at
+    /// deployment. Missing key means "missing" rather than "deny all":
+    /// `get_allowed_tokens` falls back to an empty list, which means any
+    /// token is accepted.
+    AllowedTokens,
 }
 
 #[contracterror]
@@ -64,6 +72,11 @@ pub enum Error {
     /// across `create_escrow`'s transfer (a lying or short-delivering
     /// token) — see docs/threat-model.md T5.
     BalanceMismatch = 6,
+    /// `token` is not on the deploy-time allowlist (issue #299). An
+    /// empty allowlist means every token is allowed, so this is only
+    /// ever returned by an instance deployed with a non-empty list.
+    /// Provisional code: issue number × 100 + 1.
+    TokenNotAllowed = 29901,
 }
 
 #[contract]
@@ -71,6 +84,18 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
+    /// Runs once at deployment, before any caller exists, so it needs no
+    /// auth. Stores the immutable token allowlist (issue #299) — there is
+    /// deliberately no setter, so a contract instance's accepted tokens
+    /// can never change after construction. An empty `allowed_tokens`
+    /// list restores the pre-allowlist behaviour: any SEP-41 token is
+    /// accepted.
+    pub fn __constructor(env: Env, allowed_tokens: Vec<Address>) {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedTokens, &allowed_tokens);
+    }
+
     /// Locks `amount` of `token` pulled from `payer`, held for `payee`,
     /// tagged with an opaque `condition_ref`. `releaser` is the only
     /// address that will later be permitted to call `release`/`refund`
@@ -91,6 +116,9 @@ impl EscrowContract {
     ) -> Result<u64, Error> {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
+        }
+        if !Self::token_allowed(&env, &token) {
+            return Err(Error::TokenNotAllowed);
         }
         if let Some(deadline) = refund_after {
             if deadline <= env.ledger().timestamp() {
@@ -121,6 +149,20 @@ impl EscrowContract {
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         Ok(id)
+    }
+
+    /// Read-only: the immutable token allowlist fixed at deployment
+    /// (issue #299). An **empty** list means any token is accepted.
+    /// Integrators should verify this on-chain with this getter instead
+    /// of trusting deployment docs — the list can never change, so one
+    /// read answers the question for the lifetime of the instance.
+    ///
+    /// An instance whose allowlist key is absent returns an empty list
+    /// rather than trapping. That state is not reachable through this
+    /// WASM (the constructor always writes the key), but the getter is
+    /// deliberately total.
+    pub fn get_allowed_tokens(env: Env) -> Vec<Address> {
+        Self::allowed_tokens(&env)
     }
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
@@ -215,6 +257,23 @@ impl EscrowContract {
         data.status = EscrowStatus::Refunded;
         env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
+    }
+
+    /// The deploy-time allowlist, or an empty list when the key is
+    /// absent (meaning: any token is accepted).
+    fn allowed_tokens(env: &Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::AllowedTokens)
+            .unwrap_or_else(|| Vec::new(env))
+    }
+
+    /// An empty allowlist allows every token; otherwise `token` must be
+    /// on the list. Never re-reads state after construction because the
+    /// list is immutable.
+    fn token_allowed(env: &Env, token: &Address) -> bool {
+        let allowed = Self::allowed_tokens(env);
+        allowed.is_empty() || allowed.contains(token)
     }
 
     fn next_id(env: &Env) -> u64 {
