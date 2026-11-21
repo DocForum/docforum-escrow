@@ -66,19 +66,19 @@ impl EscrowContract {
         env: Env,
         escrow_id: u64,
         approvers: Vec<Address>,
-        old: Address,
-        new: Address,
+        old_releaser: Address,
+        new_releaser: Address,
     ) -> Result<(), Error> {
         Self::extend_instance_ttl(&env);
         let mut data = Self::load(&env, escrow_id)?;
         Self::check_approvals(&env, &data, &approvers)?;
         Self::check_funded(&data)?;
-        if !Self::contains(&data.releasers, &old) {
+        if !Self::contains(&data.releasers, &old_releaser) {
             return Err(Error::InvalidReleaser);
         }
-        if Self::contains(&data.releasers, &new)
-            || new == env.current_contract_address()
-            || new == data.payee
+        if Self::contains(&data.releasers, &new_releaser)
+            || new_releaser == env.current_contract_address()
+            || new_releaser == data.payee
         {
             return Err(Error::InvalidReleaser);
         }
@@ -86,8 +86,8 @@ impl EscrowContract {
         data.payer.require_auth();
         let mut releasers = Vec::new(&env);
         for releaser in data.releasers.iter() {
-            if releaser == old {
-                releasers.push_back(new.clone());
+            if releaser == old_releaser {
+                releasers.push_back(new_releaser.clone());
             } else {
                 releasers.push_back(releaser);
             }
@@ -99,7 +99,7 @@ impl EscrowContract {
         Self::extend_escrow_ttl(&env, escrow_id, data.refund_after);
         env.events().publish(
             (symbol_short!("rotate"), escrow_id),
-            (old, new),
+            (old_releaser, new_releaser),
         );
         Ok(())
     }
