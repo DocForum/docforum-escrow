@@ -102,7 +102,7 @@ impl EscrowContract {
 
     /// Returns the escrowed `amount` to the escrow's `refund_to` (the
     /// `payer` unless a different destination was fixed at creation —
-    /// docs/adr/0006). Same state rule as
+    /// docs/adr/0009). Same state rule as
     /// `release` (only while `Funded`), but two callers are authorised:
     ///
     /// - the escrow's releaser (docs/adr/0002), always; or

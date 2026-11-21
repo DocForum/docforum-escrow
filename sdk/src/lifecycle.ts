@@ -26,6 +26,14 @@ export interface AcceptParams extends LifecycleCallOptions {
   payee: EscrowSigner;
 }
 
+export interface TransferPayeeParams extends LifecycleCallOptions {
+  escrowId: bigint;
+  /** The escrow's current payee; signs the transfer and pays the fee. */
+  currentPayee: EscrowSigner;
+  /** The address future payouts go to. Must not be the payer or the contract id. */
+  newPayee: string;
+}
+
 /**
  * Why a lifecycle call was refused before submission. Each maps to the
  * contract error the transaction would otherwise fail with.
@@ -34,6 +42,7 @@ export type EscrowPreconditionCode =
   | "InvalidAmount"
   | "NotFunded"
   | "Unauthorized"
+  | "InvalidNewPayee"
   | "AcceptanceNotConfigured"
   | "AlreadyAccepted";
 
@@ -50,13 +59,14 @@ export class EscrowPreconditionError extends Error {
 }
 
 /** Contract functions the prepare/submit flow can carry. */
-export type LifecycleMethod = "top_up" | "accept" | "cancel";
+export type LifecycleMethod = "top_up" | "accept" | "cancel" | "transfer_payee";
 
 /** One lifecycle call, described without any signer. */
 export type LifecycleCall =
   | { method: "top_up"; escrowId: bigint; payer: string; amount: bigint }
   | { method: "accept"; escrowId: bigint; payee: string }
-  | { method: "cancel"; escrowId: bigint; payer: string };
+  | { method: "cancel"; escrowId: bigint; payer: string }
+  | { method: "transfer_payee"; escrowId: bigint; currentPayee: string; newPayee: string };
 
 /**
  * A simulated lifecycle transaction in transit between signers. Plain JSON
