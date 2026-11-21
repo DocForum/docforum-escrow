@@ -229,10 +229,23 @@ impl EscrowContract {
             .amount
             .checked_sub(refund_amount)
             .ok_or(Error::Overflow)?;
+        let closes_failed_round = data.amount == 0;
+        if closes_failed_round {
+            data.status = EscrowStatus::Refunded;
+        }
         env.storage().persistent().set(&key, &contribution);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &data);
+        if closes_failed_round {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::Escrow(escrow_id));
+            env.storage()
+                .persistent()
+                .set(&DataKey::Status(escrow_id), &data.status);
+        } else {
+            env.storage()
+                .persistent()
+                .set(&DataKey::Escrow(escrow_id), &data);
+        }
         // Issue #39: the pooled total just dropped by `refund_amount`.
         Self::sub_liability(&env, &data.token, refund_amount)?;
 
@@ -246,6 +259,39 @@ impl EscrowContract {
             (symbol_short!("claimed"), escrow_id),
             (contributor, refund_amount),
         );
+        if closes_failed_round {
+            Self::publish_state(&env, symbol_short!("refunded"), escrow_id, &data);
+        }
+        Ok(())
+    }
+
+    /// Closes a failed pooled round that had no contributions. A round with
+    /// contributions reaches the same terminal state on the final claim;
+    /// this permissionless path handles the zero-contribution case because
+    /// there is no contributor call that could otherwise close it.
+    pub fn close_failed_round(env: Env, escrow_id: u64) -> Result<(), Error> {
+        Self::extend_instance_ttl(&env);
+        let mut data = Self::load(&env, escrow_id)?;
+        let pooled = Self::pooled_data(&env, escrow_id)?;
+        Self::check_funded(&data)?;
+        if env.ledger().timestamp() < pooled.funding_deadline {
+            return Err(Error::RefundNotOpen);
+        }
+        if data.amount >= pooled.funding_target {
+            return Err(Error::FundingTargetReached);
+        }
+        if data.amount != 0 {
+            return Err(Error::RefundNotOpen);
+        }
+
+        data.status = EscrowStatus::Refunded;
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Escrow(escrow_id));
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(escrow_id), &data.status);
+        Self::publish_state(&env, symbol_short!("refunded"), escrow_id, &data);
         Ok(())
     }
 
