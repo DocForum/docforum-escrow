@@ -111,6 +111,7 @@ jobs:
         run: node scripts/check-contract-change.mjs "origin/${{ github.base_ref }}"
 
       - name: Test contract-change tooling
+        working-directory: .
         run: node --test scripts/contract-change.test.mjs
 
       - name: Install Rust toolchain
