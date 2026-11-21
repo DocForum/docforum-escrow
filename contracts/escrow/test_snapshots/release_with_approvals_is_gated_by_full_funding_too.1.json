@@ -421,6 +421,12 @@
                   },
                   {
                     "key": {
+                      "symbol": "funding_spender"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "notify_payee"
                     },
                     "val": {

@@ -61,6 +61,48 @@ impl EscrowContract {
         payer_already_authorized: bool,
         payee_shares: Option<Vec<PayeeShare>>,
     ) -> Result<u64, Error> {
+        Self::create_escrow_with_payees_inner_authorized(
+            env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            threshold,
+            refund_after,
+            notify_payee,
+            requires_acceptance,
+            refund_to,
+            release_not_before,
+            fee_recipient,
+            fee_bps,
+            payer_already_authorized,
+            payee_shares,
+            None,
+        )
+    }
+
+    pub(crate) fn create_escrow_with_payees_inner_authorized(
+        env: &Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releasers: Vec<Address>,
+        threshold: u32,
+        refund_after: Option<u64>,
+        notify_payee: bool,
+        requires_acceptance: bool,
+        refund_to: Option<Address>,
+        release_not_before: Option<u64>,
+        fee_recipient: Option<Address>,
+        fee_bps: Option<u32>,
+        payer_already_authorized: bool,
+        payee_shares: Option<Vec<PayeeShare>>,
+        funding_spender: Option<Address>,
+    ) -> Result<u64, Error> {
         // Every creation entry point funnels through here, so this one
         // check covers all deposit paths: while paused, no new escrow can
         // be created, no id is consumed and no funds move (docs/adr/0011).
@@ -162,18 +204,25 @@ impl EscrowContract {
 
         // `require_auth` can only run once per address in a frame, so a batch
         // authorizes up front instead of once per item.
-        if !payer_already_authorized {
+        if let Some(spender) = &funding_spender {
+            spender.require_auth();
+        } else if !payer_already_authorized {
             payer.require_auth();
         }
         if notify_payee {
             payee.require_auth();
         }
 
-        Self::transfer_in_exact(env, &token, &payer, amount)?;
+        if let Some(spender) = &funding_spender {
+            Self::transfer_in_exact_from(env, &token, spender, &payer, amount)?;
+        } else {
+            Self::transfer_in_exact(env, &token, &payer, amount)?;
+        }
 
         let id = Self::next_id(env);
         let data = EscrowData {
             payer,
+            funding_spender,
             payee,
             token,
             amount,

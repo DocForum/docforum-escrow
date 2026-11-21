@@ -107,6 +107,50 @@ impl EscrowContract {
         )
     }
 
+    /// Creates an escrow by consuming the payer's allowance for `spender`.
+    /// Only the spender authorizes this call; the payer remains the funder,
+    /// refund destination by default, and stored party for all later rules.
+    /// The spender gains no settlement rights unless it is also named as a
+    /// releaser.
+    pub fn create_escrow_from(
+        env: Env,
+        spender: Address,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        notify_payee: bool,
+        refund_to: Option<Address>,
+        fee_recipient: Option<Address>,
+        fee_bps: Option<u32>,
+    ) -> Result<u64, Error> {
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        Self::create_escrow_with_payees_inner_authorized(
+            &env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            1,
+            refund_after,
+            notify_payee,
+            false,
+            refund_to,
+            None,
+            fee_recipient,
+            fee_bps,
+            true,
+            None,
+            Some(spender),
+        )
+    }
+
     /// Creates a single-releaser escrow with an optional earliest release time.
     /// Release is allowed at the configured timestamp. Accepts the same
     /// optional `fee_recipient`/`fee_bps` pair as `create_escrow`

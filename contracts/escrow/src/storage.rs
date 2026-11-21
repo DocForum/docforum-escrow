@@ -30,6 +30,24 @@ impl EscrowContract {
         Self::add_liability(env, token, amount)
     }
 
+    pub(crate) fn transfer_in_exact_from(
+        env: &Env,
+        token: &Address,
+        spender: &Address,
+        payer: &Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        let token_client = token::Client::new(env, token);
+        let contract_address = env.current_contract_address();
+        let balance_before = token_client.balance(&contract_address);
+        token_client.transfer_from(spender, payer, &contract_address, &amount);
+        let balance_after = token_client.balance(&contract_address);
+        if balance_after.checked_sub(balance_before) != Some(amount) {
+            return Err(Error::BalanceMismatch);
+        }
+        Self::add_liability(env, token, amount)
+    }
+
     /// Current outstanding liability for `token`; `0` when never used.
     pub(crate) fn liability(env: &Env, token: &Address) -> i128 {
         env.storage()

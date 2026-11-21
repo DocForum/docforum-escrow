@@ -69,6 +69,7 @@ impl EscrowContract {
         });
         let data = EscrowData {
             payer: creator.clone(),
+            funding_spender: None,
             payee: payee.clone(),
             token,
             // Grows with accepted contributions; release pays exactly

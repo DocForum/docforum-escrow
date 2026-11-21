@@ -86,6 +86,10 @@ pub struct EscrowData {
     /// = 10 %), taken once at release, rounded **down** with the
     /// remainder to the payee — see docs/adr/0010.
     pub fee_bps: Option<u32>,
+    /// The address that authorized an allowance-based creation, if any.
+    /// `None` means the payer authorized the ordinary direct creation path.
+    /// Appended to preserve the encoding of existing escrow records.
+    pub funding_spender: Option<Address>,
 }
 
 /// Identifies voluntary refunds started by the escrow's stored payee.
