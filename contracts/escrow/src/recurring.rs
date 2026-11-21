@@ -12,6 +12,7 @@
 //! unaffected by a cancel.
 
 use crate::*;
+use crate::internal::Funding;
 
 #[contractimpl]
 impl EscrowContract {
