@@ -68,6 +68,7 @@ impl EscrowContract {
             fee_bps,
             false,
             Some(payees),
+            Funding::Transfer,
         )
     }
 
