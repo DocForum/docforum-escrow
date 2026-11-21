@@ -4,6 +4,51 @@ use crate::*;
 
 #[contractimpl]
 impl EscrowContract {
+    /// Creates an escrow using one options struct for all opt-in policies.
+    /// Existing creation entry points remain unchanged and continue to use
+    /// their documented defaults. Validation and funding are delegated to
+    /// the same internal path used by those entry points.
+    pub fn create_escrow_with_options(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        options: EscrowOptions,
+    ) -> Result<u64, Error> {
+        let EscrowOptions {
+            releasers,
+            threshold,
+            refund_after,
+            release_not_before,
+            notify_payee,
+            requires_acceptance,
+            refund_to,
+            fee_recipient,
+            fee_bps,
+        } = options;
+        Self::create_escrow_inner(
+            &env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            threshold,
+            refund_after,
+            notify_payee,
+            requires_acceptance,
+            refund_to,
+            release_not_before,
+            fee_recipient,
+            fee_bps,
+            None,
+            false,
+        )
+    }
+
     /// Locks `amount` of `token` pulled from `payer` and holds it for `payee`.
     /// `condition_ref` is bounded (docs/threat-model.md T10 and ROADMAP.md
     /// Phase E5). `releaser` is the

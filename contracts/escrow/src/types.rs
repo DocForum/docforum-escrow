@@ -23,6 +23,25 @@ pub enum SettleAction {
     Refund,
 }
 
+/// Optional creation policy for the complete opt-in feature set.
+///
+/// `create_escrow_with_options` is additive: existing entry points retain
+/// their current defaults, while callers that need more than one optional
+/// policy can configure them in one request.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowOptions {
+    pub releasers: Vec<Address>,
+    pub threshold: u32,
+    pub refund_after: Option<u64>,
+    pub release_not_before: Option<u64>,
+    pub notify_payee: bool,
+    pub requires_acceptance: bool,
+    pub refund_to: Option<Address>,
+    pub fee_recipient: Option<Address>,
+    pub fee_bps: Option<u32>,
+}
+
 /// Direct recipient and share of a split release, in basis points.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
