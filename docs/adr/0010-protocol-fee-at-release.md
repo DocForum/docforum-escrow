@@ -160,6 +160,22 @@ while paying the other. Fee-first is simply the reading that matches
 decision 4 ("off the top") in the tx's event stream, which is where
 integrators will look.
 
+### Addendum (issue #295): an unreachable fee recipient blocks release
+
+The fee recipient is a required destination of the release split. If its
+token transfer fails — for example because an issued-asset trustline was
+revoked — `release` returns `Undeliverable` and the entire invocation is
+rolled back. The payee is not paid, the fee is not retained, the escrow stays
+`Funded`, and its liability remains unchanged. This is deliberate: paying the
+payee while leaving the fee as an uncollectable liability would break the
+fee-conservation invariant and would make the outcome depend on which
+destination happened to fail first.
+
+The releaser can retry after the recipient is able to receive the asset. A
+zero fee (`fee_bps = 0`) never calls the fee recipient and therefore cannot be
+blocked by that recipient. The behavior is covered by
+`tests/undeliverable.rs::unauthorized_sac_fee_recipient_blocks_release_atomically_and_can_be_retried`.
+
 ## Invariant added (companion to I1)
 
 **I7 (fee conservation):** exactly once per escrow's lifetime, at release,
