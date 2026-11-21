@@ -19,6 +19,7 @@ impl EscrowContract {
         release_not_before: Option<u64>,
         fee_recipient: Option<Address>,
         fee_bps: Option<u32>,
+        attester: Option<BytesN<32>>,
         payer_already_authorized: bool,
     ) -> Result<u64, Error> {
         Self::create_escrow_with_payees_inner(
@@ -37,6 +38,7 @@ impl EscrowContract {
             release_not_before,
             fee_recipient,
             fee_bps,
+            attester,
             payer_already_authorized,
             None,
         )
@@ -58,6 +60,7 @@ impl EscrowContract {
         release_not_before: Option<u64>,
         fee_recipient: Option<Address>,
         fee_bps: Option<u32>,
+        attester: Option<BytesN<32>>,
         payer_already_authorized: bool,
         payee_shares: Option<Vec<PayeeShare>>,
     ) -> Result<u64, Error> {
@@ -190,6 +193,7 @@ impl EscrowContract {
             release_not_before,
             fee_recipient,
             fee_bps,
+            attester,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         env.storage()

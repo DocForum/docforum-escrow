@@ -153,6 +153,7 @@ export type {
 // Public types, constants and errors live in topical modules (one per
 // feature); index.ts re-exports them all and keeps the EscrowClient class.
 export * from "./archived-entries.js";
+export * from "./attestation.js";
 export * from "./batch.js";
 export * from "./client-config.js";
 export * from "./contract-version.js";
