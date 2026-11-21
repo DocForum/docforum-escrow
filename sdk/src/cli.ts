@@ -6,6 +6,7 @@ import { stdin, stdout } from "node:process";
 import { Keypair, rpc } from "@stellar/stellar-sdk";
 import { Client } from "./generated/contract-client.js";
 import { parseArgs, type Options } from "./cli-args.js";
+import { checkSolvency } from "./solvency.js";
 
 const TESTNET_RPC = "https://soroban-testnet.stellar.org";
 const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
@@ -69,7 +70,7 @@ async function run(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const json = options.flags.has("json");
   if (options.flags.has("help") || !options.command) {
-    const help = `docforum-escrow ${options.command ?? "<create|status|show|release|refund|list>"}\n\nCommon options: --contract-id ID --rpc-url URL --network-passphrase TEXT --json --dry-run\nSigner options: --signer-file PATH, --signer-env NAME, or DOCFORUM_SECRET_KEY (otherwise prompt)\nState changes require confirmation unless --yes is passed. list requires --from-events.`;
+    const help = `docforum-escrow ${options.command ?? "<create|status|show|release|refund|list|check-solvency>"}\n\nCommon options: --contract-id ID --rpc-url URL --network-passphrase TEXT --json --dry-run\nSigner options: --signer-file PATH, --signer-env NAME, or DOCFORUM_SECRET_KEY (otherwise prompt)\nState changes require confirmation unless --yes is passed. list requires --from-events. check-solvency needs --tokens (comma-separated contract addresses) and exits 1 on a shortfall; it needs no signer.`;
     output(help, false);
     return;
   }
@@ -135,6 +136,35 @@ async function run(): Promise<void> {
         limit: Number(options.values.limit ?? 100),
       });
       result = response.events;
+      break;
+    }
+    case "check-solvency": {
+      const tokens = (options.values.tokens ?? "")
+        .split(",")
+        .map((token) => token.trim())
+        .filter((token) => token.length > 0);
+      if (tokens.length === 0) throw new Error("check-solvency requires --tokens (comma-separated contract addresses)");
+      const report = await checkSolvency({
+        contractId,
+        tokens,
+        rpcUrl,
+        networkPassphrase,
+        allowMainnet: options.flags.has("allow-mainnet"),
+        ...(options.values["from-ledger"] ? { fromLedger: Number(options.values["from-ledger"]) } : {}),
+      });
+      result = {
+        contractId: report.contractId,
+        solvent: report.solvent,
+        tokens: report.tokens.map((entry) => ({
+          token: entry.token,
+          balance: entry.balance,
+          liabilities: entry.liabilities,
+          solvent: entry.solvent,
+          source: entry.source,
+        })),
+        shortfalls: report.shortfalls.map((entry) => ({ token: entry.token, shortfall: entry.shortfall })),
+      };
+      if (!report.solvent) process.exitCode = 1;
       break;
     }
     default: throw new Error(`Unknown command: ${options.command}`);
