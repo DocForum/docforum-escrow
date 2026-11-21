@@ -61,7 +61,7 @@ pub enum Error {
     /// Release was attempted before the configured time.
     ReleaseTooEarly = 23,
     /// A batch call was passed more than `MAX_BATCH_SIZE` items — see
-    /// docs/adr/0005. Callers must chunk. Appended at the end so existing
+    /// docs/adr/0012. Callers must chunk. Appended at the end so existing
     /// discriminants keep their on-chain values.
     BatchTooLarge = 25,
     /// `contribute`/`claim_refund`/`get_contribution` on a non-pooled
