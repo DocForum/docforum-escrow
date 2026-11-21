@@ -175,7 +175,7 @@ import { type CancelParams, type CreateEscrowParams, type CreateQuorumEscrowPara
 import { type EscrowEvent, type EscrowEventType, EventCursorExpiredError, type GetEventsParams, type GetEventsResult, type SubscribeOptions } from "./events.js";
 import { type EstimateCallParams, type FeeBumpOptions, type FeeBumpResult, type FeeEstimate, type GuardResult, MaxFeeExceededError, SponsorshipGuardError, computeFeeEstimate } from "./fees.js";
 import { EMPTY_SPAN_ATTRIBUTES, MISSING_FUNCTION_ERROR, TESTNET_NETWORK_PASSPHRASE, TESTNET_RPC_URL, assertLedgerWindow, assertPositiveAmount, batchErrorMessage, contractAddressOf, isRetentionError, lifecycleCallSigner, safeScValToNative, sendErrorName, trancheOf } from "./internal.js";
-import { type AcceptParams, type EscrowPreconditionCode, EscrowPreconditionError, type LifecycleCall, type LifecycleMethod, PREPARED_AUTH_TTL_LEDGERS, type PrepareLifecycleParams, type PreparedLifecycleCall, type TopUpParams } from "./lifecycle.js";
+import { type AcceptParams, type EscrowPreconditionCode, EscrowPreconditionError, type LifecycleCall, type LifecycleMethod, PREPARED_AUTH_TTL_LEDGERS, type PrepareLifecycleParams, type PreparedLifecycleCall, type TopUpParams, type TransferPayeeParams } from "./lifecycle.js";
 import { type CreateMilestoneEscrowParams, type Milestone, type MilestoneEscrow, MilestoneEscrowPartialError, type RefundMilestoneParams, type ReleaseMilestoneParams, milestoneConditionRef, validateMilestoneSchedule } from "./milestones.js";
 import { MAINNET_NETWORK_PASSPHRASE, MainnetNotAllowedError } from "./networks.js";
 import { type ClaimRefundParams, type ContributeParams, type ContributionRecord, type CreatePooledEscrowParams, type PooledEscrow, type SolvencyReport } from "./pooled.js";
@@ -485,6 +485,9 @@ export class EscrowClient {
     }
     if (params.feeBps !== undefined && (!Number.isInteger(params.feeBps) || params.feeBps < 0 || params.feeBps > MAX_FEE_BPS)) {
       throw new RangeError(`feeBps must be an integer between 0 and ${MAX_FEE_BPS} (10 %)`);
+    }
+    if (params.requiresAcceptance && (params.feeRecipient !== undefined || params.feeBps !== undefined)) {
+      throw new TypeError("requiresAcceptance cannot be combined with feeRecipient or feeBps.");
     }
     const client = this.contractClient(params.payer);
     const createParams = {
@@ -861,6 +864,39 @@ export class EscrowClient {
   }
 
   /**
+   * Reassigns future payout rights to `newPayee` (contract `transfer_payee`,
+   * issue #45). Only the escrow's current payee may call it, only while
+   * `Funded`; `newPayee` must not be the payer or the contract id
+   * (`InvalidNewPayee`). Warning: on a `notifyPayee` escrow the new payee
+   * must implement the `notify_payee` callback, or payouts to it will fail.
+   * Returns the transaction's hash.
+   */
+  async transferPayee(params: TransferPayeeParams): Promise<{ txHash: string }> {
+    const currentPayee = signerAddress(params.currentPayee);
+    const call: LifecycleCall = {
+      method: "transfer_payee",
+      escrowId: params.escrowId,
+      currentPayee,
+      newPayee: params.newPayee,
+    };
+    if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
+    const client = this.contractClient(params.currentPayee);
+    const sent = await this.invoke(
+      "transfer_payee",
+      params.escrowId,
+      () =>
+        client.transfer_payee({
+          escrow_id: params.escrowId,
+          current_payee: currentPayee,
+          new_payee: params.newPayee,
+        }),
+      { address: currentPayee },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
    * Step 1 of the multi-party flow: simulates `call` with `source` as the
    * transaction source and returns it as portable JSON, listing every other
    * party whose contract authorization is still needed. Pass the result to
@@ -971,6 +1007,12 @@ export class EscrowClient {
         return client.accept({ escrow_id: call.escrowId, payee: call.payee });
       case "cancel":
         return client.cancel({ escrow_id: call.escrowId, payer: call.payer });
+      case "transfer_payee":
+        return client.transfer_payee({
+          escrow_id: call.escrowId,
+          current_payee: call.currentPayee,
+          new_payee: call.newPayee,
+        });
     }
   }
 
@@ -985,9 +1027,10 @@ export class EscrowClient {
       throw new EscrowPreconditionError(call.method, code, message);
     };
     // Same order as the contract, so the error matches what it would return.
-    const [party, expected] = call.method === "accept"
-      ? ["payee", escrow.payee] as const
-      : ["payer", escrow.payer] as const;
+    const [party, expected] =
+      call.method === "accept" || call.method === "transfer_payee"
+        ? ["payee", escrow.payee] as const
+        : ["payer", escrow.payer] as const;
     if (lifecycleCallSigner(call) !== expected) {
       fail("Unauthorized", `only the escrow's ${party} can call ${call.method}.`);
     }
@@ -995,6 +1038,15 @@ export class EscrowClient {
       fail("NotFunded", `escrow ${call.escrowId} is ${escrow.status}, not Funded.`);
     }
     if (call.method === "top_up") return;
+    if (call.method === "transfer_payee") {
+      if (call.newPayee === escrow.payer || call.newPayee === this.contractId) {
+        fail(
+          "InvalidNewPayee",
+          "newPayee must not be the payer or the contract id.",
+        );
+      }
+      return;
+    }
     if (!escrow.requiresAcceptance) {
       fail("AcceptanceNotConfigured", "the escrow was created without the acceptance gate.");
     }
