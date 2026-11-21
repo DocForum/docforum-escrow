@@ -89,11 +89,11 @@ impl EscrowContract {
     ) -> Result<(), Error> {
         Self::extend_instance_ttl(&env);
         let mut data = Self::load(&env, escrow_id)?;
-        let attester = data.attester.ok_or(Error::AttesterNotConfigured)?;
+        let attester = data.attester.as_ref().ok_or(Error::AttesterNotConfigured)?;
         Self::check_funded(&data)?;
         Self::check_pooled_fully_funded(&env, escrow_id, &data)?;
         let message = Self::release_attestation_message(&env, escrow_id);
-        env.crypto().ed25519_verify(&attester, &message, &signature);
+        env.crypto().ed25519_verify(attester, &message, &signature);
         Self::settle_full(&env, escrow_id, &mut data, EscrowStatus::Released)
     }
 }

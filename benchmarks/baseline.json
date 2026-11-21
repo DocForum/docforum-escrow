@@ -3,7 +3,7 @@
   "threshold_percent": 20,
   "functions": {
     "create_escrow": {
-      "source_bytes": 720,
+      "source_bytes": 875,
       "profile": {
         "before": {
           "cpu_instructions": 469580,

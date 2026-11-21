@@ -26,6 +26,7 @@ export const ATTESTATION_DOMAIN = "docforum-escrow:release-attestation:v1";
 /** The action string for a release attestation. */
 export const ATTESTATION_ACTION_RELEASE = "release";
 
+/** Parameters for building a release attestation message. */
 export interface ReleaseAttestationParams {
   /** Contract id (56-byte strkey) of the escrow contract. */
   contractId: string;
@@ -35,6 +36,7 @@ export interface ReleaseAttestationParams {
   escrowId: bigint;
 }
 
+/** A signed release attestation, ready to submit with `release_with_attestation`. */
 export interface SignedReleaseAttestation {
   /** The exact bytes that were signed. */
   message: Buffer;
