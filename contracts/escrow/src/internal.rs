@@ -267,7 +267,7 @@ impl EscrowContract {
 
     /// Writes the settled state, then transfers the funds out.
     ///
-    /// Checks-effects-interactions (docs/adr/0006): the status write comes
+    /// Checks-effects-interactions (docs/adr/0013): the status write comes
     /// before the token call, so safety doesn't rest on the host's re-entry
     /// rule alone (threat model T4). A failing transfer panics inside the
     /// token contract, which aborts and rolls back this whole invocation —
@@ -370,7 +370,7 @@ impl EscrowContract {
             // Reclaim storage (docs/adr/0013): the full record is published by
             // `publish_state` below and then removed; the `Status` entry
             // written above is all that remains. Written before the transfer
-            // (docs/adr/0006); a failed payout or callback rolls the whole
+            // (docs/adr/0013); a failed payout or callback rolls the whole
             // invocation back, including this.
             env.storage()
                 .persistent()
