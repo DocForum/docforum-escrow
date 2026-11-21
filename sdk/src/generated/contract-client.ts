@@ -857,6 +857,26 @@ export interface Client {
    */
   rotate_releaser: ({escrow_id, caller, new_releaser}: {escrow_id: u64, caller: string, new_releaser: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
 
+  /**
+   * Construct and simulate a rotate_releaser_with_approvals transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Rotates one member of an M-of-N releaser set (issue #294, ADR 0009).
+   * The escrow must be `Funded`. At least `threshold` distinct members
+   * of the current set must authorize this exact invocation
+   * (`check_approvals`), and the stored payer must authorize too — the
+   * payer's consent is the recovery guard, as in single rotation.
+   * 
+   * The outgoing member's approval counts toward the threshold: it is
+   * still a member until the rotation lands, and excluding it would
+   * make recovery impossible when only `threshold` members can sign.
+   * If the payer is also a releaser, one signature satisfies both
+   * roles. The set size and threshold are unchanged, so
+   * `threshold <= releasers.len()` keeps holding. `old` must be a
+   * current member; `new` must not already be a member, must not be
+   * the contract itself, and must not be the payee. Emits the same
+   * `rotate` event as single rotation, carrying old and new.
+   */
+  rotate_releaser_with_approvals: ({escrow_id, approvers, old_releaser, new_releaser}: {escrow_id: u64, approvers: Array<string>, old_releaser: string, new_releaser: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
+
 }
 export class Client extends ContractClient {
   static async deploy<T = Client>(
@@ -926,7 +946,8 @@ export class Client extends ContractClient {
         "AAAAAAAAAO9SZWFkLW9ubHkgc3RhdHVzIHF1ZXJ5LiBSZWFkcyB0aGUgbGlnaHR3ZWlnaHQgYFN0YXR1c2AgZW50cnksIHdoaWNoCm91dGxpdmVzIHRoZSBmdWxsIHJlY29yZDogYSBzZXR0bGVkIGVzY3JvdyBrZWVwcyBhbnN3ZXJpbmcgYWZ0ZXIgaXRzCnJlY29yZCBpcyByZWNsYWltZWQgKGRvY3MvYWRyLzAwMTMpLCBzbyBgTm90Rm91bmRgIG1lYW5zIGV4YWN0bHkgb25lCnRoaW5nOiB0aGlzIGlkIHdhcyBuZXZlciBjcmVhdGVkLgAAAAAKZ2V0X3N0YXR1cwAAAAAAAQAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAEAAAPpAAAH0AAAAAxFc2Nyb3dTdGF0dXMAAAAD",
         "AAAAAAAAAHhUcmFuc2ZlcnMgdmVzdGVkIHRva2VucyB0byB0aGUgcGF5ZWUgYW5kIHJlZHVjZXMgdGhlIHJlbWFpbmluZwplc2Nyb3cgYW1vdW50IGFuZCBwZXItdG9rZW4gbGlhYmlsaXR5IGJ5IHRoZSBzYW1lIGFtb3VudC4AAAAId2l0aGRyYXcAAAACAAAAAAAAAAllc2Nyb3dfaWQAAAAAAAAGAAAAAAAAAAVwYXllZQAAAAAAABMAAAABAAAD6QAAAAsAAAAD",
         "AAAAAAAAAEZSZXR1cm5zIGN1cnJlbnQgdmVzdGVkLCB3aXRoZHJhd24sIGFuZCBjbGFpbWFibGUgYW1vdW50cyBmb3IgYSBzdHJlYW0uAAAAAAALZ2V0X3Zlc3RpbmcAAAAAAQAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAEAAAPpAAAH0AAAAAtWZXN0aW5nSW5mbwAAAAAD",
-        "AAAAAAAAAPhSb3RhdGVzIGEgZnVuZGVkIGVzY3JvdydzIHJlbGVhc2VyLiBCb3RoIHRoZSBjdXJyZW50IHJlbGVhc2VyIGFuZApwYXllciBtdXN0IGF1dGhvcml6ZSB0aGUgY2hhbmdlOyB0aGUgcGF5ZXIncyBjb25zZW50IHByZXZlbnRzIGEKY29tcHJvbWlzZWQgcmVsZWFzZXIgZnJvbSBzaWxlbnRseSBhcHBvaW50aW5nIGFuIGF0dGFja2VyLiBUaGUKcmVwbGFjZW1lbnQgY2Fubm90IGJlIHRoZSBjb250cmFjdCBpdHNlbGYgb3IgdGhlIHBheWVlLgAAAA9yb3RhdGVfcmVsZWFzZXIAAAAAAwAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAAAAAAGY2FsbGVyAAAAAAATAAAAAAAAAAxuZXdfcmVsZWFzZXIAAAATAAAAAQAAA+kAAAACAAAAAw==" ]),
+        "AAAAAAAAAPhSb3RhdGVzIGEgZnVuZGVkIGVzY3JvdydzIHJlbGVhc2VyLiBCb3RoIHRoZSBjdXJyZW50IHJlbGVhc2VyIGFuZApwYXllciBtdXN0IGF1dGhvcml6ZSB0aGUgY2hhbmdlOyB0aGUgcGF5ZXIncyBjb25zZW50IHByZXZlbnRzIGEKY29tcHJvbWlzZWQgcmVsZWFzZXIgZnJvbSBzaWxlbnRseSBhcHBvaW50aW5nIGFuIGF0dGFja2VyLiBUaGUKcmVwbGFjZW1lbnQgY2Fubm90IGJlIHRoZSBjb250cmFjdCBpdHNlbGYgb3IgdGhlIHBheWVlLgAAAA9yb3RhdGVfcmVsZWFzZXIAAAAAAwAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAAAAAAGY2FsbGVyAAAAAAATAAAAAAAAAAxuZXdfcmVsZWFzZXIAAAATAAAAAQAAA+kAAAACAAAAAw==",
+        "AAAAAAAAA25Sb3RhdGVzIG9uZSBtZW1iZXIgb2YgYW4gTS1vZi1OIHJlbGVhc2VyIHNldCAoaXNzdWUgIzI5NCwgQURSIDAwMDkpLgpUaGUgZXNjcm93IG11c3QgYmUgYEZ1bmRlZGAuIEF0IGxlYXN0IGB0aHJlc2hvbGRgIGRpc3RpbmN0IG1lbWJlcnMKb2YgdGhlIGN1cnJlbnQgc2V0IG11c3QgYXV0aG9yaXplIHRoaXMgZXhhY3QgaW52b2NhdGlvbgooYGNoZWNrX2FwcHJvdmFsc2ApLCBhbmQgdGhlIHN0b3JlZCBwYXllciBtdXN0IGF1dGhvcml6ZSB0b28g4oCUIHRoZQpwYXllcidzIGNvbnNlbnQgaXMgdGhlIHJlY292ZXJ5IGd1YXJkLCBhcyBpbiBzaW5nbGUgcm90YXRpb24uCgpUaGUgb3V0Z29pbmcgbWVtYmVyJ3MgYXBwcm92YWwgY291bnRzIHRvd2FyZCB0aGUgdGhyZXNob2xkOiBpdCBpcwpzdGlsbCBhIG1lbWJlciB1bnRpbCB0aGUgcm90YXRpb24gbGFuZHMsIGFuZCBleGNsdWRpbmcgaXQgd291bGQKbWFrZSByZWNvdmVyeSBpbXBvc3NpYmxlIHdoZW4gb25seSBgdGhyZXNob2xkYCBtZW1iZXJzIGNhbiBzaWduLgpJZiB0aGUgcGF5ZXIgaXMgYWxzbyBhIHJlbGVhc2VyLCBvbmUgc2lnbmF0dXJlIHNhdGlzZmllcyBib3RoCnJvbGVzLiBUaGUgc2V0IHNpemUgYW5kIHRocmVzaG9sZCBhcmUgdW5jaGFuZ2VkLCBzbwpgdGhyZXNob2xkIDw9IHJlbGVhc2Vycy5sZW4oKWAga2VlcHMgaG9sZGluZy4gYG9sZGAgbXVzdCBiZSBhCmN1cnJlbnQgbWVtYmVyOyBgbmV3YCBtdXN0IG5vdCBhbHJlYWR5IGJlIGEgbWVtYmVyLCBtdXN0IG5vdCBiZQp0aGUgY29udHJhY3QgaXRzZWxmLCBhbmQgbXVzdCBub3QgYmUgdGhlIHBheWVlLiBFbWl0cyB0aGUgc2FtZQpgcm90YXRlYCBldmVudCBhcyBzaW5nbGUgcm90YXRpb24sIGNhcnJ5aW5nIG9sZCBhbmQgbmV3LgAAAAAAHnJvdGF0ZV9yZWxlYXNlcl93aXRoX2FwcHJvdmFscwAAAAAABAAAAAAAAAAJZXNjcm93X2lkAAAAAAAABgAAAAAAAAAJYXBwcm92ZXJzAAAAAAAD6gAAABMAAAAAAAAADG9sZF9yZWxlYXNlcgAAABMAAAAAAAAADG5ld19yZWxlYXNlcgAAABMAAAABAAAD6QAAAAIAAAAD" ]),
       options
     )
   }
@@ -964,6 +985,7 @@ export class Client extends ContractClient {
         get_status: this.txFromJSON<Result<EscrowStatus>>,
         withdraw: this.txFromJSON<Result<i128>>,
         get_vesting: this.txFromJSON<Result<VestingInfo>>,
-        rotate_releaser: this.txFromJSON<Result<void>>
+        rotate_releaser: this.txFromJSON<Result<void>>,
+        rotate_releaser_with_approvals: this.txFromJSON<Result<void>>
   }
 }

@@ -41,3 +41,17 @@ rotation succeeds.
 Contract tests cover successful rotation, rejection of a caller other
 than the current releaser, rejection after settlement, and rejection of
 the contract/payee as the replacement.
+
+## Amendment (issue #294): quorum rotation
+
+`rotate_releaser_with_approvals(escrow_id, approvers, old, new)` extends
+rotation to M-of-N escrows. At least `threshold` distinct members of the
+current set must authorize the call (reusing `check_approvals`), and the
+stored payer must authorize too. The outgoing member's approval counts
+toward the threshold: it is still a member until the rotation lands, and
+excluding it would make recovery impossible when only `threshold` members
+can sign. If the payer is also a releaser, one signature satisfies both
+roles. `old` must be a current member; `new` must not already be a
+member, must not be the contract itself, and must not be the payee. The
+set size and threshold are unchanged, so `threshold <= releasers.len()`
+keeps holding. The same `rotate` event is emitted, carrying old and new.
