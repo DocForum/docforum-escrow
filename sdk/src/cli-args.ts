@@ -7,8 +7,8 @@ export interface Options {
 const FLAG_OPTIONS = new Set(["help", "json", "dry-run", "yes", "allow-mainnet", "from-events"]);
 const VALUE_OPTIONS = new Set([
   "contract-id", "rpc-url", "network-passphrase", "signer-file", "signer-env",
-  "payee", "token", "amount", "condition-ref", "releaser", "refund-after",
-  "escrow-id", "start-ledger", "limit",
+  "payee", "token", "tokens", "amount", "condition-ref", "releaser", "refund-after",
+  "escrow-id", "from-ledger", "start-ledger", "limit",
 ]);
 
 /** Parse long options. Secrets are never accepted as option values. */
