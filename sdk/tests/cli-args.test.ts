@@ -20,4 +20,10 @@ describe("CLI argument parsing", () => {
     expect(() => parseArgs(["show", "--escrow-id"])).toThrow(/requires a value/);
     expect(() => parseArgs(["show", "123"])).toThrow(/Unexpected argument/);
   });
+
+  it("parses the check-solvency command with a token list", () => {
+    const parsed = parseArgs(["check-solvency", "--contract-id=C123", "--tokens", "CTOK1,CTOK2", "--from-ledger", "42"]);
+    expect(parsed.command).toBe("check-solvency");
+    expect(parsed.values).toEqual({ "contract-id": "C123", tokens: "CTOK1,CTOK2", "from-ledger": "42" });
+  });
 });
