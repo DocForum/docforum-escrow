@@ -199,7 +199,27 @@ impl EscrowContract {
         Self::extend_instance_ttl(&env);
         contributor.require_auth();
 
-        let mut data: EscrowData = Self::load(&env, escrow_id)?;
+        let key = DataKey::Contribution(escrow_id, contributor.clone());
+        // The final claim removes the live escrow. Preserve the more useful
+        // double-claim error using the durable contribution marker.
+        let mut data: EscrowData = match Self::load(&env, escrow_id) {
+            Ok(data) => data,
+            Err(Error::NotFunded) => {
+                if env
+                    .storage()
+                    .persistent()
+                    .get::<_, Contribution>(&key)
+                    .is_some_and(|contribution| contribution.refunded)
+                {
+                    return Err(Error::AlreadyRefunded);
+                }
+                if Self::pooled_data(&env, escrow_id).is_ok() {
+                    return Err(Error::NoContribution);
+                }
+                return Err(Error::NotFunded);
+            }
+            Err(error) => return Err(error),
+        };
         let pooled = Self::pooled_data(&env, escrow_id)?;
         Self::check_funded(&data)?;
         if env.ledger().timestamp() < pooled.funding_deadline {
@@ -210,7 +230,6 @@ impl EscrowContract {
             return Err(Error::FundingTargetReached);
         }
 
-        let key = DataKey::Contribution(escrow_id, contributor.clone());
         let mut contribution: Contribution = env
             .storage()
             .persistent()
