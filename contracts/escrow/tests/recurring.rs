@@ -513,7 +513,7 @@ fn fund_next_uses_the_payers_signature_tree() {
         sub_invokes: &[transfer_from],
     };
     env.mock_auths(&[MockAuth {
-        address: &contract_id,
+        address: &payer,
         invoke: &invoke,
     }]);
 
