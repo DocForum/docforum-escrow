@@ -356,4 +356,16 @@ describe("createEscrow with requiresAcceptance", () => {
       client.createEscrow({ ...base, requiresAcceptance: true, releaseNotBefore: 5n }),
     ).rejects.toThrow(/cannot be combined/);
   });
+
+  it("rejects fees before calling the acceptance-only entry point", async () => {
+    const client = makeClient({ contractClient: () => ({}) });
+    await expect(
+      client.createEscrow({
+        ...base,
+        requiresAcceptance: true,
+        feeRecipient: Keypair.random().publicKey(),
+        feeBps: 100,
+      }),
+    ).rejects.toThrow(/cannot be combined/);
+  });
 });
