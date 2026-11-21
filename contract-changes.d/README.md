@@ -3,6 +3,10 @@
 One new file per PR that changes the escrow contract
 (anything under `contracts/escrow/src/`).
 
+A PR that only adds tests (for example a proptest model under
+`contracts/escrow/tests/`) doesn't change the contract source and needs no
+fragment here.
+
 When every contract PR bumped `CONTRACT_VERSION` itself, all of them edited
 the same line and picked the same "next" version, so each contract merge put
 every other contract PR into conflict. Now you describe the change in a

@@ -116,8 +116,8 @@ impl EscrowContract {
     /// - must be a positive amount (`InvalidAmount`);
     /// - is accepted only while the escrow is `Funded` and the ledger
     ///   timestamp is strictly before the funding deadline
-    ///   (`FundingDeadlinePassed` after it — late money can never change a
-    ///   round's outcome);
+    ///   (`FundingDeadlinePassed` at or after it — late money can never
+    ///   change a round's outcome);
     /// - may not push the pooled total past the funding target
     ///   (`FundingTargetReached` — overfunding is rejected, not refunded);
     /// - is pulled from `payer` under `payer.require_auth()` and verified
@@ -185,9 +185,10 @@ impl EscrowContract {
     /// Pull-based refund (issue #113, docs/adr/0011): pays `contributor`
     /// exactly the amount recorded against that address, once. Available
     /// only for a *failed* funding round — the funding deadline has passed
-    /// with the pooled total still below the target (`RefundNotOpen`
-    /// otherwise) — and only while the escrow has not been released
-    /// (`NotFunded` afterwards: released funds can never be claimed).
+    /// (the claim is allowed at `now >= funding_deadline`) with the pooled
+    /// total still below the target (`RefundNotOpen` otherwise) — and only
+    /// while the escrow has not been released (`NotFunded` afterwards:
+    /// released funds can never be claimed).
     /// Each claim is O(1) work — no path iterates contributors — and its
     /// own authorization: no one can claim on another contributor's
     /// behalf (`NoContribution` for an address with no record), a second
@@ -271,35 +272,9 @@ impl EscrowContract {
     /// aggregate funded amount is the escrow's `amount` from `get_escrow`;
     /// a round is failed when `now >= funding_deadline` and `amount <
     /// funding_target` (then `claim_refund` is open to each contributor).
-    /// Errors `NotPooled` on a non-pooled or unknown id.
-    pub fn get_pooled(env: Env, escrow_id: u64) -> Result<PooledData, Error> {
+    /// Errors `NotPooled` on a non-pooled escrow.
+    pub fn get_pooled_config(env: Env, escrow_id: u64) -> Result<PooledData, Error> {
         Self::extend_instance_ttl(&env);
         Self::pooled_data(&env, escrow_id)
-    }
-
-    /// Read-only: one contributor's record on a pooled escrow — the exact
-    /// amount they can claim back from a failed round, and whether it has
-    /// already been claimed. `None` means the address never contributed.
-    /// Errors `NotFound` on an unknown id and `NotPooled` on a
-    /// non-pooled escrow.
-    pub fn get_contribution(
-        env: Env,
-        escrow_id: u64,
-        contributor: Address,
-    ) -> Result<Option<Contribution>, Error> {
-        Self::extend_instance_ttl(&env);
-        let key = DataKey::Contribution(escrow_id, contributor);
-        if !env.storage().persistent().has(&key) {
-            // Distinguish "no such escrow" from "wrong escrow kind" so
-            // callers can't confuse a missing record with a bad id.
-            if !env.storage().persistent().has(&DataKey::Pooled(escrow_id)) {
-                if env.storage().persistent().has(&DataKey::Escrow(escrow_id)) {
-                    return Err(Error::NotPooled);
-                }
-                return Err(Error::NotFound);
-            }
-            return Ok(None);
-        }
-        Ok(env.storage().persistent().get(&key))
     }
 }
