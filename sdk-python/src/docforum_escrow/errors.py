@@ -86,6 +86,7 @@ __all__ = [
     "StreamTopUpUnsupportedError",
     "InvalidSettlementAmountError",
     "SettlementNotSupportedError",
+    "AttesterNotConfiguredError",
     "ScheduleTooEarlyError",
     "ScheduleCompleteError",
     "ScheduleCancelledError",
@@ -147,6 +148,7 @@ CONTRACT_ERROR_NAMES: dict[int, str] = {
     51: "StreamTopUpUnsupported",
     52: "InvalidSettlementAmount",
     53: "SettlementNotSupported",
+    4200: "AttesterNotConfigured",
     11500: "ScheduleTooEarly",
     11501: "ScheduleComplete",
     11502: "ScheduleCancelled",
@@ -576,6 +578,11 @@ class SettlementNotSupportedError(ContractError):
     contract_error = "SettlementNotSupported"
 
 
+class AttesterNotConfiguredError(ContractError):
+    """Contract error 4200: ``AttesterNotConfigured``."""
+
+    code = 4200
+    contract_error = "AttesterNotConfigured"
 class ScheduleTooEarlyError(ContractError):
     """Contract error 11500: ``ScheduleTooEarly``."""
 

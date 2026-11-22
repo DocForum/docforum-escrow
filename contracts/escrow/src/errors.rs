@@ -133,6 +133,9 @@ pub enum Error {
     /// `unpause` on a running contract. The transition did not happen, so
     /// no event is emitted.
     NotPaused = 40,
+    /// `release_with_attestation` was called on an escrow with no
+    /// `attester` configured (Phase E5, issue #42).
+    AttesterNotConfigured = 4200,
     /// `fund_next` before the next period is due (issue #115).
     ScheduleTooEarly = 11500,
     /// `fund_next` after every period was funded (issue #115).
