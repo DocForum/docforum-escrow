@@ -15,9 +15,6 @@ use soroban_sdk::{
     Address, BytesN, Env, IntoVal, String, Vec,
 };
 
-#[path = "common/auth.rs"]
-mod auth;
-
 const DOMAIN: &[u8] = b"docforum-escrow:release-attestation:v1";
 const ACTION: &[u8] = b"release";
 
@@ -129,7 +126,7 @@ fn release_with_attestation_pays_payee_and_marks_released() {
     // The submitter needs no authorization at all: anyone may submit.
     f.client
         .release_with_attestation(&f.escrow_id, &signature);
-    auth::assert_auth_addresses(&env, &[]);
+    assert!(env.auths().is_empty());
 
     assert_eq!(f.token.balance(&f.payee), 300);
     assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Released);
