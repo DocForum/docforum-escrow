@@ -10,6 +10,7 @@ export interface RpcProviderConfig {
   timeoutMs?: number;
 }
 
+/** Health-check result for one configured Soroban RPC endpoint. */
 export interface RpcProviderHealth {
   url: string;
   priority: number;
@@ -18,6 +19,7 @@ export interface RpcProviderHealth {
   error?: unknown;
 }
 
+/** Creates an RPC server for a provider, with the client's HTTP policy applied. */
 export type RpcProviderFactory = (config: RpcProviderConfig, allowHttp: boolean) => RpcServer;
 
 interface Provider {
@@ -99,6 +101,7 @@ export class RpcProviderPool {
       .map((provider) => ({ url: provider.config.url, rpc: provider.rpc }));
   }
 
+  /** Return the highest-priority provider that is healthy and sufficiently fresh. */
   async select(): Promise<{ url: string; rpc: RpcServer }> {
     return (await this.healthyProviders())[0]!;
   }
