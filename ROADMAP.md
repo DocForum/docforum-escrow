@@ -355,6 +355,8 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   cases. SDK `getAllowedTokens()` and regenerated bindings. No new storage
   key or error code.
 - [x] List escrows by payer or payee (issue #33, ADR 0015): decided **off-chain**, so the contract is unchanged. The `ESCROW` event (issue #9) already carries `payer`/`payee`, and the issue #87 indexer already stores them, so the query is an index filter; `EscrowIndexerClient.listEscrows` gained optional `payer`/`payee` filters. No redeploy; SDK minor, additive.
+- [x] Attestation-based release (issue #42): optional `attester` (ed25519 public key) at creation and `release_with_attestation(escrow_id, signature)`, verified over a domain-separated message (contract id, network id, escrow id, action). Tests: `contracts/escrow/tests/attestation.rs`. **Not yet on testnet.**
+- [x] Recurring escrows funded through token allowances (issue #115, ADR 0015): `create_schedule` records a payer/payee/token/amount/period/count schedule; any keeper may call `fund_next` when a period is due, pulling exactly one period's amount via `transfer_from` under the payer's SEP-41 allowance and creating a normal escrow for it; the payer may cancel at any time. Tests: `contracts/escrow/tests/recurring.rs`. **Not yet on testnet.**
 
 ## Phase E6 — SDK & integrator tooling
 - [x] Typed SDK errors mapped from the contract error enum (issue #61):
@@ -477,6 +479,11 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   opt-in live testnet suite kept out of CI. Not on PyPI; publish plan in
   `sdk-python/README.md`.
 - [x] Solvency checker (issue #78): `checkSolvency({ contractId, tokens })` returns balance vs liabilities per token from the on-chain `solvency` view, with an events-based fallback for deployments that predate it, and a `check-solvency` CLI command that exits 1 on a shortfall. Read-only, no secret needed.
+- [x] **Multiple RPC providers with health checks and failover (issue #123).**
+  The TypeScript SDK accepts prioritized Soroban endpoints, filters providers by
+  latest-ledger freshness and configured network passphrase, and retries
+  idempotent reads across healthy providers. Writes remain single-provider and
+  must verify a submitted transaction hash before any caller-controlled retry.
 
 ## Phase E7 — Verification, testing & release engineering
 - [ ] Assert exact auth trees throughout contract tests (issue #105). This contribution strengthens `create_escrow`, `release`, and `refund` with complete tree comparisons and a wrong-signer creation regression; remaining contract-test modules still need conversion.
@@ -548,6 +555,15 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `knownNetworkConfig`). Refuses a dirty tree and mainnet; `--dry-run`
   targets a local quickstart.
 - [x] **Contract interface snapshot and breaking ABI guard** (issue #96) — committed `contract-spec.json` snapshot of public functions, signatures, and error codes; CI diff ensures no unreviewed interface drift; error codes are checked append-only (never renumbered or reused); interface changes are classified as additive or breaking, requiring semver bump notes.
+- [x] **Mutation testing fails the nightly run on new survivors (issue #314)** —
+  `contracts/escrow/.cargo/mutants-baseline.txt` records the mutants the project
+  accepts surviving, each with a one-line reason, and
+  `scripts/mutation-baseline.mjs` diffs `mutants.out/missed.txt` against it
+  (`validate` before the run, `check` after it), matching on function + mutation
+  instead of `file:line:col` so line shifts do not churn the file. A survivor
+  outside the baseline fails the job and is named in the job summary with the
+  baseline line to add; entries that no longer survive are reported for pruning.
+  `mutants.toml` now examines every module under `src/`, not just `src/lib.rs`.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -1245,7 +1261,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   - Issue #41: let the payer and first releaser jointly extend an active single-releaser escrow refund deadline, with a dedicated update event and visible deadline in escrow reads.
   - Issue #44: add fixed-total linear vesting escrows with start/end/cliff schedules, payee withdrawals, and settlement that routes unpaid vested value to the payee and unvested value to the stored refund destination.
   - Issue #46: releaser-authorized split settlement. New `settle(escrow_id, caller, payee_amount)` pays a chosen gross amount to the payee and returns the rest to `refund_to`, under the same release-time and acceptance gates as `release`. A protocol fee applies to the payee share only, never to the refunded part (ADR 0010), so `settle(0)` matches `refund` and `settle(amount)` matches `release`. Streamed and multi-payee escrows are rejected with `SettlementNotSupported`. New errors `InvalidSettlementAmount` (52) and `SettlementNotSupported` (53).
-  - Issue #48: reclaim storage for settled escrows (docs/adr/0013). Settling a non-pooled escrow removes its full `EscrowData` record and keeps only the `Status` entry (whose TTL is extended as before); `get_escrow` on a settled id now returns `NotFound` and mutating calls return `NotFunded`. Pooled escrows keep their full record, and a settled stream stays readable through `get_vesting`. Breaking for callers that read `get_escrow` after settlement; the SDK accepts contract 3.x (`SUPPORTED_CONTRACT_VERSIONS` < 4.0.0).
+  - Issue #48: reclaim storage for settled escrows (docs/adr/0013). Settling a non-pooled escrow removes its full `EscrowData` record and keeps only the `Status` entry (whose TTL is extended as before); `get_escrow` on a settled id now returns `NotFound` and mutating calls return `NotFunded`. Pooled escrows keep their full record while contributor refunds remain; the final failed-round claim (or empty-round close) reclaims it while status and contribution records remain. A settled stream stays readable through `get_vesting`. Breaking for callers that read `get_escrow` after settlement; the SDK accepts contract 3.x (`SUPPORTED_CONTRACT_VERSIONS` < 4.0.0).
   Final error codes: Error::InvalidSettlementAmount 4600 -> 52, Error::SettlementNotSupported 4601 -> 53, Error::InvalidPayeeList 2200 -> 41, Error::TooManyPayees 2201 -> 42, Error::DuplicatePayee 2202 -> 43, Error::InvalidBasisPoints 2203 -> 44, Error::SplitAmountOverflow 2204 -> 45, Error::PoolInsufficient 4400 -> 47, Error::NotStreamed 4401 -> 48, Error::InvalidVestingSchedule 4402 -> 49, Error::NothingToWithdraw 4403 -> 50, Error::StreamTopUpUnsupported 4404 -> 51, Error::InvalidRefundExtension 4100 -> 46.
 - 2026-11-19 — Redeployed contract 3.0.0 to testnet as
   `CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H` with `scripts/deploy` (source `2bbc6b1`).
@@ -1396,3 +1412,46 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   - Issue #294: quorum releaser rotation (ADR 0009). New `rotate_releaser_with_approvals` entry point; no existing entry point or error changes.
   - Issue #298: correct public escrow contract documentation and ADR references; the contract behavior and public entry-point signatures are unchanged, but the WASM spec and generated SDK documentation are refreshed.
   - Issue #299: new read-only `get_allowed_tokens() -> Vec<Address>` returning the immutable deploy-time token allowlist; an empty list still means any token is accepted. No new storage key and no new error code — the constructor already wrote `DataKey::AllowedTokens`, this only exposes it to integrators.
+- 2026-11-22 — Issue #123 (Phase E6): added prioritized Soroban RPC provider configuration with
+  fresh-ledger health checks, network-passphrase validation, lag filtering and
+  read failover. Existing single-`rpcUrl` clients remain compatible.
+- 2026-11-22 — Issue #131 (Phase E7): add CI coverage for SDK release and historical contract
+  compatibility, including explicit known-incompatible ABI pairs and current-SDK
+  read/settle checks against legacy deployments.
+- 2026-11-22 — Issue #289 (Phase E5): failed pooled rounds now become `Refunded` when the
+  final contribution is claimed. Zero-contribution failed rounds can be closed
+  permissionlessly after their deadline, and both paths emit the terminal
+  `ESCROW` snapshot without changing liabilities.
+- 2026-11-22 — Issue #296 (Phase E5): aligned `settle_many` refund operations with the
+  single-escrow `refund` path. The stored payee can now initiate a voluntary
+  refund in a batch, with the same `PayeeRefunded` event and pooled-escrow
+  protection.
+- 2026-11-22 — Issue #301 (Phase E5): custom releaser account authorizes `settle_many` on its configured escrow, counting each operation in the batch against the per-window settlement cap.
+- 2026-11-22 — Issue #314 (Phase E7): the nightly mutation run now fails on survivors it was
+  not told to accept. `contracts/escrow/.cargo/mutants-baseline.txt` lists the
+  accepted survivors, one line and one reason each, and
+  `scripts/mutation-baseline.mjs` diffs `mutants.out/missed.txt` against it —
+  matching on the mutation description (function + mutation) rather than
+  `file:line:col`, so unrelated edits that shift line numbers do not churn the
+  baseline. The job summary lists every survivor, the exact baseline line that
+  would accept it, and any baseline entry that no longer survives. The baseline
+  starts empty, so every survivor fails until it is either killed by a test or
+  accepted with a reason. `mutants.toml`'s `examine_globs` now covers all of
+  `src/`: it still named only `src/lib.rs`, which stopped holding contract code
+  when the contract was split into one module per area, so the job was mutating
+  nothing. No contract or SDK change.
+- 2026-11-22 — Issue #318: CI now fails when a committed contract test snapshot has no
+  corresponding test.
+- 2026-11-22 — Issue #42 (Phase E5): escrows can now be created with an optional attester
+  key, and released with a signed off-chain attestation instead of a releaser
+  transaction. SDK helper builds and signs the attestation message.
+- 2026-11-22 — CI now fails when an editor backup or merge artefact (`*.bak`, `*.orig`, `*.rej`) is tracked: `node scripts/check-no-backup-files.mjs`, ported from docforum-web #354. It reports the files and how to remove them. This is an ordinary CI check, not a malware-scan finding: a leftover `.orig` from resolving a conflict is a mistake to fix, not a reason to block CI approval.
+- 2026-11-22 — Contract 3.2.0 (was 3.1.0), folded from 3 change(s):
+  - Issue #289: add permissionless `close_failed_round` for zero-contribution failed pools and transition a pooled escrow to `Refunded` on its final claim; both paths emit the terminal `ESCROW` snapshot.
+  - Issue #296: align `settle_many` refund operations with the single-escrow `refund` path so the stored payee can voluntarily refund a funded escrow; the batch emits the same `PayeeRefunded` event and keeps pooled escrows excluded from push refunds.
+  - Issue #42: attestation-based release. New `create_escrow_with_attester` and `release_with_attestation` entry points, an optional `attester` field on `EscrowData`, and a new `AttesterNotConfigured` error (provisional code 4200). No existing entry point or stored field changes shape.
+  Final error codes: Error::AttesterNotConfigured 4200 -> 54.
+- 2026-11-22 — Issue #115 (Phase E5): recurring escrows funded through token allowances (ADR 0015). `create_schedule` records a payer/payee/token/amount/period/count schedule; any keeper may call `fund_next` when a period is due, pulling exactly one period's amount via `transfer_from` under the payer's SEP-41 allowance and creating a normal escrow for it; the payer may cancel at any time. Tests: `contracts/escrow/tests/recurring.rs`.
+- 2026-11-22 — Contract 3.3.0 (was 3.2.0), folded from 1 change(s):
+  - Issue #115: recurring escrows funded through token allowances (ADR 0015). New `create_schedule`/`fund_next`/`cancel_schedule`/`get_schedule` entry points, `RecurringSchedule` storage, and `ScheduleTooEarly`, `ScheduleComplete`, `ScheduleCancelled`, `AllowanceExhausted`, `InvalidSchedule` errors; period escrows are created through the existing creation path, so no existing entry point changes.
+  Final error codes: Error::ScheduleTooEarly 11500 -> 55, Error::ScheduleComplete 11501 -> 56, Error::ScheduleCancelled 11502 -> 57, Error::AllowanceExhausted 11503 -> 58, Error::InvalidSchedule 11504 -> 59.

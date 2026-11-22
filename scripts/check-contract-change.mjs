@@ -19,6 +19,7 @@
 //
 //   node scripts/check-contract-change.mjs <base-ref>   # e.g. origin/main
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 
 const SRC = 'contracts/escrow/src/';
 const FRAGMENTS = 'contract-changes.d/';
@@ -49,6 +50,20 @@ const changed = git('diff', '--name-status', mergeBase, 'HEAD', '--', FRAGMENTS)
 const added = changed.filter((l) => l.startsWith('A'));
 const deleted = changed.filter((l) => l.startsWith('D'));
 const isFold = deleted.length > 0 && added.length === 0;
+const problems = [];
+
+for (const entry of added) {
+  const filePath = entry.split(/\s+/).at(-1);
+  const file = filePath.split('/').at(-1);
+  if (!/^\d+-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/.test(file)) {
+    problems.push(`${file}: fragment filename must be <issue>-<slug>.md.`);
+    continue;
+  }
+  const text = fs.readFileSync(filePath, 'utf8');
+  if (!/^bump:\s*(?:patch|minor|major)\s*\n---\s*\n\s*\S[\s\S]*$/u.test(text)) {
+    problems.push(`${file}: expected bump: patch|minor|major, then ---, then a non-empty summary.`);
+  }
+}
 
 const version = (src) => (src.match(/^pub const CONTRACT_VERSION: &str = "([^"]+)";/m) || [])[1];
 function errorCodes(src) {
@@ -60,7 +75,6 @@ function errorCodes(src) {
 
 const before = show(mergeBase);
 const after = show('HEAD');
-const problems = [];
 
 if (!isFold && added.length === 0) {
   problems.push(

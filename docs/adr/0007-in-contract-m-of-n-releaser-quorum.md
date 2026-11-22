@@ -197,6 +197,15 @@ Append-only, following the existing scheme (1–8 and 12 are already used):
 | Change `release`/`refund` to take `approvers` | Breaks every existing caller and the SDK's stable surface for a per-escrow option; the new entry points are additive. |
 | OpenZeppelin access/role modules | Not usable here (no `soroban-sdk` 27-compatible release) and would add the contract-level authority ADR 0002 rejects — see ADR 0006. |
 
+## Custom releaser accounts as quorum members
+
+A custom releaser account may appear as one address in the escrow's
+`releasers` set. When the account is listed in `approvers`, its own signer
+threshold is evaluated independently by the account contract, and one
+rate-limit slot is consumed for the approval-based call. The account rejects
+approval contexts for any other escrow, function, or malformed/missing
+`approvers` argument.
+
 ## Tests
 
 `contracts/escrow/tests/quorum.rs` (19 tests) covers: stored set/threshold,
