@@ -15,7 +15,8 @@
 // pause/unpause state errors).
 
 use docforum_escrow::{
-    Error, EscrowContract, EscrowContractClient, EscrowStatus, Paused, SettleAction, Unpaused,
+    Error, EscrowContract, EscrowContractClient, EscrowOptions, EscrowStatus, Paused,
+    SettleAction, Unpaused,
 };
 use soroban_sdk::{
     events::Event as _,
@@ -40,6 +41,7 @@ const DEPOSIT_ENTRYPOINTS: &[&str] = &[
     "create_escrow_with_acceptance",
     "create_escrow_with_attester",
     "create_escrow_with_releasers",
+    "create_escrow_with_options",
     "create_escrows",
     "create_streamed_escrow",
     "create_pooled_escrow",
@@ -439,6 +441,30 @@ fn paused_blocks_the_other_creation_entry_points_and_top_up() {
             &false,
             &None,
             &None,
+        ),
+        Error::Paused,
+    );
+
+    // The combined options entry point is a deposit path too.
+    let options = EscrowOptions {
+        releasers: releasers.clone(),
+        threshold: 1,
+        refund_after: None,
+        release_not_before: None,
+        notify_payee: false,
+        requires_acceptance: false,
+        refund_to: None,
+        fee_recipient: None,
+        fee_bps: None,
+    };
+    assert_contract_error(
+        f.client.try_create_escrow_with_options(
+            &f.payer,
+            &f.payee,
+            &f.token_id,
+            &100,
+            &String::from_str(&env, "blocked-options"),
+            &options,
         ),
         Error::Paused,
     );
