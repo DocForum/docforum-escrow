@@ -1,8 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype,
-    crypto::Hash, xdr::ToXdr, Address, BytesN, Env, Vec,
+    contract, contracterror, contractimpl, contracttype, crypto::Hash, xdr::ToXdr, Address, BytesN,
+    Env, Vec,
 };
 
 #[contracterror]
@@ -27,7 +27,9 @@ pub struct EscrowFactory;
 #[contractimpl]
 impl EscrowFactory {
     pub fn __constructor(env: Env, escrow_wasm: BytesN<32>) {
-        env.storage().instance().set(&DataKey::EscrowWasm, &escrow_wasm);
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowWasm, &escrow_wasm);
     }
 
     pub fn create_instance(
@@ -38,7 +40,11 @@ impl EscrowFactory {
         pause_admin: Address,
     ) -> Result<Address, Error> {
         integrator.require_auth();
-        if env.storage().persistent().has(&DataKey::Instance(integrator.clone())) {
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Instance(integrator.clone()))
+        {
             return Err(Error::AlreadyRegistered);
         }
         let wasm_hash: BytesN<32> = env
@@ -46,7 +52,7 @@ impl EscrowFactory {
             .instance()
             .get(&DataKey::EscrowWasm)
             .expect("factory was not initialized");
-        let mut preimage = integrator.to_xdr(&env);
+        let mut preimage = integrator.clone().to_xdr(&env);
         preimage.append(&salt.to_xdr(&env));
         let derived_salt: Hash<32> = env.crypto().sha256(&preimage);
         let instance = env
@@ -60,7 +66,9 @@ impl EscrowFactory {
     }
 
     pub fn get_instance(env: Env, integrator: Address) -> Option<Address> {
-        env.storage().persistent().get(&DataKey::Instance(integrator))
+        env.storage()
+            .persistent()
+            .get(&DataKey::Instance(integrator))
     }
 }
 
@@ -72,10 +80,7 @@ mod tests {
     #[test]
     fn registry_is_empty_before_deployment() {
         let env = Env::default();
-        let factory = env.register(
-            EscrowFactory,
-            BytesN::from_array(&env, &[7; 32]),
-        );
+        let factory = env.register(EscrowFactory, (BytesN::from_array(&env, &[7; 32]),));
         let client = EscrowFactoryClient::new(&env, &factory);
         assert!(client.get_instance(&Address::generate(&env)).is_none());
     }
