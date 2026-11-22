@@ -571,7 +571,7 @@ class SettlementNotSupportedError(ContractError):
 class AttesterNotConfiguredError(ContractError):
     """Contract error 54: ``AttesterNotConfigured``."""
 
-    code = 4200
+    code = 54
     contract_error = "AttesterNotConfigured"
 
 
