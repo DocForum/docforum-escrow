@@ -135,6 +135,12 @@ impl EscrowContract {
             });
             shares
         };
+        if payees
+            .iter()
+            .any(|share| share.payee == env.current_contract_address())
+        {
+            return Err(Error::InvalidPayeeList);
+        }
         if let Some(deadline) = refund_after {
             if deadline <= env.ledger().timestamp() {
                 return Err(Error::InvalidRefundAfter);
@@ -238,6 +244,9 @@ impl EscrowContract {
         }
         let mut seen: Vec<Address> = Vec::new(env);
         for releaser in releasers.iter() {
+            if releaser == env.current_contract_address() {
+                return Err(Error::InvalidReleaser);
+            }
             if Self::contains(&seen, &releaser) {
                 return Err(Error::DuplicateReleaser);
             }
