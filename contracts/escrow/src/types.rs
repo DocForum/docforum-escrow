@@ -2,16 +2,7 @@
 
 use crate::*;
 
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum EscrowStatus {
-    Funded,
-    Released,
-    Refunded,
-    /// The payer withdrew the funds before the payee accepted — see
-    /// docs/adr/0010. Terminal, like `Released` and `Refunded`.
-    Cancelled,
-}
+pub use docforum_escrow_interface::{EscrowData, EscrowStatus, PayeeShare};
 
 /// What one `settle_many` operation does to its escrow (issue #29).
 #[contracttype]
@@ -24,69 +15,6 @@ pub enum SettleAction {
 }
 
 /// Direct recipient and share of a split release, in basis points.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PayeeShare {
-    pub payee: Address,
-    pub basis_points: u32,
-}
-
-#[contracttype]
-#[derive(Clone)]
-pub struct EscrowData {
-    /// The funder: authorises and pays for the escrow at creation. Also
-    /// the refund destination unless `refund_to` says otherwise.
-    pub payer: Address,
-    pub payee: Address,
-    pub token: Address,
-    pub amount: i128,
-    /// Opaque caller-supplied reference the contract stores but never
-    /// interprets (docs/adr/0001). This field is **public on-chain forever**,
-    /// like the rest of `EscrowData` (docs/threat-model.md T9): never put
-    /// private, personal or sensitive data here. Pass an opaque, meaningless
-    /// id such as a UUID or an internal record id.
-    pub condition_ref: String,
-    pub status: EscrowStatus,
-    /// Addresses permitted to settle this escrow — see docs/adr/0002 for the
-    /// per-escrow releaser, and docs/adr/0007 for M-of-N sets. A plain
-    /// single-releaser escrow stores exactly one entry here.
-    pub releasers: Vec<Address>,
-    /// How many *distinct* addresses from `releasers` must authorize one
-    /// settlement. Always `>= 1` and `<= releasers.len()`; `1` means any
-    /// single releaser can settle (the pre-quorum behaviour).
-    pub threshold: u32,
-    /// Optional deadline (unix seconds) after which `refund` opens to
-    /// anyone — still only to `refund_to`. `None` means no timeout,
-    /// behaviour identical to before this field existed — see docs/adr/0004.
-    pub refund_after: Option<u64>,
-    /// Direct release recipients; ordinary escrows store one 10,000-bps share.
-    pub payees: Vec<PayeeShare>,
-    /// If true, invoke the contract payee's `on_escrow_released` hook after
-    /// the payout transfer. A failed callback reverts the whole release.
-    pub notify_payee: bool,
-    /// Whether release requires the payee's explicit acceptance.
-    pub requires_acceptance: bool,
-    /// Ledger timestamp at which the payee accepted, if any.
-    pub accepted_at: Option<u64>,
-    /// Where **every** refund path (releaser, timeout) sends the funds.
-    /// Fixed at creation under the funder's auth and never chosen at
-    /// payout, so invariant I1 holds; defaults to `payer` when omitted at
-    /// creation — see docs/adr/0009.
-    pub refund_to: Address,
-    /// Earliest ledger timestamp at which release is allowed.
-    pub release_not_before: Option<u64>,
-    /// Optional protocol fee recipient, set once at `create_escrow` time
-    /// and paid at release (never on refund) — see docs/adr/0010. Stored
-    /// as one (recipient, bps) pair in two fields so both are always set
-    /// together or not at all (creation-time rule, `InvalidFee`
-    /// otherwise). `None` (with no bps) means no fee: the payee receives
-    /// the full `amount`, exactly as before this field existed.
-    pub fee_recipient: Option<Address>,
-    /// Fee rate in basis points of `amount` (capped at [`MAX_FEE_BPS`]
-    /// = 10 %), taken once at release, rounded **down** with the
-    /// remainder to the payee — see docs/adr/0010.
-    pub fee_bps: Option<u32>,
-}
 
 /// Identifies voluntary refunds started by the escrow's stored payee.
 #[contractevent]
