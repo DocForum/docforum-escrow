@@ -95,6 +95,7 @@ mod admin;
 mod attestation;
 mod create;
 mod internal;
+mod milestones;
 mod pause;
 mod payee_transfer;
 mod pooled;

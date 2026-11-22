@@ -141,5 +141,19 @@ impl EscrowContract {
         let storage = env.storage().persistent();
         storage.extend_ttl(&DataKey::Escrow(escrow_id), threshold, extend_to);
         storage.extend_ttl(&DataKey::Status(escrow_id), threshold, extend_to);
+        if storage.has(&DataKey::Milestones(escrow_id)) {
+            storage.extend_ttl(&DataKey::Milestones(escrow_id), threshold, extend_to);
+        }
+    }
+
+    /// Keeps the milestone audit record for the same period as settled status.
+    pub(crate) fn extend_settled_milestone_ttl(env: &Env, escrow_id: u64) {
+        let extend_to = SETTLED_ESCROW_EXTEND_TO.min(env.storage().max_ttl());
+        let threshold = SETTLED_ESCROW_TTL_THRESHOLD.min(extend_to);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Milestones(escrow_id),
+            threshold,
+            extend_to,
+        );
     }
 }

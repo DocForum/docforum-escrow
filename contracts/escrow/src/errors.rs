@@ -148,4 +148,16 @@ pub enum Error {
     AllowanceExhausted = 58,
     /// A schedule with a zero period or zero total periods (issue #115).
     InvalidSchedule = 59,
+    /// The milestone schedule is empty, non-positive, or does not total the escrow amount (issue #21).
+    InvalidMilestones = 2101,
+    /// A milestone-only query or release was used on an ordinary escrow (issue #21).
+    NotMilestone = 2102,
+    /// The milestone index is outside the immutable schedule (issue #21).
+    InvalidMilestoneIndex = 2103,
+    /// The requested tranche has already been released (issue #21).
+    MilestoneAlreadyReleased = 2104,
+    /// A full-escrow release path cannot settle milestone escrow (issue #21).
+    MilestoneReleaseRequired = 2105,
+    /// The milestone schedule exceeds `MAX_MILESTONES` (issue #21).
+    TooManyMilestones = 2106,
 }

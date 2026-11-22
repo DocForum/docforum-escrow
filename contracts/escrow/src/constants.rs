@@ -33,6 +33,8 @@ pub const MAX_SETTLE_OPS: u32 = 12;
 /// Measured against the read-only simulation budget with the full
 /// `EscrowData` shape; callers should chunk larger dashboards queries.
 pub const MAX_GET_ESCROWS: u32 = 24;
+/// Maximum tranche count in one immutable milestone schedule (issue #21).
+pub const MAX_MILESTONES: u32 = 32;
 /// Issue #39: a `Liability(token)` entry is re-extended whenever its
 /// remaining TTL falls below this many ledgers (~30 days at 5 s/ledger)…
 pub const LIABILITY_TTL_THRESHOLD: u32 = 518_400;

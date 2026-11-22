@@ -1,7 +1,7 @@
 //! Escrow creation entry points and payee acceptance.
 
-use crate::*;
 use crate::internal::Funding;
+use crate::*;
 
 #[contractimpl]
 impl EscrowContract {
@@ -111,6 +111,78 @@ impl EscrowContract {
             None,
             false,
         )
+    }
+
+    /// Creates a funded escrow with an immutable schedule of positive tranche
+    /// amounts. Tranches must sum to `amount`; use `release_milestone` to pay
+    /// them individually. Refunds return only the unpaid remainder.
+    pub fn create_escrow_with_milestones(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        milestones: Vec<i128>,
+        refund_after: Option<u64>,
+        notify_payee: bool,
+        refund_to: Option<Address>,
+        fee_recipient: Option<Address>,
+        fee_bps: Option<u32>,
+    ) -> Result<u64, Error> {
+        if milestones.is_empty() || amount <= 0 {
+            return Err(Error::InvalidMilestones);
+        }
+        if milestones.len() > MAX_MILESTONES {
+            return Err(Error::TooManyMilestones);
+        }
+        let mut total = 0i128;
+        for tranche in milestones.iter() {
+            if tranche <= 0 {
+                return Err(Error::InvalidMilestones);
+            }
+            total = total.checked_add(tranche).ok_or(Error::Overflow)?;
+        }
+        if total != amount {
+            return Err(Error::InvalidMilestones);
+        }
+
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        let id = Self::create_escrow_inner(
+            &env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            1,
+            refund_after,
+            notify_payee,
+            false,
+            refund_to,
+            None,
+            fee_recipient,
+            fee_bps,
+            None,
+            false,
+        )?;
+        let mut released = Vec::new(&env);
+        for _ in milestones.iter() {
+            released.push_back(false);
+        }
+        env.storage().persistent().set(
+            &DataKey::Milestones(id),
+            &MilestoneData {
+                amounts: milestones,
+                released,
+                paid: 0,
+            },
+        );
+        Self::extend_escrow_ttl(&env, id, refund_after);
+        Ok(id)
     }
 
     /// Creates a single-releaser escrow with an optional earliest release time.

@@ -582,16 +582,14 @@ question tracked by issue #8 and are not changed here.
 
 ### T23 — Planned Phase E5 features would change the trust model · **Medium per feature**
 
-**Nothing in this section is implemented in the reviewed commit.** It exists
-so the analysis is ready when a feature is proposed, and so a reviewer knows
-which questions to ask then. Milestones, disputes and per-escrow
-attestations are *not* part of the reviewed scope; if one lands, it needs its
-own threat, tests, and a delta review recorded in `docs/audit/`.
+Milestones are implemented in issue #21 and covered by the I3 checks below.
+Disputes and per-escrow attestations remain out of scope; each needs its own
+threat analysis, tests, and delta review recorded in `docs/audit/`.
 
-- **Milestones (STRIDE: Tampering, Elevation).** Partial releases would turn
-  I3 into "each milestone pays at most once, and the sum never exceeds
-  `amount`." Reviewer must confirm a per-milestone settled flag and the
-  running-total bound, and that a milestone cannot be replayed after refund.
+- **Milestones (STRIDE: Tampering, Elevation).** Partial releases turn I3
+  into "each milestone pays at most once, and the sum never exceeds `amount`."
+  Per-milestone released flags and a checked running total enforce that bound;
+  terminal refunds prevent replay after the unpaid remainder is returned.
 - **Disputes (STRIDE: Spoofing, Repudiation).** A resolver would be a new
   trusted role, subject to T1/T2 (leak and loss). Reviewer must confirm the
   resolver cannot direct funds anywhere but the stored `payee`/`refund_to`
@@ -605,10 +603,9 @@ own threat, tests, and a delta review recorded in `docs/audit/`.
   off-chain or in a separate contract; I5 must extend to them, and no escrow
   path may read attestation data.
 
-Were these implemented, the invariants added to §1 would be: milestone
-payouts bounded by `amount`; a disputed escrow settled only by its resolver;
-immutable split set and payee list; and no attestation read anywhere in the
-escrow.
+The remaining proposed invariants are: a disputed escrow is settled only by
+its resolver; split recipients are immutable; and no attestation is read by
+the escrow.
 
 ### T24 — Front-running `cancel` against `accept` · **High**
 - **What an attacker can do:** if the payee and payer both act on the same

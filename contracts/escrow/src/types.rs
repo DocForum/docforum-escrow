@@ -182,6 +182,16 @@ pub struct RecurringSchedule {
     pub cancelled: bool,
 }
 
+/// Immutable tranche amounts and settlement state for a milestone escrow.
+/// `paid` is the checked sum of amounts whose `released` flag is true.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MilestoneData {
+    pub amounts: Vec<i128>,
+    pub released: Vec<bool>,
+    pub paid: i128,
+}
+
 /// One entry of a `create_escrows` batch. Mirrors the single-escrow
 /// creation parameters minus the batch-wide `payer`.
 #[contracttype]
@@ -247,6 +257,8 @@ pub enum DataKey {
     RecurringSchedule(u64),
     /// Issue #115: next schedule id counter.
     NextScheduleId,
+    /// Issue #21: immutable milestone amounts and per-tranche settlement state.
+    Milestones(u64),
 }
 
 /// Emitted by `pause` (docs/adr/0011). Carries the custodian that flipped

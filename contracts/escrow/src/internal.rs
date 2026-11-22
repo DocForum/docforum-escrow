@@ -310,6 +310,13 @@ impl EscrowContract {
         data: &mut EscrowData,
         settled: EscrowStatus,
     ) -> Result<(), Error> {
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Milestones(escrow_id))
+        {
+            return Err(Error::MilestoneReleaseRequired);
+        }
         if settled == EscrowStatus::Released
             && data
                 .release_not_before
@@ -640,6 +647,34 @@ impl EscrowContract {
                 (data, EscrowStatus::Refunded, payee_initiated)
             }
         };
+        if settled == EscrowStatus::Refunded
+            && env
+                .storage()
+                .persistent()
+                .has(&DataKey::Milestones(escrow_id))
+        {
+            if let Err(error) = Self::refund_milestones(env, escrow_id, &mut data) {
+                panic_with_error!(env, error);
+            }
+            if payee_initiated {
+                PayeeRefunded {
+                    escrow_id,
+                    payer: data.payer,
+                    payee: data.payee,
+                    amount: data.amount,
+                }
+                .publish(env);
+            }
+            return Ok(());
+        }
+        if settled == EscrowStatus::Released
+            && env
+                .storage()
+                .persistent()
+                .has(&DataKey::Milestones(escrow_id))
+        {
+            return Err(Error::MilestoneReleaseRequired);
+        }
         if let Err(error) = Self::settle_full(env, escrow_id, &mut data, settled) {
             panic_with_error!(env, error);
         }

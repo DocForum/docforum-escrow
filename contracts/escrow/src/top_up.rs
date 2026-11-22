@@ -24,6 +24,13 @@ impl EscrowContract {
         // A bare top-up would raise `data.amount` without a contribution
         // record, breaking "funded == sum of unclaimed contributions".
         Self::reject_pooled(&env, escrow_id)?;
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Milestones(escrow_id))
+        {
+            return Err(Error::MilestoneReleaseRequired);
+        }
         if env.storage().persistent().has(&DataKey::Vesting(escrow_id)) {
             return Err(Error::StreamTopUpUnsupported);
         }

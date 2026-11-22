@@ -23,6 +23,13 @@ impl EscrowContract {
         Self::check_single_caller(&data, &caller)?;
         Self::reject_pooled(&env, escrow_id)?;
         Self::check_funded(&data)?;
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Milestones(escrow_id))
+        {
+            return Err(Error::MilestoneReleaseRequired);
+        }
         if data.payees.len() > 1 || env.storage().persistent().has(&DataKey::Vesting(escrow_id)) {
             return Err(Error::SettlementNotSupported);
         }

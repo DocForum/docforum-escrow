@@ -1,4 +1,6 @@
-use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus};
+use docforum_escrow::{
+    Error, EscrowContract, EscrowContractClient, EscrowStatus, SettleAction, MAX_MILESTONES,
+};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
     token::{StellarAssetClient, TokenClient},
@@ -30,7 +32,10 @@ fn fixture<const N: usize>(
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
     let schedule = Vec::from_array(env, milestones);
     let escrow_id = client.create_escrow_with_milestones(
@@ -43,6 +48,8 @@ fn fixture<const N: usize>(
         &schedule,
         &refund_after,
         &false,
+        &None,
+        &None,
         &None,
     );
 
@@ -82,7 +89,10 @@ fn invalid_schedule_does_not_lock_funds() {
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     for schedule in [
@@ -101,9 +111,49 @@ fn invalid_schedule_does_not_lock_funds() {
             &None,
             &false,
             &None,
+            &None,
+            &None,
         );
         assert_eq!(result, Err(Ok(Error::InvalidMilestones)));
     }
+    let mut too_many = Vec::new(&env);
+    for _ in 0..=MAX_MILESTONES {
+        too_many.push_back(1);
+    }
+    assert_eq!(
+        client.try_create_escrow_with_milestones(
+            &payer,
+            &payee,
+            &token_id,
+            &1_000,
+            &String::from_str(&env, "too-many-milestones"),
+            &releaser,
+            &too_many,
+            &None,
+            &false,
+            &None,
+            &None,
+            &None,
+        ),
+        Err(Ok(Error::TooManyMilestones))
+    );
+    assert_eq!(
+        client.try_create_escrow_with_milestones(
+            &payer,
+            &payee,
+            &token_id,
+            &i128::MAX,
+            &String::from_str(&env, "overflowing-milestones"),
+            &releaser,
+            &Vec::from_array(&env, [i128::MAX, 1]),
+            &None,
+            &false,
+            &None,
+            &None,
+            &None,
+        ),
+        Err(Ok(Error::Overflow))
+    );
     assert_eq!(token.balance(&payer), 1_000);
     assert_eq!(token.balance(&contract_id), 0);
     assert!(matches!(
@@ -131,6 +181,33 @@ fn releases_are_out_of_order_and_final_release_settles() {
     assert_eq!(f.client.get_milestones(&f.escrow_id).paid, 1_000);
     assert_eq!(f.token.balance(&f.payee), 1_000);
     assert_eq!(f.token.balance(&f.contract_id), 0);
+}
+
+#[test]
+fn every_tranche_order_releases_the_full_amount_exactly_once() {
+    let orders = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ];
+
+    for order in orders {
+        let env = Env::default();
+        let f = fixture(&env, [200, 300, 500], None);
+
+        for index in order {
+            f.client
+                .release_milestone(&f.escrow_id, &index, &f.releaser);
+        }
+
+        assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Released);
+        assert_eq!(f.client.get_milestones(&f.escrow_id).paid, 1_000);
+        assert_eq!(f.token.balance(&f.payee), 1_000);
+        assert_eq!(f.token.balance(&f.contract_id), 0);
+    }
 }
 
 #[test]
@@ -181,6 +258,47 @@ fn refund_returns_only_unreleased_remainder_and_is_terminal() {
 }
 
 #[test]
+fn ordinary_full_release_and_top_up_cannot_bypass_milestone_schedule() {
+    let env = Env::default();
+    let f = fixture(&env, [400, 600], None);
+
+    assert_eq!(
+        f.client.try_release(&f.escrow_id, &f.releaser),
+        Err(Ok(Error::MilestoneReleaseRequired))
+    );
+    assert_eq!(
+        f.client.try_settle(&f.escrow_id, &f.releaser, &0),
+        Err(Ok(Error::MilestoneReleaseRequired))
+    );
+    assert_eq!(
+        f.client.try_top_up(&f.escrow_id, &f.payer, &1),
+        Err(Ok(Error::MilestoneReleaseRequired))
+    );
+    let ops = Vec::from_array(&env, [(f.escrow_id, SettleAction::Release)]);
+    let outcomes = f.client.settle_many(&f.releaser, &ops);
+    assert_eq!(outcomes.get(0), Some(Err(Error::MilestoneReleaseRequired)));
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Funded);
+    assert_eq!(f.client.get_milestones(&f.escrow_id).paid, 0);
+    assert_eq!(f.token.balance(&f.contract_id), 1_000);
+}
+
+#[test]
+fn settle_many_refund_returns_only_unreleased_milestone_remainder() {
+    let env = Env::default();
+    let f = fixture(&env, [400, 600], None);
+    f.client.release_milestone(&f.escrow_id, &0, &f.releaser);
+
+    let ops = Vec::from_array(&env, [(f.escrow_id, SettleAction::Refund)]);
+    let outcomes = f.client.settle_many(&f.releaser, &ops);
+    assert_eq!(outcomes.get(0), Some(Ok(())));
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Refunded);
+    assert_eq!(f.token.balance(&f.payee), 400);
+    assert_eq!(f.token.balance(&f.payer), 600);
+    assert_eq!(f.token.balance(&f.contract_id), 0);
+    assert_eq!(f.client.get_milestones(&f.escrow_id).paid, 400);
+}
+
+#[test]
 fn timeout_refund_by_stranger_returns_the_remainder_only() {
     let env = Env::default();
     env.ledger().set_timestamp(1_000);
@@ -209,7 +327,10 @@ fn ordinary_escrows_do_not_gain_milestone_behavior() {
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
     let id = client.create_escrow(
         &payer,
@@ -220,6 +341,8 @@ fn ordinary_escrows_do_not_gain_milestone_behavior() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
 

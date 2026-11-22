@@ -9,10 +9,7 @@ impl EscrowContract {
     /// contract reports zero.
     pub fn next_escrow_id(env: Env) -> u64 {
         Self::extend_instance_ttl(&env);
-        env.storage()
-            .instance()
-            .get(&DataKey::NextId)
-            .unwrap_or(0)
+        env.storage().instance().get(&DataKey::NextId).unwrap_or(0)
     }
 
     /// Reads up to `MAX_GET_ESCROWS` funded escrow records in one call.
@@ -62,5 +59,17 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::NotFound)
+    }
+
+    /// Returns the immutable milestone schedule and each tranche's release state.
+    pub fn get_milestones(env: Env, escrow_id: u64) -> Result<MilestoneData, Error> {
+        Self::extend_instance_ttl(&env);
+        if !env.storage().persistent().has(&DataKey::Status(escrow_id)) {
+            return Err(Error::NotFound);
+        }
+        env.storage()
+            .persistent()
+            .get(&DataKey::Milestones(escrow_id))
+            .ok_or(Error::NotMilestone)
     }
 }

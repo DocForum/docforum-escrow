@@ -129,9 +129,16 @@ impl EscrowContract {
         Self::extend_instance_ttl(&env);
         caller.require_auth();
 
-        let (mut data, payee_initiated) =
-            Self::refund_checks_for_caller(&env, escrow_id, &caller)?;
-        Self::settle_full(&env, escrow_id, &mut data, EscrowStatus::Refunded)?;
+        let (mut data, payee_initiated) = Self::refund_checks_for_caller(&env, escrow_id, &caller)?;
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Milestones(escrow_id))
+        {
+            Self::refund_milestones(&env, escrow_id, &mut data)?;
+        } else {
+            Self::settle_full(&env, escrow_id, &mut data, EscrowStatus::Refunded)?;
+        }
         if payee_initiated {
             PayeeRefunded {
                 escrow_id,
@@ -202,6 +209,14 @@ impl EscrowContract {
         Self::check_approvals(&env, &data, &approvers)?;
         Self::check_funded(&data)?;
 
-        Self::settle_full(&env, escrow_id, &mut data, EscrowStatus::Refunded)
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Milestones(escrow_id))
+        {
+            Self::refund_milestones(&env, escrow_id, &mut data)
+        } else {
+            Self::settle_full(&env, escrow_id, &mut data, EscrowStatus::Refunded)
+        }
     }
 }

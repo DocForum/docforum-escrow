@@ -57,4 +57,10 @@ export const CONTRACT_ERROR_NAMES = {
   57: "ScheduleCancelled",
   58: "AllowanceExhausted",
   59: "InvalidSchedule",
+  2101: "InvalidMilestones",
+  2102: "NotMilestone",
+  2103: "InvalidMilestoneIndex",
+  2104: "MilestoneAlreadyReleased",
+  2105: "MilestoneReleaseRequired",
+  2106: "TooManyMilestones",
 } as const;

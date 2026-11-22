@@ -1,6 +1,10 @@
-Issue #21 adds first-class on-chain milestone escrows. A fixed positive
-schedule must sum to the funded amount; tranches release once in any order,
-partial escrows remain `Funded`, and refunds return only the unreleased
-remainder. See [ADR 0012](../docs/adr/0012-milestone-escrows.md). This is
-separate from the SDK's existing one-escrow-per-tranche grouping and is not
-deployed to testnet.
+---
+file: ARCHITECTURE_ESSENTIALS.md
+section: Contract surface
+---
+Milestone escrows use a fixed positive tranche schedule whose amounts sum to
+the funded amount. `create_escrow_with_milestones` stores the schedule,
+`get_milestones` exposes release state, and `release_milestone` pays one
+unreleased tranche in any order. Standard full release, top-up, and split
+settlement cannot bypass the schedule. Refunds return only the unpaid
+remainder. This contract feature is not deployed to testnet.
