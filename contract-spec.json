@@ -97,6 +97,11 @@
       "return": "Result<(), Error>"
     },
     {
+      "name": "close_failed_round",
+      "args": "env: Env, escrow_id: u64",
+      "return": "Result<(), Error>"
+    },
+    {
       "name": "solvency",
       "args": "env: Env, token: Address",
       "return": "(i128, i128)"
