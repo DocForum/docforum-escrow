@@ -65,6 +65,7 @@ const NON_DEPOSIT_ENTRYPOINTS: &[&str] = &[
     "get_status",
     "get_escrow",
     "extend_refund_after",
+    "close_failed_round",
     "release",
     "release_with_approvals",
     "settle_many",
