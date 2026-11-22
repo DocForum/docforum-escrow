@@ -19,6 +19,9 @@
 // docs/adr/0011. Pooled escrows add two storage records (funding config,
 // per-payer contributions); `EscrowData` and every pre-existing entry
 // point keep their exact meaning.
+// Phase E5 (issue #21): milestone escrows store an immutable tranche schedule
+// separately from `EscrowData`; partial releases keep the existing Funded
+// status, while refunds pay only the unreleased remainder.
 //
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
@@ -137,6 +140,16 @@ pub struct Contribution {
     pub refunded: bool,
 }
 
+/// Immutable tranche amounts and settlement state for a milestone escrow.
+/// `paid` is the sum of the entries whose `released` flag is true.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MilestoneData {
+    pub amounts: Vec<i128>,
+    pub released: Vec<bool>,
+    pub paid: i128,
+}
+
 /// One entry of a `create_escrows` batch. Mirrors the single-escrow
 /// creation parameters minus the batch-wide `payer`.
 #[contracttype]
@@ -162,6 +175,9 @@ enum DataKey {
     Pooled(u64),
     /// Pooled escrows only (issue #113): one record per contributor.
     Contribution(u64, Address),
+    /// Milestone escrows only (issue #21): immutable schedule plus the
+    /// per-tranche settlement flags and running paid total.
+    Milestones(u64),
 }
 
 #[contracterror]
@@ -250,6 +266,16 @@ pub enum Error {
     NotSupportedForPooled = 33,
     /// The funding deadline was not strictly in the future at creation.
     InvalidFundingDeadline = 34,
+    /// The milestone schedule was empty, non-positive, or did not sum to
+    /// the escrow's funded amount.
+    InvalidMilestones = 35,
+    /// A milestone entry point was used for an ordinary escrow, or vice
+    /// versa.
+    NotMilestone = 36,
+    /// The requested milestone index is outside the immutable schedule.
+    InvalidMilestoneIndex = 37,
+    /// The requested tranche was already released.
+    MilestoneAlreadyReleased = 38,
 }
 
 #[contract]
@@ -307,6 +333,56 @@ impl EscrowContract {
             refund_to,
             None,
         )
+    }
+
+    /// Creates one funded escrow with an immutable list of positive tranche
+    /// amounts. The list must sum exactly to `amount`. Existing
+    /// `create_escrow` callers keep the original all-or-nothing behavior;
+    /// milestone callers use `release_milestone` for each tranche.
+    pub fn create_escrow_with_milestones(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        milestones: Vec<i128>,
+        refund_after: Option<u64>,
+        notify_payee: bool,
+        refund_to: Option<Address>,
+    ) -> Result<u64, Error> {
+        Self::validate_milestones(&milestones, amount)?;
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        let id = Self::create_escrow_inner(
+            &env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            1,
+            refund_after,
+            notify_payee,
+            false,
+            refund_to,
+            None,
+        )?;
+        let mut released = Vec::new(&env);
+        for _ in milestones.iter() {
+            released.push_back(false);
+        }
+        env.storage().persistent().set(
+            &DataKey::Milestones(id),
+            &MilestoneData {
+                amounts: milestones,
+                released,
+                paid: 0,
+            },
+        );
+        Ok(id)
     }
 
     /// Creates a single-releaser escrow with an optional earliest release time.
@@ -486,8 +562,7 @@ impl EscrowContract {
 
     /// Read-only status query. Errors if `escrow_id` doesn't exist.
     pub fn get_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, Error> {
-        env
-            .storage()
+        env.storage()
             .persistent()
             .get(&DataKey::Status(escrow_id))
             .ok_or(Error::NotFound)
@@ -504,6 +579,15 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::NotFound)
+    }
+
+    /// Returns the immutable tranche schedule and current settlement flags.
+    pub fn get_milestones(env: Env, escrow_id: u64) -> Result<MilestoneData, Error> {
+        Self::load(&env, escrow_id)?;
+        env.storage()
+            .persistent()
+            .get(&DataKey::Milestones(escrow_id))
+            .ok_or(Error::NotMilestone)
     }
 
     /// Creates a pooled escrow funded by many payers (issue #113,
@@ -579,7 +663,9 @@ impl EscrowContract {
             release_not_before: None,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        env.storage().persistent().set(&DataKey::Status(id), &data.status);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(id), &data.status);
         env.storage().persistent().set(
             &DataKey::Pooled(id),
             &PooledData {
@@ -631,15 +717,18 @@ impl EscrowContract {
         Self::transfer_in_exact(&env, &data.token, &payer, amount)?;
 
         let key = DataKey::Contribution(escrow_id, payer.clone());
-        let mut contribution: Contribution = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or(Contribution {
-                amount: 0,
-                refunded: false,
-            });
-        contribution.amount = contribution.amount.checked_add(amount).ok_or(Error::Overflow)?;
+        let mut contribution: Contribution =
+            env.storage()
+                .persistent()
+                .get(&key)
+                .unwrap_or(Contribution {
+                    amount: 0,
+                    refunded: false,
+                });
+        contribution.amount = contribution
+            .amount
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
         let funded = data.amount.checked_add(amount).ok_or(Error::Overflow)?;
         data.amount = funded;
         env.storage().persistent().set(&key, &contribution);
@@ -666,11 +755,7 @@ impl EscrowContract {
     /// change anyone's entitlement. Checks-effects-interactions: the
     /// `refunded` flag and the pooled total are written before the
     /// transfer, and a failing transfer rolls the whole claim back.
-    pub fn claim_refund(
-        env: Env,
-        escrow_id: u64,
-        contributor: Address,
-    ) -> Result<(), Error> {
+    pub fn claim_refund(env: Env, escrow_id: u64, contributor: Address) -> Result<(), Error> {
         contributor.require_auth();
 
         let mut data: EscrowData = Self::load(&env, escrow_id)?;
@@ -699,7 +784,10 @@ impl EscrowContract {
         // the pooled total first, so a failed transfer rolls back
         // atomically and can never double-pay (invariant I3).
         contribution.refunded = true;
-        data.amount = data.amount.checked_sub(refund_amount).ok_or(Error::Overflow)?;
+        data.amount = data
+            .amount
+            .checked_sub(refund_amount)
+            .ok_or(Error::Overflow)?;
         env.storage().persistent().set(&key, &contribution);
         env.storage()
             .persistent()
@@ -814,6 +902,13 @@ impl EscrowContract {
         // A bare top-up would raise `data.amount` without a contribution
         // record, breaking "funded == sum of unclaimed contributions".
         Self::reject_pooled(&env, escrow_id)?;
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Milestones(escrow_id))
+        {
+            return Err(Error::NotMilestone);
+        }
         if data.payer != payer {
             return Err(Error::Unauthorized);
         }
@@ -847,9 +942,99 @@ impl EscrowContract {
         let mut data = Self::load(&env, escrow_id)?;
         Self::check_single_caller(&data, &caller)?;
         Self::check_funded(&data)?;
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Milestones(escrow_id))
+        {
+            return Err(Error::NotMilestone);
+        }
         Self::check_pooled_fully_funded(&env, escrow_id, &data)?;
 
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
+    }
+
+    /// Releases one unreleased tranche. Tranches may be released in any
+    /// order. A milestone escrow remains `Funded` until its final tranche;
+    /// each tranche can be paid only once.
+    pub fn release_milestone(
+        env: Env,
+        escrow_id: u64,
+        index: u32,
+        caller: Address,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+        let mut data = Self::load(&env, escrow_id)?;
+        Self::check_single_caller(&data, &caller)?;
+        Self::check_funded(&data)?;
+        let mut milestones: MilestoneData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Milestones(escrow_id))
+            .ok_or(Error::NotMilestone)?;
+        let position = index as u32;
+        if position >= milestones.amounts.len() {
+            return Err(Error::InvalidMilestoneIndex);
+        }
+        if milestones.released.get(position).unwrap_or(false) {
+            return Err(Error::MilestoneAlreadyReleased);
+        }
+        if data
+            .release_not_before
+            .is_some_and(|release_time| env.ledger().timestamp() < release_time)
+        {
+            return Err(Error::ReleaseTooEarly);
+        }
+        if data.requires_acceptance && data.accepted_at.is_none() {
+            return Err(Error::AcceptanceRequired);
+        }
+
+        let tranche = milestones
+            .amounts
+            .get(position)
+            .ok_or(Error::InvalidMilestoneIndex)?;
+        let paid = milestones
+            .paid
+            .checked_add(tranche)
+            .ok_or(Error::Overflow)?;
+        let final_tranche = paid == data.amount;
+        milestones.released.set(position, true);
+        milestones.paid = paid;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Milestones(escrow_id), &milestones);
+        if final_tranche {
+            data.status = EscrowStatus::Released;
+            env.storage()
+                .persistent()
+                .set(&DataKey::Escrow(escrow_id), &data);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Status(escrow_id), &data.status);
+        }
+
+        let token_client = token::Client::new(&env, &data.token);
+        token_client.transfer(&env.current_contract_address(), &data.payee, &tranche);
+        if data.notify_payee {
+            let args = (escrow_id, tranche).into_val(&env);
+            let callback = env.try_invoke_contract::<(), soroban_sdk::Error>(
+                &data.payee,
+                &soroban_sdk::Symbol::new(&env, "on_escrow_released"),
+                args,
+            );
+            match callback {
+                Ok(Ok(())) => {}
+                _ => return Err(Error::CallbackFailed),
+            }
+        }
+        env.events().publish(
+            (symbol_short!("milestone"), escrow_id),
+            (index, tranche, paid),
+        );
+        if final_tranche {
+            Self::publish_state(&env, symbol_short!("released"), escrow_id, &data);
+        }
+        Ok(())
     }
 
     /// Moves the escrowed `amount` to `payee` on behalf of an M-of-N
@@ -866,6 +1051,13 @@ impl EscrowContract {
         let mut data = Self::load(&env, escrow_id)?;
         Self::check_approvals(&env, &data, &approvers)?;
         Self::check_funded(&data)?;
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Milestones(escrow_id))
+        {
+            return Err(Error::NotMilestone);
+        }
         Self::check_pooled_fully_funded(&env, escrow_id, &data)?;
 
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Released)
@@ -930,6 +1122,14 @@ impl EscrowContract {
         }
         Self::check_funded(&data)?;
 
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Milestones(escrow_id))
+        {
+            return Self::refund_milestones(&env, escrow_id, &mut data);
+        }
+
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
     }
 
@@ -959,6 +1159,13 @@ impl EscrowContract {
         // refund path at all (docs/adr/0011) — contributors pull their
         // own funds after a missed funding deadline.
         Self::reject_pooled(&env, escrow_id)?;
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Milestones(escrow_id))
+        {
+            return Err(Error::NotMilestone);
+        }
         if payer != data.payer {
             return Err(Error::Unauthorized);
         }
@@ -989,7 +1196,60 @@ impl EscrowContract {
         Self::check_approvals(&env, &data, &approvers)?;
         Self::check_funded(&data)?;
 
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Milestones(escrow_id))
+        {
+            return Self::refund_milestones(&env, escrow_id, &mut data);
+        }
+
         Self::settle(&env, escrow_id, &mut data, EscrowStatus::Refunded)
+    }
+
+    fn validate_milestones(milestones: &Vec<i128>, amount: i128) -> Result<(), Error> {
+        if milestones.len() == 0 || amount <= 0 {
+            return Err(Error::InvalidMilestones);
+        }
+        let mut total = 0i128;
+        for tranche in milestones.iter() {
+            if tranche <= 0 {
+                return Err(Error::InvalidMilestones);
+            }
+            total = total.checked_add(tranche).ok_or(Error::Overflow)?;
+        }
+        if total != amount {
+            return Err(Error::InvalidMilestones);
+        }
+        Ok(())
+    }
+
+    fn refund_milestones(env: &Env, escrow_id: u64, data: &mut EscrowData) -> Result<(), Error> {
+        let milestones: MilestoneData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Milestones(escrow_id))
+            .ok_or(Error::NotMilestone)?;
+        let remaining = data
+            .amount
+            .checked_sub(milestones.paid)
+            .ok_or(Error::Overflow)?;
+        if remaining <= 0 {
+            return Err(Error::NotFunded);
+        }
+        data.status = EscrowStatus::Refunded;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(escrow_id), &data.status);
+        let token_client = token::Client::new(env, &data.token);
+        token_client.transfer(&env.current_contract_address(), &data.refund_to, &remaining);
+        env.events()
+            .publish((symbol_short!("refunded"), escrow_id), remaining);
+        Self::publish_state(env, symbol_short!("refunded"), escrow_id, data);
+        Ok(())
     }
 
     fn create_escrow_inner(
@@ -1067,7 +1327,9 @@ impl EscrowContract {
             release_not_before,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
-        env.storage().persistent().set(&DataKey::Status(id), &data.status);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Status(id), &data.status);
         Self::publish_state(env, symbol_short!("created"), id, &data);
         Ok(id)
     }
@@ -1256,11 +1518,7 @@ impl EscrowContract {
     /// (push `refund`, `refund_with_approvals`, `cancel`, `top_up` — see
     /// docs/adr/0011 for why each would break per-contributor accounting).
     fn reject_pooled(env: &Env, escrow_id: u64) -> Result<(), Error> {
-        if env
-            .storage()
-            .persistent()
-            .has(&DataKey::Pooled(escrow_id))
-        {
+        if env.storage().persistent().has(&DataKey::Pooled(escrow_id)) {
             return Err(Error::NotSupportedForPooled);
         }
         Ok(())

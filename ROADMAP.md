@@ -252,6 +252,15 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   (scenarios A–M) + 3 malicious-token contribution tests; existing
   suites and snapshots unchanged. SDK `0.7.0 → 0.8.0` (additive).
   **Not yet on testnet** — the live deployment predates it.
+- [x] **Milestone escrows released in tranches** (issue #21) — `docs/adr/0012`
+  chooses a fixed positive schedule whose entries sum to the funded amount.
+  `create_escrow_with_milestones`, `get_milestones`, and
+  `release_milestone` keep the schedule and per-tranche release flags on-chain;
+  tranches may be released out of order, partial escrows remain `Funded`, and
+  every refund path pays only the unreleased remainder to the stored
+  `refund_to`. Contract tests cover validation, replay/auth/index failures,
+  ordering, timeout refunds, terminal transitions, and ordinary escrow
+  compatibility. Not yet on testnet.
 ## Phase E6 — SDK & integrator tooling
 - [x] Escrow lifecycle snapshots and a configurable SubQuery indexer with a typed, paginated SDK query client (issue #87). Operators provide the deployed contract and starting ledger; no hosted indexer is assumed.
 - [x] Automated npm release workflow (`.github/workflows/release-sdk.yml`),

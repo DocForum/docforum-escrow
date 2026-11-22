@@ -18,6 +18,11 @@ Updated 2026-10-22 for the formal-verification spike (issue #101): §1 I1–I3
 now link to their properties in `certora/escrow.spec`. The properties are
 specified but not yet machine-checked — see `docs/formal-verification.md`.
 
+*Updated 2026-11-22 for issue #21 (`docs/adr/0012`): I1–I3 now cover
+first-class milestone schedules, partial release accounting, and remainder
+refunds; T20 records schedule/replay/order risks; §6 and §8 traceability were
+updated.*
+
 *Updated 2026-10-20 for issues #118/#119: §1 I2 and §2 now describe the
 releaser set with a threshold instead of a single address; T1 and T2 record
 the in-contract M-of-N mitigation and its limits; T4 records the
@@ -50,7 +55,7 @@ and contributor-resource exhaustion; §8 traceability gains matching rows.*
 |---|---|---|
 | I1 | Funds only leave an escrow to that escrow's `payee` (on release, subject to the `release_not_before` time-lock guard) or the escrow's stored `refund_to` (on refund; equals `payer` unless a different one was set at creation) — or, on a **pooled** escrow (issue #113, ADR 0011), back to each recorded `contributor` in that contributor's exact recorded amount via the pull-based `claim_refund`. No other destination exists in either mode. | Both destinations are written once in `create_escrow` under the funder's auth and read from storage, never from call arguments (`lib.rs:165`, `lib.rs:203`). The `refund_after` timeout path (issue #11, ADR 0004) adds a new *caller*, not a new destination, and `refund_to` (issue #28, ADR 0009) is a second stored-at-creation destination, not a payout-time choice: nothing sets it after creation. The `release_not_before` field (issue #43) gates the `release` entry point — release before this time is rejected with `ReleaseTooEarly`. For pooled escrows the push paths (`refund`, `refund_with_approvals`, `cancel`) are rejected outright (`NotSupportedForPooled`), so `refund_to` can never drain a pool; `claim_refund` pays only the calling contributor's own record, under that contributor's `require_auth`, and only while the escrow has not been released. |
 | I2 | Only the escrow's releasers can move funds out — `threshold` distinct ones when the escrow was created M-of-N (ADR 0007); release additionally requires payee acceptance when configured — or, once `refund_after` has passed, anyone at all, and then still only to the stored `refund_to`. Rotate‑releaser changes the stored releaser set only when both the current releaser and the payer authorize the change (`rotate_releaser`). `top_up` adds funds to a `Funded` escrow, authorized only by the stored `payer`. The one non-releaser movement that exists is pooled (issue #113): each `contributor` may pull back **only its own recorded amount** via `claim_refund` under its own signature, only from a failed round (deadline passed, target unmet), never after a release — `top_up`, `cancel` and both push-refund paths are rejected on pooled escrows (`NotSupportedForPooled`). | `require_auth()` per caller/approver + membership in the stored `releasers` set + the threshold check (`check_single_caller`, `check_approvals`), relaxed solely by the deadline check in `refund`. Duplicate approvers are rejected. `rotate_releaser` requires auth from both the current releaser and the payer, and rejects if the new releaser is the contract or the payee (`lib.rs:369-408`). `top_up` reads the stored `payer` from escrow data and rejects if `payer != caller` (`lib.rs:412-439`). |
-| I3 | Each escrow pays out at most once — and on a pooled escrow (issue #113), each contribution is refunded at most once; a release and a refund can never spend the same tokens. | `status == Funded` check and terminal status write before transfer/callback; failures roll back atomically. Additionally, `cancel` (ADR 0010) is a terminal status — once `Cancelled`, `Released`, or `Refunded`, the escrow cannot be settled again. The accept/cancel race is resolved by ledger-order: whichever transaction lands first wins, the other fails. For pooled escrows, `claim_refund` writes the `refunded` flag and decrements the pooled total *before* the transfer (checks-effects-interactions), so a second claim fails `AlreadyRefunded` and a claim after release fails `NotFunded`; release requires `funded == target`, which becomes permanently false after any claim of a failed round. |
+| I3 | Each ordinary escrow pays out at most once; each milestone tranche pays at most once and the sum of released tranches never exceeds `amount`; pooled contributions are refunded at most once. A release and refund can never spend the same tokens. | Ordinary settlement uses the `status == Funded` check and terminal status write before transfer/callback. Milestones persist an immutable `amounts` vector, per-tranche `released` flags and a checked running `paid` total; `release_milestone` sets one flag once and marks the escrow `Released` only when the total reaches `amount`. `refund`/`refund_with_approvals` transfer `amount - paid` and then make the escrow terminal. Failures roll back atomically. For pooled escrows, `claim_refund` writes the `refunded` flag and decrements the pooled total before transfer, so a second claim fails `AlreadyRefunded` and a claim after release fails `NotFunded`. |
 | I4 | An escrow only exists, or grows, if the declared funds were actually transferred in — including every contribution to a pooled escrow. | `payer.require_auth()` + shared exact-balance-delta verification on create/top-up before storage is updated. `top_up` verified the transferred amount matches the top‑up amount before updating `data.amount`. `contribute` (issue #113) routes through the same `transfer_in_exact`, and updates both the per-payer record and the pooled total only after the delta is verified. |
 | I5 | The contract never interprets `condition_ref`. | No code reads it after storage (ADR 0001). |
 | I6 | An escrow created with `requires_acceptance` cannot be settled (released/refunded/canceled) without the payee's explicit `accept` call first. | `release`/`refund`/`cancel` all check `data.accepted_at` — `AcceptanceRequired` if absent, `NotFunded` if already terminal. The accept/cancel race on one ledger state is resolved by ordering: first to commit wins. |
@@ -412,18 +417,12 @@ behave like SEP-41.
 - **Residual risk:** none that I1 doesn't already cover — no one but the
   funder chooses the address, and only at creation.
 
-### T12 — Planned Phase E5 features would change the trust model · **Medium per feature, none implemented yet**
+### T12 — Planned Phase E5 features would change the trust model · **Medium per feature, except milestones implemented**
 
-**Nothing in this section is implemented in the reviewed commit.** It exists
-so the analysis is ready when a feature is proposed, and so a reviewer knows
-which questions to ask then. Milestones, disputes, splits and per-escrow
-attestations are *not* part of the reviewed scope; if one lands, it needs its
-own threat, tests, and a delta review recorded in `docs/audit/`.
-
-- **Milestones (STRIDE: Tampering, Elevation).** Partial releases would turn
-  I3 into "each milestone pays at most once, and the sum never exceeds
-  `amount`." Reviewer must confirm a per-milestone settled flag and the
-  running-total bound, and that a milestone cannot be replayed after refund.
+This section remains a forward-looking review map for disputes, splits and
+per-escrow attestations. Milestones are implemented in issue #21 and covered
+by T20 below; any other feature needs its own threat, tests, and a delta
+review recorded in `docs/audit/`.
 - **Disputes (STRIDE: Spoofing, Repudiation).** A resolver would be a new
   trusted role, subject to T1/T2 (leak and loss). Reviewer must confirm the
   resolver cannot direct funds anywhere but the stored `payee`/`refund_to`
@@ -437,10 +436,26 @@ own threat, tests, and a delta review recorded in `docs/audit/`.
   off-chain or in a separate contract; I5 must extend to them, and no escrow
   path may read attestation data.
 
-Were these implemented, the invariants added to §1 would be: milestone
-payouts bounded by `amount`; a disputed escrow settled only by its resolver;
+Were these implemented, the invariants added to §1 would be: a disputed
+escrow settled only by its resolver;
 immutable split set and payee list; and no attestation read anywhere in the
 escrow.
+
+### T20 — Milestone schedule, replay, and partial-refund accounting · **Medium (believed mitigated)**
+- **What can go wrong:** a malformed schedule, repeated tranche release, an
+  out-of-range index, or a refund after a partial release could overpay the
+  payee or strand the remaining funds.
+- **Mitigations:** creation rejects empty/non-positive schedules and requires
+  an exact checked sum. `MilestoneData` stores immutable amounts, one release
+  flag per index, and a checked `paid` total. `release_milestone` requires the
+  stored releaser, rejects released/invalid indices, and marks the escrow
+  `Released` only when `paid == amount`. Refund paths transfer only
+  `amount - paid` to stored `refund_to` and require the escrow to remain
+  `Funded`; all writes precede interactions and failed calls roll back.
+- **Residual:** the schedule is fixed at creation and cannot express a
+  per-tranche release time or acceptance gate. Integrators must inspect
+  `get_milestones` and coordinate tranche conditions off-chain, consistent
+  with the contract's opaque `condition_ref` rule.
 
 ### T12 — Front-running `cancel` against `accept` · **High**
 - **What an attacker can do:** if the payee and payer both act on the same
@@ -624,6 +639,7 @@ escrow.
 | T17 — Pooled double refund / claim theft / ordering | `tests/pooled.rs::double_claim_is_rejected`, `::contributor_cannot_claim_another_contributors_funds`, `::claiming_requires_the_contributors_signature`, `::refund_entitlements_are_order_independent`, `::release_and_refund_can_never_share_funds` | Covered |
 | T18 — Pooled funding-window manipulation | `tests/pooled.rs::reaching_the_target_releases_the_pooled_total` (late + overfunding + post-success claim), `::partial_funding_records_and_blocks_release` (premature release), `::pooled_creation_validation` (deadline at creation) | Covered |
 | T19 — Contributor-resource exhaustion / unbounded refund loops | `tests/pooled.rs::no_contributor_cap_each_claim_is_independent` (bounded per-claim work, no cap by design) | Covered (design) |
+| T20 — Milestone schedule/replay/partial-refund accounting | `tests/milestones.rs` (schedule validation, out-of-order release, replay/index/auth rejection, remainder refund and timeout refund) | Covered |
 
 *Key: "Covered" = at least one test explicitly exercises the threat and verifies the mitigation. "Residual risk: accepted" = the threat is understood and intentionally tolerated with a documented mitigation. "Uncovered" = no test or mitigation exists — should be evaluated for a future release.*
 
@@ -691,7 +707,7 @@ needs tests in `contracts/escrow/tests/` in the same PR (hard rule 2).
       `tests/malicious_token.rs`
 - [ ] Releaser held as multisig or in a KMS, not a plain env var (T1, T2)
 - [ ] Consumer funding flow made idempotent + reconcile job (§5)
-- [x] **Traceability table added to threat model** (T1‑T15 mapped to tests
+- [x] **Traceability table added to threat model** (T1‑T20 mapped to tests
       or residual risk) — this issue
 - [ ] **Independent review of this document and the contract**, linked
       from issue #6

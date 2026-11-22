@@ -29,6 +29,9 @@ claim_refund(escrow_id, contributor) -> () // IMPLEMENTED (issue #113) — pull-
 get_pooled(escrow_id) -> PooledData  // read-only: funding_target, funding_deadline — errors NotPooled (26) on non-pooled ids
 get_contribution(escrow_id, contributor) -> Option<Contribution> // read-only: one contributor's record (amount, refunded); None if never contributed
 rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue #23) — single-releaser escrow only; current releaser and payer authorize; funded only
+create_escrow_with_milestones(payer, payee, token, amount, condition_ref, releaser, milestones, refund_after, notify_payee, refund_to) -> escrow_id // IMPLEMENTED (Phase E5, issue #21, ADR 0012) — immutable positive schedule summing to amount
+get_milestones(escrow_id) -> MilestoneData // IMPLEMENTED (issue #21) — schedule, per-tranche released flags and paid total
+release_milestone(escrow_id, index, caller) -> result // IMPLEMENTED (issue #21) — releaser releases one tranche; partial escrows remain Funded
 ```
 
 No new contract-level role came in with the M-of-N work: `releasers` is
@@ -57,6 +60,16 @@ record; pooled escrows have no `refund_after`. `get_status` keeps its
 four-value settlement vocabulary — a failed round stays `Funded`; read
 `get_pooled` + the ledger clock for funding state. New errors 26–34 are
 append-only (ADR 0011 lists them).
+
+Milestone escrows (Phase E5, issue #21, `docs/adr/0012`) are additive:
+`create_escrow_with_milestones` funds one escrow with an immutable positive
+schedule whose sum equals `amount`; `release_milestone` pays one unreleased
+tranche in any order; and `get_milestones` exposes the schedule, flags and
+running paid total. Partial releases keep `EscrowStatus::Funded`, while
+`refund`/`refund_with_approvals` return only the unreleased remainder to the
+stored `refund_to`. The final tranche changes the status to `Released`.
+Existing single-tranche entry points remain unchanged, and milestone storage
+is kept under an appended key. Errors 35–38 are append-only.
 
 The allowlist is fixed when the contract is deployed. `create_escrow`
 rejects any token outside a non-empty list with `DisallowedToken` (error
