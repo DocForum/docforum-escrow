@@ -49,7 +49,11 @@ fn fund<'a>(env: &'a Env, distinct_refund_to: bool, refund_after: Option<u64>) -
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
+        ),
     );
     let client = EscrowContractClient::new(env, &contract_id);
 
@@ -338,7 +342,11 @@ fn explicit_refund_to_equal_to_payer_behaves_like_the_default() {
     let releaser = Address::generate(&env);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -373,7 +381,11 @@ fn create_escrow_rejects_the_contract_as_refund_to() {
     StellarAssetClient::new(&env, &sac.address()).mint(&payer, &1_000);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -411,7 +423,11 @@ fn create_escrow_with_refund_to_requires_the_funders_auth() {
     StellarAssetClient::new(&env, &sac.address()).mint(&payer, &1_000);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 

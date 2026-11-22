@@ -166,7 +166,11 @@ fn fixture(env: &Env) -> Fixture<'_> {
     let hook = PayeeHookClient::new(&env, &hook_id);
     let escrow_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
+        ),
     );
     let escrow = EscrowContractClient::new(&env, &escrow_id);
     let id = escrow.create_escrow(

@@ -685,6 +685,18 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "AmountCaps"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": []
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "NextId"
                           }
                         ]
@@ -875,6 +887,18 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "AmountCaps"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": []
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "NextId"
                           }
                         ]
@@ -1054,6 +1078,18 @@
                         "vec": [
                           {
                             "symbol": "AllowedTokens"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": []
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "AmountCaps"
                           }
                         ]
                       },

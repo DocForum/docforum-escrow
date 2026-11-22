@@ -50,7 +50,14 @@ fn configured_allowlist_accepts_listed_token_and_rejects_unlisted_token() {
 
     let mut allowlist = Vec::new(&env);
     allowlist.push_back(allowed_token.clone());
-    let contract_id = env.register(EscrowContract, (allowlist, Address::generate(&env)));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            allowlist,
+            Address::generate(&env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
+        ),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     assert_eq!(create_escrow(&env, &client, &allowed_token, &payer), 0);
@@ -82,7 +89,11 @@ fn get_allowed_tokens_returns_the_configured_list_in_order() {
 
     let contract_id = env.register(
         EscrowContract,
-        (allowlist.clone(), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
+        (
+            allowlist.clone(),
+            Address::generate(&env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -96,7 +107,11 @@ fn get_allowed_tokens_returns_empty_for_an_open_allowlist() {
     let env = Env::default();
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -114,7 +129,11 @@ fn empty_allowlist_preserves_open_token_behavior() {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 

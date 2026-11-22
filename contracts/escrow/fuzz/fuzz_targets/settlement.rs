@@ -189,7 +189,7 @@ fn run(data: &[u8]) {
     StellarAssetClient::new(&env, &token_id).mint(&payer, &START_BALANCE);
     let contract = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), soroban_sdk::Vec::<(Address, i128)>::new(&env)),
     );
     let world = World {
         env: &env,

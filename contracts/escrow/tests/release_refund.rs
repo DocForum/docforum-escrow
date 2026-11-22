@@ -42,7 +42,11 @@ fn fund_escrow(env: &Env, amount: i128) -> Fixture<'_> {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(env), Address::generate(env), Vec::<(Address, i128)>::new(env)),
+        (
+            Vec::<Address>::new(env),
+            Address::generate(env),
+            Vec::<(Address, i128)>::new(env),
+        ),
     );
     let client = EscrowContractClient::new(env, &contract_id);
 

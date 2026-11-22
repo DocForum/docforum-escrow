@@ -138,7 +138,11 @@ fn setup<'a>() -> Fixture<'a> {
     token.set_balance(&payer, &1_000);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
+        (
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
+        ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
     Fixture {

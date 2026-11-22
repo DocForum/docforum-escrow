@@ -9,20 +9,14 @@ impl EscrowContract {
     /// contract reports zero.
     pub fn next_escrow_id(env: Env) -> u64 {
         Self::extend_instance_ttl(&env);
-        env.storage()
-            .instance()
-            .get(&DataKey::NextId)
-            .unwrap_or(0)
+        env.storage().instance().get(&DataKey::NextId).unwrap_or(0)
     }
 
     /// Reads up to `MAX_GET_ESCROWS` funded escrow records in one call.
     /// Unknown ids and settled ids whose full records were reclaimed return
     /// `None`; use `get_status` for a settled id's terminal status. The
     /// over-cap case returns `BatchTooLarge` before any persistent read.
-    pub fn get_escrows(
-        env: Env,
-        ids: Vec<u64>,
-    ) -> Result<Vec<Option<EscrowData>>, Error> {
+    pub fn get_escrows(env: Env, ids: Vec<u64>) -> Result<Vec<Option<EscrowData>>, Error> {
         Self::extend_instance_ttl(&env);
         if ids.len() > MAX_GET_ESCROWS {
             return Err(Error::BatchTooLarge);

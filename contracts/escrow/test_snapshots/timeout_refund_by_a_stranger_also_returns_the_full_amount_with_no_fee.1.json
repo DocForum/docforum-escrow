@@ -323,6 +323,18 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "AmountCaps"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": []
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "NextId"
                           }
                         ]

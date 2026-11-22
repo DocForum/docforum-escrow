@@ -138,4 +138,19 @@ pub enum Error {
     /// The constructor cap table contains a non-positive amount or duplicate
     /// token.
     InvalidAmountCap = 5601,
+    /// `release_with_attestation` was called on an escrow with no
+    /// `attester` configured (Phase E5, issue #42).
+    AttesterNotConfigured = 54,
+    /// `fund_next` before the next period is due (issue #115).
+    ScheduleTooEarly = 11500,
+    /// `fund_next` after every period was funded (issue #115).
+    ScheduleComplete = 11501,
+    /// `fund_next` or a second `cancel_schedule` on a cancelled schedule
+    /// (issue #115).
+    ScheduleCancelled = 11502,
+    /// The payer's allowance for this contract is below one period's
+    /// amount — or has expired, which reads as zero (issue #115).
+    AllowanceExhausted = 11503,
+    /// A schedule with a zero period or zero total periods (issue #115).
+    InvalidSchedule = 11504,
 }

@@ -12,7 +12,14 @@ fn setup<'a>(env: &Env) -> (EscrowContractClient<'a>, TokenClient<'a>, Address, 
     let asset = StellarAssetClient::new(env, &token_id.address());
     let payer = Address::generate(env);
     asset.mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env), Address::generate(env)));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(env),
+            Address::generate(env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
+        ),
+    );
     (
         EscrowContractClient::new(env, &contract_id),
         token,

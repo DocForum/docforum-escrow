@@ -533,6 +533,12 @@
                   },
                   {
                     "key": {
+                      "symbol": "attester"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "condition_ref"
                     },
                     "val": {
@@ -769,6 +775,18 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "AmountCaps"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": []
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "NextId"
                           }
                         ]
@@ -883,6 +901,12 @@
                     "val": {
                       "i128": "300"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "attester"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {
@@ -1122,6 +1146,18 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "AmountCaps"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": []
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "NextId"
                           }
                         ]
@@ -1236,6 +1272,12 @@
                     "val": {
                       "i128": "300"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "attester"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {
@@ -1464,6 +1506,18 @@
                         "vec": [
                           {
                             "symbol": "AllowedTokens"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": []
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "AmountCaps"
                           }
                         ]
                       },

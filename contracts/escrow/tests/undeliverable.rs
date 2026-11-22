@@ -145,6 +145,7 @@ fn rejecting_contract_payee_returns_dedicated_error_without_settling() {
         (
             soroban_sdk::Vec::<Address>::new(&env),
             soroban_sdk::Address::generate(&env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
         ),
     );
     token.set_escrow(&contract_id);

@@ -25,7 +25,14 @@ fn fixture() -> Fixture<'static> {
     // The constructor also takes the immutable pause admin (docs/adr/0011);
     // the profile never pauses, so any address will do.
     let pause_admin = Address::generate(&env);
-    let contract = env.register(EscrowContract, (Vec::<Address>::new(&env), pause_admin));
+    let contract = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(&env),
+            pause_admin,
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
+        ),
+    );
     let client = EscrowContractClient::new(&env, &contract);
     Fixture {
         env,

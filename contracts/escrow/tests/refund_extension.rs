@@ -27,7 +27,14 @@ fn fund_escrow(env: &Env, refund_after: Option<u64>) -> Fixture<'_> {
     asset.mint(&payer, &1_000);
 
     let pause_admin = Address::generate(env);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env), pause_admin));
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(env),
+            pause_admin,
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
+        ),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
     let escrow_id = client.create_escrow(
         &payer,

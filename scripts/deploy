@@ -9,6 +9,7 @@
 # Usage:
 #   scripts/deploy [--network testnet] [--wasm PATH] [--expected-wasm-hash HEX]
 #                  [--allowed-tokens C...,C...] [--pause-admin G...|C...]
+#                  [--amount-caps '[ ["C...", 1000], ... ]']
 #                  [--no-record]
 #   scripts/deploy --dry-run        # same flow against a local quickstart
 #
@@ -29,6 +30,9 @@
 #                            may pause/unpause deposits, fixed for the
 #                            instance's lifetime (docs/adr/0011). Default:
 #                            the deployer account.
+#   --amount-caps JSON       Constructor `amount_caps`: a JSON array of
+#                            [token_address, max_amount] pairs. Default: []
+#                            (no caps; preserves existing behavior).
 #   --no-record              Deploy and verify, but write no record.
 #   -h, --help               Show this help.
 #
@@ -59,6 +63,7 @@ expected_hash=""
 allowed_tokens_set=false
 allowed_tokens=""
 pause_admin=""
+amount_caps_json='[]'
 record=true
 
 while [[ $# -gt 0 ]]; do
@@ -69,6 +74,7 @@ while [[ $# -gt 0 ]]; do
     --expected-wasm-hash) expected_hash="${2:?--expected-wasm-hash needs a value}"; shift 2 ;;
     --allowed-tokens) allowed_tokens="${2-}"; allowed_tokens_set=true; shift 2 ;;
     --pause-admin) pause_admin="${2:?--pause-admin needs an address}"; shift 2 ;;
+    --amount-caps) amount_caps_json="${2:?--amount-caps needs a JSON array}"; shift 2 ;;
     --no-record) record=false; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; die "unknown argument: $1" ;;
@@ -217,9 +223,9 @@ upload_tx="$(tx_of_last)"
   die "uploaded WASM hash $uploaded_hash does not match local $wasm_hash."
 
 [[ -n "$pause_admin" ]] || pause_admin="$(addr deployer)"
-log "Deploying with allowed_tokens=$allowed_json pause_admin=$pause_admin"
+log "Deploying with allowed_tokens=$allowed_json pause_admin=$pause_admin amount_caps=$amount_caps_json"
 contract_id="$(submit contract deploy --wasm-hash "$wasm_hash" --source deployer "${net_args[@]}" \
-  -- --allowed_tokens "$allowed_json" --pause_admin "$pause_admin" | tail -n 1)"
+  -- --allowed_tokens "$allowed_json" --pause_admin "$pause_admin" --amount_caps "$amount_caps_json" | tail -n 1)"
 deploy_tx="$(tx_of_last)"
 [[ "$contract_id" =~ ^C[A-Z2-7]{55}$ ]] || die "unexpected contract id: $contract_id"
 log "Contract $contract_id"
