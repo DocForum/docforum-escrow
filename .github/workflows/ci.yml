@@ -183,6 +183,10 @@ jobs:
         working-directory: .
         run: node scripts/check-contract-change.mjs "origin/${{ github.base_ref }}"
 
+      - name: Test contract-change tooling
+        working-directory: .
+        run: node --test scripts/contract-change.test.mjs
+
       - name: No tracked backup files
         working-directory: .
         run: node scripts/check-no-backup-files.mjs
