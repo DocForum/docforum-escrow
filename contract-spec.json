@@ -7,6 +7,11 @@
       "return": ""
     },
     {
+      "name": "get_allowed_tokens",
+      "args": "env: Env",
+      "return": "Vec<Address>"
+    },
+    {
       "name": "version",
       "args": "env: Env",
       "return": "String"
@@ -107,6 +112,16 @@
       "return": "Result<Option<Contribution>, Error>"
     },
     {
+      "name": "next_escrow_id",
+      "args": "env: Env",
+      "return": "u64"
+    },
+    {
+      "name": "get_escrows",
+      "args": "env: Env, ids: Vec<u64>,",
+      "return": "Result<Vec<Option<EscrowData>>, Error>"
+    },
+    {
       "name": "get_status",
       "args": "env: Env, escrow_id: u64",
       "return": "Result<EscrowStatus, Error>"
@@ -154,6 +169,11 @@
     {
       "name": "rotate_releaser",
       "args": "env: Env, escrow_id: u64, caller: Address, new_releaser: Address,",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "rotate_releaser_with_approvals",
+      "args": "env: Env, escrow_id: u64, approvers: Vec<Address>, old_releaser: Address, new_releaser: Address,",
       "return": "Result<(), Error>"
     },
     {
