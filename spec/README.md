@@ -4,13 +4,16 @@ This directory contains a finite TLA+ model of the escrow contract's actual beha
 
 ## What it covers
 
-- Funded, Released, and Refunded states
+- Funded, Released, Refunded, and Cancelled states
 - Single-releaser settlement and M-of-N approval paths
 - Optional timeout refunds via `refund_after`
 - Payee-initiated voluntary refunds while `Funded` (ADR 0010)
 - Earliest-release gating via `release_not_before`
 - Payee acceptance gating for `requires_acceptance`
+- Payer cancellation before acceptance on acceptance-gated escrows
+- Current-payee authorization and payee conservation for `transfer_payee`
 - Authorization checks for the releaser and timeout cases
+- Mutual exclusion of cancel and release eligibility
 - Same-ledger race windows where timeout refund and release can both become eligible at the same ledger time
 
 ## What it intentionally omits
@@ -71,7 +74,9 @@ Do not weaken invariants to hide a real contract behavior difference.
 | `ReleaseWithApprovals` | `release_with_approvals` | `contracts/escrow/src/lib.rs` | Thresholded quorum release using distinct approvers |
 | `RefundEscrow` | `refund` | `contracts/escrow/src/lib.rs` | Releaser refund before the timeout; timeout path is modeled separately |
 | `TimeoutRefund` | `refund` timeout branch | `contracts/escrow/src/lib.rs` | Anyone may trigger refund once `refund_after` is reached |
+| `CancelEscrow` | `cancel` | `contracts/escrow/src/release_refund.rs` | Payer cancellation is limited to funded, unaccepted acceptance escrows |
 | `AcceptEscrow` | `accept` | `contracts/escrow/src/lib.rs` | Optional payee authorization for release gating |
+| `TransferPayee` | `transfer_payee` | `contracts/escrow/src/payee_transfer.rs` | The current payee may change the stored payee while funded; payout destinations remain the conserved `payeeSet`, and the new payee cannot be the payer |
 | `AdvanceLedger` | Soroban ledger timestamp | `contracts/escrow/src/lib.rs` | Represents time progression; the contract itself uses the ledger timestamp |
 
 ## Updating the model
