@@ -546,6 +546,27 @@ export class EscrowClient {
     );
   }
 
+  /**
+   * Reads the immutable deploy-time token allowlist (issue #299). An
+   * **empty** array means any token is accepted, preserving the legacy
+   * behavior. The list can never change after deployment, so verify it
+   * once instead of trusting deployment notes.
+   */
+  async getAllowedTokens(): Promise<string[]> {
+    try {
+      const client = this.contractClient();
+      const tx = await tracePhase(
+        this.instrumentation,
+        "simulate",
+        this.spanAttributesIfEnabled("get_allowed_tokens"),
+        () => client.get_allowed_tokens(),
+      );
+      return tx.result;
+    } catch (error) {
+      throw toEscrowError(error);
+    }
+  }
+
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
   async getStatus(escrowId: bigint): Promise<EscrowStatus> {
     try {

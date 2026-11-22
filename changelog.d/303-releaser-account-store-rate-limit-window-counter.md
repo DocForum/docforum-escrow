@@ -1,0 +1,1 @@
+Issue #303 (Phase E5): Releaser account now stores rate-limit window counters in temporary storage with a TTL of the window length plus a small margin, so past windows no longer pay persistent rent or accumulate forever. `window_usage(window)` returns 0 for an expired counter instead of trapping. Existing deployments keep the previous persistent-counter behaviour.

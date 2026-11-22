@@ -1,0 +1,56 @@
+name: Python SDK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sdk-python/**'
+      - 'contract-spec.json'
+      - 'contracts/escrow/src/errors.rs'
+      - '.github/workflows/sdk-python.yml'
+  pull_request:
+    paths:
+      - 'sdk-python/**'
+      - 'contract-spec.json'
+      - 'contracts/escrow/src/errors.rs'
+      - '.github/workflows/sdk-python.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    # Offline only. The testnet integration tests (sdk-python/tests/
+    # test_integration.py) stay out of CI, like the TypeScript SDK's.
+    name: Python SDK unit tests (offline, ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.13']
+    defaults:
+      run:
+        working-directory: sdk-python
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: sdk-python/pyproject.toml
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: ruff
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: mypy
+        run: mypy
+
+      - name: pytest (offline)
+        run: pytest

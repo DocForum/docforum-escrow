@@ -91,7 +91,7 @@ fn quorum_requires_distinct_registered_ed25519_signers() {
 }
 
 #[test]
-fn policy_allows_only_the_configured_escrow_release_or_refund() {
+fn policy_allows_only_the_configured_escrow_operation() {
     let env = Env::default();
     let escrow = Address::generate(&env);
     let (_key, public) = signer(&env, 8);
@@ -114,6 +114,32 @@ fn policy_allows_only_the_configured_escrow_release_or_refund() {
             contract: escrow.clone(),
             fn_name: Symbol::new(&env, "refund"),
             args: vec![&env, 7u64.into_val(&env), account.clone().into_val(&env)],
+        }),
+    ];
+    let rotate = vec![
+        &env,
+        Context::Contract(ContractContext {
+            contract: escrow.clone(),
+            fn_name: Symbol::new(&env, "rotate_releaser"),
+            args: vec![
+                &env,
+                7u64.into_val(&env),
+                account.clone().into_val(&env),
+                wrong_escrow.clone().into_val(&env),
+            ],
+        }),
+    ];
+    let wrong_rotate_caller = vec![
+        &env,
+        Context::Contract(ContractContext {
+            contract: escrow.clone(),
+            fn_name: Symbol::new(&env, "rotate_releaser"),
+            args: vec![
+                &env,
+                7u64.into_val(&env),
+                wrong_escrow.clone().into_val(&env),
+                account.clone().into_val(&env),
+            ],
         }),
     ];
     let wrong_target = vec![
@@ -142,12 +168,14 @@ fn policy_allows_only_the_configured_escrow_release_or_refund() {
     ];
     let nested = vec![&env, release.get(0).unwrap(), refund.get(0).unwrap()];
     env.as_contract(&account, || {
-        assert!(release_or_refund_only(&env, &escrow, &release));
-        assert!(release_or_refund_only(&env, &escrow, &refund));
-        assert!(!release_or_refund_only(&env, &escrow, &wrong_target));
-        assert!(!release_or_refund_only(&env, &escrow, &management));
-        assert!(!release_or_refund_only(&env, &escrow, &wrong_caller));
-        assert!(!release_or_refund_only(&env, &escrow, &nested));
+        assert!(escrow_operation_only(&env, &escrow, &release));
+        assert!(escrow_operation_only(&env, &escrow, &refund));
+        assert!(escrow_operation_only(&env, &escrow, &rotate));
+        assert!(!escrow_operation_only(&env, &escrow, &wrong_rotate_caller));
+        assert!(!escrow_operation_only(&env, &escrow, &wrong_target));
+        assert!(!escrow_operation_only(&env, &escrow, &management));
+        assert!(!escrow_operation_only(&env, &escrow, &wrong_caller));
+        assert!(!escrow_operation_only(&env, &escrow, &nested));
     });
 }
 
@@ -286,4 +314,59 @@ fn usage_entry_is_extended_beyond_short_persistent_minimum_until_window_end() {
     env.ledger().set_sequence_number(14);
     let client = ReleaserAccountClient::new(&env, &account_id);
     assert_eq!(client.window_usage(&0), 1);
+}
+
+#[test]
+fn window_counter_expires_for_previous_window() {
+    let env = Env::default();
+    env.ledger().set_max_entry_ttl(20);
+    env.ledger().set_min_persistent_entry_ttl(2);
+    let escrow = Address::generate(&env);
+    let (_signer, public) = signer(&env, 41);
+    let account_id = env.register(
+        ReleaserAccount,
+        (&escrow, &vec![&env, public], &1u32, &2u32, &5u32),
+    );
+
+    env.ledger().set_sequence_number(0);
+    assert_eq!(
+        env.as_contract(&account_id, || consume_operation_slot(&env)),
+        Ok(())
+    );
+    let client = ReleaserAccountClient::new(&env, &account_id);
+    assert_eq!(client.window_usage(&0), 1);
+
+    // Move well past the window (and its TTL) so the counter expires.
+    env.ledger().set_sequence_number(20);
+    assert_eq!(client.window_usage(&0), 0);
+}
+
+#[test]
+fn cap_hit_at_window_boundary() {
+    let env = Env::default();
+    let escrow = Address::generate(&env);
+    let (_signer, public) = signer(&env, 42);
+    let account_id = env.register(
+        ReleaserAccount,
+        (&escrow, &vec![&env, public], &1u32, &1u32, &10u32),
+    );
+
+    // Last ledger of window 0: cap (1) can be hit here.
+    env.ledger().set_sequence_number(10);
+    assert_eq!(
+        env.as_contract(&account_id, || consume_operation_slot(&env)),
+        Ok(())
+    );
+    assert_eq!(
+        env.as_contract(&account_id, || consume_operation_slot(&env)),
+        Err(Error::RateLimited)
+    );
+
+    // First ledger of window 1: fresh counter, slot available again.
+    env.ledger().set_sequence_number(11);
+    assert_eq!(
+        env.as_contract(&account_id, || consume_operation_slot(&env)),
+        Ok(())
+    );
+    assert_eq!(ReleaserAccountClient::new(&env, &account_id).window_usage(&1), 1);
 }
