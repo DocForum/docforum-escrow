@@ -16,7 +16,7 @@ impl EscrowContract {
     /// the escrow's `payer` (co-authorization for `rotate_releaser` only)
     /// and as the `refund_to` placeholder; no push refund path exists for
     /// pooled escrows. No `refund_after`, no acceptance gate, no callback:
-    /// pooled settlement reuses the plain releaser/threshold rules.
+    /// pooled settlement uses the stored releaser set and threshold.
     pub fn create_pooled_escrow(
         env: Env,
         creator: Address,
@@ -25,6 +25,62 @@ impl EscrowContract {
         funding_target: i128,
         condition_ref: String,
         releaser: Address,
+        funding_deadline: u64,
+    ) -> Result<u64, Error> {
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        Self::create_pooled_escrow_inner(
+            env,
+            creator,
+            payee,
+            token,
+            funding_target,
+            condition_ref,
+            releasers,
+            1,
+            funding_deadline,
+        )
+    }
+
+    /// Pooled-escrow variant settled by an M-of-N releaser set (issue #290).
+    /// Takes the same funding rules as `create_pooled_escrow`, with
+    /// `releasers`/`threshold` validated by the shared `check_releaser_set`;
+    /// a fully funded round requires `threshold` approvals through
+    /// `release_with_approvals`. Push refunds stay unavailable, so failed
+    /// rounds are still refunded per contributor with `claim_refund`.
+    pub fn create_pooled_quorum_escrow(
+        env: Env,
+        creator: Address,
+        payee: Address,
+        token: Address,
+        funding_target: i128,
+        condition_ref: String,
+        releasers: Vec<Address>,
+        threshold: u32,
+        funding_deadline: u64,
+    ) -> Result<u64, Error> {
+        Self::create_pooled_escrow_inner(
+            env,
+            creator,
+            payee,
+            token,
+            funding_target,
+            condition_ref,
+            releasers,
+            threshold,
+            funding_deadline,
+        )
+    }
+
+    fn create_pooled_escrow_inner(
+        env: Env,
+        creator: Address,
+        payee: Address,
+        token: Address,
+        funding_target: i128,
+        condition_ref: String,
+        releasers: Vec<Address>,
+        threshold: u32,
         funding_deadline: u64,
     ) -> Result<u64, Error> {
         // Creating a pooled escrow opens a new deposit target, so the
@@ -55,9 +111,7 @@ impl EscrowContract {
         if condition_ref.len() > MAX_CONDITION_REF_LEN {
             return Err(Error::ConditionRefTooLong);
         }
-        let mut releasers = Vec::new(&env);
-        releasers.push_back(releaser);
-        Self::check_releaser_set(&env, &releasers, 1)?;
+        Self::check_releaser_set(&env, &releasers, threshold)?;
 
         creator.require_auth();
 
@@ -77,7 +131,7 @@ impl EscrowContract {
             condition_ref,
             status: EscrowStatus::Funded,
             releasers,
-            threshold: 1,
+            threshold,
             // No push timeout exists for pooled escrows, so the field is
             // inert; kept for read-shape compatibility.
             refund_after: None,

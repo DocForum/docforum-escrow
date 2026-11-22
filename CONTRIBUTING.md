@@ -8,7 +8,19 @@ instead.
 
 ## 1. Set up locally
 
-Requires a Rust toolchain with the `wasm32v1-none` target.
+The reproducible fast path is the devcontainer. Open the repo in VS Code or
+Codespaces and choose "Reopen in Container", then run `make dev` from the
+workspace root. It builds and tests the contract, deploys it to a local
+quickstart, and runs the SDK conformance suite against that deployment. Rust
+1.96.0 and `wasm32v1-none` come from `rust-toolchain.toml`, Stellar CLI 28.1.0
+and its checksums from `scripts/stellar-cli-version`, and quickstart is pinned
+to the same digest CI uses in `.devcontainer/docker-compose.yml`. The
+devcontainer works on Apple Silicon and x86 hosts and does not use
+`initializeCommand` or any other container autorun step; `make dev` is the only
+entry point. It writes deployment addresses and disposable secrets to the
+gitignored `.dev-env.local` file in the workspace root.
+
+For a host-only setup, requires a Rust toolchain with the `wasm32v1-none` target.
 
 ```bash
 git clone https://github.com/DocForum/docforum-escrow.git

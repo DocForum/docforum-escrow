@@ -1,0 +1,21 @@
+services:
+  workspace:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    volumes:
+      - ..:/workspaces/docforum-escrow:cached
+    working_dir: /workspaces/docforum-escrow
+    command: sleep infinity
+    depends_on:
+      - quickstart
+    environment:
+      DEV_RPC_URL: http://quickstart:8000/rpc
+      DEV_NETWORK_PASSPHRASE: "Standalone Network ; February 2017"
+  quickstart:
+    image: stellar/quickstart@sha256:4f8dfd693deba57fddef7f0bc722e4782c2e606c8675e3adc5438cebae249295
+    environment:
+      NETWORK: local
+      ENABLE_SOROBAN_RPC: "true"
+    ports:
+      - "8000:8000"

@@ -587,6 +587,31 @@ fn pooled_creation_respects_the_token_allowlist() {
         &releaser,
         &DEADLINE,
     );
+
+    let releasers = vec![&env, releaser, Address::generate(&env)];
+    assert_eq!(
+        client.try_create_pooled_quorum_escrow(
+            &creator,
+            &payee,
+            &unlisted,
+            &100,
+            &String::from_str(&env, "pooled-quorum"),
+            &releasers,
+            &2,
+            &DEADLINE
+        ),
+        Err(Ok(Error::DisallowedToken))
+    );
+    client.create_pooled_quorum_escrow(
+        &creator,
+        &payee,
+        &allowed,
+        &100,
+        &String::from_str(&env, "pooled-quorum"),
+        &releasers,
+        &2,
+        &DEADLINE,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -883,4 +908,146 @@ fn create_pooled_escrow_accepts_a_condition_ref_at_the_length_limit() {
     );
 
     assert_eq!(f.client.get_status(&id), EscrowStatus::Funded);
+}
+
+// ---------------------------------------------------------------------------
+// Pooled escrows settled by an M-of-N releaser set (issue #290)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn quorum_pooled_creation_stores_the_releaser_set_and_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(CREATED_AT);
+
+    let token_id = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
+    let creator = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releasers = vec![
+        &env,
+        Address::generate(&env),
+        Address::generate(&env),
+        Address::generate(&env),
+    ];
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_pooled_quorum_escrow(
+        &creator,
+        &payee,
+        &token_id,
+        &100,
+        &String::from_str(&env, "quorum-pooled"),
+        &releasers,
+        &2,
+        &DEADLINE,
+    );
+
+    let data = client.get_escrow(&id);
+    assert_eq!(data.releasers, releasers);
+    assert_eq!(data.threshold, 2);
+    assert_eq!(data.payer, creator);
+    assert_eq!(data.refund_to, creator);
+    assert_eq!(data.amount, 0);
+    assert_eq!(data.status, EscrowStatus::Funded);
+    let pooled = client.get_pooled(&id);
+    assert_eq!(pooled.funding_target, 100);
+    assert_eq!(pooled.funding_deadline, DEADLINE);
+}
+
+#[test]
+fn quorum_pooled_creation_validates_the_funding_and_releaser_rules() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(CREATED_AT);
+
+    let token_id = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
+    let creator = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let condition = String::from_str(&env, "quorum-pooled");
+    let a = Address::generate(&env);
+    let b = Address::generate(&env);
+    let c = Address::generate(&env);
+    let unique = vec![&env, a.clone(), b.clone(), c.clone()];
+    let duplicate = vec![&env, a.clone(), a.clone()];
+
+    for threshold in [0, 4] {
+        assert_eq!(
+            client.try_create_pooled_quorum_escrow(
+                &creator, &payee, &token_id, &100, &condition, &unique, &threshold, &DEADLINE
+            ),
+            Err(Ok(Error::InvalidThreshold))
+        );
+    }
+    assert_eq!(
+        client.try_create_pooled_quorum_escrow(
+            &creator,
+            &payee,
+            &token_id,
+            &100,
+            &condition,
+            &Vec::<Address>::new(&env),
+            &1,
+            &DEADLINE
+        ),
+        Err(Ok(Error::InvalidThreshold))
+    );
+    assert_eq!(
+        client.try_create_pooled_quorum_escrow(
+            &creator, &payee, &token_id, &100, &condition, &duplicate, &2, &DEADLINE
+        ),
+        Err(Ok(Error::DuplicateReleaser))
+    );
+    assert_eq!(
+        client.try_create_pooled_quorum_escrow(
+            &creator, &payee, &token_id, &0, &condition, &unique, &2, &DEADLINE
+        ),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(
+        client.try_create_pooled_quorum_escrow(
+            &creator,
+            &payee,
+            &token_id,
+            &100,
+            &condition,
+            &unique,
+            &2,
+            &CREATED_AT
+        ),
+        Err(Ok(Error::InvalidFundingDeadline))
+    );
+    assert_eq!(
+        client.try_create_pooled_quorum_escrow(
+            &creator,
+            &payee,
+            &token_id,
+            &100,
+            &String::from_str(&env, &"x".repeat(65)),
+            &unique,
+            &2,
+            &DEADLINE
+        ),
+        Err(Ok(Error::ConditionRefTooLong))
+    );
+
+    assert!(client.try_get_status(&0).is_err());
+    assert_eq!(
+        client.create_pooled_quorum_escrow(
+            &creator, &payee, &token_id, &100, &condition, &unique, &2, &DEADLINE
+        ),
+        0
+    );
 }

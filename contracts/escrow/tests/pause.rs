@@ -42,6 +42,7 @@ const DEPOSIT_ENTRYPOINTS: &[&str] = &[
     "create_escrows",
     "create_streamed_escrow",
     "create_pooled_escrow",
+    "create_pooled_quorum_escrow",
     "contribute",
     "top_up",
 ];
@@ -687,6 +688,20 @@ fn paused_blocks_pooled_creation_and_contributions() {
             &500,
             &String::from_str(&env, "blocked-pooled"),
             &f.releaser,
+            &FUNDING_DEADLINE,
+        ),
+        Error::Paused,
+    );
+    let quorum = soroban_sdk::vec![&env, f.releaser.clone(), Address::generate(&env)];
+    assert_contract_error(
+        f.client.try_create_pooled_quorum_escrow(
+            &f.payer,
+            &f.payee,
+            &f.token_id,
+            &500,
+            &String::from_str(&env, "blocked-quorum-pooled"),
+            &quorum,
+            &2,
             &FUNDING_DEADLINE,
         ),
         Error::Paused,

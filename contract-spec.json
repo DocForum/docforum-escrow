@@ -87,6 +87,11 @@
       "return": "Result<u64, Error>"
     },
     {
+      "name": "create_pooled_quorum_escrow",
+      "args": "env: Env, creator: Address, payee: Address, token: Address, funding_target: i128, condition_ref: String, releasers: Vec<Address>, threshold: u32, funding_deadline: u64,",
+      "return": "Result<u64, Error>"
+    },
+    {
       "name": "contribute",
       "args": "env: Env, escrow_id: u64, payer: Address, amount: i128",
       "return": "Result<(), Error>"
