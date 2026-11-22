@@ -487,3 +487,99 @@ proptest! {
         prop_assert_eq!(client.window_usage(&1), 1);
     }
 }
+
+#[test]
+fn policy_authorizes_settle_many_and_counts_operations() {
+    let env = Env::default();
+    let escrow = Address::generate(&env);
+    let (_key, public) = signer(&env, 51);
+    let account = env.register(
+        ReleaserAccount,
+        (&escrow, &vec![&env, public], &1u32, &5u32, &10u32),
+    );
+    let wrong_escrow = Address::generate(&env);
+
+    let ops = vec![
+        &env,
+        (1u64, SettleAction::Release),
+        (2u64, SettleAction::Refund),
+    ];
+    let valid_settle_many = vec![
+        &env,
+        Context::Contract(ContractContext {
+            contract: escrow.clone(),
+            fn_name: Symbol::new(&env, "settle_many"),
+            args: vec![&env, account.clone().into_val(&env), ops.clone().into_val(&env)],
+        }),
+    ];
+
+    let wrong_target_settle = vec![
+        &env,
+        Context::Contract(ContractContext {
+            contract: wrong_escrow.clone(),
+            fn_name: Symbol::new(&env, "settle_many"),
+            args: vec![&env, account.clone().into_val(&env), ops.clone().into_val(&env)],
+        }),
+    ];
+
+    let wrong_caller_settle = vec![
+        &env,
+        Context::Contract(ContractContext {
+            contract: escrow.clone(),
+            fn_name: Symbol::new(&env, "settle_many"),
+            args: vec![&env, wrong_escrow.into_val(&env), ops.clone().into_val(&env)],
+        }),
+    ];
+
+    let empty_ops: Vec<(u64, SettleAction)> = vec![&env];
+    let empty_settle = vec![
+        &env,
+        Context::Contract(ContractContext {
+            contract: escrow.clone(),
+            fn_name: Symbol::new(&env, "settle_many"),
+            args: vec![&env, account.clone().into_val(&env), empty_ops.into_val(&env)],
+        }),
+    ];
+
+    let malformed_settle = vec![
+        &env,
+        Context::Contract(ContractContext {
+            contract: escrow.clone(),
+            fn_name: Symbol::new(&env, "settle_many"),
+            args: vec![&env, account.clone().into_val(&env), 12345u32.into_val(&env)],
+        }),
+    ];
+
+    env.as_contract(&account, || {
+        assert_eq!(authorize_context(&env, &escrow, &valid_settle_many), Ok(2));
+        assert_eq!(authorize_context(&env, &escrow, &wrong_target_settle), Err(Error::UnauthorizedContext));
+        assert_eq!(authorize_context(&env, &escrow, &wrong_caller_settle), Err(Error::UnauthorizedContext));
+        assert_eq!(authorize_context(&env, &escrow, &empty_settle), Err(Error::UnauthorizedContext));
+        assert_eq!(authorize_context(&env, &escrow, &malformed_settle), Err(Error::UnauthorizedContext));
+    });
+}
+
+#[test]
+fn settle_many_batch_consumes_n_slots_and_rejects_over_cap() {
+    let env = Env::default();
+    let escrow = Address::generate(&env);
+    let (_key, public) = signer(&env, 52);
+    let account = env.register(
+        ReleaserAccount,
+        (&escrow, &vec![&env, public], &1u32, &4u32, &10u32),
+    );
+    let client = ReleaserAccountClient::new(&env, &account);
+
+    env.as_contract(&account, || {
+        assert_eq!(consume_operation_slots(&env, 3), Ok(()));
+        assert_eq!(consume_operation_slots(&env, 1), Ok(()));
+        assert_eq!(consume_operation_slots(&env, 1), Err(Error::RateLimited));
+    });
+    assert_eq!(client.window_usage(&0), 4);
+
+    env.ledger().set_sequence_number(11);
+    env.as_contract(&account, || {
+        assert_eq!(consume_operation_slots(&env, 5), Err(Error::RateLimited));
+    });
+    assert_eq!(client.window_usage(&1), 0);
+}
