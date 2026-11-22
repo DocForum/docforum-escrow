@@ -142,6 +142,11 @@ path stays visible in a diff.
 - Snapshots must be deterministic: fresh keypairs come from the SDK's seeded
 `Address::generate`, so a second `cargo test` must produce a byte-identical
 snapshot. CI's snapshot step catches both drift and nondeterminism.
+- CI also runs `node scripts/check-orphaned-snapshots.mjs` after the contract
+  tests. It lists the tests from Cargo and compares their names with the
+  `<test-name>.<n>.json` snapshot prefixes, so stale snapshots from renamed or
+  deleted tests fail CI. Numbered files such as `.2.json` belong to the same
+  test and are checked using the shared prefix.
 
 ## Generated SDK bindings
 

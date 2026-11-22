@@ -153,6 +153,7 @@ export type {
 // Public types, constants and errors live in topical modules (one per
 // feature); index.ts re-exports them all and keeps the EscrowClient class.
 export * from "./archived-entries.js";
+export * from "./attestation.js";
 export * from "./batch.js";
 export * from "./client-config.js";
 export * from "./contract-version.js";
@@ -165,6 +166,8 @@ export * from "./networks.js";
 export * from "./pooled.js";
 export * from "./prepare-submit.js";
 export * from "./relayed-auth.js";
+export * from "./rpc-providers.js";
+export * from "./solvency.js";
 
 import { type ArchivedEntryBehavior } from "./archived-entries.js";
 import { type BatchCreateItem, type BatchItemResult, type BatchOptions, BatchPartialFailureError, type BatchSettleOperation, MAX_BATCH_SIZE } from "./batch.js";
@@ -174,12 +177,13 @@ import { type CancelParams, type CreateEscrowParams, type CreateQuorumEscrowPara
 import { type EscrowEvent, type EscrowEventType, EventCursorExpiredError, type GetEventsParams, type GetEventsResult, type SubscribeOptions } from "./events.js";
 import { type EstimateCallParams, type FeeBumpOptions, type FeeBumpResult, type FeeEstimate, type GuardResult, MaxFeeExceededError, SponsorshipGuardError, computeFeeEstimate } from "./fees.js";
 import { EMPTY_SPAN_ATTRIBUTES, MISSING_FUNCTION_ERROR, TESTNET_NETWORK_PASSPHRASE, TESTNET_RPC_URL, assertLedgerWindow, assertPositiveAmount, batchErrorMessage, contractAddressOf, isRetentionError, lifecycleCallSigner, safeScValToNative, sendErrorName, trancheOf } from "./internal.js";
-import { type AcceptParams, type EscrowPreconditionCode, EscrowPreconditionError, type LifecycleCall, type LifecycleMethod, PREPARED_AUTH_TTL_LEDGERS, type PrepareLifecycleParams, type PreparedLifecycleCall, type TopUpParams } from "./lifecycle.js";
+import { type AcceptParams, type EscrowPreconditionCode, EscrowPreconditionError, type LifecycleCall, type LifecycleMethod, PREPARED_AUTH_TTL_LEDGERS, type PrepareLifecycleParams, type PreparedLifecycleCall, type TopUpParams, type TransferPayeeParams } from "./lifecycle.js";
 import { type CreateMilestoneEscrowParams, type Milestone, type MilestoneEscrow, MilestoneEscrowPartialError, type RefundMilestoneParams, type ReleaseMilestoneParams, milestoneConditionRef, validateMilestoneSchedule } from "./milestones.js";
 import { MAINNET_NETWORK_PASSPHRASE, MainnetNotAllowedError } from "./networks.js";
 import { type ClaimRefundParams, type ContributeParams, type ContributionRecord, type CreatePooledEscrowParams, type PooledEscrow, type SolvencyReport } from "./pooled.js";
 import { DEFAULT_SUBMIT_MAX_FEE, OFFLINE_PREPARED_TX_TTL_LEDGERS, PREPARED_TX_TTL_LEDGERS, type PrepareCreateEscrowParams, type PrepareSettlementParams, type SubmitSignedOptions, type SubmitSignedResult } from "./prepare-submit.js";
 import { RELAYED_AUTH_TTL_LEDGERS, type RelayedAuthorization, type RelayedAuthorizationParams } from "./relayed-auth.js";
+import { RpcProviderPool } from "./rpc-providers.js";
 
 /**
  * Thin client for the docforum-escrow Soroban contract. Wraps
@@ -189,9 +193,10 @@ import { RELAYED_AUTH_TTL_LEDGERS, type RelayedAuthorization, type RelayedAuthor
 export class EscrowClient {
   /** Contract id of the escrow instance this client talks to. */
   readonly contractId: string;
-  private readonly rpcUrl: string;
+  private rpcUrl: string;
   private readonly networkPassphrase: string;
-  private readonly rpc: RpcServer;
+  private rpc: RpcServer;
+  private readonly rpcPool?: RpcProviderPool;
   private readonly instrumentation?: InstrumentationOptions;
   private readonly archivalBehavior: ArchivedEntryBehavior;
   private readonly restoreSigner?: Keypair;
@@ -209,7 +214,7 @@ export class EscrowClient {
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
-    this.rpcUrl = config.rpcUrl ?? config.network?.rpcUrl ?? TESTNET_RPC_URL;
+    this.rpcUrl = config.rpcUrl ?? config.rpcProviders?.[0]?.url ?? config.network?.rpcUrl ?? TESTNET_RPC_URL;
     this.networkPassphrase =
       config.networkPassphrase ?? config.network?.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
     this.allowMainnet = config.allowMainnet === true;
@@ -234,6 +239,10 @@ export class EscrowClient {
             ? "auto"
             : "off";
     this.allowHttp = config.allowHttp ?? config.network?.allowHttp ?? false;
+    const providerConfigs = config.rpcProviders ?? [{ url: this.rpcUrl }];
+    this.rpcPool = config.rpcProviders
+      ? new RpcProviderPool(providerConfigs, { networkPassphrase: this.networkPassphrase, allowHttp: this.allowHttp })
+      : undefined;
     this.rpc = new RpcServer(this.rpcUrl, { allowHttp: this.allowHttp });
     this.instrumentation = config.onEvent
       ? { ...config.instrumentation, onEvent: config.onEvent }
@@ -310,6 +319,11 @@ export class EscrowClient {
   }
 
   private async ensureNetworkPassphrase(): Promise<void> {
+    if (this.rpcPool) {
+      const selected = await this.rpcPool.select();
+      this.rpc = selected.rpc;
+      this.rpcUrl = selected.url;
+    }
     if (this.networkVerification === "off") return;
     await this.runNetworkVerification(this.networkVerification === "required");
   }
@@ -485,6 +499,9 @@ export class EscrowClient {
     if (params.feeBps !== undefined && (!Number.isInteger(params.feeBps) || params.feeBps < 0 || params.feeBps > MAX_FEE_BPS)) {
       throw new RangeError(`feeBps must be an integer between 0 and ${MAX_FEE_BPS} (10 %)`);
     }
+    if (params.requiresAcceptance && (params.feeRecipient !== undefined || params.feeBps !== undefined)) {
+      throw new TypeError("requiresAcceptance cannot be combined with feeRecipient or feeBps.");
+    }
     const client = this.contractClient(params.payer);
     const createParams = {
       payer: signerAddress(params.payer),
@@ -540,6 +557,27 @@ export class EscrowClient {
       token,
       rpcTokenInfoSource({ rpcUrl: this.rpcUrl, networkPassphrase: this.networkPassphrase }),
     );
+  }
+
+  /**
+   * Reads the immutable deploy-time token allowlist (issue #299). An
+   * **empty** array means any token is accepted, preserving the legacy
+   * behavior. The list can never change after deployment, so verify it
+   * once instead of trusting deployment notes.
+   */
+  async getAllowedTokens(): Promise<string[]> {
+    try {
+      const client = this.contractClient();
+      const tx = await tracePhase(
+        this.instrumentation,
+        "simulate",
+        this.spanAttributesIfEnabled("get_allowed_tokens"),
+        () => client.get_allowed_tokens(),
+      );
+      return tx.result;
+    } catch (error) {
+      throw toEscrowError(error);
+    }
   }
 
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
@@ -860,6 +898,40 @@ export class EscrowClient {
   }
 
   /**
+   * Reassigns future payout rights to `newPayee` (contract `transfer_payee`,
+   * issue #45). Only the escrow's current payee may call it, only while
+   * `Funded`; `newPayee` must not be the payer or the contract id
+   * (`InvalidNewPayee`). If the escrow had `notifyPayee` set, it is reset
+   * to `false` upon transfer so the new payee receives standard push payouts
+   * without needing to implement the callback hook (issue #286).
+   * Returns the transaction's hash.
+   */
+  async transferPayee(params: TransferPayeeParams): Promise<{ txHash: string }> {
+    const currentPayee = signerAddress(params.currentPayee);
+    const call: LifecycleCall = {
+      method: "transfer_payee",
+      escrowId: params.escrowId,
+      currentPayee,
+      newPayee: params.newPayee,
+    };
+    if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
+    const client = this.contractClient(params.currentPayee);
+    const sent = await this.invoke(
+      "transfer_payee",
+      params.escrowId,
+      () =>
+        client.transfer_payee({
+          escrow_id: params.escrowId,
+          current_payee: currentPayee,
+          new_payee: params.newPayee,
+        }),
+      { address: currentPayee },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
    * Step 1 of the multi-party flow: simulates `call` with `source` as the
    * transaction source and returns it as portable JSON, listing every other
    * party whose contract authorization is still needed. Pass the result to
@@ -970,6 +1042,12 @@ export class EscrowClient {
         return client.accept({ escrow_id: call.escrowId, payee: call.payee });
       case "cancel":
         return client.cancel({ escrow_id: call.escrowId, payer: call.payer });
+      case "transfer_payee":
+        return client.transfer_payee({
+          escrow_id: call.escrowId,
+          current_payee: call.currentPayee,
+          new_payee: call.newPayee,
+        });
     }
   }
 
@@ -984,9 +1062,10 @@ export class EscrowClient {
       throw new EscrowPreconditionError(call.method, code, message);
     };
     // Same order as the contract, so the error matches what it would return.
-    const [party, expected] = call.method === "accept"
-      ? ["payee", escrow.payee] as const
-      : ["payer", escrow.payer] as const;
+    const [party, expected] =
+      call.method === "accept" || call.method === "transfer_payee"
+        ? ["payee", escrow.payee] as const
+        : ["payer", escrow.payer] as const;
     if (lifecycleCallSigner(call) !== expected) {
       fail("Unauthorized", `only the escrow's ${party} can call ${call.method}.`);
     }
@@ -994,6 +1073,15 @@ export class EscrowClient {
       fail("NotFunded", `escrow ${call.escrowId} is ${escrow.status}, not Funded.`);
     }
     if (call.method === "top_up") return;
+    if (call.method === "transfer_payee") {
+      if (call.newPayee === escrow.payer || call.newPayee === this.contractId) {
+        fail(
+          "InvalidNewPayee",
+          "newPayee must not be the payer or the contract id.",
+        );
+      }
+      return;
+    }
     if (!escrow.requiresAcceptance) {
       fail("AcceptanceNotConfigured", "the escrow was created without the acceptance gate.");
     }

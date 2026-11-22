@@ -19,4 +19,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "settlement"
+path = "fuzz_targets/settlement.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

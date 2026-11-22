@@ -344,6 +344,8 @@ pause custodian.
 - The payee must authorize creation when `notify_payee` is true. Only use it
   for a contract address implementing `on_escrow_released(u64, i128)`; a
   consenting address without the method cannot complete release. See ADR 0005.
+- When `transfer_payee` reassigns payout rights to a new payee, `notify_payee` is automatically reset to `false` (issue #286). This ensures that transferring an escrow to a plain account or a contract without the callback hook cannot leave the escrow permanently unreleasable with `CallbackFailed`.
+
 ### T5 — Malicious or non-standard `token` · **Medium**
 `token` is any address the payer supplies. The contract trusts it to
 behave like SEP-41.
@@ -511,6 +513,30 @@ TTL-extended (see T6), so the counter can outlive the escrows it sums.
   release) or to any third party; the destination is fixed at creation
   and visible, so this is a disclosed property of the deal, not a hidden
   one.
+
+#### Role-overlap matrix (issue #300)
+
+Role overlap is allowed unless a row says otherwise. The payer chooses these
+addresses at creation, so the overlap is part of the deal and must be visible
+to the payee in `get_escrow` before relying on the escrow.
+
+| Overlap | Allowed? | Implication |
+|---|---|---|
+| `payer == payee` | Yes | Release pays the payer; this is a valid self-funded escrow. |
+| `payer == releaser` | Yes | The payer can choose release or refund, so the payee has no independent settlement protection. |
+| `payer == refund_to` | Yes | This is the default refund destination. |
+| `payer == fee_recipient` | Yes | The payer receives the configured release fee. |
+| `payee == releaser` | Yes | The payee may authorize its own release. |
+| `payee == refund_to` | Yes | A refund sends the funds to the payee. |
+| `payee == fee_recipient` | Yes | The payee receives both the fee and the release remainder. |
+| `releaser == refund_to` | Yes | The releaser can direct a refund to itself when the payer configured it. |
+| `releaser == fee_recipient` | Yes | The releaser receives the configured release fee. |
+| `refund_to == fee_recipient` | Yes | The same destination receives a refund or the release fee, as applicable. |
+
+The contract address is not a user-role overlap: it is rejected as
+`refund_to` or `fee_recipient` because funds sent there would be permanently
+stranded. Contract-self `payee` and `releaser` remain the separate design
+question tracked by issue #8 and are not changed here.
 
 ### T9 — `condition_ref` is public · **Low (privacy)**
 - Everything in `EscrowData` is publicly readable on-chain forever,
@@ -743,6 +769,55 @@ escrow.
     who need time‑bounded release should use the single‑releaser path with
     `release_not_before`.
 
+### T25 — `attester` key compromised, lost, or attestation replayed · **Medium**
+
+- **What changed:** Phase E5 (issue #42) lets an escrow carry an optional
+  `attester` (an ed25519 public key), and lets anyone submit a signed
+  attestation to release it via `release_with_attestation`. The attester
+  signs offline with a cold key; the releaser no longer has to be online,
+  funded, or holding a hot key at release time. The attestation is a
+  signature over a domain-separated message (contract id, network id,
+  escrow id, action `release`) verified with `env.crypto().ed25519_verify`.
+- **Key compromised:** if the attester key is stolen, the attacker can sign
+  a release attestation for any escrow naming that attester and submit it
+  at any time, so the payout happens early. Blast radius is limited to
+  escrows naming that attester; the releaser and payer keys are unaffected,
+  and the releaser can still refund (only to the payer) while the escrow
+  is `Funded`, if they spot the compromise in time. Treat the attester key
+  like the releaser key in T1: cold storage, single purpose, rotate the
+  escrow rather than the key if it is exposed.
+- **Key lost:** if the attester key is lost, the attestation path is dead,
+  but the escrow is not stuck — the stored releaser can still release, and
+  the refund path is unchanged. A lost attester key is a degraded release
+  path, not a loss of funds.
+- **Replay:** an attestation cannot be replayed on another contract or
+  another network — the signed message binds the contract id and the
+  network id, and a testnet attestation will not verify on mainnet. It
+  cannot be reused on the same escrow either: release settles the escrow,
+  so a second submission fails. The verification cost is a single
+  `ed25519_verify` call, the same primitive the host uses for auth checks;
+  no measurement was run for this change, so the cost still needs a
+  testnet run to confirm.
+- **What is still missing:** there is no way to rotate or revoke an
+  attester once set, and no way to list escrows by attester. A compromised
+  attester stays valid for every escrow that names it until each one
+  settles. Tracked as a follow-up, not a blocker.
+- **Residual risk:** accepted. The cold-key attestation path is strictly
+  safer than the hot-key releaser path it replaces (T1), and the same
+  escrow is still releasable by its releaser.
+
+### T26 — Keeper drains a schedule beyond the payer's authorisation · **High**
+
+- **What an attacker can do:** `fund_next` is permissionless by design — anyone may call it. A keeper could try to pull more than the payer authorised: fund before a period is due, fund the same period twice, keep funding after the schedule is complete or cancelled, or drain an allowance the payer meant to cover only a few periods.
+- **Impact:** funds leave the payer's balance for escrows the payer never agreed to fund, up to the full allowance. Each extra period is still a normal escrow (funds can only go to the stored payee or refund destination), so the loss is bounded by the allowance, not the payer's whole balance — but it is a loss all the same.
+- **Mitigations to consider:**
+  - [x] `fund_next` pulls exactly `amount` per call, only when the ledger timestamp has reached `next_due`, only while periods remain, and only while the schedule is not cancelled (`ScheduleTooEarly`, `ScheduleComplete`, `ScheduleCancelled`).
+  - [x] A late trigger funds one period: `next_due` advances by exactly one `period_seconds` from the previous due time, so no single call ever creates several periods at once.
+  - [x] The allowance is checked before the pull, and the token contract enforces the cap and its expiration ledger (`AllowanceExhausted`); an expired allowance reads as zero.
+  - [x] The payer can stop funding at any time by cancelling (payer-signed) or by setting the allowance to zero.
+  - [x] `transfer_from` is only ever called from `fund_next`: no other entry point spends the allowance. Tests: `tests/recurring.rs` (early trigger, allowance exhaustion, expired allowance, cancel, completion, one-period-per-call).
+  - Consumer guidance: approve exactly `total_periods * amount` so the allowance itself caps the schedule completely.
+
 ## 8. Traceability table
 
 | Threat | Test coverage | Status |
@@ -768,6 +843,8 @@ escrow.
 | T19 — Contributor-resource exhaustion / unbounded refund loops | `tests/pooled.rs::no_contributor_cap_each_claim_is_independent` (bounded per-claim work, no cap by design) | Covered (design) |
 
 *Key: "Covered" = at least one test explicitly exercises the threat and verifies the mitigation. "Residual risk: accepted" = the threat is understood and intentionally tolerated with a documented mitigation. "Uncovered" = no test or mitigation exists — should be evaluated for a future release.*
+
+| T26 — Keeper drains a schedule beyond the payer's authorisation | `tests/recurring.rs` (early trigger, allowance exhaustion, expired allowance, cancel, completion, one-period-per-call) | Covered |
 
 ### T22 — Payee key compromise or loss · **Medium (new surface from issue #45)**
 - **What changed:** `transfer_payee` (Phase E5) gives the current `payee`
