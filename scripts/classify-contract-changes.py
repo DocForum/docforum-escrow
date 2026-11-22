@@ -11,6 +11,16 @@ import sys
 root = Path(__file__).resolve().parents[1]
 
 
+# Provisional error codes (>= 1000, contract-changes.d/README.md) are never
+# released: the maintainer fold renumbers them to final codes before a deploy.
+# That one move, provisional -> final, is not a renumbering of a released code.
+PROVISIONAL_MIN = 1000
+
+
+def is_fold_renumbering(old_code, new_code):
+    return old_code >= PROVISIONAL_MIN and new_code < PROVISIONAL_MIN
+
+
 def run_git(args: list[str]) -> subprocess.CompletedProcess:
     is_win = sys.platform == "win32"
     return subprocess.run(["git"] + args, capture_output=True, text=True, shell=is_win)
@@ -91,7 +101,7 @@ def classify_changes(base_spec: dict, curr_spec: dict) -> tuple[list[str], list[
     for name, code in old_errors.items():
         if name not in new_errors:
             breaking.append(f"Error variant '{name}' (= {code}) removed (violates append-only)")
-        elif new_errors[name] != code:
+        elif new_errors[name] != code and not is_fold_renumbering(code, new_errors[name]):
             breaking.append(f"Error variant '{name}' renumbered ({code} -> {new_errors[name]}) (violates append-only)")
 
     for name, code in new_errors.items():

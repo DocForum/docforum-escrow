@@ -135,5 +135,5 @@ pub enum Error {
     NotPaused = 40,
     /// `release_with_attestation` was called on an escrow with no
     /// `attester` configured (Phase E5, issue #42).
-    AttesterNotConfigured = 4200,
+    AttesterNotConfigured = 54,
 }
