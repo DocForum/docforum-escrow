@@ -508,6 +508,9 @@ impl EscrowContract {
                 data.requires_acceptance,
                 data.accepted_at,
                 status,
+                // Keep the snapshot within Soroban's 13-value tuple limit by
+                // grouping the optional refund destination and release lock.
+                (data.refund_to.clone(), data.release_not_before),
                 // The fee is one nested (recipient, bps) pair: soroban-sdk's
                 // event payloads support tuples of at most 13 values, and
                 // keeping the pair atomic matches how it is stored

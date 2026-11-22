@@ -60,13 +60,14 @@ Topic:   ("ESCROW", action, escrow_id)
 
 Payload: (payer, payee, token, amount, condition_ref, releasers, threshold,
           refund_after, notify_payee, requires_acceptance, accepted_at,
-          status, (fee_recipient, fee_bps))
+          status, (refund_to, release_not_before), (fee_recipient, fee_bps))
 ```
 
 The status value is the matching `Funded`, `Released`, `Refunded`, or
-`Cancelled` symbol. The fee fields are nested because Soroban event tuples
-support at most 13 values. `condition_ref` remains opaque: callers must not
-put sensitive data in it (threat model T9).
+`Cancelled` symbol. The optional refund destination and release lock, and the
+fee fields, are nested because Soroban event tuples support at most 13 values.
+`condition_ref` remains opaque: callers must not put sensitive data in it
+(threat model T9).
 
 Other emitted events (not lifecycle):
 - `top_up`   — topic `("top_up", escrow_id)`,   payload `(added, new_total)`

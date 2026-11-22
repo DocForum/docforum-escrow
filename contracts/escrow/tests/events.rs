@@ -47,6 +47,32 @@ fn state_payload(
     refund_after: Option<u64>,
     status: soroban_sdk::Symbol,
 ) -> Val {
+    state_payload_with_options(
+        env,
+        payer,
+        payee,
+        token,
+        amount,
+        releasers,
+        refund_after,
+        None,
+        None,
+        status,
+    )
+}
+
+fn state_payload_with_options(
+    env: &Env,
+    payer: &Address,
+    payee: &Address,
+    token: &Address,
+    amount: i128,
+    releasers: Vec<Address>,
+    refund_after: Option<u64>,
+    refund_to: Option<Address>,
+    release_not_before: Option<u64>,
+    status: soroban_sdk::Symbol,
+) -> Val {
     (
         payer.clone(),
         payee.clone(),
@@ -60,9 +86,73 @@ fn state_payload(
         false,
         Option::<u64>::None,
         status,
+        (refund_to, release_not_before),
         (Option::<Address>::None, Option::<u32>::None),
     )
         .into_val(env)
+}
+
+#[test]
+fn snapshot_includes_refund_destination_and_release_lock() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_000);
+
+    let (token_id, _token, asset) = setup_token(&env);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    let refund_to = Address::generate(&env);
+    asset.mint(&payer, &1_000);
+
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let release_not_before = 1_500u64;
+    let escrow_id = client.create_escrow_release_time(
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(&env, "opaque-ref"),
+        &releaser,
+        &Some(2_000),
+        &false,
+        &Some(refund_to.clone()),
+        &Some(release_not_before),
+        &None,
+        &None,
+    );
+
+    assert_eq!(
+        env.events().all().filter_by_contract(&contract_id),
+        vec![
+            &env,
+            (
+                contract_id.clone(),
+                (
+                    symbol_short!("ESCROW"),
+                    symbol_short!("created"),
+                    escrow_id,
+                )
+                    .into_val(&env),
+                state_payload_with_options(
+                    &env,
+                    &payer,
+                    &payee,
+                    &token_id,
+                    300,
+                    vec![&env, releaser],
+                    Some(2_000),
+                    Some(refund_to),
+                    Some(release_not_before),
+                    symbol_short!("Funded"),
+                ),
+            ),
+        ]
+    );
 }
 
 struct Fixture<'a> {

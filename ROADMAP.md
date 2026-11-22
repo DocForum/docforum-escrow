@@ -514,6 +514,9 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   deliberately ends on the emitting call so the mechanism is visible in a
   diff. Determinism verified by running the suite twice against the
   committed files (no diff).
+- [x] **Include all escrow routing and timing fields in lifecycle event snapshots**
+  (issue #291) — `refund_to` and `release_not_before` are emitted alongside
+  the existing full-state snapshot fields.
 - [x] **CI check that generated SDK bindings match the contract WASM**
   (issue #121) — `scripts/check-generated-bindings.sh` plus the `sdk-bindings`
   CI job: builds the WASM, regenerates with the Stellar CLI version pinned in
