@@ -80,6 +80,7 @@ __all__ = [
     "SplitAmountOverflowError",
     "InvalidRefundExtensionError",
     "PoolInsufficientError",
+    "DuplicateConditionRefError",
     "NotStreamedError",
     "InvalidVestingScheduleError",
     "NothingToWithdrawError",
@@ -574,6 +575,13 @@ class AttesterNotConfiguredError(ContractError):
 
     code = 54
     contract_error = "AttesterNotConfigured"
+
+
+class DuplicateConditionRefError(ContractError):
+    """Contract error 4700: ``DuplicateConditionRef``."""
+
+    code = 4700
+    contract_error = "DuplicateConditionRef"
 
 
 _CLASSES: dict[int, type[ContractError]] = {
