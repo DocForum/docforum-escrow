@@ -10,3 +10,5 @@ sdk/docs-api/
 .DS_Store
 __pycache__/
 *.pyc
+
+benchmarks/resource-profile.json
