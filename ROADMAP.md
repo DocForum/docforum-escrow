@@ -458,7 +458,6 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   contract or SDK API change, so bindings and the SDK version are unchanged.
 
 ## Phase E7 — Verification, testing & release engineering
-- [x] **Offline SDK tests run through Vitest projects (issue #321)** — offline and live test files are classified by configuration, and CI runs the complete offline project without hand-maintained file lists.
 - [ ] Assert exact auth trees throughout contract tests (issue #105). This contribution covers `create_escrow`, `release`, and `refund`, including nested token-transfer auth on creation; remaining contract-test modules still need conversion.
 - [x] Contract version and reproducible build provenance exposed in the
   contract interface and WASM metadata (issue #52).
