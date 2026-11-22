@@ -48,17 +48,32 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
 
-      - name: Build lifecycle fuzzer
+      - name: Build fuzzers
         working-directory: contracts/escrow
-        run: cargo +nightly fuzz build lifecycle
+        run: |
+          cargo +nightly fuzz build lifecycle
+          cargo +nightly fuzz build settlement
 
+      # Issue #308: two targets share the old single-target budget (30 s on
+      # PRs, 600 s nightly) instead of doubling it. Each runs even if the
+      # other fails, so the artifact step sees both targets' crashes.
       - name: Run lifecycle fuzzer
         working-directory: contracts/escrow
         run: |
           if [ "$GITHUB_EVENT_NAME" = schedule ]; then
-            cargo +nightly fuzz run lifecycle -- -max_total_time=600 -timeout=30
+            cargo +nightly fuzz run lifecycle -- -max_total_time=300 -timeout=30
           else
-            cargo +nightly fuzz run lifecycle -- -max_total_time=30 -timeout=30
+            cargo +nightly fuzz run lifecycle -- -max_total_time=15 -timeout=30
+          fi
+
+      - name: Run settlement fuzzer
+        if: success() || failure()
+        working-directory: contracts/escrow
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            cargo +nightly fuzz run settlement -- -max_total_time=300 -timeout=30
+          else
+            cargo +nightly fuzz run settlement -- -max_total_time=15 -timeout=30
           fi
 
       - name: Upload crash artifacts
@@ -94,6 +109,10 @@ jobs:
         if: github.event_name == 'pull_request'
         working-directory: .
         run: node scripts/check-contract-change.mjs "origin/${{ github.base_ref }}"
+
+      - name: No tracked backup files
+        working-directory: .
+        run: node scripts/check-no-backup-files.mjs
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.96.0
@@ -139,6 +158,10 @@ jobs:
             exit 1
           fi
           echo "Committed test snapshots match this run."
+
+      - name: Fail if test snapshots are orphaned
+        working-directory: .
+        run: node scripts/check-orphaned-snapshots.mjs
 
       - name: cargo build --release (wasm)
         run: cargo build --target wasm32v1-none --release

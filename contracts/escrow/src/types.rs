@@ -86,6 +86,11 @@ pub struct EscrowData {
     /// = 10 %), taken once at release, rounded **down** with the
     /// remainder to the payee — see docs/adr/0010.
     pub fee_bps: Option<u32>,
+    /// Optional attester key (ed25519 public key) for attestation-based
+    /// release (Phase E5, issue #42). `None` means the escrow can only
+    /// be released by its releaser(s). Set once at creation, never
+    /// changed.
+    pub attester: Option<BytesN<32>>,
 }
 
 /// Identifies voluntary refunds started by the escrow's stored payee.
