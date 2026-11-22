@@ -141,7 +141,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check public function baseline
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.96.0
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/target
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+
+      # Issue #319: the baseline check reads measured costs now, so CI takes the
+      # measurement with the profile bench. The bench profiles every function
+      # twice and fails when the runs disagree, which is what makes comparing
+      # against benchmarks/baseline.json meaningful.
+      - name: Profile public function resources
+        working-directory: contracts/escrow
+        run: cargo bench --bench resource_profile -- --out ../../benchmarks/resource-profile.json
+
+      - name: Compare measured costs with the baseline
         run: python3 scripts/check-resource-baseline.py
 
   contract:

@@ -11,3 +11,5 @@ sdk/docs-api/
 action/dist/
 __pycache__/
 *.pyc
+
+benchmarks/resource-profile.json
