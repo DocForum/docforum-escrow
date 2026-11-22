@@ -74,7 +74,8 @@ describe("utf8ByteLength boundary", () => {
   });
 
   it("accepts exactly 64 bytes and rejects 65 for multi-byte input", async () => {
-    // 32 two-byte characters = 64 bytes: must not fail on length.
+    // 32 two-byte characters = 64 bytes: the length check must pass.
+    // The call then fails on the unreachable network, not on conditionRef.
     await expect(
       client.createPooledEscrow(pooledCreateParams({ conditionRef: "é".repeat(32) }))
     ).rejects.not.toThrow(/conditionRef/);

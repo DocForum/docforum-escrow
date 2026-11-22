@@ -67,7 +67,8 @@ export function validateMilestoneSchedule(milestones: readonly bigint[], amount:
  * `condition_ref` for tranche `index` of `count`: `<base>#m<index+1>/<count>`.
  * Tagged so each tranche stays traceable back to its group on-chain, where
  * only the ref is visible. Length is checked in UTF-8 bytes, matching the
- * contract.
+ * contract: the byte limit is `MAX_CONDITION_REF_LENGTH`, and the message
+ * reports bytes rather than characters.
  */
 export function milestoneConditionRef(base: string, index: number, count: number): string {
   const ref = `${base}#m${index + 1}/${count}`;

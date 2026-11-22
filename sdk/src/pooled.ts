@@ -15,6 +15,11 @@ export interface CreatePooledEscrowParams {
    * possible. Must be positive; fixed at creation, never changed.
    */
   fundingTarget: bigint;
+  /**
+   * Free-form reference bounded to 64 UTF-8 bytes on-chain
+   * (`MAX_CONDITION_REF_LEN`). Length is measured with `utf8ByteLength`,
+   * not `String.length`.
+   */
   conditionRef: string;
   /** The address permitted to `release` the fully funded pool (docs/adr/0002). */
   releaser: string;

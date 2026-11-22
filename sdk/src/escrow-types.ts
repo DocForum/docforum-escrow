@@ -123,7 +123,7 @@ export interface CreateEscrowParams {
   token: string;
   /** Amount of `token` to lock, in the token's smallest unit. Must be positive. */
   amount: bigint;
-  /** Opaque reference the contract stores but never interprets; at most {@link MAX_CONDITION_REF_LENGTH} bytes. */
+  /** Opaque reference the contract stores but never interprets; at most {@link MAX_CONDITION_REF_LENGTH} UTF-8 bytes. */
   conditionRef: string;
   /**
    * The only address later permitted to call `release`/`refund` on this
