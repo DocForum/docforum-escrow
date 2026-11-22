@@ -6,16 +6,17 @@
 
 M-of-N signatures reduce the risk of a single compromised key, but a
 compromised quorum could settle many open escrows quickly. A count cap limits
-the number of release and refund operations accepted by one custom releaser
+the number of release, refund, and releaser-rotation operations accepted by one custom releaser
 account during a ledger window.
 
 ## Decision
 
 The custom account is initialized with a maximum operation count and a window
 length in ledgers. Each successful custom-account authorization for one
-`release` or `refund` consumes one slot. The invocation policy continues to
-reject multiple or unrelated contexts, so callers cannot cover a batch with
-one authorization. Separate settlement authorizations each consume a slot.
+`release`, `refund`, or `rotate_releaser` consumes one slot, while `settle_many`
+consumes `ops.len()` slots against the window cap. The invocation policy continues to
+reject multiple or unrelated contexts, and batches that would exceed the
+remaining window headroom are rejected.
 
 Usage is stored under a key containing the window index, in **temporary**
 storage (issue #303): a counter only matters for the duration of its own

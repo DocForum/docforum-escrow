@@ -180,6 +180,7 @@ sdk/
   package.json
 packages/escrow-react/   @docforum/escrow-react — React Query hooks (no UI)
 sdk-go/                  Go client for the same contract (big.Int i128 amounts)
+sdk-python/              Python client for the same contract (int i128 amounts)
 examples/web-demo/       Vite + React demo wiring hooks, wallet and telemetry
 scripts/
   check-generated-bindings.sh   CI/regeneration check for the generated bindings
@@ -417,6 +418,7 @@ await client.topUp({ escrowId, payer, amount: 500_000n });
 
 const { escrowId: gated } = await client.createEscrow({ ...params, requiresAcceptance: true });
 await client.accept({ escrowId: gated, payee });   // payer can no longer cancel
+await client.transferPayee({ escrowId, currentPayee: payee, newPayee }); // payee rotates wallets; newPayee must not be the payer or the contract id, and on a notifyPayee escrow must implement the callback
 // before acceptance: await client.cancel({ escrowId: gated, payer });
 ```
 
@@ -619,6 +621,13 @@ SDK errors are typed by contract error code and common RPC failure category.
 See [`docs/sdk-errors.md`](docs/sdk-errors.md) for the error classes and a
 consumer migration example.
 
+### Python client
+
+[`sdk-python/`](sdk-python) mirrors the TypeScript surface (`create_escrow`,
+`get_status`, `get_escrow`, `release`, `refund`) on the Stellar Python SDK,
+with typed contract errors and plain `int` i128 amounts. Testnet only, not
+on PyPI yet. See [`sdk-python/README.md`](sdk-python/README.md).
+
 ## Documentation
 
 | Doc | Purpose |
@@ -656,6 +665,26 @@ generated SDK bindings match the contract WASM (issue #121):
 | [#6 Threat model + external security review](https://github.com/DocForum/docforum-escrow/issues/6) | E4 | High |
 
 Full breakdown: [`ROADMAP.md`](ROADMAP.md).
+
+### SDK/contract compatibility
+
+The `SDK/contract compatibility` workflow builds each `sdk-v*` contract tag,
+deploys the artifacts to a local network, and exercises current-SDK reads and
+settlement against those deployments. It also checks the last two SDK releases
+against the current contract. Missing results fail the job, while
+known-incompatible ABI pairs are listed explicitly.
+
+| SDK release | Contract deployment | Result |
+| --- | --- | --- |
+| `sdk-v0.1.0` | `sdk-v0.1.0` | verified read/settle |
+| `sdk-v0.1.0` | `sdk-v0.2.0` | verified read/settle |
+| `sdk-v0.1.0` | `main` | known-incompatible: legacy create ABI |
+| `sdk-v0.2.0` | `sdk-v0.1.0` | verified read/settle |
+| `sdk-v0.2.0` | `sdk-v0.2.0` | verified read/settle |
+| `sdk-v0.2.0` | `main` | known-incompatible: legacy create ABI |
+| `main` | `sdk-v0.1.0` | verified read/settle |
+| `main` | `sdk-v0.2.0` | verified read/settle |
+| `main` | `main` | verified read/settle |
 
 ## Contributing
 

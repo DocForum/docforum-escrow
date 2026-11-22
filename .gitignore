@@ -9,5 +9,8 @@ sdk/docs-api/
 .dev-env.local
 *.log
 .DS_Store
+action/dist/
 __pycache__/
 *.pyc
+
+benchmarks/resource-profile.json
