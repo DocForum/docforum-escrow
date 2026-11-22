@@ -172,7 +172,8 @@ import { type ArchivedEntryBehavior } from "./archived-entries.js";
 import { type BatchCreateItem, type BatchItemResult, type BatchOptions, BatchPartialFailureError, type BatchSettleOperation, MAX_BATCH_SIZE } from "./batch.js";
 import { type EscrowClientConfig } from "./client-config.js";
 import { UnsupportedContractVersionError, isSupportedContractVersion } from "./contract-version.js";
-import { type CancelParams, type CreateEscrowParams, type CreateQuorumEscrowParams, type Escrow, type EscrowStatus, type ExtendRefundAfterParams, MAX_CONDITION_REF_LENGTH, MAX_FEE_BPS, MAX_RELEASERS, type ReleaseOrRefundParams, type SettlementApprovalsParams } from "./escrow-types.js";
+import { type CancelParams, type CreateEscrowParams, type CreateQuorumEscrowParams, type Escrow, type EscrowStatus, type ExtendRefundAfterParams, MAX_CONDITION_REF_LENGTH, MAX_FEE_BPS, MAX_RELEASERS, type ReleaseOrRefundParams, type SettlementApprovalsParams, utf8ByteLength } from "./escrow-types.js";
+
 import { type EscrowEvent, type EscrowEventType, EventCursorExpiredError, type GetEventsParams, type GetEventsResult, type SubscribeOptions } from "./events.js";
 import { type EstimateCallParams, type FeeBumpOptions, type FeeBumpResult, type FeeEstimate, type GuardResult, MaxFeeExceededError, SponsorshipGuardError, computeFeeEstimate } from "./fees.js";
 import { EMPTY_SPAN_ATTRIBUTES, MISSING_FUNCTION_ERROR, TESTNET_NETWORK_PASSPHRASE, TESTNET_RPC_URL, assertLedgerWindow, assertPositiveAmount, batchErrorMessage, contractAddressOf, isRetentionError, lifecycleCallSigner, safeScValToNative, sendErrorName, trancheOf } from "./internal.js";
