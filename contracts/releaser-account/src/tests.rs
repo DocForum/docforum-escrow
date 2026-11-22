@@ -91,7 +91,7 @@ fn quorum_requires_distinct_registered_ed25519_signers() {
 }
 
 #[test]
-fn policy_allows_only_the_configured_escrow_release_or_refund() {
+fn policy_allows_only_the_configured_escrow_operation() {
     let env = Env::default();
     let escrow = Address::generate(&env);
     let (_key, public) = signer(&env, 8);
@@ -114,6 +114,32 @@ fn policy_allows_only_the_configured_escrow_release_or_refund() {
             contract: escrow.clone(),
             fn_name: Symbol::new(&env, "refund"),
             args: vec![&env, 7u64.into_val(&env), account.clone().into_val(&env)],
+        }),
+    ];
+    let rotate = vec![
+        &env,
+        Context::Contract(ContractContext {
+            contract: escrow.clone(),
+            fn_name: Symbol::new(&env, "rotate_releaser"),
+            args: vec![
+                &env,
+                7u64.into_val(&env),
+                account.clone().into_val(&env),
+                wrong_escrow.clone().into_val(&env),
+            ],
+        }),
+    ];
+    let wrong_rotate_caller = vec![
+        &env,
+        Context::Contract(ContractContext {
+            contract: escrow.clone(),
+            fn_name: Symbol::new(&env, "rotate_releaser"),
+            args: vec![
+                &env,
+                7u64.into_val(&env),
+                wrong_escrow.clone().into_val(&env),
+                account.clone().into_val(&env),
+            ],
         }),
     ];
     let wrong_target = vec![
@@ -142,12 +168,14 @@ fn policy_allows_only_the_configured_escrow_release_or_refund() {
     ];
     let nested = vec![&env, release.get(0).unwrap(), refund.get(0).unwrap()];
     env.as_contract(&account, || {
-        assert!(release_or_refund_only(&env, &escrow, &release));
-        assert!(release_or_refund_only(&env, &escrow, &refund));
-        assert!(!release_or_refund_only(&env, &escrow, &wrong_target));
-        assert!(!release_or_refund_only(&env, &escrow, &management));
-        assert!(!release_or_refund_only(&env, &escrow, &wrong_caller));
-        assert!(!release_or_refund_only(&env, &escrow, &nested));
+        assert!(escrow_operation_only(&env, &escrow, &release));
+        assert!(escrow_operation_only(&env, &escrow, &refund));
+        assert!(escrow_operation_only(&env, &escrow, &rotate));
+        assert!(!escrow_operation_only(&env, &escrow, &wrong_rotate_caller));
+        assert!(!escrow_operation_only(&env, &escrow, &wrong_target));
+        assert!(!escrow_operation_only(&env, &escrow, &management));
+        assert!(!escrow_operation_only(&env, &escrow, &wrong_caller));
+        assert!(!escrow_operation_only(&env, &escrow, &nested));
     });
 }
 

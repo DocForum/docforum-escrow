@@ -249,7 +249,7 @@ impl CustomAccountInterface for ReleaserAccount {
         auth_contexts: Vec<Context>,
     ) -> Result<(), Error> {
         let escrow: Address = get(&env, &DataKey::Escrow);
-        if !release_or_refund_only(&env, &escrow, &auth_contexts) {
+        if !escrow_operation_only(&env, &escrow, &auth_contexts) {
             return Err(Error::UnauthorizedContext);
         }
         let payload = signature_payload.to_bytes();
@@ -264,7 +264,7 @@ impl CustomAccountInterface for ReleaserAccount {
     }
 }
 
-fn release_or_refund_only(env: &Env, escrow: &Address, contexts: &Vec<Context>) -> bool {
+fn escrow_operation_only(env: &Env, escrow: &Address, contexts: &Vec<Context>) -> bool {
     // One account auth entry authorizes one escrow operation. Additional or
     // nested auth contexts are rejected rather than implicitly covered.
     if contexts.len() != 1 {
@@ -273,10 +273,13 @@ fn release_or_refund_only(env: &Env, escrow: &Address, contexts: &Vec<Context>) 
     let Some(Context::Contract(context)) = contexts.first() else {
         return false;
     };
+    let is_release = context.fn_name == Symbol::new(env, "release");
+    let is_refund = context.fn_name == Symbol::new(env, "refund");
+    let is_rotate = context.fn_name == Symbol::new(env, "rotate_releaser");
     if context.contract != *escrow
-        || (context.fn_name != Symbol::new(env, "release")
-            && context.fn_name != Symbol::new(env, "refund"))
-        || context.args.len() != 2
+        || (!is_release && !is_refund && !is_rotate)
+        || (is_rotate && context.args.len() != 3)
+        || (!is_rotate && context.args.len() != 2)
     {
         return false;
     }
