@@ -116,6 +116,22 @@ fn policy_allows_only_the_configured_escrow_operation() {
             args: vec![&env, 7u64.into_val(&env), account.clone().into_val(&env)],
         }),
     ];
+    let quorum_approvers = vec![
+        &env,
+        7u64.into_val(&env),
+        vec![&env, account.clone(), wrong_escrow.clone()].into_val(&env),
+    ];
+    let quorum_refund_approvers = vec![
+        &env,
+        7u64.into_val(&env),
+        vec![&env, wrong_escrow.clone(), account.clone()].into_val(&env),
+    ];
+    let quorum_missing_account = vec![
+        &env,
+        7u64.into_val(&env),
+        vec![&env, wrong_escrow.clone()].into_val(&env),
+    ];
+    let quorum_malformed = vec![&env, 7u64.into_val(&env), 9u64.into_val(&env)];
     let rotate = vec![
         &env,
         Context::Contract(ContractContext {
@@ -170,6 +186,18 @@ fn policy_allows_only_the_configured_escrow_operation() {
     env.as_contract(&account, || {
         assert!(escrow_operation_only(&env, &escrow, &release));
         assert!(escrow_operation_only(&env, &escrow, &refund));
+        assert!(escrow_operation_only(&env, &escrow, &quorum_approvers));
+        assert!(escrow_operation_only(
+            &env,
+            &escrow,
+            &quorum_refund_approvers
+        ));
+        assert!(!escrow_operation_only(
+            &env,
+            &escrow,
+            &quorum_missing_account
+        ));
+        assert!(!escrow_operation_only(&env, &escrow, &quorum_malformed));
         assert!(escrow_operation_only(&env, &escrow, &rotate));
         assert!(!escrow_operation_only(&env, &escrow, &wrong_rotate_caller));
         assert!(!escrow_operation_only(&env, &escrow, &wrong_target));

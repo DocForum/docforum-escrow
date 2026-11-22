@@ -275,15 +275,38 @@ fn escrow_operation_only(env: &Env, escrow: &Address, contexts: &Vec<Context>) -
     };
     let is_release = context.fn_name == Symbol::new(env, "release");
     let is_refund = context.fn_name == Symbol::new(env, "refund");
+    let is_release_with_approvals = context.fn_name == Symbol::new(env, "release_with_approvals");
+    let is_refund_with_approvals = context.fn_name == Symbol::new(env, "refund_with_approvals");
     let is_rotate = context.fn_name == Symbol::new(env, "rotate_releaser");
-    if context.contract != *escrow
-        || (!is_release && !is_refund && !is_rotate)
+    if context.contract != *escrow {
+        return false;
+    }
+    if is_release_with_approvals || is_refund_with_approvals {
+        if context.args.len() != 2 {
+            return false;
+        }
+        let approvers_val = match context.args.get(1) {
+            Some(value) => value,
+            None => return false,
+        };
+        let approvers = match Vec::<Address>::try_from_val(env, &approvers_val) {
+            Ok(approvers) => approvers,
+            Err(_) => return false,
+        };
+        return approvers
+            .iter()
+            .any(|approver| approver == env.current_contract_address());
+    }
+    if (!is_release && !is_refund && !is_rotate)
         || (is_rotate && context.args.len() != 3)
-        || (!is_rotate && context.args.len() != 2)
+        || ((!is_rotate && (is_release || is_refund)) && context.args.len() != 2)
     {
         return false;
     }
-    let caller_val = context.args.get(1).unwrap();
+    let caller_val = match context.args.get(1) {
+        Some(value) => value,
+        None => return false,
+    };
     Address::try_from_val(env, &caller_val)
         .map(|caller| caller == env.current_contract_address())
         .unwrap_or(false)
