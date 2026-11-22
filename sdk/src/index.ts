@@ -165,6 +165,7 @@ export * from "./networks.js";
 export * from "./pooled.js";
 export * from "./prepare-submit.js";
 export * from "./relayed-auth.js";
+export * from "./rpc-providers.js";
 export * from "./solvency.js";
 
 import { type ArchivedEntryBehavior } from "./archived-entries.js";
@@ -181,6 +182,7 @@ import { MAINNET_NETWORK_PASSPHRASE, MainnetNotAllowedError } from "./networks.j
 import { type ClaimRefundParams, type ContributeParams, type ContributionRecord, type CreatePooledEscrowParams, type PooledEscrow, type SolvencyReport } from "./pooled.js";
 import { DEFAULT_SUBMIT_MAX_FEE, OFFLINE_PREPARED_TX_TTL_LEDGERS, PREPARED_TX_TTL_LEDGERS, type PrepareCreateEscrowParams, type PrepareSettlementParams, type SubmitSignedOptions, type SubmitSignedResult } from "./prepare-submit.js";
 import { RELAYED_AUTH_TTL_LEDGERS, type RelayedAuthorization, type RelayedAuthorizationParams } from "./relayed-auth.js";
+import { RpcProviderPool } from "./rpc-providers.js";
 
 /**
  * Thin client for the docforum-escrow Soroban contract. Wraps
@@ -190,9 +192,10 @@ import { RELAYED_AUTH_TTL_LEDGERS, type RelayedAuthorization, type RelayedAuthor
 export class EscrowClient {
   /** Contract id of the escrow instance this client talks to. */
   readonly contractId: string;
-  private readonly rpcUrl: string;
+  private rpcUrl: string;
   private readonly networkPassphrase: string;
-  private readonly rpc: RpcServer;
+  private rpc: RpcServer;
+  private readonly rpcPool?: RpcProviderPool;
   private readonly instrumentation?: InstrumentationOptions;
   private readonly archivalBehavior: ArchivedEntryBehavior;
   private readonly restoreSigner?: Keypair;
@@ -210,7 +213,7 @@ export class EscrowClient {
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
-    this.rpcUrl = config.rpcUrl ?? config.network?.rpcUrl ?? TESTNET_RPC_URL;
+    this.rpcUrl = config.rpcUrl ?? config.rpcProviders?.[0]?.url ?? config.network?.rpcUrl ?? TESTNET_RPC_URL;
     this.networkPassphrase =
       config.networkPassphrase ?? config.network?.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
     this.allowMainnet = config.allowMainnet === true;
@@ -235,6 +238,10 @@ export class EscrowClient {
             ? "auto"
             : "off";
     this.allowHttp = config.allowHttp ?? config.network?.allowHttp ?? false;
+    const providerConfigs = config.rpcProviders ?? [{ url: this.rpcUrl }];
+    this.rpcPool = config.rpcProviders
+      ? new RpcProviderPool(providerConfigs, { networkPassphrase: this.networkPassphrase, allowHttp: this.allowHttp })
+      : undefined;
     this.rpc = new RpcServer(this.rpcUrl, { allowHttp: this.allowHttp });
     this.instrumentation = config.onEvent
       ? { ...config.instrumentation, onEvent: config.onEvent }
@@ -311,6 +318,11 @@ export class EscrowClient {
   }
 
   private async ensureNetworkPassphrase(): Promise<void> {
+    if (this.rpcPool) {
+      const selected = await this.rpcPool.select();
+      this.rpc = selected.rpc;
+      this.rpcUrl = selected.url;
+    }
     if (this.networkVerification === "off") return;
     await this.runNetworkVerification(this.networkVerification === "required");
   }
@@ -544,6 +556,27 @@ export class EscrowClient {
       token,
       rpcTokenInfoSource({ rpcUrl: this.rpcUrl, networkPassphrase: this.networkPassphrase }),
     );
+  }
+
+  /**
+   * Reads the immutable deploy-time token allowlist (issue #299). An
+   * **empty** array means any token is accepted, preserving the legacy
+   * behavior. The list can never change after deployment, so verify it
+   * once instead of trusting deployment notes.
+   */
+  async getAllowedTokens(): Promise<string[]> {
+    try {
+      const client = this.contractClient();
+      const tx = await tracePhase(
+        this.instrumentation,
+        "simulate",
+        this.spanAttributesIfEnabled("get_allowed_tokens"),
+        () => client.get_allowed_tokens(),
+      );
+      return tx.result;
+    } catch (error) {
+      throw toEscrowError(error);
+    }
   }
 
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
@@ -867,8 +900,9 @@ export class EscrowClient {
    * Reassigns future payout rights to `newPayee` (contract `transfer_payee`,
    * issue #45). Only the escrow's current payee may call it, only while
    * `Funded`; `newPayee` must not be the payer or the contract id
-   * (`InvalidNewPayee`). Warning: on a `notifyPayee` escrow the new payee
-   * must implement the `notify_payee` callback, or payouts to it will fail.
+   * (`InvalidNewPayee`). If the escrow had `notifyPayee` set, it is reset
+   * to `false` upon transfer so the new payee receives standard push payouts
+   * without needing to implement the callback hook (issue #286).
    * Returns the transaction's hash.
    */
   async transferPayee(params: TransferPayeeParams): Promise<{ txHash: string }> {

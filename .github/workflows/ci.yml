@@ -110,6 +110,10 @@ jobs:
         working-directory: .
         run: node scripts/check-contract-change.mjs "origin/${{ github.base_ref }}"
 
+      - name: No tracked backup files
+        working-directory: .
+        run: node scripts/check-no-backup-files.mjs
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.96.0
         with:
