@@ -1,6 +1,7 @@
 //! Escrow creation entry points and payee acceptance.
 
 use crate::*;
+use crate::internal::Funding;
 
 #[contractimpl]
 impl EscrowContract {
@@ -68,8 +69,10 @@ impl EscrowContract {
             None,
             fee_recipient,
             fee_bps,
+            None,
             false,
             Some(payees),
+            Funding::Transfer,
         )
     }
 
@@ -105,6 +108,7 @@ impl EscrowContract {
             None,
             fee_recipient,
             fee_bps,
+            None,
             false,
         )
     }
@@ -147,9 +151,11 @@ impl EscrowContract {
             None,
             fee_recipient,
             fee_bps,
+            None,
             true,
             None,
             Some(spender),
+            Funding::Transfer,
         )
     }
 
@@ -190,6 +196,7 @@ impl EscrowContract {
             release_not_before,
             fee_recipient,
             fee_bps,
+            None,
             false,
         )
     }
@@ -223,6 +230,7 @@ impl EscrowContract {
             false,
             requires_acceptance,
             refund_to,
+            None,
             None,
             None,
             None,
@@ -294,6 +302,7 @@ impl EscrowContract {
             None,
             None,
             None,
+            None,
             false,
         )
     }
@@ -332,6 +341,7 @@ impl EscrowContract {
                 item.refund_after,
                 false,
                 false,
+                None,
                 None,
                 None,
                 None,

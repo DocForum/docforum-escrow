@@ -51,6 +51,10 @@ impl EscrowContract {
 
         let old_payee = data.payee.clone();
         data.payee = new_payee.clone();
+        // Reset notify_payee on transfer so transferring to an account or a contract
+        // without the callback hook cannot leave release permanently failing with
+        // CallbackFailed (issue #286).
+        data.notify_payee = false;
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), &data);

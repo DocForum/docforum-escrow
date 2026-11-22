@@ -30,6 +30,7 @@ impl EscrowContract {
         Self::add_liability(env, token, amount)
     }
 
+    /// Transfers from a payer under a spender's authorization (issue #116).
     pub(crate) fn transfer_in_exact_from(
         env: &Env,
         token: &Address,
@@ -41,6 +42,28 @@ impl EscrowContract {
         let contract_address = env.current_contract_address();
         let balance_before = token_client.balance(&contract_address);
         token_client.transfer_from(spender, payer, &contract_address, &amount);
+        let balance_after = token_client.balance(&contract_address);
+        if balance_after.checked_sub(balance_before) != Some(amount) {
+            return Err(Error::BalanceMismatch);
+        }
+        Self::add_liability(env, token, amount)
+    }
+
+    /// Pulls funds through the contract's own allowance for recurring
+    /// escrows (issue #115); expired or insufficient approvals fail early.
+    pub(crate) fn transfer_from_exact(
+        env: &Env,
+        token: &Address,
+        payer: &Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        let token_client = token::Client::new(env, token);
+        let contract_address = env.current_contract_address();
+        if token_client.allowance(payer, &contract_address) < amount {
+            return Err(Error::AllowanceExhausted);
+        }
+        let balance_before = token_client.balance(&contract_address);
+        token_client.transfer_from(&contract_address, payer, &contract_address, &amount);
         let balance_after = token_client.balance(&contract_address);
         if balance_after.checked_sub(balance_before) != Some(amount) {
             return Err(Error::BalanceMismatch);
