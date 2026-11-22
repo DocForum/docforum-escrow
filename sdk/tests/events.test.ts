@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Keypair, xdr } from "@stellar/stellar-sdk";
 import { Server } from "@stellar/stellar-sdk/rpc";
 import { EscrowClient, EventCursorExpiredError } from "../src/index.js";
-import { createdEventFixture, unknownEventFixture } from "./fixtures/events.js";
+import { createdEventFixture, unknownEventFixture, payeeTransferredEventFixture } from "./fixtures/events.js";
 
 const contractId = Keypair.random().publicKey();
 const client = new EscrowClient({ contractId, rpcUrl: "https://rpc.example.test" });
@@ -17,6 +17,13 @@ const fixture = {
 };
 const response = { events: [fixture], cursor: fixture.id, latestLedger: 42, oldestLedger: 1, latestLedgerCloseTime: "", oldestLedgerCloseTime: "" };
 const unknownFixture = { ...fixture, id: unknownEventFixture.id, ledger: unknownEventFixture.ledger, topic: unknownEventFixture.topicXdr.map((encoded) => xdr.ScVal.fromXDR(encoded, "base64")) };
+const payeeTransferredFixture = {
+  ...fixture,
+  id: payeeTransferredEventFixture.id,
+  ledger: payeeTransferredEventFixture.ledger,
+  topic: payeeTransferredEventFixture.topicXdr.map((encoded) => xdr.ScVal.fromXDR(encoded, "base64")),
+  value: xdr.ScVal.fromXDR(payeeTransferredEventFixture.valueXdr, "base64"),
+};
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
@@ -28,6 +35,12 @@ describe("EscrowClient event history", () => {
     expect(page.nextCursor).toBe(fixture.id);
     expect(page.events).toEqual([expect.objectContaining({ type: "created", escrowId: 7n, ledger: 42, transactionHash: fixture.txHash })]);
     expect(page.events[0].data).toBe(250n);
+  });
+
+  it("decodes a payee transfer event into a typed variant", async () => {
+    vi.spyOn(Server.prototype, "getEvents").mockResolvedValue({ ...response, events: [payeeTransferredFixture] } as never);
+    const page = await client.getEvents({ cursor: "resume", types: ["payeeTransferred"] });
+    expect(page.events).toEqual([expect.objectContaining({ type: "payeeTransferred", escrowId: payeeTransferredEventFixture.escrowId, oldPayee: payeeTransferredEventFixture.oldPayee, newPayee: payeeTransferredEventFixture.newPayee } as Record<string, unknown>)]);
   });
 
   it("rejects mixing a cursor with a ledger start", async () => {
