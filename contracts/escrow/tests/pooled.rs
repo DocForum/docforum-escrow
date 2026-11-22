@@ -58,7 +58,10 @@ fn setup(env: &Env, target: i128) -> Fixture<'_> {
     let payee = Address::generate(env);
     let releaser = Address::generate(env);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
     let id = client.create_pooled_escrow(
         &creator,
@@ -276,10 +279,9 @@ fn failed_round_refunds_every_contributor_exactly() {
     assert_eq!(f.token.balance(&c), 10);
     assert_eq!(f.token.balance(&f.contract_id), 0);
     assert_eq!(f.token.balance(&f.payee), 0);
-    // A failed round never settles: `get_status` still reports `Funded`
-    // (settlement vocabulary), the funding state is `get_pooled`'s job.
-    assert_eq!(f.client.get_status(&f.id), EscrowStatus::Funded);
-    assert_eq!(f.client.get_escrow(&f.id).amount, 0);
+    // The final claim settles the failed round and reclaims its escrow record.
+    assert_eq!(f.client.get_status(&f.id), EscrowStatus::Refunded);
+    assert!(f.client.try_get_escrow(&f.id).is_err());
 
     // Someone with no recorded contribution gets nothing.
     assert_eq!(
@@ -312,7 +314,11 @@ fn run_refund_order(order: [u8; 3]) -> [i128; 3] {
     }
 
     assert_eq!(f.token.balance(&f.contract_id), 0);
-    [f.token.balance(&a), f.token.balance(&b), f.token.balance(&c)]
+    [
+        f.token.balance(&a),
+        f.token.balance(&b),
+        f.token.balance(&c),
+    ]
 }
 
 #[test]
@@ -461,33 +467,60 @@ fn pooled_creation_validation() {
     let creator = Address::generate(&env);
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
     let ref_str = String::from_str(&env, "pooled");
 
     // Non-positive targets.
     assert_eq!(
         client.try_create_pooled_escrow(
-            &creator, &payee, &token_id, &0, &ref_str, &releaser, &(DEADLINE)
+            &creator,
+            &payee,
+            &token_id,
+            &0,
+            &ref_str,
+            &releaser,
+            &(DEADLINE)
         ),
         Err(Ok(Error::InvalidAmount))
     );
     assert_eq!(
         client.try_create_pooled_escrow(
-            &creator, &payee, &token_id, &-1, &ref_str, &releaser, &(DEADLINE)
+            &creator,
+            &payee,
+            &token_id,
+            &-1,
+            &ref_str,
+            &releaser,
+            &(DEADLINE)
         ),
         Err(Ok(Error::InvalidAmount))
     );
     // A deadline that is not strictly in the future.
     assert_eq!(
         client.try_create_pooled_escrow(
-            &creator, &payee, &token_id, &100, &ref_str, &releaser, &CREATED_AT
+            &creator,
+            &payee,
+            &token_id,
+            &100,
+            &ref_str,
+            &releaser,
+            &CREATED_AT
         ),
         Err(Ok(Error::InvalidFundingDeadline))
     );
     assert_eq!(
         client.try_create_pooled_escrow(
-            &creator, &payee, &token_id, &100, &ref_str, &releaser, &(CREATED_AT - 1)
+            &creator,
+            &payee,
+            &token_id,
+            &100,
+            &ref_str,
+            &releaser,
+            &(CREATED_AT - 1)
         ),
         Err(Ok(Error::InvalidFundingDeadline))
     );
@@ -529,7 +562,7 @@ fn pooled_creation_respects_the_token_allowlist() {
 
     let mut allowlist = Vec::new(&env);
     allowlist.push_back(allowed.clone());
-    let contract_id = env.register(EscrowContract, (allowlist,));
+    let contract_id = env.register(EscrowContract, (allowlist, Address::generate(&env)));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     assert_eq!(
@@ -639,7 +672,7 @@ fn release_and_refund_can_never_share_funds() {
     assert_eq!(f2.token.balance(&b), 30);
     assert_eq!(
         f2.client.try_release(&f2.id, &f2.releaser),
-        Err(Ok(Error::FundingIncomplete))
+        Err(Ok(Error::NotFunded))
     );
     assert_eq!(
         f2.client.try_claim_refund(&f2.id, &b),
@@ -719,7 +752,10 @@ fn ordinary_escrows_are_unaffected() {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
     let id = client.create_escrow(
         &payer,
@@ -730,6 +766,8 @@ fn ordinary_escrows_are_unaffected() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
 
@@ -768,6 +806,8 @@ fn ordinary_escrows_are_unaffected() {
         &releaser,
         &None,
         &false,
+        &None,
+        &None,
         &None,
     );
     client.refund(&id2, &releaser);
@@ -821,8 +861,45 @@ fn claim_refund_emits_an_event() {
                 (symbol_short!("claimed"), f.id).into_val(&env),
                 (a.clone(), 30i128).into_val(&env),
             ),
+            (
+                f.contract_id.clone(),
+                (symbol_short!("ESCROW"), symbol_short!("refunded"), f.id).into_val(&env),
+                (
+                    f.creator.clone(),
+                    f.payee.clone(),
+                    f.token.address.clone(),
+                    0i128,
+                    String::from_str(&env, "pooled-condition"),
+                    vec![&env, f.releaser.clone()],
+                    1u32,
+                    Option::<u64>::None,
+                    false,
+                    false,
+                    Option::<u64>::None,
+                    symbol_short!("Refunded"),
+                    (Option::<Address>::None, Option::<u32>::None),
+                )
+                    .into_val(&env),
+            ),
         ]
     );
 }
 
+#[test]
+fn create_pooled_escrow_accepts_a_condition_ref_at_the_length_limit() {
+    let env = Env::default();
+    let f = setup(&env, 100);
+    let at_limit = String::from_str(&env, &"x".repeat(64));
 
+    let id = f.client.create_pooled_escrow(
+        &f.creator,
+        &f.payee,
+        &f.token.address,
+        &100,
+        &at_limit,
+        &f.releaser,
+        &DEADLINE,
+    );
+
+    assert_eq!(f.client.get_status(&id), EscrowStatus::Funded);
+}

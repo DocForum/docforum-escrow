@@ -113,8 +113,8 @@ func TestCreateEscrowArgsSingleReleaser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(args) != 9 {
-		t.Fatalf("arg count = %d, want 9", len(args))
+	if len(args) != 11 {
+		t.Fatalf("arg count = %d, want 11", len(args))
 	}
 	decodedAmount, err := decodeI128(args[3])
 	if err != nil || decodedAmount.Cmp(amount) != 0 {
@@ -175,8 +175,11 @@ func TestCreateEscrowArgShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(single) != 9 {
-		t.Fatalf("create_escrow args = %d, want 9", len(single))
+	if len(single) != 11 {
+		t.Fatalf("create_escrow args = %d, want 11", len(single))
+	}
+	if single[9].Type != xdr.ScValTypeScvVoid || single[10].Type != xdr.ScValTypeScvVoid {
+		t.Fatalf("create_escrow fee args have types %s/%s, want void/void (no fee)", single[9].Type, single[10].Type)
 	}
 	if single[5].Type != xdr.ScValTypeScvAddress {
 		t.Fatalf("create_escrow releaser arg type = %s, want address", single[5].Type)

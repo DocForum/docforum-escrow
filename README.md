@@ -5,7 +5,7 @@
 ![Stack](https://img.shields.io/badge/contract-Rust%20%2F%20Soroban-orange.svg)
 ![Network](https://img.shields.io/badge/network-testnet%20only-important.svg)
 
-**🔗 Live on testnet:** [`CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR`](https://stellar.expert/explorer/testnet/contract/CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR) — current upstream main deployment, including sponsored refunds (`refund_to`), verified with real create, release, refund, timeout refund, and `BalanceMismatch` calls. History and transaction links: [`docs/testnet-deployments.md`](docs/testnet-deployments.md).
+**🔗 Live on testnet:** [`CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H`](https://stellar.expert/explorer/testnet/contract/CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H) — contract 3.0.0 from upstream main (storage reclaim for settled escrows, split payouts, vesting, split settlement, storage TTL, refund-deadline extension), verified with real create, release and refund calls. History and transaction links: [`docs/testnet-deployments.md`](docs/testnet-deployments.md).
 
 A [Soroban](https://developers.stellar.org/docs/build/smart-contracts) (Stellar) smart contract for conditional payment escrow — lock funds, and release them to the payee only when release is authorized, or return them to the payer on refund. Paired with a TypeScript client SDK, `@docforum/escrow-sdk`.
 
@@ -22,6 +22,7 @@ application, not here.
 - [Why this repo exists](#why-this-repo-exists-honestly)
 - [Contract surface](#contract-surface)
 - [How it's used](#how-its-used)
+- [Trust model for integrators](#trust-model-for-integrators)
 - [Repo layout](#repo-layout)
 - [Getting started](#getting-started)
 - [Documentation](#documentation)
@@ -44,13 +45,51 @@ stored `refund_to`, which is the payer unless set otherwise at creation).
 Creation options: a single releaser or an M-of-N releaser quorum, an
 optional payee-acceptance gate, an optional `refund_after` timeout that
 lets anyone trigger the refund, an optional `refund_to`, and an optional
-release callback to a contract payee. Funded escrows can be topped up by
-the original payer, and `get_status`/`get_escrow` are read-only. A token
-allowlist is fixed at deploy time. Pooled escrows — one agreement funded
+release callback to a contract payee. An optional protocol fee
+(`fee_recipient`/`fee_bps`, fixed at creation, at most 10 %) is taken off
+the top at release and never on a refund — see
+[ADR 0010](docs/adr/0010-protocol-fee-at-release.md). Funded escrows can be
+topped up by the original payer, and `get_status`/`get_escrow` are
+read-only (`get_escrow` is for funded escrows; a settled escrow's record is
+reclaimed, so use `get_status` and the state event:
+[ADR 0013](docs/adr/0013-reclaim-storage-for-settled-escrows.md)). `settle_many` releases or refunds up to 20 escrows in one
+transaction with per-op results (the fast response to a leaked releaser
+key, see [ADR 0012](docs/adr/0012-batch-settlement-best-effort.md)). A token
+allowlist and an optional emergency-pause custodian are fixed at deploy
+time; the custodian can only block **new** deposits, never touch escrowed
+funds (see [Emergency pause](#emergency-pause)).
+
+### Emergency pause
+
+If a bug turns up after mainnet, the alternative to a pause is asking every
+integrator to stop calling the contract. Since issue #35 there is a narrow
+on-chain lever instead: one `pause_admin` address, fixed at deployment by
+the contract's constructor, can flip a flag that makes every deposit path
+fail with `Paused` (error code 38).
+
+Nothing else changes. `release`, `refund`, the timeout refund, and both
+`settle_many` ops (release and refund) never read the flag, so **a pause can never lock funds that are already escrowed** —
+paused means "no new business", never "your money is stuck". The pause has
+no timelock, no second role, and no power over existing escrows; unpausing
+is the same custodian calling `unpause`. See
+[ADR 0011](docs/adr/0011-emergency-pause-for-new-deposits-only.md) for the
+design, the rejected alternatives (permissionless pause, auto-expiring
+pause), and threat model T12 for the residual liveness risk.
+
+For mainnet, pass a Stellar multisig account as `pause_admin` — no contract
+change needed, since `require_auth` honours that account's own signer
+thresholds. **Note:** this changes deployment (the constructor now takes
+both the allowlist and the custodian), so the current testnet deployment
+predates it and cannot pause; a redeploy is the follow-up step.
+Pooled escrows — one agreement funded
 by many payers, with per-payer contribution records and pull-based
 pro-rata refunds — are a separate creation entry point
 (`create_pooled_escrow`, see [ADR 0011](docs/adr/0011-pooled-escrow-funding.md)
-and the contract surface list).
+and the contract surface list). A read-only `solvency(token)` view returns
+the contract's balance of a token next to the total it owes across every
+`Funded` escrow in that token (SDK: `client.getSolvency(token)`), so
+monitors can check `balance >= liabilities` in one call — see
+[threat model → Solvency monitoring](docs/threat-model.md#solvency-monitoring-issue-39).
 
 **The full function list, signatures and rules are in
 [`ARCHITECTURE_ESSENTIALS.md` → Contract surface](ARCHITECTURE_ESSENTIALS.md#contract-surface).**
@@ -85,23 +124,63 @@ sequenceDiagram
 — it never calls this contract as a running network service, and this
 repo never crosses back into `docforum-core`'s database or domain model.
 
+## Trust model for integrators
+
+The contract enforces **who** may settle an escrow, not **why** — so a
+status alone is not a promise about the deal. These properties are by
+design. Read them before treating a `Funded` escrow as safe; the full
+reasoning and threat ids are in [`docs/threat-model.md`](docs/threat-model.md).
+
+- **`Funded` means "locked under the releaser's control", not "committed
+  to the payee"** (threat model T8). The payer chooses the releaser, and
+  nothing stops `releaser == payer`, in which case the payer can refund
+  itself at any time. A payee should read `releasers`, `threshold`,
+  `refundAfter` and `refundTo` with `getEscrow` / `client.getEscrow()`
+  before relying on the escrow. A quorum still settles early if
+  `threshold` releasers collude, and after `refundAfter` has passed
+  anyone may refund, always to the stored `refundTo`.
+- **Check the escrow's token, not just its status** (threat model T5).
+  `Funded` only says funds were transferred in the escrow's stored
+  `token`; it says nothing about whether that token is sound. A malicious
+  or non-standard token can report a successful transfer without moving
+  funds, and a clawback-enabled issuer can remove funds from the shared
+  per-token balance after creation. Payees should verify `token` against
+  a list they trust before relying on the escrow.
+- **`condition_ref` is public on-chain forever** (threat model T9), as
+  are `payer`, `payee` and `amount`. The contract does not interpret
+  `condition_ref` and cannot redact it, so never put private, personal or
+  otherwise sensitive data in it. Pass an opaque, meaningless id such as
+  a UUID or an internal record id.
+- **`contractId` is caller-supplied and unchecked** (threat model §4). A
+  misconfigured or tampered id points the SDK at an arbitrary contract
+  with the same function names, and `createEscrow` would send the payer's
+  funds there. Pin `contractId` in your own config and check it against
+  the contract ID and WASM hash recorded in the latest entry of
+  [`docs/testnet-deployments.md`](docs/testnet-deployments.md) before
+  using it. Pin the network passphrase too, and never take either from
+  untrusted input.
+
 ## Repo layout
 
 ```
 contracts/escrow/
-  src/lib.rs             Contract implementation
+  src/lib.rs             Contract entry: CONTRACT_VERSION, module list, re-exports
+  src/*.rs               One module per area (create, pooled, release_refund, pause, …); Error enum in errors.rs
   tests/                 Integration tests (soroban-sdk testutils) — required for any contract change
   test_snapshots/        Committed Soroban snapshots (events/auth/storage) per test — issue #120
   Cargo.toml
 certora/
   escrow.spec            Property list for invariants I1–I3 and the timeout rule (see docs/formal-verification.md)
 sdk/
-  src/index.ts           @docforum/escrow-sdk — hand-written public surface
+  src/index.ts           @docforum/escrow-sdk — EscrowClient + re-exports of the public modules (escrow-types, events, fees, …)
   src/generated/         Machine-generated contract bindings — never hand-edit (issue #121)
   src/signers/           SEP-43 signer types + optional Stellar Wallets Kit adapter
+  typedoc.json           Generated API reference config + missing-doc lint (issue #79)
+  examples/              Runnable per-flow SDK examples against testnet (issue #79)
   package.json
 packages/escrow-react/   @docforum/escrow-react — React Query hooks (no UI)
 sdk-go/                  Go client for the same contract (big.Int i128 amounts)
+sdk-python/              Python client for the same contract (int i128 amounts)
 examples/web-demo/       Vite + React demo wiring hooks, wallet and telemetry
 scripts/
   check-generated-bindings.sh   CI/regeneration check for the generated bindings
@@ -276,7 +355,7 @@ From the repository root, run the verifier with the contract ID. It builds
 the current source and fetches deployed WASM from testnet:
 
 ```bash
-bash scripts/verify-deployment CAFI5QOTNLK5OIHEHGGQ7B22RN5IUOFGKKEID2OQCZSCJAQS4FLSS2DR
+bash scripts/verify-deployment CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H
 ```
 
 Matching SHA-256 values mean the deployed bytes equal this source build.
@@ -339,6 +418,7 @@ await client.topUp({ escrowId, payer, amount: 500_000n });
 
 const { escrowId: gated } = await client.createEscrow({ ...params, requiresAcceptance: true });
 await client.accept({ escrowId: gated, payee });   // payer can no longer cancel
+await client.transferPayee({ escrowId, currentPayee: payee, newPayee }); // payee rotates wallets; newPayee must not be the payer or the contract id, and on a notifyPayee escrow must implement the callback
 // before acceptance: await client.cancel({ escrowId: gated, payer });
 ```
 
@@ -397,6 +477,75 @@ exceed `maxFee` — the cap is never silently overshot:
 ```ts
 const { xdr, fee } = client.feeBump(signedXdr, sponsor, { maxFee: 10_000n });
 ```
+
+### Prepare, sign elsewhere, submit
+
+`EscrowClient` normally signs with a key it holds. When the payer signs in a
+browser wallet and a backend builds and submits, split the steps:
+
+```ts
+// 1. Backend: build + simulate for a public key. Nothing is signed.
+const prepared = await client.prepareCreateEscrow({
+  payer: payerPublicKey, payee, token, amount, conditionRef, releaser,
+});
+// { xdr, hash, validUntilLedger, source, authSigners, authValidUntilLedger }
+
+// 2. Wallet (Freighter, Stellar Lab, the CLI, ...): sign prepared.xdr.
+
+// 3. Backend: verify, submit and wait.
+const { escrowId, txHash } = await client.submitSigned(signedXdr, {
+  expectedHash: prepared.hash,        // reject a different transaction
+  feeBumpSigner: sponsorKeypair,      // optional: sponsor pays the fee
+  maxFee: 50_000_000n,                // hard cap on what the sponsor pays
+});
+```
+
+- **Envelope signing (default).** The payer is the transaction source, so the
+  wallet only signs the envelope. To have a backend account pay the fee instead,
+  pass `source`; `authSigners` then lists the payer, who must sign a Soroban auth
+  entry (`signAuthEntries`) before the envelope.
+- **Expiry.** The transaction is valid until `validUntilLedger` (default about
+  ten minutes, `validForLedgers` to change it). After that `submitSigned` throws
+  `PreparedTransactionExpiredError`; prepare again.
+- **Stale sequence.** If another transaction from the source account lands first,
+  `submitSigned` throws `StaleSequenceError` before sending.
+- **Fee-bump cap.** The cap is checked against the fee actually charged,
+  including the Soroban resource fee, and the bump's base fee defaults to the
+  inner transaction's fee rate.
+
+Migration: purely additive. `createEscrow` is unchanged; existing integrations
+need no changes.
+
+### Offline signing for release and refund
+
+Keeping the releaser key hot on a server is the risk the threat model warns about
+(T1). Prepare online, sign offline, submit from anywhere:
+
+```ts
+const prepared = await client.prepareRelease({ escrowId, releaser }); // or prepareRefund
+// Sign prepared.xdr on an air-gapped machine. For a classic multisig releaser,
+// each signer signs their own copy; then combine them:
+const merged = client.mergeSignatures([signedByA, signedByB]);
+await client.submitSigned(merged, { expectedHash: prepared.hash });
+```
+
+- **Cold key or multisig as the source.** By default the releaser is the
+  transaction source, so its envelope signature(s) authorize the call; no
+  separate auth entries exist. `mergeSignatures` rejects copies of a different
+  transaction and drops duplicates; the network checks the account's thresholds.
+- **Hot fee payer, cold releaser.** Set `source` to a hot account; the releaser
+  then appears in `authSigners`. Sign its auth entry first
+  (`signAuthEntries(xdr, keypair, { validUntilLedger })`, window set by
+  `authValidForLedgers`), then sign the envelope. The auth step changes the
+  hash, so use the hash it returns.
+- **Staleness.** An offline-signed transaction dies if the source account's
+  sequence moves or the window passes. `submitSigned` detects both before
+  sending (`StaleSequenceError`, `PreparedTransactionExpiredError`). The default
+  window is about a day (`OFFLINE_PREPARED_TX_TTL_LEDGERS`).
+- **Example.** `examples/offline-release/` has prepare / sign / submit scripts
+  and a 2-of-3 testnet setup.
+
+M-of-N quorum escrows settle through `releaseWithApprovals`, not this flow.
 
 ### Browser wallets (Stellar Wallets Kit)
 
@@ -464,6 +613,21 @@ count. Account addresses are **omitted by default** and only included with
 typed contract errors and `big.Int` i128 amounts. See
 [`sdk-go/README.md`](sdk-go/README.md).
 
+The TypeScript SDK (`sdk/`) wraps the contract and is distributed as a tagged
+GitHub Release tarball; see [issue #4](https://github.com/DocForum/docforum-escrow/issues/4)
+and [ADR 0003](docs/adr/0003-sdk-distribution.md).
+
+SDK errors are typed by contract error code and common RPC failure category.
+See [`docs/sdk-errors.md`](docs/sdk-errors.md) for the error classes and a
+consumer migration example.
+
+### Python client
+
+[`sdk-python/`](sdk-python) mirrors the TypeScript surface (`create_escrow`,
+`get_status`, `get_escrow`, `release`, `refund`) on the Stellar Python SDK,
+with typed contract errors and plain `int` i128 amounts. Testnet only, not
+on PyPI yet. See [`sdk-python/README.md`](sdk-python/README.md).
+
 ## Documentation
 
 | Doc | Purpose |
@@ -473,6 +637,8 @@ typed contract errors and `big.Int` i128 amounts. See
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/formal-verification.md`](docs/formal-verification.md) | Formal-verification spike for invariants I1–I3: what `certora/escrow.spec` covers, the assumptions it relies on, and its current status (specified, not yet machine-checked). |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
+| [`sdk/examples/`](sdk/examples/) | Runnable, secret-free SDK examples — one per major flow, against testnet. |
+| SDK API reference | Generated by TypeDoc from `sdk/` (`npm run docs`); published to GitHub Pages. |
 
 ## Project status
 
@@ -500,6 +666,26 @@ generated SDK bindings match the contract WASM (issue #121):
 
 Full breakdown: [`ROADMAP.md`](ROADMAP.md).
 
+### SDK/contract compatibility
+
+The `SDK/contract compatibility` workflow builds each `sdk-v*` contract tag,
+deploys the artifacts to a local network, and exercises current-SDK reads and
+settlement against those deployments. It also checks the last two SDK releases
+against the current contract. Missing results fail the job, while
+known-incompatible ABI pairs are listed explicitly.
+
+| SDK release | Contract deployment | Result |
+| --- | --- | --- |
+| `sdk-v0.1.0` | `sdk-v0.1.0` | verified read/settle |
+| `sdk-v0.1.0` | `sdk-v0.2.0` | verified read/settle |
+| `sdk-v0.1.0` | `main` | known-incompatible: legacy create ABI |
+| `sdk-v0.2.0` | `sdk-v0.1.0` | verified read/settle |
+| `sdk-v0.2.0` | `sdk-v0.2.0` | verified read/settle |
+| `sdk-v0.2.0` | `main` | known-incompatible: legacy create ABI |
+| `main` | `sdk-v0.1.0` | verified read/settle |
+| `main` | `sdk-v0.2.0` | verified read/settle |
+| `main` | `main` | verified read/settle |
+
 ## Contributing
 
 Issues are scoped as small, independent units with a stated complexity
@@ -518,3 +704,5 @@ DocForum contributor chat on [Telegram](https://t.me/+J9eZoFker_E4Y2M8).
 ## License
 
 [Apache License 2.0](LICENSE)
+
+The SDK exports an in-memory `FakeEscrowClient` from `@docforum/escrow-sdk/testing` for consumer tests. It accepts a controllable clock for deterministic deadline and race scenarios.

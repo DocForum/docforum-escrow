@@ -1,3 +1,4 @@
+/** One escrow record as returned by the indexer (all numeric fields are strings, as GraphQL serializes them). */
 export interface IndexedEscrow {
   id: string;
   escrowId: string;
@@ -16,12 +17,14 @@ export interface IndexedEscrow {
   updatedLedger: string;
 }
 
+/** One page of {@link IndexedEscrow} records plus the cursor to fetch the next page. */
 export interface EscrowPage {
   nodes: IndexedEscrow[];
   endCursor: string | null;
   hasNextPage: boolean;
 }
 
+/** Configuration for an {@link EscrowIndexerClient}. */
 export interface EscrowIndexerClientConfig {
   /** URL for an indexer deployed by the application operator. */
   endpoint: string;
@@ -29,8 +32,8 @@ export interface EscrowIndexerClientConfig {
   fetch?: typeof fetch;
 }
 
-const QUERY = `query ListEscrows($first: Int!, $after: Cursor) {
-  escrows(first: $first, after: $after) {
+const QUERY = `query ListEscrows($first: Int!, $after: Cursor, $filter: EscrowFilter) {
+  escrows(first: $first, after: $after, filter: $filter) {
     nodes { id escrowId payer payee token amount conditionRef releasers threshold refundAfter notifyPayee requiresAcceptance acceptedAt status updatedLedger }
     pageInfo { endCursor hasNextPage }
   }
@@ -50,18 +53,30 @@ export class EscrowIndexerClient {
     this.fetcher = config.fetch ?? fetch;
   }
 
-  async listEscrows(options: { first?: number; after?: string | null } = {}): Promise<EscrowPage> {
+  /**
+   * Fetches one page of indexed escrows (`first` between 1 and 100, default 50;
+   * `after` is a cursor from a prior page). Pass `payer` or `payee` to restrict
+   * the page to escrows with that participant.
+   */
+  async listEscrows(options: { first?: number; after?: string | null; payer?: string; payee?: string } = {}): Promise<EscrowPage> {
     const first = options.first ?? 50;
     if (!Number.isInteger(first) || first < 1 || first > 100) {
       throw new RangeError("first must be an integer between 1 and 100");
     }
+
+    const filter: Record<string, { equalTo: string }> = {};
+    if (options.payer) filter.payer = { equalTo: options.payer };
+    if (options.payee) filter.payee = { equalTo: options.payee };
 
     let response: Response;
     try {
       response = await this.fetcher(this.endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query: QUERY, variables: { first, after: options.after ?? null } }),
+        body: JSON.stringify({
+          query: QUERY,
+          variables: { first, after: options.after ?? null, filter: Object.keys(filter).length ? filter : null },
+        }),
       });
       if (!response.ok) throw new Error("request failed");
       const payload: unknown = await response.json();

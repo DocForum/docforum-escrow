@@ -4,12 +4,16 @@ This directory contains a finite TLA+ model of the escrow contract's actual beha
 
 ## What it covers
 
-- Funded, Released, and Refunded states
+- Funded, Released, Refunded, and Cancelled states
 - Single-releaser settlement and M-of-N approval paths
 - Optional timeout refunds via `refund_after`
+- Payee-initiated voluntary refunds while `Funded` (ADR 0010)
 - Earliest-release gating via `release_not_before`
 - Payee acceptance gating for `requires_acceptance`
+- Payer cancellation before acceptance on acceptance-gated escrows
+- Current-payee authorization and payee conservation for `transfer_payee`
 - Authorization checks for the releaser and timeout cases
+- Mutual exclusion of cancel and release eligibility
 - Same-ledger race windows where timeout refund and release can both become eligible at the same ledger time
 
 ## What it intentionally omits
@@ -23,13 +27,15 @@ The current contract does not implement a general dispute system, milestone sett
 
 ## TLC installation and run command
 
-The checker used for this repo was downloaded from the official TLA+ release:
+The checker used for this repo is TLA+ v1.7.4, downloaded from the official
+release and verified against its pinned SHA-256:
 
 ```bash
 mkdir -p /tmp/tlaplus
 curl -fsSL -H 'User-Agent: Mozilla/5.0' \
   -o /tmp/tlaplus/tla2tools.jar \
   https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+echo '936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  /tmp/tlaplus/tla2tools.jar' | sha256sum -c -
 ```
 
 Then run:
@@ -38,6 +44,9 @@ Then run:
 cd /workspaces/docforum-escrow
 java -jar /tmp/tlaplus/tla2tools.jar -config spec/Escrow.cfg spec/Escrow.tla
 ```
+
+CI runs this exact command whenever `spec/**` changes and on its nightly
+schedule.
 
 ## Verified result
 
@@ -70,7 +79,9 @@ Do not weaken invariants to hide a real contract behavior difference.
 | `ReleaseWithApprovals` | `release_with_approvals` | `contracts/escrow/src/lib.rs` | Thresholded quorum release using distinct approvers |
 | `RefundEscrow` | `refund` | `contracts/escrow/src/lib.rs` | Releaser refund before the timeout; timeout path is modeled separately |
 | `TimeoutRefund` | `refund` timeout branch | `contracts/escrow/src/lib.rs` | Anyone may trigger refund once `refund_after` is reached |
+| `CancelEscrow` | `cancel` | `contracts/escrow/src/release_refund.rs` | Payer cancellation is limited to funded, unaccepted acceptance escrows |
 | `AcceptEscrow` | `accept` | `contracts/escrow/src/lib.rs` | Optional payee authorization for release gating |
+| `TransferPayee` | `transfer_payee` | `contracts/escrow/src/payee_transfer.rs` | The current payee may change the stored payee while funded; payout destinations remain the conserved `payeeSet`, and the new payee cannot be the payer |
 | `AdvanceLedger` | Soroban ledger timestamp | `contracts/escrow/src/lib.rs` | Represents time progression; the contract itself uses the ledger timestamp |
 
 ## Updating the model
@@ -82,5 +93,7 @@ When the contract changes any of the following, update this spec and re-run TLC:
 - timeout conditions
 - acceptance gating
 - release/refund eligibility
+- payout recipient safety for single and split payees
 - quorum settlement
+| PayoutDestinationSafety | release and refund actions | contracts/escrow/src/lib.rs | Release destinations stay inside the fixed payee set; refunds use only refund_to |
 

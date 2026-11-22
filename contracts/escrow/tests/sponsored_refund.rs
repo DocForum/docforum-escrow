@@ -47,7 +47,10 @@ fn fund<'a>(env: &'a Env, distinct_refund_to: bool, refund_after: Option<u64>) -
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
 
     let (refund_to, arg) = if distinct_refund_to {
@@ -66,6 +69,8 @@ fn fund<'a>(env: &'a Env, distinct_refund_to: bool, refund_after: Option<u64>) -
         &refund_after,
         &false,
         &arg,
+        &None,
+        &None,
     );
 
     Fixture {
@@ -182,6 +187,47 @@ fn refund_to_is_fixed_at_creation_and_visible_via_get_escrow() {
 }
 
 #[test]
+fn a_sponsor_refund_to_cannot_top_up() {
+    // Being the refund destination grants no funding authority: only the
+    // stored payer may grow the escrow, exactly as for a plain escrow.
+    let env = Env::default();
+    env.mock_all_auths();
+    let f = fund(&env, true, None);
+
+    assert_eq!(
+        f.client.try_top_up(&f.escrow_id, &f.refund_to, &100),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(f.client.get_escrow(&f.escrow_id).amount, 300);
+    assert_eq!(f.token.balance(&f.contract_id), 300);
+
+    f.client.top_up(&f.escrow_id, &f.payer, &100);
+    assert_eq!(f.client.get_escrow(&f.escrow_id).amount, 400);
+}
+
+#[test]
+fn refund_after_a_top_up_returns_the_full_new_total_to_refund_to() {
+    // A top-up grows the refundable total; the refund still pays the
+    // stored `refund_to`, and the liability counter follows both moves
+    // (issue #39).
+    let env = Env::default();
+    env.mock_all_auths();
+    let f = fund(&env, true, None);
+
+    f.client.top_up(&f.escrow_id, &f.payer, &200);
+    assert_eq!(f.client.solvency(&f.token.address), (500, 500));
+
+    f.client.refund(&f.escrow_id, &f.releaser);
+
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Refunded);
+    assert_eq!(f.token.balance(&f.refund_to), 500);
+    assert_eq!(f.token.balance(&f.payer), 500);
+    assert_eq!(f.token.balance(&f.payee), 0);
+    assert_eq!(f.token.balance(&f.contract_id), 0);
+    assert_eq!(f.client.solvency(&f.token.address), (0, 0));
+}
+
+#[test]
 fn release_still_pays_the_payee_not_refund_to() {
     let env = Env::default();
     env.mock_all_auths();
@@ -240,6 +286,8 @@ fn two_escrows_keep_their_own_refund_to() {
         &None,
         &false,
         &Some(other.clone()),
+        &None,
+        &None,
     );
 
     a.client.refund(&second, &a.releaser);
@@ -288,7 +336,10 @@ fn explicit_refund_to_equal_to_payer_behaves_like_the_default() {
     let payer = Address::generate(&env);
     StellarAssetClient::new(&env, &sac.address()).mint(&payer, &1_000);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_escrow(
@@ -301,6 +352,8 @@ fn explicit_refund_to_equal_to_payer_behaves_like_the_default() {
         &None,
         &false,
         &Some(payer.clone()),
+        &None,
+        &None,
     );
     client.refund(&id, &releaser);
 
@@ -318,7 +371,10 @@ fn create_escrow_rejects_the_contract_as_refund_to() {
     let token = TokenClient::new(&env, &sac.address());
     let payer = Address::generate(&env);
     StellarAssetClient::new(&env, &sac.address()).mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_create_escrow(
@@ -331,6 +387,8 @@ fn create_escrow_rejects_the_contract_as_refund_to() {
         &None,
         &false,
         &Some(contract_id.clone()),
+        &None,
+        &None,
     );
 
     assert_eq!(result, Err(Ok(Error::InvalidRefundTo)));
@@ -351,7 +409,10 @@ fn create_escrow_with_refund_to_requires_the_funders_auth() {
     let payer = Address::generate(&env);
     env.mock_all_auths();
     StellarAssetClient::new(&env, &sac.address()).mint(&payer, &1_000);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Drop every mocked auth: nobody signed, so creation must fail even
@@ -367,6 +428,8 @@ fn create_escrow_with_refund_to_requires_the_funders_auth() {
         &None,
         &false,
         &Some(Address::generate(&env)),
+        &None,
+        &None,
     );
 
     assert!(result.is_err());
