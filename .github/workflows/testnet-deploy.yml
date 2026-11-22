@@ -1,0 +1,121 @@
+name: Testnet deploy
+
+# Manual-only deployment of the selected ref. The deployer key is available
+# only after the protected environment's required reviewers approve the run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref (branch, tag, or SHA) to deploy
+        required: true
+        default: main
+        type: string
+      notes:
+        description: Optional note for the deployment record PR
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: testnet-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy selected ref to testnet
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: testnet-deploy
+      url: https://stellar.expert/explorer/testnet
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.96.0 --profile minimal --target wasm32v1-none
+
+      - name: Install pinned Stellar CLI
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version=//p' scripts/stellar-cli-version)
+          checksum=$(sed -n 's/^linux-x86_64-sha256=//p' scripts/stellar-cli-version)
+          url="https://github.com/stellar/stellar-cli/releases/download/v${version}/stellar-cli-${version}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL --retry 3 --retry-all-errors -o /tmp/stellar-cli.tar.gz "$url"
+          echo "${checksum}  /tmp/stellar-cli.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf /tmp/stellar-cli.tar.gz -C "$HOME/.local/bin"
+          "$HOME/.local/bin/stellar" --version
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Check testnet RPC
+        run: |
+          set -euo pipefail
+          if ! curl -fsS --retry 5 --retry-all-errors --connect-timeout 10 \
+            -X POST https://soroban-testnet.stellar.org \
+            -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' \
+            | grep -q '"status"'; then
+            echo '::error::Stellar testnet RPC is unavailable; no deployment was attempted.'
+            exit 1
+          fi
+
+      - name: Deploy and record testnet contract
+        env:
+          DEPLOY_SOURCE_SECRET: ${{ secrets.TESTNET_DEPLOYER_SECRET_KEY }}
+        run: |
+          set -o pipefail
+          if ! ./scripts/deploy --network testnet 2>&1 | tee deploy.log; then
+            echo '::error::Testnet deployment failed. Check the deploy log for Friendbot or RPC availability.'
+            exit 1
+          fi
+
+      - name: Verify deployment record changes
+        run: |
+          set -euo pipefail
+          node -e "const d=require('./deployments.json'); if (d.version !== 1 || !Array.isArray(d.deployments) || d.deployments.length === 0) process.exit(1)"
+          if git diff --quiet -- deployments.json docs/testnet-deployments.md sdk/src/deployments.generated.ts; then
+            echo '::error::scripts/deploy did not update the deployment records.'
+            exit 1
+          fi
+
+      - name: Open deployment record PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ inputs.ref }}
+          SOURCE_SHA: ${{ github.sha }}
+          DEPLOY_NOTES: ${{ inputs.notes }}
+        run: |
+          set -euo pipefail
+          branch="deploy/testnet-${GITHUB_RUN_ID}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "$branch"
+          git add deployments.json docs/testnet-deployments.md sdk/src/deployments.generated.ts
+          git commit -m "docs: record testnet deployment from ${SOURCE_SHA}"
+          git push --set-upstream origin "$branch"
+          gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "chore(deploy): record testnet deployment from ${SOURCE_SHA}" \
+            --body "Closes #90
+
+Triggered by @${GITHUB_ACTOR} via the Testnet deploy workflow (run ${GITHUB_RUN_ID}).
+
+Source ref: \`${SOURCE_REF}\`
+Source commit: \`${SOURCE_SHA}\`
+${DEPLOY_NOTES}"

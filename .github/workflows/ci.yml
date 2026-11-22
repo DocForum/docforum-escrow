@@ -84,12 +84,85 @@ jobs:
           path: contracts/escrow/fuzz/artifacts
           if-no-files-found: ignore
 
+  # Issue #315: keep the bounded TLA+ model executable so specification edits
+  # fail CI on parse errors, invariant violations, or temporal-property failures.
+  tlc:
+    name: TLA+ escrow model (TLC)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check whether the model changed
+        id: spec-changes
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const isSpecFile = (path) => path.startsWith('spec/');
+            let files = [];
+            if (context.eventName === 'schedule') {
+              core.setOutput('changed', 'true');
+              return;
+            }
+            if (context.eventName === 'pull_request') {
+              files = await github.paginate(github.rest.pulls.listFiles, {
+                ...context.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              });
+            } else if (context.eventName === 'push') {
+              const comparison = await github.rest.repos.compareCommits({
+                ...context.repo,
+                base: context.payload.before,
+                head: context.sha,
+              });
+              files = comparison.data.files || [];
+            }
+            core.setOutput('changed', String(files.some((file) => isSpecFile(file.filename))));
+
+      - name: Download pinned TLC
+        if: steps.spec-changes.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/tla2tools.jar \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo '936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  /tmp/tla2tools.jar' | sha256sum -c -
+
+      - name: Run TLC with the committed model configuration
+        if: steps.spec-changes.outputs.changed == 'true'
+        run: java -jar /tmp/tla2tools.jar -config spec/Escrow.cfg spec/Escrow.tla
+
   resource-baseline:
     name: Resource cost baseline
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check public function baseline
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.96.0
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/target
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+
+      # Issue #319: the baseline check reads measured costs now, so CI takes the
+      # measurement with the profile bench. The bench profiles every function
+      # twice and fails when the runs disagree, which is what makes comparing
+      # against benchmarks/baseline.json meaningful.
+      - name: Profile public function resources
+        working-directory: contracts/escrow
+        run: cargo bench --bench resource_profile -- --out ../../benchmarks/resource-profile.json
+
+      - name: Compare measured costs with the baseline
         run: python3 scripts/check-resource-baseline.py
 
   contract:
@@ -109,6 +182,10 @@ jobs:
         if: github.event_name == 'pull_request'
         working-directory: .
         run: node scripts/check-contract-change.mjs "origin/${{ github.base_ref }}"
+
+      - name: Test contract-change tooling
+        working-directory: .
+        run: node --test scripts/contract-change.test.mjs
 
       - name: No tracked backup files
         working-directory: .
@@ -267,13 +344,9 @@ jobs:
       - name: Verify CJS, ESM, and browser package entrypoints
         run: npm run smoke
 
-      # Offline only: events fixture decoding plus quorum input validation.
-      # Never the live testnet suite (see the note at the end of this file).
+      # The offline project includes every non-network SDK test automatically.
+      # Never run the live project in PR CI (see the note at the end of this file).
       - run: npm run test:offline
-
-      - run: npm run test:milestones
-
-      - run: npm run test:unit
 
       - run: npm run test:runtime
 
@@ -352,9 +425,9 @@ jobs:
       - run: npm run test:browser
         working-directory: sdk
 
-      # Deliberately NOT run here: `npm run test:integration`
-      # (tests/testnet-integration.test.ts) depends on live testnet and
-      # Friendbot funding. Runtime checks use local fixtures only.
+      # Deliberately NOT run here: `npm run test:integration` selects the
+      # live project, which depends on testnet/Friendbot funding. Runtime
+      # checks use local fixtures only.
 
   escrow-react:
     name: React hooks package
