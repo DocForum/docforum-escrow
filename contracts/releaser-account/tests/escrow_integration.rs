@@ -70,6 +70,55 @@ fn custom_account_can_be_configured_as_escrow_releaser() {
 }
 
 #[test]
+fn custom_account_can_be_one_member_of_a_quorum() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let asset = token::StellarAssetClient::new(&env, &token_id.address());
+    let token_client = token::Client::new(&env, &token_id.address());
+    asset.mint(&payer, &500);
+
+    let escrow_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let escrow = EscrowContractClient::new(&env, &escrow_id);
+    let signer_key = soroban_sdk::BytesN::from_array(&env, &[8; 32]);
+    let signers: Vec<soroban_sdk::BytesN<32>> = Vec::from_array(&env, [signer_key]);
+    let account = env.register(
+        ReleaserAccount,
+        (&escrow_id, &signers, &1u32, &3u32, &10u32),
+    );
+    let plain_releaser = Address::generate(&env);
+    let third_releaser = Address::generate(&env);
+    let releasers = Vec::from_array(
+        &env,
+        [account.clone(), plain_releaser.clone(), third_releaser],
+    );
+    let id = escrow.create_escrow_with_releasers(
+        &payer,
+        &payee,
+        &token_id.address(),
+        &250,
+        &String::from_str(&env, "mixed quorum test"),
+        &releasers,
+        &2,
+        &None,
+        &false,
+        &None,
+    );
+
+    let approvers = Vec::from_array(&env, [account, plain_releaser]);
+    escrow.release_with_approvals(&id, &approvers);
+
+    assert_eq!(token_client.balance(&payee), 250);
+    assert_eq!(escrow.get_status(&id), EscrowStatus::Released);
+}
+
+#[test]
 fn custom_account_can_authorize_settle_many() {
     let env = Env::default();
     env.mock_all_auths();
@@ -78,7 +127,7 @@ fn custom_account_can_authorize_settle_many() {
     let payee1 = Address::generate(&env);
     let payee2 = Address::generate(&env);
     let token_admin = Address::generate(&env);
-    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_id = env.register_stellar_asset_contract_v2(token_admin);
     let token = token::StellarAssetClient::new(&env, &token_id.address());
     let token_client = token::Client::new(&env, &token_id.address());
     token.mint(&payer, &1000);
