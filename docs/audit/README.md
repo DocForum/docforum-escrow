@@ -34,9 +34,9 @@ allowlist in `__constructor`.
 
 The threat model also describes Phase E5 features that are **not implemented
 in this commit** — milestones, disputes, splits, per-escrow attestations. They
-are recorded as planned risk areas in `docs/threat-model.md` §3 (T12) only so
+are recorded as planned risk areas in `docs/threat-model.md` §3 (T23) only so
 that the analysis is ready when they land; there is nothing to review for them
-yet. Do not read T12 as current behaviour.
+yet. Do not read T23 as current behaviour.
 
 ## Contents
 

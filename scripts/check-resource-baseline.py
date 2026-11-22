@@ -3,7 +3,14 @@ import json,re
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
-src = (root / "contracts/escrow/src/lib.rs").read_text()
+def contract_source(root):
+    """lib.rs with every `mod name;` replaced by src/name.rs, i.e. the contract in source order."""
+    import re
+    src_dir = root / "contracts/escrow/src"
+    def expand(text):
+        return re.sub(r"(?m)^mod ([a-z_][a-z0-9_]*);$", lambda m: expand((src_dir / f"{m.group(1)}.rs").read_text()), text)
+    return expand((src_dir / "lib.rs").read_text())
+src = contract_source(root)
 baseline = json.loads((root / "benchmarks/baseline.json").read_text())
 profile_fields = ("cpu_instructions", "memory_bytes")
 

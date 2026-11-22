@@ -119,25 +119,27 @@ impl Model {
                 Ok(())
             }
             Op::Release { as_releaser } => {
-                // `check_single_caller` runs before `check_funded`, so a
-                // stranger gets Unauthorized even on a settled escrow.
-                if !as_releaser {
-                    return Err(Failure::Unauthorized);
-                }
+                // A settled escrow's record is reclaimed (docs/adr/0011), so
+                // there is no releaser set left to authorize against: every
+                // caller, stranger included, gets NotFunded.
                 if self.phase != Phase::Funded {
                     return Err(Failure::NotFunded);
+                }
+                if !as_releaser {
+                    return Err(Failure::Unauthorized);
                 }
                 self.phase = Phase::Released;
                 Ok(())
             }
             Op::Refund { as_releaser } => {
-                // Timeout first: after the deadline anyone may refund, and
-                // the caller check is skipped entirely.
-                if !self.timeout_passed() && !as_releaser {
-                    return Err(Failure::Unauthorized);
-                }
+                // Settled first (record reclaimed, docs/adr/0011). Then
+                // timeout: after the deadline anyone may refund, and the
+                // caller check is skipped entirely.
                 if self.phase != Phase::Funded {
                     return Err(Failure::NotFunded);
+                }
+                if !self.timeout_passed() && !as_releaser {
+                    return Err(Failure::Unauthorized);
                 }
                 self.phase = Phase::Refunded;
                 Ok(())
@@ -160,7 +162,11 @@ impl Model {
     }
 
     fn expected_payer_balance(&self) -> i128 {
-        let refunded = if self.phase == Phase::Refunded { self.amount } else { 0 };
+        let refunded = if self.phase == Phase::Refunded {
+            self.amount
+        } else {
+            0
+        };
         INITIAL_BALANCE - self.paid_in + refunded
     }
 }
@@ -208,7 +214,10 @@ fn fixture<'a>(env: &'a Env, amount: i128, refund_after: Option<u64>) -> Fixture
     let stranger = Address::generate(env);
     asset.mint(&payer, &INITIAL_BALANCE);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
     let escrow_id = client.create_escrow(
         &payer,
@@ -219,6 +228,8 @@ fn fixture<'a>(env: &'a Env, amount: i128, refund_after: Option<u64>) -> Fixture
         &releaser,
         &refund_after,
         &false,
+        &None,
+        &None,
         &None,
     );
 
@@ -262,7 +273,11 @@ fn call(env: &Env, f: &Fixture, op: Op) -> Predicted {
             other => panic!("top_up: unexpected result {other:?}"),
         },
         Op::Release { as_releaser } => {
-            let caller = if as_releaser { &f.releaser } else { &f.stranger };
+            let caller = if as_releaser {
+                &f.releaser
+            } else {
+                &f.stranger
+            };
             match f.client.try_release(&f.escrow_id, caller) {
                 Ok(Ok(())) => Ok(()),
                 Err(Ok(Error::NotFunded)) => Err(Failure::NotFunded),
@@ -271,7 +286,11 @@ fn call(env: &Env, f: &Fixture, op: Op) -> Predicted {
             }
         }
         Op::Refund { as_releaser } => {
-            let caller = if as_releaser { &f.releaser } else { &f.stranger };
+            let caller = if as_releaser {
+                &f.releaser
+            } else {
+                &f.stranger
+            };
             match f.client.try_refund(&f.escrow_id, caller) {
                 Ok(Ok(())) => Ok(()),
                 Err(Ok(Error::NotFunded)) => Err(Failure::NotFunded),
@@ -341,11 +360,24 @@ proptest! {
             );
 
             prop_assert_eq!(status_of(&f.client, f.escrow_id), model.phase, "status after step {:?}", op);
-            prop_assert_eq!(
-                f.client.get_escrow(&f.escrow_id).amount,
-                model.amount,
-                "stored amount after step {:?}", op
-            );
+            // A funded escrow's stored amount tracks the model; a settled
+            // escrow's record is reclaimed (docs/adr/0011), so only the
+            // `Status` entry above remains observable.
+            if f.client.get_status(&f.escrow_id) == EscrowStatus::Funded {
+                prop_assert_eq!(
+                    f.client.get_escrow(&f.escrow_id).amount,
+                    model.amount,
+                    "stored amount after step {:?}", op
+                );
+            } else {
+                prop_assert!(
+                    matches!(
+                        f.client.try_get_escrow(&f.escrow_id),
+                        Err(Ok(Error::NotFound))
+                    ),
+                    "settled record should be reclaimed after step {:?}", op
+                );
+            }
 
             // I3 / I1: balances follow the model exactly.
             prop_assert_eq!(

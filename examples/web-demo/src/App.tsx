@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useEscrow, useEscrowActions, useEscrowTimeline, type EscrowSigner } from "@docforum/escrow-react";
+import { formatAmount } from "@docforum/escrow-sdk";
 import { connectWallet } from "./wallet.js";
 
 const configured = Boolean(import.meta.env.VITE_ESCROW_CONTRACT_ID);
@@ -74,7 +75,7 @@ export function App() {
           <>
             <p>Status: {escrow.status}</p>
             <p>Payee: {escrow.payee}</p>
-            <p>Amount (stroops): {escrow.amount.toString()}</p>
+            <p>Amount: {formatAmount(escrow.amount, 7)} XLM ({escrow.amount.toString()} stroops)</p>
             <p>
               Refund deadline: {timeline.hasDeadline
                 ? timeline.expired

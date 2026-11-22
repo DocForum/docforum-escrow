@@ -1,1 +1,0 @@
-Added a contract test for `release_not_before` equal to the creation time (valid, and releasable straight away). The first nightly mutation-testing run found that replacing `<` with `<=` in that creation check (`src/lib.rs:594`) changed no test result. The new test fails on that mutant.

@@ -2,8 +2,11 @@ node_modules/
 dist/
 build/
 target/
+sdk/docs-api/
 *.tgz
 .env
 .env.local
 *.log
 .DS_Store
+__pycache__/
+*.pyc

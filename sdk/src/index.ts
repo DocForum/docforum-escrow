@@ -13,6 +13,7 @@ import {
   FeeBumpTransaction,
   Keypair,
   Operation,
+  Networks,
   Transaction,
   TransactionBuilder,
   scValToNative,
@@ -37,17 +38,71 @@ import {
 } from "./instrumentation.js";
 import type { FactoryClient as FactoryClientType } from "./factory.js";
 import { contractSigner, signerAddress, type EscrowSigner } from "./signers/types.js";
+import { NetworkMismatchError, toEscrowError } from "./errors.js";
+import { getTokenInfo as readTokenInfo, rpcTokenInfoSource, type TokenInfo } from "./amounts.js";
+import {
+  PreparedTransactionExpiredError,
+  SignedTransactionMismatchError,
+  StaleSequenceError,
+  UnsignedTransactionError,
+  authSignersOf,
+  ledgerBoundsMax,
+  mergeSignatures as mergeSignedTransactions,
+  setLedgerBounds,
+  signAuthEntriesInEnvelope,
+  transactionHash,
+  type PreparedTransaction,
+} from "./prepare.js";
+
+export {
+  PreparedTransactionExpiredError,
+  SignedTransactionMismatchError,
+  StaleSequenceError,
+  UnsignedTransactionError,
+  type PreparedTransaction,
+} from "./prepare.js";
 
 export { Keypair };
-export { signerAddress, type EscrowSigner } from "./signers/types.js";
+export {
+  getTokenInfo,
+  parseAmount,
+  formatAmount,
+  normaliseAmount,
+  clearTokenInfoCache,
+  rpcTokenInfoSource,
+  AmountError,
+  InvalidAmountError,
+  MAX_TOKEN_DECIMALS,
+  type TokenInfo,
+  type TokenInfoSource,
+  type TokenInfoSourceOptions,
+} from "./amounts.js";
 export {
   KeypairSigner,
   RemoteSigner,
   SignerError,
+  signerAddress,
+  type EscrowSigner,
   type RemoteSignerOptions,
   type Signer,
   type SignerOptions,
-} from "./signers/signer.js";
+} from "./signers/types.js";
+export {
+  BalanceMismatchError,
+  ContractError,
+  EscrowError,
+  InvalidAmountContractError,
+  InvalidRefundAfterError,
+  NetworkMismatchError,
+  NotFoundError,
+  NotFundedError,
+  RequestTimeoutError,
+  SimulationFailure,
+  SubmissionFailure,
+  UnauthorizedError,
+  contractErrorName,
+  toEscrowError,
+} from "./errors.js";
 export {
   otelTracer,
   spanName,
@@ -74,734 +129,130 @@ export {
 } from "./deployments.js";
 export type { FactoryClientConfig, DeployInstanceParams, DeployInstanceResult, FactoryInstance } from "./factory.js";
 
-export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Cancelled";
+// Multisig releaser account helpers (T1 mitigation). Client-side only: they
+// build classic `setOptions` transactions for the releaser account itself and
+// never touch the escrow contract.
+export {
+  buildMultisigSetup,
+  dryRunMultisigSetup,
+  printMultisigDryRun,
+  readOnChainMultisig,
+  resolveMultisigPolicy,
+  validateMultisigPolicy,
+  verifyMultisig,
+  MultisigLockOutError,
+  MultisigValidationError,
+  MAX_WEIGHT,
+  MIN_WEIGHT,
+  TESTNET_PASSPHRASE,
+} from "./multisig.js";
+export type {
+  BuildMultisigSetupOptions,
+  HorizonServerLike,
+  MultisigDryRun,
+  MultisigOnState,
+  MultisigPolicy,
+  MultisigSetupResult,
+  MultisigSigner,
+  MultisigVerificationResult,
+  ResolvedMultisigPolicy,
+  VerifyMultisigOptions,
+} from "./multisig.js";
 
-/**
- * One tranche of a milestone schedule. A milestone escrow is a *group* of
- * single-tranche escrows — see `createMilestoneEscrow`.
- */
-export type MilestoneStatus = "unreleased" | "released" | "refunded";
+// Public types, constants and errors live in topical modules (one per
+// feature); index.ts re-exports them all and keeps the EscrowClient class.
+export * from "./archived-entries.js";
+export * from "./attestation.js";
+export * from "./batch.js";
+export * from "./client-config.js";
+export * from "./contract-version.js";
+export * from "./escrow-types.js";
+export * from "./events.js";
+export * from "./fees.js";
+export * from "./lifecycle.js";
+export * from "./milestones.js";
+export * from "./networks.js";
+export * from "./pooled.js";
+export * from "./prepare-submit.js";
+export * from "./relayed-auth.js";
+export * from "./rpc-providers.js";
+export * from "./solvency.js";
 
-/** A single tranche of a milestone escrow. */
-export interface Milestone {
-  /** Position in the schedule, `0`-based — pass this to `releaseMilestone`. */
-  index: number;
-  /** Tranche amount in the token's smallest unit. */
-  amount: bigint;
-  /** The escrow that holds this tranche — see `createMilestoneEscrow`. */
-  escrowId: bigint;
-  status: MilestoneStatus;
-}
-
-export type ArchivedEntryBehavior = "auto" | "error";
-
-/** Typed error for contract calls that cannot restore archived ledger entries. */
-export class ArchivedEntryError extends Error {
-  readonly method: string;
-  override readonly cause?: unknown;
-  constructor(method: string, behavior: ArchivedEntryBehavior, cause?: unknown) {
-    super(behavior === "auto"
-      ? `Contract state needed by ${method} is archived and automatic restoration failed. Ensure the configured signer can pay the restoration fee.`
-      : `Contract state needed by ${method} is archived. Set archivalBehavior to "auto" and provide a restore signer to restore it.`);
-    this.name = "ArchivedEntryError";
-    this.method = method;
-    this.cause = cause;
-  }
-}
-
-export function isArchivedEntryFailure(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as { name?: unknown; message?: unknown };
-  return candidate.name === "ExpiredState" ||
-    (typeof candidate.message === "string" && /expired state|archived (?:contract )?state|automatic restoration attempt limit reached/i.test(candidate.message));
-}
-
-export type EscrowEventType = "created" | "released" | "refunded" | "cancelled";
-interface EscrowEventBase {
-  ledger: number;
-  cursor: string;
-  transactionHash: string;
-  data: unknown;
-}
-/**
- * Unknown variants are retained with decoded topics so newer contract event
- * schemas remain observable to older SDK consumers instead of crashing.
- */
-export type EscrowEvent = (EscrowEventBase & {
-  type: EscrowEventType;
-  escrowId: bigint;
-}) | (EscrowEventBase & {
-  type: "unknown";
-  eventName?: string;
-  escrowId?: bigint;
-  topics: unknown[];
-});
-export type GetEventsParams = {
-  types?: EscrowEventType[];
-  escrowId?: bigint;
-} & (
-  | { /** First ledger to scan (inclusive). */ fromLedger: number; cursor?: never }
-  | { /** Opaque RPC cursor returned from a prior page/event. */ cursor: string; fromLedger?: never }
-);
-export interface GetEventsResult { events: EscrowEvent[]; nextCursor: string; }
-
-/** The requested cursor predates the event history retained by the RPC server. */
-export class EventCursorExpiredError extends Error {
-  readonly name = "EventCursorExpiredError";
-  constructor(message = "The event cursor is older than the RPC server's retention window.") { super(message); }
-}
-
-export interface SubscribeOptions {
-  cursor?: string;
-  pollIntervalMs?: number;
-  types?: EscrowEventType[];
-  escrowId?: bigint;
-  onError?: (error: unknown) => void;
-}
-
-function safeScValToNative(value: xdr.ScVal): unknown {
-  try { return scValToNative(value); }
-  catch { return { xdr: value.toXDR("base64") }; }
-}
-
-function isRetentionError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /cursor.{0,40}(older|retention|oldest)|older.{0,40}(cursor|ledger|retention)|start ledger.{0,40}(oldest|retention)/i.test(message);
-}
-
-/** Everything the contract stores about one escrow — what `getEscrow` returns. */
-export interface Escrow {
-  payer: string;
-  payee: string;
-  token: string;
-  amount: bigint;
-  conditionRef: string;
-  /**
-   * The addresses permitted to settle this escrow (docs/adr/0002 for the
-   * per-escrow releaser, docs/adr/0007 for M-of-N sets) — unless
-   * `refundAfter` has passed, in which case anyone may refund. A plain
-   * single-releaser escrow has exactly one entry here.
-   */
-  releasers: string[];
-  /**
-   * How many distinct addresses from `releasers` must authorize one
-   * settlement. `1` means any single releaser can settle.
-   */
-  threshold: number;
-  /**
-   * Optional deadline in unix seconds after which **anyone** may refund —
-   * always back to `payer` (docs/adr/0004). `undefined` means no timeout:
-   * refunds stay releaser-only forever. Payees should check this before
-   * relying on a `Funded` escrow (threat model T8).
-   */
-  refundAfter?: bigint;
-  /** Earliest ledger timestamp at which release is allowed. Omit for immediate release. */
-  releaseNotBefore?: bigint;
-  /** Whether to call the contract payee's on_escrow_released hook. Defaults to false. */
-  notifyPayee: boolean;
-  /**
-   * Where every refund (releaser or timeout) sends the funds. Fixed at
-   * creation; equals `payer` unless a sponsored escrow set a different
-   * destination (docs/adr/0009). Payees can read it to see who a
-   * reversal would pay.
-   */
-  refundTo: string;
-  /** Whether release waits for the payee's `accept` (issue #25). */
-  requiresAcceptance: boolean;
-  /** Ledger timestamp of the payee's acceptance; `undefined` until `accept`. */
-  acceptedAt?: bigint;
-  status: EscrowStatus;
-}
-
-/** Largest value an `i128` can hold — the contract's arithmetic type. */
-const I128_MAX = 2n ** 127n - 1n;
-
-/**
- * `condition_ref` is capped on-chain at `MAX_CONDITION_REF_LENGTH` bytes
- * (`contracts/escrow/src/lib.rs` `MAX_CONDITION_REF_LEN`, threat model T10);
- * a longer value is rejected with `ConditionRefTooLong`. A milestone group
- * tags each tranche, so the base ref has that much less room.
- */
-
-/**
- * Thrown when a milestone schedule is invalid. Caught before any network
- * call, so an obviously-invalid schedule costs nothing.
- */
-export class MilestoneScheduleError extends Error {
-  readonly reason: string;
-  constructor(reason: string) {
-    super(`Invalid milestone schedule: ${reason}`);
-    this.name = "MilestoneScheduleError";
-    this.reason = reason;
-  }
-}
-
-/**
- * `amount` must be positive, the schedule non-empty, every tranche positive,
- * the sum exactly `amount`, and every value representable as an `i128`.
- * Pure and synchronous: a malformed schedule is a programmer error, not a
- * transaction to pay for.
- */
-export function validateMilestoneSchedule(milestones: readonly bigint[], amount: bigint): void {
-  if (amount <= 0n) throw new MilestoneScheduleError(`amount must be positive, got ${amount}`);
-  if (milestones.length === 0) throw new MilestoneScheduleError("schedule must not be empty");
-  let sum = 0n;
-  for (const [index, tranche] of milestones.entries()) {
-    if (tranche <= 0n) throw new MilestoneScheduleError(`tranche ${index} must be positive, got ${tranche}`);
-    if (tranche > I128_MAX) throw new MilestoneScheduleError(`tranche ${index} exceeds the i128 maximum`);
-    sum += tranche;
-    if (sum > I128_MAX) throw new MilestoneScheduleError("schedule total exceeds the i128 maximum");
-  }
-  if (sum !== amount) {
-    throw new MilestoneScheduleError(`schedule sums to ${sum} but amount is ${amount}`);
-  }
-}
-
-/**
- * `condition_ref` for tranche `index` of `count`: `<base>#m<index+1>/<count>`.
- * Tagged so each tranche stays traceable back to its group on-chain, where
- * only the ref is visible.
- */
-export function milestoneConditionRef(base: string, index: number, count: number): string {
-  const ref = `${base}#m${index + 1}/${count}`;
-  if (ref.length > MAX_CONDITION_REF_LENGTH) {
-    throw new MilestoneScheduleError(
-      `conditionRef "${base}" is too long: the tranche tag needs "${ref}" (${ref.length} bytes) but the contract allows ${MAX_CONDITION_REF_LENGTH}`,
-    );
-  }
-  return ref;
-}
-
-/**
- * Thrown when `createMilestoneEscrow` fails partway through: a group is N
- * separate transactions, so the tranches before the failure are already
- * funded on-chain and must be dealt with by the caller.
- */
-export class MilestoneEscrowPartialError extends Error {
-  /** Escrow ids of the tranches that were created, in schedule order. */
-  readonly createdEscrowIds: readonly bigint[];
-  /** How many tranches had been created when the failure happened. */
-  readonly createdCount: number;
-  /** Total tranches the schedule asked for. */
-  readonly totalCount: number;
-  override readonly cause?: unknown;
-
-  constructor(createdEscrowIds: readonly bigint[], createdCount: number, totalCount: number, cause?: unknown) {
-    super(
-      `Milestone escrow creation failed at tranche ${createdCount + 1} of ${totalCount}; ` +
-        `${createdCount} tranche escrow(s) already exist and are funded: [${createdEscrowIds.join(", ")}]. ` +
-        "Release or refund them, then retry the remaining tranches.",
-    );
-    this.name = "MilestoneEscrowPartialError";
-    this.createdEscrowIds = createdEscrowIds;
-    this.createdCount = createdCount;
-    this.totalCount = totalCount;
-    this.cause = cause;
-  }
-}
-
-/** The tranche at `milestoneIndex`, with a clear error outside the schedule. */
-function trancheOf(escrow: MilestoneEscrow, milestoneIndex: number): Milestone {
-  if (!Number.isInteger(milestoneIndex) || milestoneIndex < 0 || milestoneIndex >= escrow.milestones.length) {
-    throw new RangeError(
-      `milestoneIndex ${milestoneIndex} is outside the schedule (0-${escrow.milestones.length - 1})`,
-    );
-  }
-  return escrow.milestones[milestoneIndex];
-}
-
-const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
-const TESTNET_NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
-
-/**
- * Maximum allowed length of `conditionRef` in bytes — must match the
- * contract's bound (currently 64 bytes, see contracts/escrow/src/lib.rs
- * and docs/threat-model.md T10). Validated client-side so callers fail
- * fast instead of paying network fees for a rejected transaction.
- *
- * Keep in sync with the contract: if the contract bound changes, update
- * this constant and bump the SDK's semver (hard rule 3).
- */
-export const MAX_CONDITION_REF_LENGTH = 64;
-
-/**
- * Maximum number of addresses in one escrow's releaser set — must match the
- * contract's `MAX_RELEASERS` (currently 10, see docs/adr/0007). Validated
- * client-side so callers fail fast instead of paying network fees for a
- * rejected transaction. Keep in sync with the contract; a change is an SDK
- * semver event (hard rule 3).
- */
-export const MAX_RELEASERS = 10;
-
-/** Shared placeholder used on the uninstrumented path (no per-call allocation). */
-const EMPTY_SPAN_ATTRIBUTES = {} as EscrowSpanAttributes;
-
-export interface EscrowClientConfig {
-  /** The deployed docforum-escrow contract's address (`C…`). */
-  contractId: string;
-  /** Default: Soroban testnet RPC. */
-  rpcUrl?: string;
-  /** Default: Stellar testnet passphrase. */
-  networkPassphrase?: string;
-  /**
-   * Optional OpenTelemetry / event-hook instrumentation (issue #129). With no
-   * tracer and no `onEvent` callback, calls take the uninstrumented path.
-   */
-  instrumentation?: InstrumentationOptions;
-  /** Shorthand for `instrumentation.onEvent`. */
-  onEvent?: InstrumentationOptions["onEvent"];
-  /** Use the restore signer to authorize calls that automatically restore archived entries. */
-  archivalBehavior?: ArchivedEntryBehavior;
-  restoreSigner?: EscrowSigner;
-}
-
-export interface CreateEscrowParams {
-  /** Signs and pays for this call; funds are pulled from this account. */
-  payer: EscrowSigner;
-  payee: string;
-  token: string;
-  amount: bigint;
-  conditionRef: string;
-  /**
-   * The only address later permitted to call `release`/`refund` on this
-   * escrow (see docforum-escrow's docs/adr/0002). Typically the calling
-   * application's own service identity, not the payer or payee.
-   */
-  releaser: string;
-  /**
-   * Optional unix timestamp (seconds) after which anyone may refund this
-   * escrow — always back to `payer` (docs/adr/0004). Must be strictly in
-   * the future at creation, or the contract rejects with
-   * `InvalidRefundAfter` (error 5). Omit for no timeout: refunds stay
-   * releaser-only, exactly as in 0.2.x.
-   */
-  refundAfter?: bigint;
-  /** Opt a contract payee into on_escrow_released(escrowId, amount). Defaults to false. */
-  notifyPayee?: boolean;
-  /**
-   * Optional refund destination distinct from `payer` (the funder), for
-   * sponsored escrows (docs/adr/0009). All refund paths — releaser and
-   * timeout — pay this address, never the funder. Set once here under the
-   * funder's signature and immutable afterwards. Omit to refund the
-   * `payer`, exactly as in 0.3.x. Must not be the contract's own address
-   * (rejected with `InvalidRefundTo`, error 21).
-   */
-  refundTo?: string;
-  /** Earliest ledger timestamp at which release is allowed; omit for immediate release. */
-  releaseNotBefore?: bigint;
-  /**
-   * Require the payee to `accept` before release (issue #25). Until they
-   * do, the payer may `cancel`. Cannot be combined with `notifyPayee` or
-   * `releaseNotBefore` (the contract has no such creation entry point).
-   */
-  requiresAcceptance?: boolean;
-}
-
-export interface CreateMilestoneEscrowParams extends Omit<CreateEscrowParams, "amount"> {
-  /** Total across all tranches; must equal the sum of `milestones`. */
-  amount: bigint;
-  /**
-   * Tranche schedule in payout order. Every entry must be positive and the
-   * entries must sum exactly to `amount`; validated before any transaction
-   * (`MilestoneScheduleError`).
-   */
-  milestones: readonly bigint[];
-}
-
-/**
- * A milestone schedule, as returned by `createMilestoneEscrow`: one
- * single-tranche escrow per tranche, in schedule order.
- */
-export interface MilestoneEscrow {
-  milestones: Milestone[];
-  /** The tranche escrow ids, in schedule order. */
-  escrowIds: bigint[];
-}
-
-export interface CancelParams {
-  escrowId: bigint;
-  /** The escrow's payer; signs the cancellation. */
-  payer: EscrowSigner;
-  /** See `LifecycleCallOptions.checkPreconditions`. Default `true`. */
-  checkPreconditions?: boolean;
-}
-
-// ---------------------------------------------------------------------------
-// Lifecycle amendments (issue #84): top-up, payee acceptance, payer cancel,
-// plus a prepare → collect auth → submit flow for calls signed by parties
-// on different machines.
-// ---------------------------------------------------------------------------
-
-/** Options shared by the lifecycle amendment methods. */
-export interface LifecycleCallOptions {
-  /**
-   * Read the escrow first and throw `EscrowPreconditionError` when the call
-   * would certainly fail (wrong signer, not `Funded`, no acceptance gate,
-   * already accepted). Costs one read-only simulation, saves a failed
-   * transaction fee. The contract enforces the same rules either way.
-   * Default `true`.
-   */
-  checkPreconditions?: boolean;
-}
-
-export interface TopUpParams extends LifecycleCallOptions {
-  escrowId: bigint;
-  /** The escrow's original payer; signs the transfer and pays the fee. */
-  payer: EscrowSigner;
-  /** Raw token units to add; must be positive. */
-  amount: bigint;
-}
-
-export interface AcceptParams extends LifecycleCallOptions {
-  escrowId: bigint;
-  /** The escrow's payee; signs the acceptance and pays the fee. */
-  payee: EscrowSigner;
-}
-
-/**
- * Why a lifecycle call was refused before submission. Each maps to the
- * contract error the transaction would otherwise fail with.
- */
-export type EscrowPreconditionCode =
-  | "InvalidAmount"
-  | "NotFunded"
-  | "Unauthorized"
-  | "AcceptanceNotConfigured"
-  | "AlreadyAccepted";
-
-/** Thrown before any transaction is built when a client-side check fails. */
-export class EscrowPreconditionError extends Error {
-  readonly name = "EscrowPreconditionError";
-  readonly code: EscrowPreconditionCode;
-  readonly method: LifecycleMethod;
-  constructor(method: LifecycleMethod, code: EscrowPreconditionCode, message: string) {
-    super(`${method}: ${message}`);
-    this.method = method;
-    this.code = code;
-  }
-}
-
-/** Contract functions the prepare/submit flow can carry. */
-export type LifecycleMethod = "top_up" | "accept" | "cancel";
-
-/** One lifecycle call, described without any signer. */
-export type LifecycleCall =
-  | { method: "top_up"; escrowId: bigint; payer: string; amount: bigint }
-  | { method: "accept"; escrowId: bigint; payee: string }
-  | { method: "cancel"; escrowId: bigint; payer: string };
-
-/**
- * A simulated lifecycle transaction in transit between signers. Plain JSON
- * strings and numbers only, so it can be passed between processes or
- * machines as-is (for example over HTTP or a queue).
- */
-export interface PreparedLifecycleCall {
-  method: LifecycleMethod;
-  /** `AssembledTransaction.toJSON()` output; not a base64 envelope. */
-  transaction: string;
-  /** The transaction source: signs the envelope and pays the fee at submit. */
-  source: string;
-  /** Addresses whose contract auth entry is still unsigned. */
-  pendingSigners: string[];
-  /** Ledger after which every collected auth entry expires. */
-  expiresAtLedger: number;
-}
-
-export interface PrepareLifecycleParams extends LifecycleCallOptions {
-  call: LifecycleCall;
-  /**
-   * Address that will submit the transaction (envelope signer and fee
-   * payer). Its own auth is covered by the envelope signature, so it never
-   * appears in `pendingSigners`. Defaults to the call's own signer.
-   */
-  source?: string;
-  /** How long collected auth entries stay valid. Default `PREPARED_AUTH_TTL_LEDGERS`. */
-  ttlLedgers?: number;
-}
-
-/** Default lifetime of auth entries collected by `prepareLifecycleCall`, in ledgers (~5 minutes). */
-export const PREPARED_AUTH_TTL_LEDGERS = 60;
-
-/**
- * Creation parameters for a pooled escrow (issue #113, docs/adr/0011): one
- * agreement funded by many payers. Creation funds nothing — `contribute`
- * does, before `fundingDeadline`, up to `fundingTarget`.
- */
-export interface CreatePooledEscrowParams {
-  /** Signs and pays for creation; funds nothing at this step. */
-  creator: EscrowSigner;
-  payee: string;
-  token: string;
-  /**
-   * Raw token units the contributors must reach before `release` becomes
-   * possible. Must be positive; fixed at creation, never changed.
-   */
-  fundingTarget: bigint;
-  conditionRef: string;
-  /** The address permitted to `release` the fully funded pool (docs/adr/0002). */
-  releaser: string;
-  /**
-   * Unix seconds after which contributions are rejected forever and, if
-   * the target was missed, `claimRefund` opens to every contributor.
-   * Must be strictly in the future (contract error
-   * `InvalidFundingDeadline`, 34).
-   */
-  fundingDeadline: bigint;
-}
-
-export interface ContributeParams {
-  escrowId: bigint;
-  /** Signs the transfer; the funds come from this account. */
-  payer: EscrowSigner;
-  /** Raw token units; positive, and only while the pool is under target. */
-  amount: bigint;
-}
-
-/** Pull-based refund params — the contributor claims their own record. */
-export interface ClaimRefundParams {
-  escrowId: bigint;
-  /** Must be the recorded contributor; signs the claim (docs/adr/0011). */
-  contributor: EscrowSigner;
-}
-
-/** Read-only funding config of a pooled escrow (`getPooled`). */
-export interface PooledEscrow {
-  fundingTarget: bigint;
-  fundingDeadline: bigint;
-}
-
-/** One contributor's record on a pooled escrow (`getContribution`). */
-export interface ContributionRecord {
-  /** Total accepted contributions from this address — claimable if not `refunded`. */
-  amount: bigint;
-  /** True once `claimRefund` has paid this record; a second claim fails. */
-  refunded: boolean;
-}
-
-export interface ReleaseOrRefundParams {
-  escrowId: bigint;
-  /**
-   * Must be one of the escrow's `releasers` (set at creation) — see
-   * docs/adr/0002. Only valid when the escrow's threshold is `1`; a
-   * multi-signature escrow settles via `releaseWithApprovals` /
-   * `refundWithApprovals`.
-   */
-  caller: EscrowSigner;
-}
-
-/** Release params for one tranche of a milestone escrow. */
-export interface ReleaseMilestoneParams {
-  /** The group returned by `createMilestoneEscrow`. */
-  escrow: MilestoneEscrow;
-  /** `0`-based position in the schedule. */
-  milestoneIndex: number;
-  /** Must be that tranche's `releaser` (set at creation) — see docs/adr/0002. */
-  caller: EscrowSigner;
-}
-
-/** Refund params for one tranche of a milestone escrow — same rules as `refund`. */
-export interface RefundMilestoneParams {
-  escrow: MilestoneEscrow;
-  milestoneIndex: number;
-  caller: EscrowSigner;
-}
-
-/** Creation parameters for an M-of-N releaser escrow (docs/adr/0007). */
-export interface CreateQuorumEscrowParams {
-  /** Signs and pays for this call; funds are pulled from this account. */
-  payer: EscrowSigner;
-  payee: string;
-  token: string;
-  amount: bigint;
-  conditionRef: string;
-  /**
-   * The addresses that settle this escrow. Between 1 and `MAX_RELEASERS`
-   * distinct addresses, stored immutably at creation — there is no setter
-   * and no admin.
-   */
-  releasers: string[];
-  /** How many of `releasers` must approve a settlement (at least 1). */
-  threshold: number;
-  /** See `CreateEscrowParams.refundAfter`. */
-  refundAfter?: bigint;
-  /** Opt a contract payee into `on_escrow_released`; requires payee authorization. */
-  notifyPayee?: boolean;
-  /** Optional refund destination distinct from `payer` (docs/adr/0009); defaults to `payer`. */
-  refundTo?: string;
-}
-
-/** An M-of-N settlement: each keypair signs the contract auth entry. */
-export interface SettlementApprovalsParams {
-  escrowId: bigint;
-  /**
-   * The releasers approving this settlement. The first keypair also pays the
-   * transaction fee; each of them signs the contract authorization entry, so
-   * the list must not repeat a keypair. Without at least `threshold`
-   * distinct approvers the contract rejects the call with `ThresholdNotMet`.
-   */
-  approvers: EscrowSigner[];
-}
-
-/** The relayer pays the transaction fee; the releaser signs only contract auth. */
-export interface RelayedAuthorizationParams {
-  escrowId: bigint;
-  releaser: EscrowSigner;
-  relayer: EscrowSigner;
-}
-
-/**
- * Serialized, simulated transaction containing a short-lived signed auth
- * entry. `transaction` is the JSON form produced by the Stellar SDK's
- * `AssembledTransaction.toJSON()` (it carries the simulation metadata the
- * relayer needs to sign the envelope); it is not a base64 envelope.
- */
-export interface RelayedAuthorization {
-  transaction: string;
-  expiresAtLedger: number;
-}
-
-/** How long a relayed auth entry stays valid, in ledgers. */
-export const RELAYED_AUTH_TTL_LEDGERS = 10;
-
-// ---------------------------------------------------------------------------
-// Fee estimation + sponsorship (issue #70)
-// ---------------------------------------------------------------------------
-
-/** A single contract invocation to estimate the fee of. */
-export interface EstimateCallParams {
-  /** Contract to invoke. Defaults to the client's configured `contractId`. */
-  contractId?: string;
-  /** Contract function name, e.g. `"create_escrow"`. */
-  method: string;
-  /** Already-encoded contract arguments (`xdr.ScVal[]`). */
-  args?: xdr.ScVal[];
-  /** Account that would sign and pay for the call. */
-  source: EscrowSigner;
-}
-
-/** Components of a simulated contract call's fee, in stroops. */
-export interface FeeEstimate {
-  /** Resource fee charged for CPU/memory/ledger entries, buffered for drift. */
-  resourceFee: bigint;
-  /** Inclusion fee: base fee × number of operations. */
-  inclusionFee: bigint;
-  /** `resourceFee + inclusionFee` — what the call is expected to cost. */
-  total: bigint;
-  /** The unbuffered resource fee the simulation reported. */
-  minResourceFee: bigint;
-}
-
-export interface FeeBumpOptions {
-  /**
-   * Hard cap, in stroops, on the fee-bump transaction's fee. If the fee the
-   * bump requires would exceed it, `feeBump` throws `MaxFeeExceededError`
-   * instead of silently exceeding the cap.
-   */
-  maxFee: bigint;
-  /** Base fee per operation for the wrapper, in stroops. Default: the network base fee (100). */
-  baseFee?: bigint;
-}
-
-export interface FeeBumpResult {
-  /** Signed fee-bump envelope, base64 XDR. */
-  xdr: string;
-  /** Fee the fee-bump transaction will charge, in stroops. */
-  fee: bigint;
-  /** Hash of the inner (sponsored) transaction — the one that actually executes. */
-  innerTxHash: string;
-}
-
-/** Outcome of the sponsorship guard. */
-export interface GuardResult {
-  /** True only when every operation and contract-address auth entry targets the escrow contract. */
-  ok: boolean;
-  /** Human-readable rejection reasons, empty when `ok`. */
-  reasons: string[];
-  /** Every contract id the transaction invokes. */
-  invokedContracts: string[];
-}
-
-/** Thrown when the sponsorship guard rejects a transaction. */
-export class SponsorshipGuardError extends Error {
-  readonly reasons: string[];
-  constructor(reasons: string[]) {
-    super(`Sponsorship guard rejected transaction: ${reasons.join("; ")}`);
-    this.name = "SponsorshipGuardError";
-    this.reasons = reasons;
-  }
-}
-
-/** Thrown when a fee-bump would exceed the caller's `maxFee`. */
-export class MaxFeeExceededError extends Error {
-  readonly requestedFee: bigint;
-  readonly maxFee: bigint;
-  constructor(requestedFee: bigint, maxFee: bigint) {
-    super(`Fee-bump requires ${requestedFee} stroops, above the maxFee cap of ${maxFee}`);
-    this.name = "MaxFeeExceededError";
-    this.requestedFee = requestedFee;
-    this.maxFee = maxFee;
-  }
-}
-
-/** Default headroom added to the simulated resource fee: 20% (2000 bps). */
-export const DEFAULT_RESOURCE_FEE_BUFFER_BPS = 2_000;
-
-/**
- * Pure fee arithmetic, split out so it can be unit-tested without an RPC.
- * The buffer is applied to the resource fee only (inclusion fee is already
- * deterministic) and rounds up, so an estimate is never a strop short.
- */
-export function computeFeeEstimate(input: {
-  minResourceFee: bigint;
-  inclusionFee: bigint;
-  bufferBps?: number;
-}): FeeEstimate {
-  const { minResourceFee, inclusionFee } = input;
-  const bufferBps = input.bufferBps ?? DEFAULT_RESOURCE_FEE_BUFFER_BPS;
-  if (minResourceFee < 0n) throw new RangeError("minResourceFee must not be negative.");
-  if (inclusionFee < 0n) throw new RangeError("inclusionFee must not be negative.");
-  if (!Number.isInteger(bufferBps) || bufferBps < 0) throw new RangeError("bufferBps must be a non-negative integer.");
-  const resourceFee = (minResourceFee * BigInt(10_000 + bufferBps) + 9_999n) / 10_000n;
-  return { resourceFee, inclusionFee, total: resourceFee + inclusionFee, minResourceFee };
-}
-
-/** Decode a contract address out of an `xdr.ScAddress`, or `undefined` for account addresses. */
-function contractAddressOf(scAddress: xdr.ScAddress): string | undefined {
-  if (scAddress.switch().name !== "scAddressTypeContract") return undefined;
-  return Address.fromScAddress(scAddress).toString();
-}
+import { type ArchivedEntryBehavior } from "./archived-entries.js";
+import { type BatchCreateItem, type BatchItemResult, type BatchOptions, BatchPartialFailureError, type BatchSettleOperation, MAX_BATCH_SIZE } from "./batch.js";
+import { type EscrowClientConfig } from "./client-config.js";
+import { UnsupportedContractVersionError, isSupportedContractVersion } from "./contract-version.js";
+import { type CancelParams, type CreateEscrowParams, type CreateQuorumEscrowParams, type Escrow, type EscrowStatus, type ExtendRefundAfterParams, MAX_CONDITION_REF_LENGTH, MAX_FEE_BPS, MAX_RELEASERS, type ReleaseOrRefundParams, type SettlementApprovalsParams } from "./escrow-types.js";
+import { type EscrowEvent, type EscrowEventType, EventCursorExpiredError, type GetEventsParams, type GetEventsResult, type SubscribeOptions } from "./events.js";
+import { type EstimateCallParams, type FeeBumpOptions, type FeeBumpResult, type FeeEstimate, type GuardResult, MaxFeeExceededError, SponsorshipGuardError, computeFeeEstimate } from "./fees.js";
+import { EMPTY_SPAN_ATTRIBUTES, MISSING_FUNCTION_ERROR, TESTNET_NETWORK_PASSPHRASE, TESTNET_RPC_URL, assertLedgerWindow, assertPositiveAmount, batchErrorMessage, contractAddressOf, isRetentionError, lifecycleCallSigner, safeScValToNative, sendErrorName, trancheOf } from "./internal.js";
+import { type AcceptParams, type EscrowPreconditionCode, EscrowPreconditionError, type LifecycleCall, type LifecycleMethod, PREPARED_AUTH_TTL_LEDGERS, type PrepareLifecycleParams, type PreparedLifecycleCall, type TopUpParams, type TransferPayeeParams } from "./lifecycle.js";
+import { type CreateMilestoneEscrowParams, type Milestone, type MilestoneEscrow, MilestoneEscrowPartialError, type RefundMilestoneParams, type ReleaseMilestoneParams, milestoneConditionRef, validateMilestoneSchedule } from "./milestones.js";
+import { MAINNET_NETWORK_PASSPHRASE, MainnetNotAllowedError } from "./networks.js";
+import { type ClaimRefundParams, type ContributeParams, type ContributionRecord, type CreatePooledEscrowParams, type PooledEscrow, type SolvencyReport } from "./pooled.js";
+import { DEFAULT_SUBMIT_MAX_FEE, OFFLINE_PREPARED_TX_TTL_LEDGERS, PREPARED_TX_TTL_LEDGERS, type PrepareCreateEscrowParams, type PrepareSettlementParams, type SubmitSignedOptions, type SubmitSignedResult } from "./prepare-submit.js";
+import { RELAYED_AUTH_TTL_LEDGERS, type RelayedAuthorization, type RelayedAuthorizationParams } from "./relayed-auth.js";
+import { RpcProviderPool } from "./rpc-providers.js";
 
 /**
  * Thin client for the docforum-escrow Soroban contract. Wraps
  * `create_escrow`/`get_status`/`get_escrow`/`release`/`refund` with plain
  * TypeScript types and no manual XDR/signing plumbing.
  */
-function assertPositiveAmount(call: { method: LifecycleMethod; amount: bigint }): void {
-  if (call.amount <= 0n) {
-    throw new EscrowPreconditionError(call.method, "InvalidAmount", `amount must be positive, got ${call.amount}.`);
-  }
-}
-
-/** The party whose signature a lifecycle call needs. */
-function lifecycleCallSigner(call: LifecycleCall): string {
-  return call.method === "accept" ? call.payee : call.payer;
-}
-
 export class EscrowClient {
   /** Contract id of the escrow instance this client talks to. */
   readonly contractId: string;
-  private readonly rpcUrl: string;
+  private rpcUrl: string;
   private readonly networkPassphrase: string;
-  private readonly rpc: RpcServer;
+  private rpc: RpcServer;
+  private readonly rpcPool?: RpcProviderPool;
   private readonly instrumentation?: InstrumentationOptions;
   private readonly archivalBehavior: ArchivedEntryBehavior;
-  private readonly restoreSigner?: EscrowSigner;
+  private readonly restoreSigner?: Keypair;
+  private readonly allowMainnet: boolean;
+  private readonly allowHttp: boolean;
+  /** "required": explicit opt-in; "auto": preset selected; "off": no automatic check. */
+  private readonly networkVerification: "required" | "auto" | "off";
+  /** Cached result of the network passphrase verification. */
+  private networkVerified?: Promise<void>;
+  /** "required": explicit opt-in; "auto": preset selected; "off": no automatic check. */
+  private readonly contractVersionCheck: "required" | "auto" | "off";
+  /** Cached `version()` result; `null` means the deployment has no `version()`. */
+  private contractVersion?: Promise<string | null>;
+  private contractVersionChecked = false;
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
-    this.rpcUrl = config.rpcUrl ?? TESTNET_RPC_URL;
-    this.networkPassphrase = config.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
-    this.rpc = new RpcServer(this.rpcUrl);
+    this.rpcUrl = config.rpcUrl ?? config.rpcProviders?.[0]?.url ?? config.network?.rpcUrl ?? TESTNET_RPC_URL;
+    this.networkPassphrase =
+      config.networkPassphrase ?? config.network?.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
+    this.allowMainnet = config.allowMainnet === true;
+    if (this.networkPassphrase === MAINNET_NETWORK_PASSPHRASE && !this.allowMainnet) {
+      throw new MainnetNotAllowedError();
+    }
+    // No network I/O here: verification is lazy (see ensureNetworkVerified).
+    this.networkVerification =
+      config.verifyNetwork === true
+        ? "required"
+        : config.verifyNetwork === false
+          ? "off"
+          : config.network
+            ? "auto"
+            : "off";
+    this.contractVersionCheck =
+      config.verifyContractVersion === true
+        ? "required"
+        : config.verifyContractVersion === false
+          ? "off"
+          : config.network
+            ? "auto"
+            : "off";
+    this.allowHttp = config.allowHttp ?? config.network?.allowHttp ?? false;
+    const providerConfigs = config.rpcProviders ?? [{ url: this.rpcUrl }];
+    this.rpcPool = config.rpcProviders
+      ? new RpcProviderPool(providerConfigs, { networkPassphrase: this.networkPassphrase, allowHttp: this.allowHttp })
+      : undefined;
+    this.rpc = new RpcServer(this.rpcUrl, { allowHttp: this.allowHttp });
     this.instrumentation = config.onEvent
       ? { ...config.instrumentation, onEvent: config.onEvent }
       : config.instrumentation;
@@ -829,17 +280,129 @@ export class EscrowClient {
     });
   }
 
+  /**
+   * Verifies once (and caches) that the RPC's reported network passphrase
+   * matches the configured one. A mismatch throws `NetworkMismatchError` so a
+   * custom `rpcUrl` cannot silently point a client at another network. Calling
+   * this is an explicit request, so an RPC without `getNetwork` is an error. A
+   * rejection is not cached, so a transient RPC failure is retryable.
+   */
+  verifyNetwork(): Promise<void> {
+    return this.runNetworkVerification(true);
+  }
+
+  private runNetworkVerification(required: boolean): Promise<void> {
+    if (!this.networkVerified) {
+      const rpc = this.rpc as Partial<Pick<RpcServer, "getNetwork">>;
+      if (typeof rpc.getNetwork !== "function") {
+        // Not cached: a later explicit request must still fail loudly.
+        return required
+          ? Promise.reject(
+              new Error("Cannot verify the network: the RPC client does not implement getNetwork()."),
+            )
+          : Promise.resolve();
+      }
+      const getNetwork = rpc.getNetwork.bind(rpc);
+      this.networkVerified = (async () => {
+        const rpcNetwork = await getNetwork();
+        if (rpcNetwork.passphrase !== this.networkPassphrase) {
+          throw new NetworkMismatchError(this.networkPassphrase, rpcNetwork.passphrase);
+        }
+      })();
+      this.networkVerified.catch(() => {
+        this.networkVerified = undefined;
+      });
+    }
+    return this.networkVerified;
+  }
+
+  /**
+   * Gate on every network call path: lazily verifies the RPC's passphrase once
+   * (see `verifyNetwork()`), then reuses the cached result. A no-op unless a
+   * `network` preset was selected or `verifyNetwork: true` was passed; with a
+   * preset only, an RPC without `getNetwork` is skipped rather than failing.
+   */
+  private async ensureNetworkVerified(): Promise<void> {
+    await this.ensureNetworkPassphrase();
+    await this.ensureContractVersionChecked();
+  }
+
+  private async ensureNetworkPassphrase(): Promise<void> {
+    if (this.rpcPool) {
+      const selected = await this.rpcPool.select();
+      this.rpc = selected.rpc;
+      this.rpcUrl = selected.url;
+    }
+    if (this.networkVerification === "off") return;
+    await this.runNetworkVerification(this.networkVerification === "required");
+  }
+
+  /**
+   * Reads the contract's semantic version once and caches it. Resolves to `null`
+   * for an older deployment with no `version()` function. A failed lookup
+   * rejects and isn't cached, so a transient RPC failure is retryable.
+   */
+  getContractVersion(): Promise<string | null> {
+    if (!this.contractVersion) {
+      this.contractVersion = (async () => {
+        await this.ensureNetworkPassphrase();
+        try {
+          const tx = await this.contractClient().version();
+          return tx.result;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (MISSING_FUNCTION_ERROR.test(message)) return null;
+          throw error;
+        }
+      })();
+      this.contractVersion.catch(() => {
+        this.contractVersion = undefined;
+      });
+    }
+    return this.contractVersion;
+  }
+
+  /**
+   * Checks the contract against `SUPPORTED_CONTRACT_VERSIONS`. Calling this is
+   * an explicit request, so an older deployment with no `version()` is rejected
+   * with `UnsupportedContractVersionError`, like any unsupported version.
+   */
+  async verifyContractVersion(): Promise<void> {
+    const version = await this.getContractVersion();
+    if (version === null || !isSupportedContractVersion(version)) {
+      throw new UnsupportedContractVersionError(this.contractId, version);
+    }
+  }
+
+  private async ensureContractVersionChecked(): Promise<void> {
+    if (this.contractVersionCheck === "off" || this.contractVersionChecked) return;
+    if (this.contractVersionCheck === "required") {
+      await this.verifyContractVersion();
+    } else {
+      let version: string | null;
+      try {
+        version = await this.getContractVersion();
+      } catch {
+        return; // A failed lookup says nothing about the version; retry next call.
+      }
+      if (version !== null && !isSupportedContractVersion(version)) {
+        throw new UnsupportedContractVersionError(this.contractId, version);
+      }
+    }
+    this.contractVersionChecked = true;
+  }
+
   private contractClient(signer?: EscrowSigner): EscrowContractClient {
     const effectiveSigner = signer ?? (this.archivalBehavior === "auto" ? this.restoreSigner : undefined);
     return new EscrowContractClient({
       contractId: this.contractId,
       rpcUrl: this.rpcUrl,
       networkPassphrase: this.networkPassphrase,
+      allowHttp: this.allowHttp,
       ...(effectiveSigner
         ? {
             publicKey: signerAddress(effectiveSigner),
             signTransaction: contractSigner(effectiveSigner, this.networkPassphrase),
-            signAuthEntry: contractSigner(effectiveSigner, this.networkPassphrase),
           }
         : {}),
     });
@@ -874,8 +437,14 @@ export class EscrowClient {
     build: () => Promise<AssembledTransaction<T>>,
     hooks: { beforeSign?: (tx: AssembledTransaction<T>) => Promise<void>; address?: string } = {},
   ): Promise<SentTransaction<T>> {
+    await this.ensureNetworkVerified();
     const attributes = this.spanAttributesIfEnabled(method, escrowId, hooks.address);
-    const tx = await tracePhase(this.instrumentation, "simulate", attributes, build);
+    let tx: AssembledTransaction<T>;
+    try {
+      tx = await tracePhase(this.instrumentation, "simulate", attributes, build);
+    } catch (error) {
+      throw toEscrowError(error, "simulation");
+    }
     if (tx.isReadCall) {
       throw new Error(`${method} was simulated as a read call; no transaction was sent.`);
     }
@@ -885,7 +454,11 @@ export class EscrowClient {
     });
 
     if (!this.instrumentation?.tracer && !this.instrumentation?.onEvent) {
-      return tx.send();
+      try {
+        return await tx.send();
+      } catch (error) {
+        throw toEscrowError(error, "submission");
+      }
     }
 
     const submitSpan = beginPhase(this.instrumentation, "submit", attributes);
@@ -921,7 +494,7 @@ export class EscrowClient {
     } catch (error) {
       if (!submitted) submitSpan.end(error);
       confirmSpan.end(error);
-      throw error;
+      throw toEscrowError(error, "submission");
     }
   }
 
@@ -931,6 +504,15 @@ export class EscrowClient {
       throw new Error(
         `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
       );
+    }
+    if ((params.feeRecipient === undefined) !== (params.feeBps === undefined)) {
+      throw new TypeError("feeRecipient and feeBps must be given together, or both omitted");
+    }
+    if (params.feeBps !== undefined && (!Number.isInteger(params.feeBps) || params.feeBps < 0 || params.feeBps > MAX_FEE_BPS)) {
+      throw new RangeError(`feeBps must be an integer between 0 and ${MAX_FEE_BPS} (10 %)`);
+    }
+    if (params.requiresAcceptance && (params.feeRecipient !== undefined || params.feeBps !== undefined)) {
+      throw new TypeError("requiresAcceptance cannot be combined with feeRecipient or feeBps.");
     }
     const client = this.contractClient(params.payer);
     const createParams = {
@@ -943,6 +525,8 @@ export class EscrowClient {
       refund_after: params.refundAfter,
       notify_payee: params.notifyPayee ?? false,
       refund_to: params.refundTo,
+      fee_recipient: params.feeRecipient,
+      fee_bps: params.feeBps,
     };
     if (params.requiresAcceptance && (params.notifyPayee || params.releaseNotBefore !== undefined)) {
       throw new Error("requiresAcceptance cannot be combined with notifyPayee or releaseNotBefore.");
@@ -973,8 +557,57 @@ export class EscrowClient {
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
   }
 
+  /**
+   * Read-only: `decimals`, `symbol` and `name` for `token`, read from the
+   * SEP-41 contract over this client's RPC and cached per contract address.
+   * Pass the returned `decimals` to `parseAmount`/`formatAmount` instead of
+   * assuming 7.
+   */
+  async getTokenInfo(token: string): Promise<TokenInfo> {
+    await this.ensureNetworkVerified();
+    return readTokenInfo(
+      token,
+      rpcTokenInfoSource({ rpcUrl: this.rpcUrl, networkPassphrase: this.networkPassphrase }),
+    );
+  }
+
+  /**
+   * Reads the immutable deploy-time token allowlist (issue #299). An
+   * **empty** array means any token is accepted, preserving the legacy
+   * behavior. The list can never change after deployment, so verify it
+   * once instead of trusting deployment notes.
+   */
+  async getAllowedTokens(): Promise<string[]> {
+    try {
+      const client = this.contractClient();
+      const tx = await tracePhase(
+        this.instrumentation,
+        "simulate",
+        this.spanAttributesIfEnabled("get_allowed_tokens"),
+        () => client.get_allowed_tokens(),
+      );
+      return tx.result;
+    } catch (error) {
+      throw toEscrowError(error);
+    }
+  }
+
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
   async getStatus(escrowId: bigint): Promise<EscrowStatus> {
+    try {
+      const client = this.contractClient();
+      const tx = await tracePhase(
+        this.instrumentation,
+        "simulate",
+        this.spanAttributesIfEnabled("get_status", escrowId),
+        () => client.get_status({ escrow_id: escrowId }),
+      );
+      const status: GeneratedEscrowStatus = tx.result.unwrap();
+      return status.tag;
+    } catch (error) {
+      throw toEscrowError(error);
+    }
+    await this.ensureNetworkVerified();
     const client = this.contractClient();
     const tx = await tracePhase(
       this.instrumentation,
@@ -1044,16 +677,24 @@ export class EscrowClient {
    * Read-only: everything stored about `escrowId` — including the
    * `releasers` set, its `threshold` and `refundAfter`, which payees should
    * check before relying on a `Funded` escrow (docs/adr/0004, threat model
-   * T8). Throws if `escrowId` doesn't exist.
+   * T8). Throws if `escrowId` doesn't exist, **and also once the escrow has
+   * settled**: its record is reclaimed (docs/adr/0013). Use `getStatus` for a
+   * settled id and the `ESCROW` state event for its history.
    */
   async getEscrow(escrowId: bigint): Promise<Escrow> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient();
-    const tx = await tracePhase(
-      this.instrumentation,
-      "simulate",
-      this.spanAttributesIfEnabled("get_escrow", escrowId),
-      () => client.get_escrow({ escrow_id: escrowId }),
-    );
+    let tx: Awaited<ReturnType<EscrowContractClient["get_escrow"]>>;
+    try {
+      tx = await tracePhase(
+        this.instrumentation,
+        "simulate",
+        this.spanAttributesIfEnabled("get_escrow", escrowId),
+        () => client.get_escrow({ escrow_id: escrowId }),
+      );
+    } catch (error) {
+      throw toEscrowError(error);
+    }
     let data: GeneratedEscrowData;
     try {
       data = tx.result.unwrap();
@@ -1087,6 +728,8 @@ export class EscrowClient {
       notifyPayee: data.notify_payee,
       refundTo: data.refund_to,
       releaseNotBefore: data.release_not_before ?? undefined,
+      feeRecipient: data.fee_recipient ?? undefined,
+      feeBps: data.fee_bps ?? undefined,
       requiresAcceptance: data.requires_acceptance,
       acceptedAt: data.accepted_at ?? undefined,
       status: data.status.tag,
@@ -1208,6 +851,7 @@ export class EscrowClient {
    * transaction's hash.
    */
   async cancel(params: CancelParams): Promise<{ txHash: string }> {
+    await this.ensureNetworkVerified();
     const payer = signerAddress(params.payer);
     const call: LifecycleCall = { method: "cancel", escrowId: params.escrowId, payer };
     if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
@@ -1266,6 +910,40 @@ export class EscrowClient {
   }
 
   /**
+   * Reassigns future payout rights to `newPayee` (contract `transfer_payee`,
+   * issue #45). Only the escrow's current payee may call it, only while
+   * `Funded`; `newPayee` must not be the payer or the contract id
+   * (`InvalidNewPayee`). If the escrow had `notifyPayee` set, it is reset
+   * to `false` upon transfer so the new payee receives standard push payouts
+   * without needing to implement the callback hook (issue #286).
+   * Returns the transaction's hash.
+   */
+  async transferPayee(params: TransferPayeeParams): Promise<{ txHash: string }> {
+    const currentPayee = signerAddress(params.currentPayee);
+    const call: LifecycleCall = {
+      method: "transfer_payee",
+      escrowId: params.escrowId,
+      currentPayee,
+      newPayee: params.newPayee,
+    };
+    if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
+    const client = this.contractClient(params.currentPayee);
+    const sent = await this.invoke(
+      "transfer_payee",
+      params.escrowId,
+      () =>
+        client.transfer_payee({
+          escrow_id: params.escrowId,
+          current_payee: currentPayee,
+          new_payee: params.newPayee,
+        }),
+      { address: currentPayee },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
    * Step 1 of the multi-party flow: simulates `call` with `source` as the
    * transaction source and returns it as portable JSON, listing every other
    * party whose contract authorization is still needed. Pass the result to
@@ -1275,6 +953,7 @@ export class EscrowClient {
   async prepareLifecycleCall(params: PrepareLifecycleParams): Promise<PreparedLifecycleCall> {
     const { call } = params;
     if (call.method === "top_up") assertPositiveAmount(call);
+    await this.ensureNetworkVerified();
     if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
     const source = params.source ?? lifecycleCallSigner(call);
     const client = this.contractClientForAddress(source);
@@ -1344,6 +1023,7 @@ export class EscrowClient {
     if (signerAddress(source) !== prepared.source) {
       throw new Error(`Prepared call must be submitted by its source ${prepared.source}.`);
     }
+    await this.ensureNetworkVerified();
     const client = this.contractClient(source);
     const tx = client.txFromJSON<Result<void>>(prepared.transaction);
     const missing = tx.needsNonInvokerSigningBy();
@@ -1361,6 +1041,7 @@ export class EscrowClient {
       contractId: this.contractId,
       rpcUrl: this.rpcUrl,
       networkPassphrase: this.networkPassphrase,
+      allowHttp: this.allowHttp,
       publicKey: address,
     });
   }
@@ -1376,6 +1057,12 @@ export class EscrowClient {
         return client.accept({ escrow_id: call.escrowId, payee: call.payee });
       case "cancel":
         return client.cancel({ escrow_id: call.escrowId, payer: call.payer });
+      case "transfer_payee":
+        return client.transfer_payee({
+          escrow_id: call.escrowId,
+          current_payee: call.currentPayee,
+          new_payee: call.newPayee,
+        });
     }
   }
 
@@ -1390,9 +1077,10 @@ export class EscrowClient {
       throw new EscrowPreconditionError(call.method, code, message);
     };
     // Same order as the contract, so the error matches what it would return.
-    const [party, expected] = call.method === "accept"
-      ? ["payee", escrow.payee] as const
-      : ["payer", escrow.payer] as const;
+    const [party, expected] =
+      call.method === "accept" || call.method === "transfer_payee"
+        ? ["payee", escrow.payee] as const
+        : ["payer", escrow.payer] as const;
     if (lifecycleCallSigner(call) !== expected) {
       fail("Unauthorized", `only the escrow's ${party} can call ${call.method}.`);
     }
@@ -1400,6 +1088,15 @@ export class EscrowClient {
       fail("NotFunded", `escrow ${call.escrowId} is ${escrow.status}, not Funded.`);
     }
     if (call.method === "top_up") return;
+    if (call.method === "transfer_payee") {
+      if (call.newPayee === escrow.payer || call.newPayee === this.contractId) {
+        fail(
+          "InvalidNewPayee",
+          "newPayee must not be the payer or the contract id.",
+        );
+      }
+      return;
+    }
     if (!escrow.requiresAcceptance) {
       fail("AcceptanceNotConfigured", "the escrow was created without the acceptance gate.");
     }
@@ -1509,6 +1206,7 @@ export class EscrowClient {
    * `NotPooled` (error 26) on a non-pooled or unknown id.
    */
   async getPooled(escrowId: bigint): Promise<PooledEscrow> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient();
     const tx = await tracePhase(
       this.instrumentation,
@@ -1533,6 +1231,7 @@ export class EscrowClient {
     escrowId: bigint,
     contributor: string
   ): Promise<ContributionRecord | undefined> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient();
     const tx = await tracePhase(
       this.instrumentation,
@@ -1543,6 +1242,26 @@ export class EscrowClient {
     const record: GeneratedContribution | undefined = tx.result.unwrap();
     if (record == null) return undefined;
     return { amount: record.amount, refunded: record.refunded };
+  }
+
+  /**
+   * Read-only solvency check for one token (issue #39): the contract's
+   * balance of `token` and its total outstanding liability in it (the sum
+   * of `amount` over every `Funded` escrow, maintained on-chain in the
+   * same invocation as each state change). `solvent` is false only when
+   * the contract holds less than it owes, e.g. after an issuer clawback
+   * (threat model T5). A token never used reports zero liabilities.
+   */
+  async getSolvency(token: string): Promise<SolvencyReport> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("solvency"),
+      () => client.solvency({ token }),
+    );
+    const [balance, liabilities] = tx.result;
+    return { balance, liabilities, solvent: balance >= liabilities };
   }
 
   /**
@@ -1565,6 +1284,183 @@ export class EscrowClient {
   }
 
   /**
+   * Blocks **new deposits** — `createEscrow`, its variants and any future
+   * deposit path — until `unpause` is called (docs/adr/0011). Only the
+   * custodian fixed at deployment may call it, and it must sign.
+   *
+   * Deliberately cannot touch money already escrowed: `release`,
+   * `refund` and the timeout refund never read the flag, so a pause can
+   * stop new exposure but never lock existing funds. Returns the
+   * transaction's hash.
+   */
+  async pause(caller: EscrowSigner): Promise<{ txHash: string }> {
+    const client = this.contractClient(caller);
+    const sent = await this.invoke(
+      "pause",
+      undefined,
+      () => client.pause({ caller: signerAddress(caller) }),
+      { address: signerAddress(caller) },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Re-opens new deposits after a pause (docs/adr/0011). Same authority as
+   * `pause` — only the deploy-time custodian, which must sign. Returns the
+   * transaction's hash.
+   */
+  async unpause(caller: EscrowSigner): Promise<{ txHash: string }> {
+    const client = this.contractClient(caller);
+    const sent = await this.invoke(
+      "unpause",
+      undefined,
+      () => client.unpause({ caller: signerAddress(caller) }),
+      { address: signerAddress(caller) },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /** Read-only: is the emergency pause currently blocking new deposits? */
+  async isPaused(): Promise<boolean> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("is_paused"),
+      () => client.is_paused(),
+    );
+    return tx.result;
+  }
+
+  /**
+   * Read-only: the custodian address that may `pause`/`unpause`, so an
+   * integrator can verify who holds the role without trusting docs
+   * (docs/adr/0011). `undefined` only for an instance deployed without a
+   * constructor, which this contract's WASM does not allow.
+   */
+  async getPauseAdmin(): Promise<string | undefined> {
+    const client = this.contractClient();
+    const tx = await tracePhase(
+      this.instrumentation,
+      "simulate",
+      this.spanAttributesIfEnabled("get_pause_admin"),
+      () => client.get_pause_admin(),
+    );
+    return tx.result ?? undefined;
+  }
+
+  /** The contract's limit on items per batched call (docs/adr/0005). */
+  get maxBatchSize(): number {
+    return MAX_BATCH_SIZE;
+  }
+
+  /**
+   * Creates several escrows, chunked to the contract's max batch size and
+   * mapped back to the caller's input order. Each item goes through the
+   * normal single-escrow `create_escrow` path, so validation, auth and
+   * events are identical to `createEscrow`.
+   *
+   * A failure never stops later chunks: every item is attempted, then a
+   * `BatchPartialFailureError` carrying all per-item results is thrown if
+   * any failed. Retry with `{ resumeFrom: error.results }` to send only the
+   * failures.
+   */
+  async createEscrows(
+    items: BatchCreateItem[],
+    options: BatchOptions<BatchCreateItem> = {},
+  ): Promise<BatchItemResult<BatchCreateItem>[]> {
+    const results = this.batchResults(items, options.resumeFrom);
+    const chunkSize = this.resolveChunkSize(options.chunkSize);
+
+    for (let start = 0; start < items.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, items.length);
+      for (let index = start; index < end; index++) {
+        if (results[index].ok) continue;
+        try {
+          const created = await this.createEscrow(items[index]);
+          results[index] = { index, item: items[index], ok: true, skipped: false, ...created };
+        } catch (error) {
+          results[index] = {
+            index,
+            item: items[index],
+            ok: false,
+            skipped: false,
+            error: batchErrorMessage(error),
+          };
+        }
+      }
+    }
+
+    this.throwOnBatchFailure(results);
+    return results;
+  }
+
+  /**
+   * Settles several escrows (`release` or `refund`), chunked to the
+   * contract's max batch size and mapped back to the caller's input order.
+   * Each operation goes through the existing single-op `release`/`refund`
+   * path, so auth and state rules are unchanged.
+   *
+   * A failure never stops later chunks: every operation is attempted, then
+   * a `BatchPartialFailureError` carrying all per-op results is thrown if
+   * any failed. Retry with `{ resumeFrom: error.results }` to send only the
+   * failures — already settled escrows are then skipped, never re-sent.
+   */
+  async settleMany(
+    ops: BatchSettleOperation[],
+    options: BatchOptions<BatchSettleOperation> = {},
+  ): Promise<BatchItemResult<BatchSettleOperation>[]> {
+    const results = this.batchResults(ops, options.resumeFrom);
+    const chunkSize = this.resolveChunkSize(options.chunkSize);
+
+    for (let start = 0; start < ops.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, ops.length);
+      for (let index = start; index < end; index++) {
+        if (results[index].ok) continue;
+        const op = ops[index];
+        try {
+          const settled = op.kind === "release"
+            ? await this.release({ escrowId: op.escrowId, caller: op.caller })
+            : await this.refund({ escrowId: op.escrowId, caller: op.caller });
+          results[index] = { index, item: op, ok: true, skipped: false, ...settled };
+        } catch (error) {
+          results[index] = { index, item: op, ok: false, skipped: false, error: batchErrorMessage(error) };
+        }
+      }
+    }
+
+    this.throwOnBatchFailure(results);
+    return results;
+  }
+
+  /** One not-yet-successful result per input, pre-filled from `resumeFrom`. */
+  private batchResults<T>(items: T[], resumeFrom?: BatchItemResult<T>[]): BatchItemResult<T>[] {
+    const results: BatchItemResult<T>[] = items.map((item, index) => ({
+      index,
+      item,
+      ok: false,
+      skipped: false,
+    }));
+    for (const prior of resumeFrom ?? []) {
+      if (!prior.ok || prior.index < 0 || prior.index >= results.length) continue;
+      results[prior.index] = { ...prior, item: items[prior.index], skipped: true };
+    }
+    return results;
+  }
+
+  private throwOnBatchFailure<T>(results: BatchItemResult<T>[]): void {
+    if (results.some((result) => !result.ok)) throw new BatchPartialFailureError(results);
+  }
+
+  /** Clamp a caller-supplied chunk size to the contract's max batch size. */
+  private resolveChunkSize(requested?: number): number {
+    if (requested === undefined || !Number.isFinite(requested) || requested < 1) return MAX_BATCH_SIZE;
+    return Math.min(Math.floor(requested), MAX_BATCH_SIZE);
+  }
+
+  /**
    * Simulates a `release`, has the releaser sign only its short-lived contract
    * authorization entry, and returns the resulting transaction for a separate
    * relayer to sign and submit. The relayer is the transaction source, so it
@@ -1584,14 +1480,266 @@ export class EscrowClient {
     return this.authorizeSettlement("refund", params);
   }
 
+  /** A contract client that can build and simulate for `publicKey` but cannot sign. */
+  private publicContractClient(publicKey: string): EscrowContractClient {
+    return new EscrowContractClient({
+      contractId: this.contractId,
+      rpcUrl: this.rpcUrl,
+      networkPassphrase: this.networkPassphrase,
+      publicKey,
+    });
+  }
+
+  /**
+   * Builds and simulates a `create_escrow` for a payer who signs elsewhere (a
+   * browser wallet, say) and returns the unsigned envelope. Nothing is signed
+   * or submitted, and no secret key is needed.
+   *
+   * By default the payer is also the transaction source, so the wallet only
+   * has to sign the envelope. Pass `source` to have another account pay the
+   * fee; the payer then has to sign its auth entry too (see `authSigners`).
+   *
+   * Hand the returned `xdr` to the signer, then pass the signed XDR and the
+   * `hash` to `submitSigned`. The transaction expires at `validUntilLedger`.
+   */
+  async prepareCreateEscrow(params: PrepareCreateEscrowParams): Promise<PreparedTransaction> {
+    await this.ensureNetworkVerified();
+    if ((params.feeRecipient === undefined) !== (params.feeBps === undefined)) {
+      throw new TypeError("feeRecipient and feeBps must be given together, or both omitted");
+    }
+    if (params.feeBps !== undefined && (!Number.isInteger(params.feeBps) || params.feeBps < 0 || params.feeBps > MAX_FEE_BPS)) {
+      throw new RangeError(`feeBps must be an integer between 0 and ${MAX_FEE_BPS} (10 %)`);
+    }
+    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+      throw new Error(
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+      );
+    }
+    const validForLedgers = params.validForLedgers ?? PREPARED_TX_TTL_LEDGERS;
+    const authValidForLedgers = params.authValidForLedgers ?? validForLedgers;
+    assertLedgerWindow("validForLedgers", validForLedgers);
+    assertLedgerWindow("authValidForLedgers", authValidForLedgers);
+    const source = params.source ?? params.payer;
+    const client = this.publicContractClient(source);
+    const createParams = {
+      payer: params.payer,
+      payee: params.payee,
+      token: params.token,
+      amount: params.amount,
+      condition_ref: params.conditionRef,
+      releaser: params.releaser,
+      refund_after: params.refundAfter,
+      notify_payee: params.notifyPayee ?? false,
+      refund_to: params.refundTo,
+      fee_recipient: params.feeRecipient,
+      fee_bps: params.feeBps,
+    };
+    const assembled = params.releaseNotBefore === undefined
+      ? await client.create_escrow(createParams)
+      : await client.create_escrow_release_time({
+          ...createParams,
+          release_not_before: params.releaseNotBefore,
+        });
+    return this.finishPrepare(assembled, source, validForLedgers, authValidForLedgers, "create_escrow");
+  }
+
+  /**
+   * Builds and simulates a `release` for a releaser that signs offline (a cold
+   * key, a hardware signer, or a classic multisig account) and returns the
+   * unsigned envelope. Nothing is signed or submitted. Sign `xdr` on the
+   * offline machine; for a multisig releaser collect one signed copy per
+   * signer and combine them with `mergeSignatures`; then send the result
+   * through `submitSigned` from anywhere.
+   *
+   * The source account's sequence number is fixed when the transaction is
+   * prepared. If that account sends anything else first, the prepared
+   * transaction is dead: `submitSigned` detects it (`StaleSequenceError`) and
+   * you must prepare and sign again. Single-releaser escrows only; M-of-N
+   * quorum escrows settle through `releaseWithApprovals`.
+   */
+  async prepareRelease(params: PrepareSettlementParams): Promise<PreparedTransaction> {
+    return this.prepareSettlement("release", params);
+  }
+
+  /** Like `prepareRelease`, but for `refund`. */
+  async prepareRefund(params: PrepareSettlementParams): Promise<PreparedTransaction> {
+    return this.prepareSettlement("refund", params);
+  }
+
+  private async prepareSettlement(
+    method: "release" | "refund",
+    params: PrepareSettlementParams,
+  ): Promise<PreparedTransaction> {
+    await this.ensureNetworkVerified();
+    const validForLedgers = params.validForLedgers ?? OFFLINE_PREPARED_TX_TTL_LEDGERS;
+    const authValidForLedgers = params.authValidForLedgers ?? validForLedgers;
+    assertLedgerWindow("validForLedgers", validForLedgers);
+    assertLedgerWindow("authValidForLedgers", authValidForLedgers);
+    const source = params.source ?? params.releaser;
+    const client = this.publicContractClient(source);
+    const args = { escrow_id: params.escrowId, caller: params.releaser };
+    const assembled = method === "release" ? await client.release(args) : await client.refund(args);
+    return this.finishPrepare(assembled, source, validForLedgers, authValidForLedgers, method);
+  }
+
+  /**
+   * Combines signed copies of one prepared transaction into a single envelope
+   * (see `mergeSignatures` in the offline-signing docs). Throws
+   * `SignedTransactionMismatchError` if any copy is a different transaction.
+   */
+  mergeSignatures(signedXdrs: string[]): string {
+    return mergeSignedTransactions(signedXdrs, this.networkPassphrase);
+  }
+
+  /**
+   * Signs the Soroban auth entries addressed to `signer` in a prepared
+   * transaction, for the case where `source` is a different account (see
+   * `PreparedTransaction.authSigners`). Returns the updated envelope and its
+   * new hash, so use the returned `hash` as `expectedHash` afterwards. Must run
+   * before the envelope is signed. `validUntilLedger` is the auth entry's
+   * expiration ledger (pass the prepared `authValidUntilLedger`); it defaults to
+   * about a day from the current ledger.
+   */
+  async signAuthEntries(
+    preparedXdr: string,
+    signer: Keypair,
+    options: { validUntilLedger?: number } = {},
+  ): Promise<{ xdr: string; hash: string; signedEntries: number }> {
+    const validUntilLedger = options.validUntilLedger
+      ?? (await this.rpc.getLatestLedger()).sequence + OFFLINE_PREPARED_TX_TTL_LEDGERS;
+    return signAuthEntriesInEnvelope(preparedXdr, signer, validUntilLedger, this.networkPassphrase);
+  }
+
+  /** Bounds a simulated transaction to a ledger window and describes it. */
+  private async finishPrepare(
+    assembled: AssembledTransaction<unknown>,
+    source: string,
+    validForLedgers: number,
+    authValidForLedgers: number,
+    label: string,
+  ): Promise<PreparedTransaction> {
+    if (assembled.isReadCall) {
+      throw new Error(`${label} was simulated as a read call; no transaction was assembled.`);
+    }
+    const latest = await this.rpc.getLatestLedger();
+    const validUntilLedger = latest.sequence + validForLedgers;
+    const bounded = setLedgerBounds(assembled.toXDR(), validUntilLedger);
+    const tx = TransactionBuilder.fromXDR(bounded, this.networkPassphrase) as Transaction;
+    return {
+      xdr: bounded,
+      hash: tx.hash().toString("hex"),
+      validUntilLedger,
+      source,
+      authSigners: authSignersOf(tx).filter((address) => address !== source),
+      authValidUntilLedger: latest.sequence + authValidForLedgers,
+    };
+  }
+
+  /**
+   * Submits a transaction that was prepared here and signed elsewhere, and
+   * waits for it to land.
+   *
+   * Before sending it checks, in order: that the envelope is signed, that its
+   * hash matches `expectedHash` (when given), that its ledger window has not
+   * passed (`PreparedTransactionExpiredError`), and that the source account's
+   * sequence number has not moved (`StaleSequenceError`). With a
+   * `feeBumpSigner` it first confirms the transaction only touches this
+   * escrow contract (`assertSponsorable`), then wraps it in a capped fee-bump.
+   * Returns the new escrow id when the transaction was a `create_escrow`.
+   */
+  async submitSigned(signedXdr: string, options: SubmitSignedOptions = {}): Promise<SubmitSignedResult> {
+    await this.ensureNetworkVerified();
+    const parsed = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+    if (!(parsed instanceof Transaction)) {
+      throw new TypeError("submitSigned expects a regular signed transaction, not an already fee-bumped envelope.");
+    }
+    const hash = parsed.hash().toString("hex");
+    if (options.expectedHash !== undefined && options.expectedHash.toLowerCase() !== hash) {
+      throw new SignedTransactionMismatchError(options.expectedHash.toLowerCase(), hash);
+    }
+    if (parsed.signatures.length === 0) throw new UnsignedTransactionError();
+
+    const validUntilLedger = ledgerBoundsMax(parsed);
+    if (validUntilLedger !== undefined) {
+      const latest = await this.rpc.getLatestLedger();
+      if (latest.sequence > validUntilLedger) {
+        throw new PreparedTransactionExpiredError(validUntilLedger, latest.sequence);
+      }
+    }
+
+    const source = parsed.source;
+    const expectedSequence = BigInt(parsed.sequence) - 1n;
+    const onChainSequence = BigInt((await this.rpc.getAccount(source)).sequenceNumber());
+    if (onChainSequence !== expectedSequence) {
+      throw new StaleSequenceError(source, expectedSequence, onChainSequence);
+    }
+
+    let toSend: Transaction | FeeBumpTransaction = parsed;
+    if (options.feeBumpSigner) {
+      this.assertSponsorable(signedXdr);
+      // A fee-bump's base fee must be at least the inner transaction's fee
+      // rate, and a Soroban transaction's fee includes its resource fee, so
+      // the network-minimum default would be rejected. Default to the inner
+      // rate (rounded up); `maxFee` still caps what the sponsor can pay.
+      const innerRate = (BigInt(parsed.fee) + BigInt(parsed.operations.length) - 1n) / BigInt(parsed.operations.length);
+      const bumped = this.feeBump(signedXdr, options.feeBumpSigner, {
+        maxFee: options.maxFee ?? DEFAULT_SUBMIT_MAX_FEE,
+        baseFee: options.baseFee ?? innerRate,
+      });
+      toSend = TransactionBuilder.fromXDR(bumped.xdr, this.networkPassphrase) as FeeBumpTransaction;
+      // `feeBump` caps baseFee x (ops + 1); stellar-base then adds the Soroban
+      // resource fee on top. Hold the sponsor to the fee actually charged.
+      const maxFee = options.maxFee ?? DEFAULT_SUBMIT_MAX_FEE;
+      const charged = BigInt(toSend.fee);
+      if (charged > maxFee) throw new MaxFeeExceededError(charged, maxFee);
+    }
+
+    const sent = await this.rpc.sendTransaction(toSend);
+    if (sent.status === "ERROR") {
+      const reason = sendErrorName(sent);
+      if (reason === "txTooLate") {
+        throw new PreparedTransactionExpiredError(validUntilLedger ?? 0, (await this.rpc.getLatestLedger()).sequence);
+      }
+      if (reason === "txBadSeq") {
+        throw new StaleSequenceError(source, expectedSequence, onChainSequence);
+      }
+      throw new Error(`Transaction ${sent.hash} was rejected${reason ? `: ${reason}` : ""}.`);
+    }
+    if (sent.status === "TRY_AGAIN_LATER") {
+      throw new Error(`The RPC node asked to try again later; transaction ${sent.hash} was not accepted.`);
+    }
+
+    const final = await this.rpc.pollTransaction(sent.hash, { attempts: options.pollAttempts ?? 30 });
+    if (final.status === Api.GetTransactionStatus.FAILED) {
+      throw new Error(`Transaction ${sent.hash} failed on-chain.`);
+    }
+    if (final.status !== Api.GetTransactionStatus.SUCCESS) {
+      throw new Error(
+        `Transaction ${sent.hash} was not confirmed after ${options.pollAttempts ?? 30} polls; ` +
+          `it may still land, so check its hash before retrying.`
+      );
+    }
+
+    const returnValue = final.returnValue;
+    const escrowId = returnValue && returnValue.switch().name === "scvU64"
+      ? BigInt(scValToNative(returnValue) as bigint | number | string)
+      : undefined;
+    return {
+      txHash: sent.hash,
+      innerTxHash: hash,
+      ...(escrowId !== undefined ? { escrowId } : {}),
+    };
+  }
+
   private async authorizeSettlement(
     settlement: "release" | "refund",
     params: RelayedAuthorizationParams,
   ): Promise<RelayedAuthorization> {
+    await this.ensureNetworkVerified();
     const client = this.contractClient(params.relayer);
     const tx = settlement === "release"
-      ? await client.release({ escrow_id: params.escrowId, caller: signerAddress(params.releaser) })
-      : await client.refund({ escrow_id: params.escrowId, caller: signerAddress(params.releaser) });
+      ? await client.release({ escrow_id: params.escrowId, caller: params.releaser.publicKey() })
+      : await client.refund({ escrow_id: params.escrowId, caller: params.releaser.publicKey() });
 
     if (tx.isReadCall) {
       throw new Error(`${settlement} was simulated as a read call; no transaction was assembled.`);
@@ -1602,7 +1750,7 @@ export class EscrowClient {
 
     // The relayer is the transaction source, so the envelope signature covers
     // its own auth; only the releaser's separate auth entry needs signing here.
-    if (tx.needsNonInvokerSigningBy().includes(signerAddress(params.releaser))) {
+    if (tx.needsNonInvokerSigningBy().includes(params.releaser.publicKey())) {
       await tx.signAuthEntries({
         signAuthEntry: contractSigner(params.releaser, this.networkPassphrase),
         expiration: expiresAtLedger,
@@ -1635,6 +1783,7 @@ export class EscrowClient {
       );
     }
 
+    await this.ensureNetworkVerified();
     const client = this.contractClient(relayer);
     const tx = client.txFromJSON<Result<void>>(authorization.transaction);
     const sent = await tx.signAndSend();
@@ -1653,6 +1802,7 @@ export class EscrowClient {
    * — fee-bump it with `maxFee` set to the most they are willing to pay.
    */
   async estimate(call: EstimateCallParams): Promise<FeeEstimate> {
+    await this.ensureNetworkVerified();
     const contractId = call.contractId ?? this.contractId;
     const account = await this.rpc.getAccount(signerAddress(call.source));
     const transaction = new TransactionBuilder(account, {
@@ -1836,9 +1986,7 @@ export class EscrowClient {
           // Every non-invoker approver signs the contract auth entry. This is
           // part of the "sign" phase, so one span covers all signatures.
           for (const signer of additionalSigners) {
-            await tx.signAuthEntries({
-              signAuthEntry: contractSigner(signer, this.networkPassphrase),
-            });
+            await tx.signAuthEntries({ signAuthEntry: contractSigner(signer, this.networkPassphrase) });
           }
         },
       },
@@ -1855,6 +2003,9 @@ export class EscrowClient {
     if (params.fromLedger !== undefined && (!Number.isSafeInteger(params.fromLedger) || params.fromLedger < 1)) {
       throw new RangeError("fromLedger must be a positive safe integer.");
     }
+    // Validate the arguments before any network work, so a bad call fails
+    // fast and never depends on RPC availability.
+    await this.ensureNetworkVerified();
     const filter: Api.EventFilter = { type: "contract", contractIds: [this.contractId] };
     const request: Api.GetEventsRequest = "cursor" in params && params.cursor !== undefined
       ? { cursor: params.cursor, filters: [filter], limit: 100 }
@@ -1883,6 +2034,42 @@ export class EscrowClient {
       else events.push({ ...base, type: "unknown", ...(unknownName ? { eventName: unknownName } : {}), ...(escrowId !== undefined ? { escrowId } : {}), topics: nativeTopics });
     }
     return { events, nextCursor: response.cursor };
+  }
+
+  /**
+   * Moves a `Funded` single-releaser escrow's `refund_after` later with the
+   * payer's and releaser's consent (issue #41, docs/adr/0004). The current
+   * deadline must exist and not have passed, and `newDeadline` must be
+   * strictly later. The payer is the transaction source; the releaser signs
+   * its own auth entry unless it is the same address. Returns the
+   * transaction's hash.
+   */
+  async extendRefundAfter(params: ExtendRefundAfterParams): Promise<{ txHash: string }> {
+    const payer = signerAddress(params.payer);
+    const releaser = signerAddress(params.releaser);
+    const client = this.contractClient(params.payer);
+    const sent = await this.invoke(
+      "extend_refund_after",
+      params.escrowId,
+      () => client.extend_refund_after({ escrow_id: params.escrowId, new_deadline: params.newDeadline }),
+      {
+        address: payer,
+        beforeSign: async (tx) => {
+          const pending = tx.needsNonInvokerSigningBy();
+          const unknown = pending.filter((address) => address !== releaser);
+          if (unknown.length > 0) {
+            throw new Error(`extend_refund_after needs authorization from ${unknown.join(", ")}, which is neither the payer nor the releaser.`);
+          }
+          if (pending.includes(releaser)) {
+            await tx.signAuthEntries({
+              signAuthEntry: contractSigner(params.releaser, this.networkPassphrase),
+            });
+          }
+        },
+      },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
   }
 
   /**
@@ -1923,3 +2110,13 @@ export class EscrowClient {
     return () => { stopped = true; };
   }
 }
+
+export {
+  FakeClock,
+  FakeEscrowClient,
+  FakeEscrowError,
+  type FakeEscrowErrorCode,
+  type FakeFailure,
+  type FakeFailureKind,
+  type FakeOperation,
+} from "./testing.js";

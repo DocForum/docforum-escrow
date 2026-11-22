@@ -9,7 +9,96 @@
 New records are written by `scripts/deploy`, newest first, and mirrored in the
 machine-readable `/deployments.json`. Older records were written by hand.
 
+> **Note (updated 2026-11-03):** the 2026-11-03 record below (contract 2.5.1)
+> is the first deployment with Phase E5's
+> `__constructor(allowed_tokens, pause_admin)` (issue #35, `docs/adr/0011`).
+> Every older record predates that constructor, so **none of them has the
+> emergency pause** and none can be upgraded to it in place: a constructor is
+> part of the instance's deployment. Those entries stay as accurate history of
+> what was actually deployed at the time. `scripts/deploy` passes
+> `--pause_admin` (default: the deployer account).
+
+**Contract versions:** the 2026-11-03 deployment reports `version()` = `2.5.1`.
+Every older record has no `version()` function, which is how the SDK identifies
+it (`getContractVersion()` returns `null`).
+
+## Operator CLI
+
+The SDK package installs the `docforum-escrow` command. From this repository,
+run `npm ci && npm link` in `sdk/` to use it locally. The current deployment
+is testnet only; the CLI defaults to the Stellar testnet RPC and passphrase.
+Create a signer file with restrictive permissions (`chmod 600`) or set
+`DOCFORUM_SECRET_KEY`; the CLI also accepts `--signer-env NAME` to select a
+different environment variable. Without either source it prompts with hidden
+input. Do not put secret keys in argv.
+
+```bash
+docforum-escrow create --contract-id CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E \
+  --payee G... --token CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC \
+  --amount 1000000 --condition-ref order-123 --releaser G... --json
+docforum-escrow status --contract-id CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E --escrow-id 0 --json
+docforum-escrow show --contract-id CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E --escrow-id 0 --json
+docforum-escrow release --contract-id CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E --escrow-id 0 --yes
+docforum-escrow refund --contract-id CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E --escrow-id 0 --dry-run --json
+docforum-escrow list --contract-id CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E --from-events --start-ledger 1 --json
+```
+
+`--dry-run` performs Soroban simulation and skips submission. Mutating commands
+require interactive confirmation; use `--yes` for automated submitters.
+Mainnet passphrases are rejected unless `--allow-mainnet` is passed explicitly.
+`list --from-events` returns contract events in the selected ledger range.
+
 <!-- scripts/deploy inserts new records below this line -->
+
+## `docforum_escrow` — 2026-11-18 (`2bbc6b1`, recorded by `scripts/deploy`)
+
+| | |
+|---|---|
+| Network | testnet (`Test SDF Network ; September 2015`) |
+| Contract ID | `CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H` |
+| Explorer | https://stellar.expert/explorer/testnet/contract/CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H |
+| WASM hash | `774709b5de18420ba16b890a90759affa1ae795b7622e51f9b1cee2dbf5ea6e0` |
+| WASM upload tx | https://stellar.expert/explorer/testnet/tx/1e4f2817f105608031c5277f9150e9b7d3481d1eb91dceb980ef68ffa2e73d17 |
+| Deploy tx | https://stellar.expert/explorer/testnet/tx/c4a03c6b302d30bc0d73eaf773b1812d1057e664fc1a5e58b3207ea635824e6b |
+| Source commit | `2bbc6b1` (`2bbc6b1cb9182eed70e25af84b2bac6758a1ba22`) |
+| Constructor `allowed_tokens` | `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` |
+| Constructor `pause_admin` | `GDJBRSDH4OARYUYDUDUXYTELZQMIJVZBLL4H2CDQFOHMNKNGE4ILUM7T` |
+| `version()` | `3.0.0` |
+
+### Scripted live verification
+
+The on-chain WASM was fetched after deployment and matched the hash above.
+
+- `create` escrow 0: Passed, expected Funded; [transaction](https://stellar.expert/explorer/testnet/tx/89a61376b4913e3b5c79a434bf292ced1e596a636ad65c83a486eeb86086b72c).
+- `release` escrow 0: Passed, expected Released; [transaction](https://stellar.expert/explorer/testnet/tx/d97ae2c2cb261f97ab98d2ca58d18bd67b51176020d89c6d13a9dfc6eda129a7).
+- `refund` escrow 1: Passed, expected Refunded; [transaction](https://stellar.expert/explorer/testnet/tx/398773340d8cd868471ef4f90c69af07fa2d5d66c249670eba16ebf711a4a276).
+- `reject_stranger_release` escrow 2: Passed, expected Error(Contract, #3) Unauthorized; rejected in simulation, not submitted.
+- `reject_double_release` escrow 0: Passed, expected Error(Contract, #4) NotFunded; rejected in simulation, not submitted.
+- `reject_non_positive_amount`: Passed, expected Error(Contract, #2) InvalidAmount; rejected in simulation, not submitted.
+
+## `docforum_escrow` — 2026-11-03 (`52a6a39`, recorded by `scripts/deploy`)
+
+| | |
+|---|---|
+| Network | testnet (`Test SDF Network ; September 2015`) |
+| Contract ID | `CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E` |
+| Explorer | https://stellar.expert/explorer/testnet/contract/CAANBNO7UXU24RVORQSGV33VJ7ZPL4UQKQNGPOSCSDDLISQ35SH62Y6E |
+| WASM hash | `95e15dec669d99e227984f2e9cb787316816acb48140bb8d8616bf78d76a1ff6` |
+| WASM upload tx | https://stellar.expert/explorer/testnet/tx/9e78a662ad3b8febd324d2faaf124ea911333a9ff4e149d46b0b09a00eabf755 |
+| Deploy tx | https://stellar.expert/explorer/testnet/tx/6c8ef8b8e2f280ad3214a1ff331e6594250c77918445c409e26f0b72f20f4eb3 |
+| Source commit | `52a6a39` (`52a6a396be7f8834107a173cefe33163fd99777f`) |
+| Constructor `allowed_tokens` | `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` |
+
+### Scripted live verification
+
+The on-chain WASM was fetched after deployment and matched the hash above.
+
+- `create` escrow 0: Passed, expected Funded; [transaction](https://stellar.expert/explorer/testnet/tx/914577181d6ed1aa7553dc5c58c3ffd0af019401de419b2af363b176ff313a44).
+- `release` escrow 0: Passed, expected Released; [transaction](https://stellar.expert/explorer/testnet/tx/b0ed914cd97919c8f65c8a7cde35a3bcd250fef96f8b0bd8f2aeb866736f90fe).
+- `refund` escrow 1: Passed, expected Refunded; [transaction](https://stellar.expert/explorer/testnet/tx/2d812b32ec87585da094050739af7aa8a655dd62051465f99e2c977daf5ca152).
+- `reject_stranger_release` escrow 2: Passed, expected Error(Contract, #3) Unauthorized; rejected in simulation, not submitted.
+- `reject_double_release` escrow 0: Passed, expected Error(Contract, #4) NotFunded; rejected in simulation, not submitted.
+- `reject_non_positive_amount`: Passed, expected Error(Contract, #2) InvalidAmount; rejected in simulation, not submitted.
 
 ## `docforum_escrow` — 2026-10-24 (`eafe267`, recorded by `scripts/deploy`)
 
@@ -275,8 +364,14 @@ stellar contract deploy \
   --wasm target/wasm32v1-none/release/docforum_escrow.wasm \
   --source <alias> \
   --network testnet \
-  --alias docforum-escrow
+  --alias docforum-escrow \
+  -- --allowed_tokens '["<token-address>"]' --pause_admin <custodian-address>
 ```
+
+Both constructor arguments are required by the current source: the
+immutable token allowlist (an empty list allows any token) and the pause
+custodian (docs/adr/0011). Pass a Stellar multisig account as
+`--pause_admin` for a deployment whose pause cannot be lost with one key.
 
 Remember the SDK's tests and any consumer config (`contractId`) point at
 the id above — a redeploy means updating those, not just this file.

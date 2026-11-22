@@ -49,6 +49,18 @@ The SDK is published to npm as `@docforum/escrow-sdk` via an automated,
 provenance-signed release workflow — see [Releasing the SDK](#releasing-the-sdk)
 below. The GitHub Release tarball is still attached for existing consumers.
 
+An HTML API reference is generated from the SDK's doc comments with
+`npm run docs` in `sdk/` (TypeDoc, config in `sdk/typedoc.json`). It also acts
+as a missing-doc lint: every exported symbol must have a doc comment, or the
+command fails — so document new exports as you add them. CI builds the
+reference on every PR and publishes it to GitHub Pages from `main`
+(`.github/workflows/docs.yml`); enabling Pages is a one-time maintainer step,
+documented in that workflow. Runnable examples live in `sdk/examples/`
+(from `sdk/`: `npm run build && node examples/<flow>.ts`) and run against
+testnet with runtime-generated, Friendbot-funded keys — never a committed
+secret; CI type-checks them (`npm run typecheck:examples`) but does not run
+them.
+
 ## 2. Find something to work on
 
 Open issues are scoped, real, and tagged with a complexity/point value
@@ -72,12 +84,23 @@ verification/release-engineering tracks.
   entry as a new file in `changelog.d/`, in the same PR. Don't append to
   the end of `ROADMAP.md`; that is what made every PR conflict. See
   `changelog.d/README.md`.
+- Don't add new lines to `ROADMAP.md`, `ARCHITECTURE_ESSENTIALS.md`,
+  `README.md` or `docs/threat-model.md`. Put new items, rows, paragraphs and
+  sections in a fragment under `docs.d/` that names the doc and the heading
+  (or line) they go under; a maintainer folds them in. Editing existing
+  lines in place is fine. CI enforces this. See `docs.d/README.md`.
+- If you change the contract (`contracts/escrow/src/`), add a fragment
+  under `contract-changes.d/` with the bump level and a one-line summary.
+  **Don't edit `CONTRACT_VERSION`**: a maintainer bumps it once per batch.
+  New `Error` variants use a provisional code (your issue number × 100 + n);
+  never renumber or remove an existing one. CI checks all three. See
+  `contract-changes.d/README.md`.
 - Changes to escrow lifecycle semantics must also update the TLA+
   specification under `spec/` and rerun TLC. That includes changes to
   settlement auth, status transitions, timeouts, payee acceptance,
   release/refund rules, or quorum behavior.
-- Keep doc edits to your own lines: add rows and lines, don't rewrite
-  other people's paragraphs. See `AGENTS.md` → "Shared docs".
+- Keep doc edits to your own lines: new lines go in `docs.d/`, and don't
+  rewrite other people's paragraphs. See `AGENTS.md` → "Shared docs".
 - Run `cargo test` and `cargo build --target wasm32v1-none --release`
   locally — this is exactly what CI checks.
 - `cargo test` also rewrites `contracts/escrow/test_snapshots/`. Review that
@@ -119,12 +142,18 @@ path stays visible in a diff.
 - Snapshots must be deterministic: fresh keypairs come from the SDK's seeded
 `Address::generate`, so a second `cargo test` must produce a byte-identical
 snapshot. CI's snapshot step catches both drift and nondeterminism.
+- CI also runs `node scripts/check-orphaned-snapshots.mjs` after the contract
+  tests. It lists the tests from Cargo and compares their names with the
+  `<test-name>.<n>.json` snapshot prefixes, so stale snapshots from renamed or
+  deleted tests fail CI. Numbered files such as `.2.json` belong to the same
+  test and are checked using the shared prefix.
 
 ## Generated SDK bindings
 
 `sdk/src/generated/contract-client.ts` is machine-generated from the compiled
 WASM and must never be hand-edited (issue #121). After any change to
-`contracts/escrow/src/lib.rs`'s public functions, types or doc comments:
+the contract's public functions, types or doc comments
+(`contracts/escrow/src/`):
 
 ```bash
 # Uses the Stellar CLI version pinned in scripts/stellar-cli-version.
