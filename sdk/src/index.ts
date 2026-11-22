@@ -900,8 +900,9 @@ export class EscrowClient {
    * Reassigns future payout rights to `newPayee` (contract `transfer_payee`,
    * issue #45). Only the escrow's current payee may call it, only while
    * `Funded`; `newPayee` must not be the payer or the contract id
-   * (`InvalidNewPayee`). Warning: on a `notifyPayee` escrow the new payee
-   * must implement the `notify_payee` callback, or payouts to it will fail.
+   * (`InvalidNewPayee`). If the escrow had `notifyPayee` set, it is reset
+   * to `false` upon transfer so the new payee receives standard push payouts
+   * without needing to implement the callback hook (issue #286).
    * Returns the transaction's hash.
    */
   async transferPayee(params: TransferPayeeParams): Promise<{ txHash: string }> {
