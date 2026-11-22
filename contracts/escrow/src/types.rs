@@ -86,6 +86,11 @@ pub struct EscrowData {
     /// = 10 %), taken once at release, rounded **down** with the
     /// remainder to the payee — see docs/adr/0010.
     pub fee_bps: Option<u32>,
+    /// Optional attester key (ed25519 public key) for attestation-based
+    /// release (Phase E5, issue #42). `None` means the escrow can only
+    /// be released by its releaser(s). Set once at creation, never
+    /// changed.
+    pub attester: Option<BytesN<32>>,
 }
 
 /// Identifies voluntary refunds started by the escrow's stored payee.
@@ -137,6 +142,44 @@ pub struct PooledData {
 pub struct Contribution {
     pub amount: i128,
     pub refunded: bool,
+}
+
+/// A recurring funding schedule (issue #115, ADR 0015): the payer
+/// records the terms once, then any keeper funds one period at a time
+/// with `fund_next`, each period becoming a normal escrow. The payer's
+/// SEP-41 allowance caps what can ever be pulled; cancelling stops
+/// future periods without touching escrows already created.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecurringSchedule {
+    pub payer: Address,
+    pub payee: Address,
+    pub token: Address,
+    /// Amount pulled for each period.
+    pub amount: i128,
+    /// Stored verbatim on every period escrow (same rule as
+    /// `EscrowData.condition_ref`: opaque, public on-chain forever).
+    pub condition_ref: String,
+    /// Single releaser of every period escrow.
+    pub releaser: Address,
+    /// Relative refund window, in seconds, applied to each period escrow
+    /// when it is funded: the period escrow's `refund_after` is the
+    /// ledger timestamp at funding plus this window. `None` means no
+    /// refund deadline. Relative on purpose: an absolute deadline stored
+    /// at creation would pass while periods remain, and every later
+    /// `fund_next` would fail the creation path's `refund_after <= now`
+    /// check, so the schedule could never complete.
+    pub refund_after_seconds: Option<u64>,
+    /// Seconds between period due times.
+    pub period_seconds: u64,
+    /// How many periods the schedule funds in total.
+    pub total_periods: u32,
+    /// Periods already funded.
+    pub periods_funded: u32,
+    /// Ledger timestamp the next period becomes due.
+    pub next_due: u64,
+    /// Set by `cancel_schedule`; a cancelled schedule never funds again.
+    pub cancelled: bool,
 }
 
 /// One entry of a `create_escrows` batch. Mirrors the single-escrow
@@ -200,6 +243,10 @@ pub enum DataKey {
     Withdrawn(u64),
     /// Streamed escrows only (issue #44): immutable original amount.
     TotalAmount(u64),
+    /// Issue #115: a recurring funding schedule (ADR 0015).
+    RecurringSchedule(u64),
+    /// Issue #115: next schedule id counter.
+    NextScheduleId,
 }
 
 /// Emitted by `pause` (docs/adr/0011). Carries the custodian that flipped

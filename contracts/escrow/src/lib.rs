@@ -36,6 +36,17 @@
 // docs/adr/0011. Pooled escrows add two storage records (funding config,
 // per-payer contributions); `EscrowData` and every pre-existing entry
 // point keep their exact meaning.
+// Phase E5 (issue #115): recurring escrows funded through SEP-41 token
+// allowances — `create_schedule` + keeper-triggered `fund_next` +
+// `cancel_schedule`, see docs/adr/0015. Each due period pulls exactly
+// one period's amount with `transfer_from` and creates a normal escrow.
+//
+// Phase E5 (issue #42): attestation-based release — an escrow can
+// carry an optional `attester` (ed25519 public key) and be released
+// with a signed off-chain attestation, `release_with_attestation`,
+// verified over a domain-separated message (contract id, network id,
+// escrow id, action). The stored releaser can still release as
+// before.
 //
 // Hard rule (see ARCHITECTURE_ESSENTIALS.md / docs/adr/0001): the contract
 // enforces WHO may act, not WHY. `condition_ref` is opaque — the contract
@@ -55,12 +66,12 @@
 
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error,
-    symbol_short, token, Address, Env, IntoVal, String, Vec,
+    symbol_short, token, Address, Bytes, BytesN, Env, IntoVal, String, Vec,
 };
 
 // Bump this value whenever a contract interface or behavior change is made.
 // CI checks this constant against the base branch when this file changes.
-pub const CONTRACT_VERSION: &str = "3.0.1";
+pub const CONTRACT_VERSION: &str = "3.3.0";
 
 include!(concat!(env!("OUT_DIR"), "/contract_metadata.rs"));
 
@@ -81,12 +92,14 @@ pub use types::*;
 pub struct EscrowContract;
 
 mod admin;
+mod attestation;
 mod create;
 mod internal;
 mod pause;
 mod payee_transfer;
 mod pooled;
 mod queries;
+mod recurring;
 mod refund_extension;
 mod release_refund;
 mod releasers;
