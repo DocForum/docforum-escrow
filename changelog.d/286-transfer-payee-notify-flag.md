@@ -1,1 +1,0 @@
-Issue #286 (Phase E5): `transfer_payee` now resets `notify_payee = false` on transfer so that reassigning payout rights to an account or a contract without the callback hook cannot leave the escrow permanently unreleasable with `CallbackFailed`. Transferred escrows receive standard push token releases.
