@@ -162,6 +162,10 @@ jobs:
         working-directory: .
         run: node scripts/check-contract-change.mjs "origin/${{ github.base_ref }}"
 
+      - name: No tracked backup files
+        working-directory: .
+        run: node scripts/check-no-backup-files.mjs
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.96.0
         with:
@@ -206,6 +210,10 @@ jobs:
             exit 1
           fi
           echo "Committed test snapshots match this run."
+
+      - name: Fail if test snapshots are orphaned
+        working-directory: .
+        run: node scripts/check-orphaned-snapshots.mjs
 
       - name: cargo build --release (wasm)
         run: cargo build --target wasm32v1-none --release
@@ -311,13 +319,9 @@ jobs:
       - name: Verify CJS, ESM, and browser package entrypoints
         run: npm run smoke
 
-      # Offline only: events fixture decoding plus quorum input validation.
-      # Never the live testnet suite (see the note at the end of this file).
+      # The offline project includes every non-network SDK test automatically.
+      # Never run the live project in PR CI (see the note at the end of this file).
       - run: npm run test:offline
-
-      - run: npm run test:milestones
-
-      - run: npm run test:unit
 
       - run: npm run test:runtime
 
@@ -396,9 +400,9 @@ jobs:
       - run: npm run test:browser
         working-directory: sdk
 
-      # Deliberately NOT run here: `npm run test:integration`
-      # (tests/testnet-integration.test.ts) depends on live testnet and
-      # Friendbot funding. Runtime checks use local fixtures only.
+      # Deliberately NOT run here: `npm run test:integration` selects the
+      # live project, which depends on testnet/Friendbot funding. Runtime
+      # checks use local fixtures only.
 
   escrow-react:
     name: React hooks package

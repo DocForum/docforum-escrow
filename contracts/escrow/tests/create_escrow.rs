@@ -335,7 +335,10 @@ fn creation_requires_payer_auth_with_nested_token_transfer_tree() {
         sub_invokes: &sub_invokes,
     };
 
-    env.mock_auths(&[MockAuth { address: &payer, invoke: &create }]);
+    env.mock_auths(&[MockAuth {
+        address: &payer,
+        invoke: &create,
+    }]);
     let id = client.create_escrow(
         &payer,
         &payee,
@@ -350,10 +353,80 @@ fn creation_requires_payer_auth_with_nested_token_transfer_tree() {
         &None,
     );
 
-    auth::assert_auth_addresses(&env, &[payer.clone()]);
+    auth::assert_auth_tree(&env, &payer, &create);
     assert_eq!(token.balance(&payer), 700);
     assert_eq!(token.balance(&contract_id), 300);
     assert_eq!(client.get_status(&id), EscrowStatus::Funded);
+}
+
+#[test]
+fn creation_rejects_a_wrong_signer_even_with_the_exact_transfer_tree() {
+    let env = Env::default();
+    env.mock_all_auths(); // authorize fixture minting only
+    let (token_id, token, asset) = setup(&env);
+    let payer = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    asset.mint(&payer, &1_000);
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let condition_ref = String::from_str(&env, "wrong-create-signer");
+
+    let transfer = MockAuthInvoke {
+        contract: &token_id,
+        fn_name: "transfer",
+        args: (payer.clone(), contract_id.clone(), 300i128).into_val(&env),
+        sub_invokes: &[],
+    };
+    let sub_invokes = [transfer];
+    let create = MockAuthInvoke {
+        contract: &contract_id,
+        fn_name: "create_escrow",
+        args: (
+            payer.clone(),
+            payee,
+            token_id.clone(),
+            300i128,
+            condition_ref.clone(),
+            releaser,
+            None::<u64>,
+            false,
+            None::<Address>,
+            None::<Address>,
+            None::<u32>,
+        )
+            .into_val(&env),
+        sub_invokes: &sub_invokes,
+    };
+
+    env.mock_auths(&[MockAuth {
+        address: &stranger,
+        invoke: &create,
+    }]);
+    let result = client.try_create_escrow(
+        &payer,
+        &Address::generate(&env),
+        &token_id,
+        &300,
+        &condition_ref,
+        &Address::generate(&env),
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+    );
+
+    assert!(result.is_err());
+    assert_eq!(token.balance(&payer), 1_000);
+    assert!(matches!(
+        client.try_get_status(&0),
+        Err(Ok(docforum_escrow::Error::NotFound))
+    ));
 }
 
 fn batch_of(env: &Env, token: &Address, count: u32) -> Vec<docforum_escrow::CreateItem> {
@@ -545,4 +618,50 @@ fn max_create_batch_fits_mainnet_limits() {
         events_bytes + return_bytes <= 16_384 * 85 / 100,
         "events {events_bytes} + return {return_bytes} bytes"
     );
+}
+
+#[test]
+fn create_escrow_rejects_contract_as_payee_or_releaser() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (token_id, _token, asset) = setup(&env);
+    let payer = Address::generate(&env);
+    let external = Address::generate(&env);
+    asset.mint(&payer, &1_000);
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let payee_result = client.try_create_escrow(
+        &payer,
+        &contract_id,
+        &token_id,
+        &100,
+        &String::from_str(&env, "contract-payee"),
+        &external,
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+    );
+    let releaser_result = client.try_create_escrow(
+        &payer,
+        &external,
+        &token_id,
+        &100,
+        &String::from_str(&env, "contract-releaser"),
+        &contract_id,
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+    );
+
+    assert!(payee_result.is_err());
+    assert!(releaser_result.is_err());
+    assert_eq!(asset.balance(&payer), 1_000);
 }

@@ -16,8 +16,10 @@ Add `contracts/releaser-account/`, a Soroban custom account configured at
 construction with one escrow contract, an Ed25519 public-key set, and a
 threshold `M`. The target escrow address is immutable. `__check_auth`
 verifies distinct registered signatures over Soroban's host-generated
-authorization payload, then permits exactly one `release` or `refund`
-context on that target. Soroban's authorization payload binds signatures
+authorization payload, then permits exactly one `release`, `refund`, or
+`rotate_releaser`, or `settle_many(caller = self, ops)` batch context on that target.
+For rotation, the account must be the `caller` argument (the second argument after
+`escrow_id`); the escrow still separately requires the payer's authorization. Soroban's authorization payload binds signatures
 to the transaction nonce and call context, preventing reuse for another
 transaction or operation. Additional and nested contexts are rejected.
 
