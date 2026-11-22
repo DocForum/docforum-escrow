@@ -1,6 +1,7 @@
 //! Escrow creation entry points and payee acceptance.
 
 use crate::*;
+use crate::internal::Funding;
 
 #[contractimpl]
 impl EscrowContract {
@@ -116,6 +117,7 @@ impl EscrowContract {
             None,
             false,
             Some(payees),
+            Funding::Transfer,
         )
     }
 
