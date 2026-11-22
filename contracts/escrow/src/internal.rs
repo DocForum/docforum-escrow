@@ -22,7 +22,7 @@ impl EscrowContract {
         attester: Option<BytesN<32>>,
         payer_already_authorized: bool,
     ) -> Result<u64, Error> {
-        Self::create_escrow_with_payees_inner(
+        Self::create_escrow_with_uniqueness_inner(
             env,
             payer,
             payee,
@@ -41,10 +41,11 @@ impl EscrowContract {
             attester,
             payer_already_authorized,
             None,
+            false,
         )
     }
 
-    pub(crate) fn create_escrow_with_payees_inner(
+    pub(crate) fn create_escrow_with_uniqueness_inner(
         env: &Env,
         payer: Address,
         payee: Address,
@@ -63,6 +64,7 @@ impl EscrowContract {
         attester: Option<BytesN<32>>,
         payer_already_authorized: bool,
         payee_shares: Option<Vec<PayeeShare>>,
+        unique_ref: bool,
     ) -> Result<u64, Error> {
         // Every creation entry point funnels through here, so this one
         // check covers all deposit paths: while paused, no new escrow can
@@ -138,6 +140,10 @@ impl EscrowContract {
         if condition_ref.len() > MAX_CONDITION_REF_LEN {
             return Err(Error::ConditionRefTooLong);
         }
+        let unique_key = DataKey::UniqueRef(payer.clone(), condition_ref.clone());
+        if unique_ref && env.storage().persistent().has(&unique_key) {
+            return Err(Error::DuplicateConditionRef);
+        }
         Self::check_releaser_set(env, &releasers, threshold)?;
         let refund_to = refund_to.unwrap_or_else(|| payer.clone());
         if refund_to == env.current_contract_address() {
@@ -200,6 +206,10 @@ impl EscrowContract {
             .persistent()
             .set(&DataKey::Status(id), &data.status);
         Self::extend_escrow_ttl(env, id, refund_after);
+        if unique_ref {
+            env.storage().persistent().set(&unique_key, &id);
+            Self::extend_unique_ref_ttl(env, &unique_key, refund_after);
+        }
         Self::publish_state(env, symbol_short!("created"), id, &data);
         Ok(id)
     }
@@ -385,6 +395,14 @@ impl EscrowContract {
             SETTLED_ESCROW_TTL_THRESHOLD,
             SETTLED_ESCROW_EXTEND_TO,
         );
+        let unique_key = DataKey::UniqueRef(data.payer.clone(), data.condition_ref.clone());
+        if env.storage().persistent().get::<_, u64>(&unique_key) == Some(escrow_id) {
+            env.storage().persistent().extend_ttl(
+                &unique_key,
+                SETTLED_ESCROW_TTL_THRESHOLD,
+                SETTLED_ESCROW_EXTEND_TO,
+            );
+        }
 
         let token_client = token::Client::new(env, &data.token);
         if settled == EscrowStatus::Released {

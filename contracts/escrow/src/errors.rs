@@ -136,4 +136,7 @@ pub enum Error {
     /// `release_with_attestation` was called on an escrow with no
     /// `attester` configured (Phase E5, issue #42).
     AttesterNotConfigured = 54,
+    /// A uniqueness-enabled creation used an already-indexed pair. Use
+    /// `get_unique_escrow` to recover the original escrow id.
+    DuplicateConditionRef = 4700,
 }

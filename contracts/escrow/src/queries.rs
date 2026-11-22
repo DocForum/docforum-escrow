@@ -4,6 +4,18 @@ use crate::*;
 
 #[contractimpl]
 impl EscrowContract {
+    /// Returns the escrow id indexed for a uniqueness-enabled `(payer,
+    /// condition_ref)` pair, if one exists. The index is retained through
+    /// settlement and expires with its persistent storage TTL.
+    pub fn get_unique_escrow(
+        env: Env,
+        payer: Address,
+        condition_ref: String,
+    ) -> Option<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::UniqueRef(payer, condition_ref))
+    }
     /// Returns the next id that a creation entry point will assign. It is a
     /// read-only view of the instance counter; an undeployed or untouched
     /// contract reports zero.

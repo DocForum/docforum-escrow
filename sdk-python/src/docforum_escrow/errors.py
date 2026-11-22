@@ -144,6 +144,7 @@ CONTRACT_ERROR_NAMES: dict[int, str] = {
     52: "InvalidSettlementAmount",
     53: "SettlementNotSupported",
     54: "AttesterNotConfigured",
+    4700: "DuplicateConditionRef",
 }
 
 

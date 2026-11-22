@@ -205,6 +205,9 @@ pub enum DataKey {
     Withdrawn(u64),
     /// Streamed escrows only (issue #44): immutable original amount.
     TotalAmount(u64),
+    /// Optional creation idempotency index: one escrow id per `(payer,
+    /// condition_ref)` while the index entry remains live.
+    UniqueRef(Address, String),
 }
 
 /// Emitted by `pause` (docs/adr/0011). Carries the custodian that flipped

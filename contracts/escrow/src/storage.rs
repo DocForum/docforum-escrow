@@ -114,4 +114,25 @@ impl EscrowContract {
         storage.extend_ttl(&DataKey::Escrow(escrow_id), threshold, extend_to);
         storage.extend_ttl(&DataKey::Status(escrow_id), threshold, extend_to);
     }
+
+    pub(crate) fn extend_unique_ref_ttl(
+        env: &Env,
+        key: &DataKey,
+        refund_after: Option<u64>,
+    ) {
+        let deadline_target = refund_after.and_then(|deadline| {
+            deadline.checked_sub(env.ledger().timestamp()).map(|seconds| {
+                u32::try_from(seconds / 5)
+                    .unwrap_or(u32::MAX)
+                    .saturating_add(ESCROW_GRACE_PERIOD_LEDGERS)
+            })
+        });
+        let extend_to = deadline_target
+            .unwrap_or(ESCROW_EXTEND_TO)
+            .max(ESCROW_EXTEND_TO)
+            .min(MAX_NETWORK_TTL_LEDGERS)
+            .min(env.storage().max_ttl());
+        let threshold = ESCROW_TTL_THRESHOLD.min(extend_to);
+        env.storage().persistent().extend_ttl(key, threshold, extend_to);
+    }
 }

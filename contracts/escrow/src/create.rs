@@ -52,7 +52,7 @@ impl EscrowContract {
         let primary_payee = payees.get(0).ok_or(Error::InvalidPayeeList)?.payee;
         let mut releasers = Vec::new(&env);
         releasers.push_back(releaser);
-        Self::create_escrow_with_payees_inner(
+        Self::create_escrow_with_uniqueness_inner(
             &env,
             payer,
             primary_payee,
@@ -71,6 +71,7 @@ impl EscrowContract {
             None,
             false,
             Some(payees),
+            false,
         )
     }
 
@@ -108,6 +109,50 @@ impl EscrowContract {
             fee_bps,
             None,
             false,
+        )
+    }
+
+    /// Creates an escrow with optional on-chain idempotency for the
+    /// `(payer, condition_ref)` pair. When `unique_ref` is true, a duplicate
+    /// returns `DuplicateConditionRef`; call `get_unique_escrow` to recover
+    /// the original id. Existing `create_escrow` callers remain unchanged.
+    pub fn create_escrow_with_uniqueness(
+        env: Env,
+        payer: Address,
+        payee: Address,
+        token: Address,
+        amount: i128,
+        condition_ref: String,
+        releaser: Address,
+        refund_after: Option<u64>,
+        notify_payee: bool,
+        refund_to: Option<Address>,
+        fee_recipient: Option<Address>,
+        fee_bps: Option<u32>,
+        unique_ref: bool,
+    ) -> Result<u64, Error> {
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        Self::create_escrow_with_uniqueness_inner(
+            &env,
+            payer,
+            payee,
+            token,
+            amount,
+            condition_ref,
+            releasers,
+            1,
+            refund_after,
+            notify_payee,
+            false,
+            refund_to,
+            None,
+            fee_recipient,
+            fee_bps,
+            None,
+            false,
+            None,
+            unique_ref,
         )
     }
 

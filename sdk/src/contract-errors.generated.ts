@@ -52,4 +52,5 @@ export const CONTRACT_ERROR_NAMES = {
   39: "AlreadyPaused",
   40: "NotPaused",
   54: "AttesterNotConfigured",
+  4700: "DuplicateConditionRef",
 } as const;
