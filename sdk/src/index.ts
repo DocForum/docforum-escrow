@@ -36,10 +36,18 @@ import {
   type InstrumentationOptions,
 } from "./instrumentation.js";
 import type { FactoryClient as FactoryClientType } from "./factory.js";
-import { signerAddress, type EscrowSigner } from "./signers/types.js";
+import { contractSigner, signerAddress, type EscrowSigner } from "./signers/types.js";
 
 export { Keypair };
 export { signerAddress, type EscrowSigner } from "./signers/types.js";
+export {
+  KeypairSigner,
+  RemoteSigner,
+  SignerError,
+  type RemoteSignerOptions,
+  type Signer,
+  type SignerOptions,
+} from "./signers/signer.js";
 export {
   otelTracer,
   spanName,
@@ -344,7 +352,7 @@ export interface EscrowClientConfig {
   onEvent?: InstrumentationOptions["onEvent"];
   /** Use the restore signer to authorize calls that automatically restore archived entries. */
   archivalBehavior?: ArchivedEntryBehavior;
-  restoreSigner?: Keypair;
+  restoreSigner?: EscrowSigner;
 }
 
 export interface CreateEscrowParams {
@@ -637,8 +645,8 @@ export interface SettlementApprovalsParams {
 /** The relayer pays the transaction fee; the releaser signs only contract auth. */
 export interface RelayedAuthorizationParams {
   escrowId: bigint;
-  releaser: Keypair;
-  relayer: Keypair;
+  releaser: EscrowSigner;
+  relayer: EscrowSigner;
 }
 
 /**
@@ -787,7 +795,7 @@ export class EscrowClient {
   private readonly rpc: RpcServer;
   private readonly instrumentation?: InstrumentationOptions;
   private readonly archivalBehavior: ArchivedEntryBehavior;
-  private readonly restoreSigner?: Keypair;
+  private readonly restoreSigner?: EscrowSigner;
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
@@ -828,7 +836,11 @@ export class EscrowClient {
       rpcUrl: this.rpcUrl,
       networkPassphrase: this.networkPassphrase,
       ...(effectiveSigner
-        ? { publicKey: signerAddress(effectiveSigner), signTransaction: effectiveSigner }
+        ? {
+            publicKey: signerAddress(effectiveSigner),
+            signTransaction: contractSigner(effectiveSigner, this.networkPassphrase),
+            signAuthEntry: contractSigner(effectiveSigner, this.networkPassphrase),
+          }
         : {}),
     });
   }
@@ -1296,7 +1308,10 @@ export class EscrowClient {
     }
     const client = this.contractClientForAddress(prepared.source);
     const tx = client.txFromJSON<Result<void>>(prepared.transaction);
-    await tx.signAuthEntries({ signAuthEntry: signer, expiration: prepared.expiresAtLedger });
+    await tx.signAuthEntries({
+      signAuthEntry: contractSigner(signer, this.networkPassphrase),
+      expiration: prepared.expiresAtLedger,
+    });
     return {
       ...prepared,
       transaction: tx.toJSON(),
@@ -1575,8 +1590,8 @@ export class EscrowClient {
   ): Promise<RelayedAuthorization> {
     const client = this.contractClient(params.relayer);
     const tx = settlement === "release"
-      ? await client.release({ escrow_id: params.escrowId, caller: params.releaser.publicKey() })
-      : await client.refund({ escrow_id: params.escrowId, caller: params.releaser.publicKey() });
+      ? await client.release({ escrow_id: params.escrowId, caller: signerAddress(params.releaser) })
+      : await client.refund({ escrow_id: params.escrowId, caller: signerAddress(params.releaser) });
 
     if (tx.isReadCall) {
       throw new Error(`${settlement} was simulated as a read call; no transaction was assembled.`);
@@ -1587,9 +1602,9 @@ export class EscrowClient {
 
     // The relayer is the transaction source, so the envelope signature covers
     // its own auth; only the releaser's separate auth entry needs signing here.
-    if (tx.needsNonInvokerSigningBy().includes(params.releaser.publicKey())) {
+    if (tx.needsNonInvokerSigningBy().includes(signerAddress(params.releaser))) {
       await tx.signAuthEntries({
-        signAuthEntry: params.releaser,
+        signAuthEntry: contractSigner(params.releaser, this.networkPassphrase),
         expiration: expiresAtLedger,
       });
     }
@@ -1821,7 +1836,9 @@ export class EscrowClient {
           // Every non-invoker approver signs the contract auth entry. This is
           // part of the "sign" phase, so one span covers all signatures.
           for (const signer of additionalSigners) {
-            await tx.signAuthEntries({ signAuthEntry: signer });
+            await tx.signAuthEntries({
+              signAuthEntry: contractSigner(signer, this.networkPassphrase),
+            });
           }
         },
       },

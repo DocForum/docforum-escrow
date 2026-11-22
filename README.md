@@ -423,6 +423,28 @@ signing. A user rejecting the prompt is returned as SEP-43
 `{ signedTxXdr: "", error: { code: -4 } }` rather than a crash. Complete
 example: [`examples/web-demo/src/wallet.ts`](examples/web-demo/src/wallet.ts).
 
+### Pluggable signers (issue #60)
+
+The SDK also accepts its own `Signer` interface, so a KMS, HSM, or remote
+service can own the signing key without placing it in the application process.
+The configured network passphrase is passed to every signing call:
+
+```ts
+import type { Signer } from "@docforum/escrow-sdk";
+
+const kmsSigner: Signer = {
+  publicKey: () => kmsPublicKey,
+  signTransaction: (xdr, { networkPassphrase }) =>
+    kms.sign({ xdr, networkPassphrase }),
+};
+
+await client.release({ escrowId, caller: kmsSigner });
+```
+
+`KeypairSigner` wraps local-key behavior, while `RemoteSigner` is a small HTTP
+reference adapter. Signer failures are exposed as `SignerError` without
+copying the signing payload into the error message.
+
 ### React hooks
 
 [`@docforum/escrow-react`](packages/escrow-react) provides `useEscrow(id)`,

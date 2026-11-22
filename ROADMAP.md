@@ -300,6 +300,9 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   server bundles stay wallet-free. Typed `WalletNetworkMismatchError` before
   signing; user rejection returned as SEP-43 `-4` rather than thrown. 12
   offline fake-kit tests.
+- [x] Pluggable SDK signer interface (issue #60) — `Signer` supports local,
+  wallet, KMS/HSM and remote signing through `KeypairSigner` and the reference
+  `RemoteSigner`; existing `Keypair` and SEP-43 call sites remain supported.
 - [x] Go client SDK (issue #128) — `sdk-go/`, module
   `github.com/DocForum/docforum-escrow/sdk-go`. `CreateEscrow`, `GetStatus`,
   `GetEscrow`, `Release`, `Refund` (+ `TopUp` and approval paths), typed
