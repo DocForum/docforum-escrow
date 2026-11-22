@@ -51,4 +51,10 @@ export const CONTRACT_ERROR_NAMES = {
   38: "Paused",
   39: "AlreadyPaused",
   40: "NotPaused",
+  54: "AttesterNotConfigured",
+  55: "ScheduleTooEarly",
+  56: "ScheduleComplete",
+  57: "ScheduleCancelled",
+  58: "AllowanceExhausted",
+  59: "InvalidSchedule",
 } as const;
