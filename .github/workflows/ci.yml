@@ -110,6 +110,10 @@ jobs:
         working-directory: .
         run: node scripts/check-contract-change.mjs "origin/${{ github.base_ref }}"
 
+      - name: No tracked backup files
+        working-directory: .
+        run: node scripts/check-no-backup-files.mjs
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.96.0
         with:
@@ -154,6 +158,10 @@ jobs:
             exit 1
           fi
           echo "Committed test snapshots match this run."
+
+      - name: Fail if test snapshots are orphaned
+        working-directory: .
+        run: node scripts/check-orphaned-snapshots.mjs
 
       - name: cargo build --release (wasm)
         run: cargo build --target wasm32v1-none --release

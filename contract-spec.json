@@ -7,6 +7,11 @@
       "return": ""
     },
     {
+      "name": "get_allowed_tokens",
+      "args": "env: Env",
+      "return": "Vec<Address>"
+    },
+    {
       "name": "version",
       "args": "env: Env",
       "return": "String"

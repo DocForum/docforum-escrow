@@ -571,6 +571,21 @@ export interface Client {
   version: (options?: MethodOptions) => Promise<AssembledTransaction<string>>
 
   /**
+   * Construct and simulate a get_allowed_tokens transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Read-only: the immutable token allowlist fixed at deployment
+   * (issue #299). An **empty** list means any token is accepted — the
+   * legacy behavior. Integrators should verify this on-chain instead of
+   * trusting deployment notes: there is no setter, so one read answers
+   * the question for the lifetime of the instance.
+   * 
+   * Total by design: an instance whose allowlist key is absent returns
+   * an empty list rather than trapping. This WASM cannot reach that
+   * state (the constructor always writes the key), but a future
+   * migration or a differently-initialised instance can.
+   */
+  get_allowed_tokens: (options?: MethodOptions) => Promise<AssembledTransaction<Array<string>>>
+
+  /**
    * Construct and simulate a pause transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Blocks new deposits (`create_escrow` and its variants,
    * `create_pooled_escrow`, `top_up` and `contribute`) until `unpause`
@@ -925,6 +940,7 @@ export class Client extends ContractClient {
         "AAAAAAAAAIJNb3ZlcyBhbiBhY3RpdmUgcmVmdW5kIGRlYWRsaW5lIGxhdGVyIHdpdGggdGhlIHBheWVyJ3MgYW5kIHRoZQpzaW5nbGUgcmVsZWFzZXIncyBjb25zZW50LiBRdW9ydW0gZXNjcm93cyB1c2UgdGhlaXIgdGhyZXNob2xkIHBhdGguAAAAAAATZXh0ZW5kX3JlZnVuZF9hZnRlcgAAAAACAAAAAAAAAAllc2Nyb3dfaWQAAAAAAAAGAAAAAAAAAAxuZXdfZGVhZGxpbmUAAAAGAAAAAQAAA+kAAAACAAAAAw==",
         "AAAAAAAAAKdTZW1hbnRpYyB2ZXJzaW9uIG9mIHRoaXMgY29udHJhY3QgaW50ZXJmYWNlIGFuZCBiZWhhdmlvci4KQnVpbGQgcHJvdmVuYW5jZSBpcyBhdmFpbGFibGUgc2VwYXJhdGVseSBpbiB0aGUgV0FTTSBjb250cmFjdAptZXRhZGF0YSAoYGdpdF9zaGFgIGFuZCBgc29yb2Jhbl9zZGtfdmVyc2lvbmApLgAAAAAHdmVyc2lvbgAAAAAAAAAAAQAAABA=",
         "AAAAAAAAAj5TZXRzIHRoZSBpbW11dGFibGUgdG9rZW4gYWxsb3dsaXN0IGF0IGRlcGxveW1lbnQuIEFuIGVtcHR5IGxpc3QKcHJlc2VydmVzIHRoZSBsZWdhY3kgYmVoYXZpb3IgYW5kIGFsbG93cyBhbnkgdG9rZW4gYWRkcmVzcy4KCkFsc28gc3RvcmVzIHRoZSBzaW5nbGUgYWRkcmVzcyBwZXJtaXR0ZWQgdG8gYHBhdXNlYC9gdW5wYXVzZWAKKGRvY3MvYWRyLzAwMTEpLiBUaGVyZSBpcyBubyBzZXR0ZXIsIHNvIHRoZSBjdXN0b2RpYW4gY2Fubm90IGJlCmNoYW5nZWQgYWZ0ZXIgZGVwbG95bWVudCDigJQgYSBuZXcgY3VzdG9kaWFuIG1lYW5zIGEgbmV3IGRlcGxveW1lbnQuCk5vIGF1dGggaXMgcmVxdWlyZWQgaGVyZTogdGhlIGNvbnN0cnVjdG9yIHJ1bnMgYXMgcGFydCBvZiBkZXBsb3lpbmcKdGhlIGluc3RhbmNlLCBiZWZvcmUgYW55IGNhbGxlciBleGlzdHMuCgpUaGUgY3VzdG9kaWFuIGlzIGRlbGliZXJhdGVseSB3ZWFrOiBpdHMgb25seSBwb3dlciBpcyB0byByZWZ1c2UKKipuZXcqKiBkZXBvc2l0cy4gSXQgY2Fubm90IHJlbGVhc2UsIHJlZnVuZCwgZWRpdCBhbiBlc2Nyb3csIG9yCnVwZ3JhZGUgYW55dGhpbmcuAAAAAAANX19jb25zdHJ1Y3RvcgAAAAAAAAIAAAAAAAAADmFsbG93ZWRfdG9rZW5zAAAAAAPqAAAAEwAAAAAAAAALcGF1c2VfYWRtaW4AAAAAEwAAAAA=",
+        "AAAAAAAAAitSZWFkLW9ubHk6IHRoZSBpbW11dGFibGUgdG9rZW4gYWxsb3dsaXN0IGZpeGVkIGF0IGRlcGxveW1lbnQKKGlzc3VlICMyOTkpLiBBbiAqKmVtcHR5KiogbGlzdCBtZWFucyBhbnkgdG9rZW4gaXMgYWNjZXB0ZWQg4oCUIHRoZQpsZWdhY3kgYmVoYXZpb3IuIEludGVncmF0b3JzIHNob3VsZCB2ZXJpZnkgdGhpcyBvbi1jaGFpbiBpbnN0ZWFkIG9mCnRydXN0aW5nIGRlcGxveW1lbnQgbm90ZXM6IHRoZXJlIGlzIG5vIHNldHRlciwgc28gb25lIHJlYWQgYW5zd2Vycwp0aGUgcXVlc3Rpb24gZm9yIHRoZSBsaWZldGltZSBvZiB0aGUgaW5zdGFuY2UuCgpUb3RhbCBieSBkZXNpZ246IGFuIGluc3RhbmNlIHdob3NlIGFsbG93bGlzdCBrZXkgaXMgYWJzZW50IHJldHVybnMKYW4gZW1wdHkgbGlzdCByYXRoZXIgdGhhbiB0cmFwcGluZy4gVGhpcyBXQVNNIGNhbm5vdCByZWFjaCB0aGF0CnN0YXRlICh0aGUgY29uc3RydWN0b3IgYWx3YXlzIHdyaXRlcyB0aGUga2V5KSwgYnV0IGEgZnV0dXJlCm1pZ3JhdGlvbiBvciBhIGRpZmZlcmVudGx5LWluaXRpYWxpc2VkIGluc3RhbmNlIGNhbi4AAAAAEmdldF9hbGxvd2VkX3Rva2VucwAAAAAAAAAAAAEAAAPqAAAAEw==",
         "AAAAAAAAAftCbG9ja3MgbmV3IGRlcG9zaXRzIChgY3JlYXRlX2VzY3Jvd2AgYW5kIGl0cyB2YXJpYW50cywKYGNyZWF0ZV9wb29sZWRfZXNjcm93YCwgYHRvcF91cGAgYW5kIGBjb250cmlidXRlYCkgdW50aWwgYHVucGF1c2VgCmlzIGNhbGxlZC4gQ2FsbGFibGUgb25seSBieSB0aGUgY3VzdG9kaWFuCnNldCBhdCBkZXBsb3ltZW50LCB3aGljaCBtdXN0IHNpZ24gdGhpcyBjYWxsIChkb2NzL2Fkci8wMDExKS4gRW1pdHMKYSBgUGF1c2VkYCBldmVudCBjYXJyeWluZyB0aGF0IGFkZHJlc3MuCgpEZWxpYmVyYXRlbHkgaGFzIG5vIGVmZmVjdCBvbiBtb25leSBhbHJlYWR5IGVzY3Jvd2VkOiBgcmVsZWFzZWAsCmByZWZ1bmRgLCB0aGUgdGltZW91dCByZWZ1bmQgYW5kIGBjbGFpbV9yZWZ1bmRgIGRvIG5vdCByZWFkIHRoZQpmbGFnLCBzbyBhIHBhdXNlIGNhbiBuZXZlciBsb2NrIGV4aXN0aW5nIGZ1bmRzLiBFcnJvcnMKYEFscmVhZHlQYXVzZWRgIGlmIHRoZSBjb250cmFjdCBpcyBhbHJlYWR5IHBhdXNlZC4AAAAABXBhdXNlAAAAAAAAAQAAAAAAAAAGY2FsbGVyAAAAAAATAAAAAQAAA+kAAAACAAAAAw==",
         "AAAAAAAAAUNSZS1vcGVucyBuZXcgZGVwb3NpdHMuIFNhbWUgYXV0aCBhcyBgcGF1c2VgIOKAlCBvbmx5IHRoZSBjdXN0b2RpYW4Kc2V0IGF0IGRlcGxveW1lbnQuIEVtaXRzIGFuIGBVbnBhdXNlZGAgZXZlbnQuIEVycm9ycyBgTm90UGF1c2VkYCBpZgp0aGUgY29udHJhY3QgaXNuJ3QgcGF1c2VkLgoKVW5wYXVzaW5nIGlzIG5vdCB0aW1lbG9ja2VkIG9uIHB1cnBvc2UgKGRvY3MvYWRyLzAwMTEpOiBpdCByZXN0b3Jlcwpub3JtYWwgb3BlcmF0aW9uIGFuZCBjYW5ub3QgdG91Y2ggYSBzaW5nbGUgZXNjcm93LCBzbyBkZWxheWluZyBpdAp3b3VsZCBvbmx5IGRlbGF5IHJlY292ZXJ5LgAAAAAHdW5wYXVzZQAAAAABAAAAAAAAAAZjYWxsZXIAAAAAABMAAAABAAAD6QAAAAIAAAAD",
         "AAAAAAAAAJ5SZWFkLW9ubHk6IGlzIHRoZSBlbWVyZ2VuY3kgcGF1c2UgY3VycmVudGx5IGJsb2NraW5nIG5ldyBkZXBvc2l0cz8KU2F5cyBub3RoaW5nIGFib3V0IGV4aXN0aW5nIGVzY3Jvd3Mg4oCUIGByZWxlYXNlYC9gcmVmdW5kYCB3b3JrIGVpdGhlcgp3YXkgKGRvY3MvYWRyLzAwMTEpLgAAAAAACWlzX3BhdXNlZAAAAAAAAAAAAAABAAAAAQ==",
@@ -981,6 +997,7 @@ export class Client extends ContractClient {
         release_with_approvals: this.txFromJSON<Result<void>>,
         extend_refund_after: this.txFromJSON<Result<void>>,
         version: this.txFromJSON<string>,
+        get_allowed_tokens: this.txFromJSON<Array<string>>,
         pause: this.txFromJSON<Result<void>>,
         unpause: this.txFromJSON<Result<void>>,
         is_paused: this.txFromJSON<boolean>,
