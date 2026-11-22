@@ -1,0 +1,34 @@
+# Accepted surviving mutants for the nightly mutation run (issue #314).
+#
+# `cargo mutants` lists every mutant no test killed in `mutants.out/missed.txt`.
+# This file is the committed answer to "which of those do we accept, and why".
+# The nightly workflow (`.github/workflows/contract-mutation-testing.yml`) fails
+# when a mutant survives that is not listed here, and names it in the job
+# summary.
+#
+# Format — one accepted survivor per line:
+#
+#   <mutation description>  # <one-line reason>
+#
+# Write the mutant as missed.txt words it (`replace < with <= in
+# create_escrow`, `replace release -> Result<(), Error> with Ok(())`, ...).
+# A leading `file:line:col: ` is ignored if you paste the whole line, and the
+# line number is never part of the identity: the mutation description already
+# names the function and the mutation, so editing an unrelated line above a
+# mutant does not churn this file.
+#
+# The reason is required — `scripts/mutation-baseline.mjs validate` fails a
+# missing one. Accept a survivor only when no test can reasonably kill it, and
+# say why in one line. A survivor a test *could* catch belongs in
+# `contracts/escrow/tests/`, not here.
+#
+# To add an entry: run the workflow (Actions -> Contract mutation testing ->
+# Run workflow), then copy the "New survivors" lines from its job summary and
+# give each one a reason.
+#
+# Matching caveat: changing a mutated function's signature changes its
+# description, so the entry has to be updated in the same PR. That is
+# intentional — it makes the acceptance visible in review.
+#
+# Currently no survivor is accepted: every survivor fails the run until it is
+# either killed by a test or added below with a reason.

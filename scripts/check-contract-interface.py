@@ -12,6 +12,16 @@ import sys
 root = Path(__file__).resolve().parents[1]
 
 
+# Provisional error codes (>= 1000, contract-changes.d/README.md) are never
+# released: the maintainer fold renumbers them to final codes before a deploy.
+# That one move, provisional -> final, is not a renumbering of a released code.
+PROVISIONAL_MIN = 1000
+
+
+def is_fold_renumbering(old_code, new_code):
+    return old_code >= PROVISIONAL_MIN and new_code < PROVISIONAL_MIN
+
+
 def contract_source(root_path: Path) -> str:
     """lib.rs with every `mod name;` replaced by src/name.rs, stripped of comments."""
     src_dir = root_path / "contracts/escrow/src"
@@ -113,7 +123,7 @@ def assert_append_only(curr_spec: dict, base_ref: str | None = None) -> None:
     for name, code in old_errors.items():
         if name not in new_errors:
             problems.append(f"Error::{name} (= {code}) was removed. Error codes are append-only.")
-        elif new_errors[name] != code:
+        elif new_errors[name] != code and not is_fold_renumbering(code, new_errors[name]):
             problems.append(f"Error::{name} was renumbered ({code} -> {new_errors[name]}). Error codes are append-only.")
 
     for code, old_name in old_codes.items():
