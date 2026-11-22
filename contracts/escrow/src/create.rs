@@ -1,5 +1,6 @@
 //! Escrow creation entry points and payee acceptance.
 
+use crate::internal::Funding;
 use crate::*;
 
 #[contractimpl]
@@ -52,7 +53,7 @@ impl EscrowContract {
         let primary_payee = payees.get(0).ok_or(Error::InvalidPayeeList)?.payee;
         let mut releasers = Vec::new(&env);
         releasers.push_back(releaser);
-        Self::create_escrow_with_uniqueness_inner(
+        Self::create_escrow_with_payees_inner(
             &env,
             payer,
             primary_payee,
@@ -72,6 +73,7 @@ impl EscrowContract {
             false,
             Some(payees),
             false,
+            Funding::Transfer,
         )
     }
 
@@ -133,7 +135,7 @@ impl EscrowContract {
     ) -> Result<u64, Error> {
         let mut releasers = Vec::new(&env);
         releasers.push_back(releaser);
-        Self::create_escrow_with_uniqueness_inner(
+        Self::create_escrow_with_payees_inner(
             &env,
             payer,
             payee,
@@ -153,6 +155,7 @@ impl EscrowContract {
             false,
             None,
             unique_ref,
+            Funding::Transfer,
         )
     }
 

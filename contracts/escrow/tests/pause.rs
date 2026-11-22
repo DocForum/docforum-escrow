@@ -44,6 +44,7 @@ const DEPOSIT_ENTRYPOINTS: &[&str] = &[
     "create_escrows",
     "create_streamed_escrow",
     "create_pooled_escrow",
+    "fund_next",
     "contribute",
     "top_up",
 ];
@@ -81,6 +82,9 @@ const NON_DEPOSIT_ENTRYPOINTS: &[&str] = &[
     "settle",
     "get_vesting",
     "withdraw",
+    "create_schedule",
+    "cancel_schedule",
+    "get_schedule",
 ];
 
 fn snapshot_function_names() -> std::vec::Vec<&'static str> {
@@ -373,6 +377,20 @@ fn paused_blocks_the_other_creation_entry_points_and_top_up() {
     env.mock_all_auths();
     let f = deploy(&env);
     let escrow_id = create(&env, &f, 100, None);
+    // A recurring schedule is created before the pause; `fund_next` pulls
+    // funds from the payer's allowance, so it is a deposit path too.
+    let schedule_id = f.client.create_schedule(
+        &f.payer,
+        &f.payee,
+        &f.token_id,
+        &100,
+        &String::from_str(&env, "blocked-schedule"),
+        &f.releaser,
+        &None,
+        &86_400,
+        &2,
+        &CREATED_AT,
+    );
     f.client.pause(&f.custodian);
 
     // The M-of-N and acceptance entry points funnel through the same
@@ -432,6 +450,10 @@ fn paused_blocks_the_other_creation_entry_points_and_top_up() {
         f.client.try_top_up(&escrow_id, &f.payer, &100),
         Error::Paused,
     );
+
+    // `fund_next` is a deposit path as well: blocked before it pulls from
+    // the payer's allowance.
+    assert_contract_error(f.client.try_fund_next(&schedule_id), Error::Paused);
 
     assert_eq!(f.token.balance(&f.payer), 900);
     assert_eq!(f.token.balance(&f.contract_id), 100);

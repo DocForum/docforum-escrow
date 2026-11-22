@@ -2,6 +2,19 @@
 
 use crate::*;
 
+/// How an escrow's funds arrive (issue #115): a normal creation pulls
+/// them with `transfer` under the payer's signature; a recurring period
+/// pulls them with `transfer_from` under the payer's pre-granted
+/// allowance, so the keeper triggering it needs no signature.
+pub(crate) enum Funding {
+    /// Pull with `token.transfer`, payer authorizes this invocation.
+    Transfer,
+    /// Pull with `token.transfer_from` under an existing allowance.
+    /// The payer does not authorize this invocation; the allowance is
+    /// the authorization.
+    Allowance,
+}
+
 impl EscrowContract {
     pub(crate) fn create_escrow_inner(
         env: &Env,
@@ -22,7 +35,7 @@ impl EscrowContract {
         attester: Option<BytesN<32>>,
         payer_already_authorized: bool,
     ) -> Result<u64, Error> {
-        Self::create_escrow_with_uniqueness_inner(
+        Self::create_escrow_with_payees_inner(
             env,
             payer,
             payee,
@@ -42,10 +55,11 @@ impl EscrowContract {
             payer_already_authorized,
             None,
             false,
+            Funding::Transfer,
         )
     }
 
-    pub(crate) fn create_escrow_with_uniqueness_inner(
+    pub(crate) fn create_escrow_with_payees_inner(
         env: &Env,
         payer: Address,
         payee: Address,
@@ -65,6 +79,7 @@ impl EscrowContract {
         payer_already_authorized: bool,
         payee_shares: Option<Vec<PayeeShare>>,
         unique_ref: bool,
+        funding: Funding,
     ) -> Result<u64, Error> {
         // Every creation entry point funnels through here, so this one
         // check covers all deposit paths: while paused, no new escrow can
@@ -122,6 +137,12 @@ impl EscrowContract {
             });
             shares
         };
+        if payees
+            .iter()
+            .any(|share| share.payee == env.current_contract_address())
+        {
+            return Err(Error::InvalidPayeeList);
+        }
         if let Some(deadline) = refund_after {
             if deadline <= env.ledger().timestamp() {
                 return Err(Error::InvalidRefundAfter);
@@ -178,7 +199,10 @@ impl EscrowContract {
             payee.require_auth();
         }
 
-        Self::transfer_in_exact(env, &token, &payer, amount)?;
+        match funding {
+            Funding::Transfer => Self::transfer_in_exact(env, &token, &payer, amount)?,
+            Funding::Allowance => Self::transfer_from_exact(env, &token, &payer, amount)?,
+        }
 
         let id = Self::next_id(env);
         let data = EscrowData {
@@ -230,6 +254,9 @@ impl EscrowContract {
         }
         let mut seen: Vec<Address> = Vec::new(env);
         for releaser in releasers.iter() {
+            if releaser == env.current_contract_address() {
+                return Err(Error::InvalidReleaser);
+            }
             if Self::contains(&seen, &releaser) {
                 return Err(Error::DuplicateReleaser);
             }

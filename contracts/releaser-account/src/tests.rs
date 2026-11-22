@@ -128,6 +128,50 @@ fn policy_allows_only_the_configured_escrow_operation() {
             args: vec![&env, 7u64.into_val(&env), account.clone().into_val(&env)],
         }),
     ];
+    let quorum_approvers = vec![
+        &env,
+        Context::Contract(ContractContext {
+            contract: escrow.clone(),
+            fn_name: Symbol::new(&env, "release_with_approvals"),
+            args: vec![
+                &env,
+                7u64.into_val(&env),
+                vec![&env, account.clone(), wrong_escrow.clone()].into_val(&env),
+            ],
+        }),
+    ];
+    let quorum_refund_approvers = vec![
+        &env,
+        Context::Contract(ContractContext {
+            contract: escrow.clone(),
+            fn_name: Symbol::new(&env, "refund_with_approvals"),
+            args: vec![
+                &env,
+                7u64.into_val(&env),
+                vec![&env, wrong_escrow.clone(), account.clone()].into_val(&env),
+            ],
+        }),
+    ];
+    let quorum_missing_account = vec![
+        &env,
+        Context::Contract(ContractContext {
+            contract: escrow.clone(),
+            fn_name: Symbol::new(&env, "release_with_approvals"),
+            args: vec![
+                &env,
+                7u64.into_val(&env),
+                vec![&env, wrong_escrow.clone()].into_val(&env),
+            ],
+        }),
+    ];
+    let quorum_malformed = vec![
+        &env,
+        Context::Contract(ContractContext {
+            contract: escrow.clone(),
+            fn_name: Symbol::new(&env, "release_with_approvals"),
+            args: vec![&env, 7u64.into_val(&env), 9u64.into_val(&env)],
+        }),
+    ];
     let rotate = vec![
         &env,
         Context::Contract(ContractContext {
@@ -182,6 +226,18 @@ fn policy_allows_only_the_configured_escrow_operation() {
     env.as_contract(&account, || {
         assert!(escrow_operation_only(&env, &escrow, &release));
         assert!(escrow_operation_only(&env, &escrow, &refund));
+        assert!(escrow_operation_only(&env, &escrow, &quorum_approvers));
+        assert!(escrow_operation_only(
+            &env,
+            &escrow,
+            &quorum_refund_approvers
+        ));
+        assert!(!escrow_operation_only(
+            &env,
+            &escrow,
+            &quorum_missing_account
+        ));
+        assert!(!escrow_operation_only(&env, &escrow, &quorum_malformed));
         assert!(escrow_operation_only(&env, &escrow, &rotate));
         assert!(!escrow_operation_only(&env, &escrow, &wrong_rotate_caller));
         assert!(!escrow_operation_only(&env, &escrow, &wrong_target));
@@ -509,7 +565,11 @@ fn policy_authorizes_settle_many_and_counts_operations() {
         Context::Contract(ContractContext {
             contract: escrow.clone(),
             fn_name: Symbol::new(&env, "settle_many"),
-            args: vec![&env, account.clone().into_val(&env), ops.clone().into_val(&env)],
+            args: vec![
+                &env,
+                account.clone().into_val(&env),
+                ops.clone().into_val(&env),
+            ],
         }),
     ];
 
@@ -518,7 +578,11 @@ fn policy_authorizes_settle_many_and_counts_operations() {
         Context::Contract(ContractContext {
             contract: wrong_escrow.clone(),
             fn_name: Symbol::new(&env, "settle_many"),
-            args: vec![&env, account.clone().into_val(&env), ops.clone().into_val(&env)],
+            args: vec![
+                &env,
+                account.clone().into_val(&env),
+                ops.clone().into_val(&env),
+            ],
         }),
     ];
 
@@ -527,7 +591,11 @@ fn policy_authorizes_settle_many_and_counts_operations() {
         Context::Contract(ContractContext {
             contract: escrow.clone(),
             fn_name: Symbol::new(&env, "settle_many"),
-            args: vec![&env, wrong_escrow.into_val(&env), ops.clone().into_val(&env)],
+            args: vec![
+                &env,
+                wrong_escrow.into_val(&env),
+                ops.clone().into_val(&env),
+            ],
         }),
     ];
 
@@ -537,7 +605,11 @@ fn policy_authorizes_settle_many_and_counts_operations() {
         Context::Contract(ContractContext {
             contract: escrow.clone(),
             fn_name: Symbol::new(&env, "settle_many"),
-            args: vec![&env, account.clone().into_val(&env), empty_ops.into_val(&env)],
+            args: vec![
+                &env,
+                account.clone().into_val(&env),
+                empty_ops.into_val(&env),
+            ],
         }),
     ];
 
@@ -546,16 +618,32 @@ fn policy_authorizes_settle_many_and_counts_operations() {
         Context::Contract(ContractContext {
             contract: escrow.clone(),
             fn_name: Symbol::new(&env, "settle_many"),
-            args: vec![&env, account.clone().into_val(&env), 12345u32.into_val(&env)],
+            args: vec![
+                &env,
+                account.clone().into_val(&env),
+                12345u32.into_val(&env),
+            ],
         }),
     ];
 
     env.as_contract(&account, || {
         assert_eq!(authorize_context(&env, &escrow, &valid_settle_many), Ok(2));
-        assert_eq!(authorize_context(&env, &escrow, &wrong_target_settle), Err(Error::UnauthorizedContext));
-        assert_eq!(authorize_context(&env, &escrow, &wrong_caller_settle), Err(Error::UnauthorizedContext));
-        assert_eq!(authorize_context(&env, &escrow, &empty_settle), Err(Error::UnauthorizedContext));
-        assert_eq!(authorize_context(&env, &escrow, &malformed_settle), Err(Error::UnauthorizedContext));
+        assert_eq!(
+            authorize_context(&env, &escrow, &wrong_target_settle),
+            Err(Error::UnauthorizedContext)
+        );
+        assert_eq!(
+            authorize_context(&env, &escrow, &wrong_caller_settle),
+            Err(Error::UnauthorizedContext)
+        );
+        assert_eq!(
+            authorize_context(&env, &escrow, &empty_settle),
+            Err(Error::UnauthorizedContext)
+        );
+        assert_eq!(
+            authorize_context(&env, &escrow, &malformed_settle),
+            Err(Error::UnauthorizedContext)
+        );
     });
 }
 

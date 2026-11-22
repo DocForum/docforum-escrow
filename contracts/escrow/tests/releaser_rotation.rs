@@ -198,10 +198,7 @@ fn quorum_rotation_replaces_one_member_and_keeps_threshold() {
     assert_eq!(data.releasers.get(2), Some(releasers.get(2).unwrap()));
 
     // The outgoing member can no longer settle.
-    assert_eq!(
-        client.try_release(&id, &old),
-        Err(Ok(Error::Unauthorized))
-    );
+    assert_eq!(client.try_release(&id, &old), Err(Ok(Error::Unauthorized)));
     // The replacement settles with one other member.
     let mut new_approvers = Vec::new(&env);
     new_approvers.push_back(replacement);
@@ -221,10 +218,7 @@ fn quorum_rotation_counts_the_outgoing_members_approval() {
 
     client.rotate_releaser_with_approvals(&id, &approvers, &old, &replacement);
 
-    assert_eq!(
-        client.get_escrow(&id).releasers.get(0),
-        Some(replacement)
-    );
+    assert_eq!(client.get_escrow(&id).releasers.get(0), Some(replacement));
 }
 
 #[test]
@@ -352,8 +346,5 @@ fn quorum_rotation_requires_payer_consent() {
         },
     ]);
     client.rotate_releaser_with_approvals(&id, &approvers, &old, &replacement);
-    assert_eq!(
-        client.get_escrow(&id).releasers.get(0),
-        Some(replacement)
-    );
+    assert_eq!(client.get_escrow(&id).releasers.get(0), Some(replacement));
 }

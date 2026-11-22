@@ -133,7 +133,7 @@
     },
     {
       "name": "get_unique_escrow",
-      "args": "env: Env, payer: Address, condition_ref: String,",
+      "args": "env: Env, payer: Address, condition_ref: String",
       "return": "Option<u64>"
     },
     {
@@ -143,7 +143,7 @@
     },
     {
       "name": "get_escrows",
-      "args": "env: Env, ids: Vec<u64>,",
+      "args": "env: Env, ids: Vec<u64>",
       "return": "Result<Vec<Option<EscrowData>>, Error>"
     },
     {
@@ -155,6 +155,26 @@
       "name": "get_escrow",
       "args": "env: Env, escrow_id: u64",
       "return": "Result<EscrowData, Error>"
+    },
+    {
+      "name": "create_schedule",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after_seconds: Option<u64>, period_seconds: u64, total_periods: u32, first_due: u64,",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "fund_next",
+      "args": "env: Env, schedule_id: u64",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "cancel_schedule",
+      "args": "env: Env, schedule_id: u64, payer: Address",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "get_schedule",
+      "args": "env: Env, schedule_id: u64",
+      "return": "Result<RecurringSchedule, Error>"
     },
     {
       "name": "extend_refund_after",
@@ -430,6 +450,26 @@
     {
       "name": "AttesterNotConfigured",
       "code": 54
+    },
+    {
+      "name": "ScheduleTooEarly",
+      "code": 55
+    },
+    {
+      "name": "ScheduleComplete",
+      "code": 56
+    },
+    {
+      "name": "ScheduleCancelled",
+      "code": 57
+    },
+    {
+      "name": "AllowanceExhausted",
+      "code": 58
+    },
+    {
+      "name": "InvalidSchedule",
+      "code": 59
     },
     {
       "name": "DuplicateConditionRef",
