@@ -457,6 +457,11 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   GitHub Pages (Pages enablement is a one-time human step). Docs-only — no
   contract or SDK API change, so bindings and the SDK version are unchanged.
 
+- [x] Static, read-only escrow explorer (issue #130): `examples/explorer/`
+  reads escrow terms, token metadata, settlement status and retained lifecycle
+  events from testnet RPC, shows T8 warnings, and deploys to GitHub Pages on
+  pushes to `main`. No wallet or signing capability is included.
+
 ## Phase E7 — Verification, testing & release engineering
 - [ ] Assert exact auth trees throughout contract tests (issue #105). This contribution covers `create_escrow`, `release`, and `refund`, including nested token-transfer auth on creation; remaining contract-test modules still need conversion.
 - [x] Contract version and reproducible build provenance exposed in the

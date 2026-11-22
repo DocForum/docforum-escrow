@@ -1,0 +1,13 @@
+{
+  "name": "@docforum/escrow-explorer",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "npm --prefix ../../sdk run build && tsc --noEmit && vite build",
+    "dev": "npm --prefix ../../sdk run build && vite",
+    "preview": "vite preview"
+  },
+  "dependencies": { "@docforum/escrow-sdk": "file:../../sdk" },
+  "devDependencies": { "typescript": "^5.6.2", "vite": "^6.0.0" }
+}
