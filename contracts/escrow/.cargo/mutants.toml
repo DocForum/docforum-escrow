@@ -1,6 +1,9 @@
 # Only mutate the production contract. Test-only token mocks and fixtures are
 # kept under tests/ and must never inflate the mutation denominator.
-examine_globs = ["src/lib.rs"]
+# The contract is split into one module per area under `src/` (only the
+# declarations live in `src/lib.rs`), so every module is examined — listing
+# just `src/lib.rs` mutated no contract logic at all.
+examine_globs = ["src/**/*.rs"]
 exclude_globs = ["tests/**/*.rs"]
 
 # Keep individual mutant runs bounded while allowing Soroban's slower host

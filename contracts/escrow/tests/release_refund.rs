@@ -78,7 +78,20 @@ fn authorize_settlement(env: &Env, f: &Fixture<'_>, fn_name: &str, caller: &Addr
         args: (f.escrow_id, caller.clone()).into_val(env),
         sub_invokes: &[],
     };
-    env.mock_auths(&[MockAuth { address: caller, invoke: &invoke }]);
+    env.mock_auths(&[MockAuth {
+        address: caller,
+        invoke: &invoke,
+    }]);
+}
+
+fn assert_settlement_auth(env: &Env, f: &Fixture<'_>, fn_name: &str, caller: &Address) {
+    let invoke = MockAuthInvoke {
+        contract: &f.contract_id,
+        fn_name,
+        args: (f.escrow_id, caller.clone()).into_val(env),
+        sub_invokes: &[],
+    };
+    auth::assert_auth_tree(env, caller, &invoke);
 }
 
 // --- release() ---
@@ -91,7 +104,7 @@ fn release_transfers_funds_to_payee_and_marks_released() {
 
     authorize_settlement(&env, &f, "release", &f.releaser);
     f.client.release(&f.escrow_id, &f.releaser);
-    auth::assert_auth_addresses(&env, &[f.releaser.clone()]);
+    assert_settlement_auth(&env, &f, "release", &f.releaser);
 
     assert_eq!(
         env.events()
@@ -147,7 +160,7 @@ fn refund_transfers_funds_back_to_payer_and_marks_refunded() {
 
     authorize_settlement(&env, &f, "refund", &f.releaser);
     f.client.refund(&f.escrow_id, &f.releaser);
-    auth::assert_auth_addresses(&env, &[f.releaser.clone()]);
+    assert_settlement_auth(&env, &f, "refund", &f.releaser);
 
     assert_eq!(
         env.events()
