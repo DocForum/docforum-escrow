@@ -17,6 +17,16 @@
       "return": "String"
     },
     {
+      "name": "create_escrow_with_attester",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, notify_payee: bool, refund_to: Option<Address>, attester: Option<BytesN<32>>,",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "release_with_attestation",
+      "args": "env: Env, escrow_id: u64, signature: BytesN<64>,",
+      "return": "Result<(), Error>"
+    },
+    {
       "name": "create_split_escrow",
       "args": "env: Env, payer: Address, payees: Vec<PayeeShare>, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, notify_payee: bool, refund_to: Option<Address>, fee_recipient: Option<Address>, fee_bps: Option<u32>,",
       "return": "Result<u64, Error>"
@@ -97,6 +107,11 @@
       "return": "Result<(), Error>"
     },
     {
+      "name": "close_failed_round",
+      "args": "env: Env, escrow_id: u64",
+      "return": "Result<(), Error>"
+    },
+    {
       "name": "solvency",
       "args": "env: Env, token: Address",
       "return": "(i128, i128)"
@@ -130,6 +145,26 @@
       "name": "get_escrow",
       "args": "env: Env, escrow_id: u64",
       "return": "Result<EscrowData, Error>"
+    },
+    {
+      "name": "create_schedule",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after_seconds: Option<u64>, period_seconds: u64, total_periods: u32, first_due: u64,",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "fund_next",
+      "args": "env: Env, schedule_id: u64",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "cancel_schedule",
+      "args": "env: Env, schedule_id: u64, payer: Address",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "get_schedule",
+      "args": "env: Env, schedule_id: u64",
+      "return": "Result<RecurringSchedule, Error>"
     },
     {
       "name": "extend_refund_after",
@@ -401,6 +436,30 @@
     {
       "name": "NotPaused",
       "code": 40
+    },
+    {
+      "name": "AttesterNotConfigured",
+      "code": 54
+    },
+    {
+      "name": "ScheduleTooEarly",
+      "code": 55
+    },
+    {
+      "name": "ScheduleComplete",
+      "code": 56
+    },
+    {
+      "name": "ScheduleCancelled",
+      "code": 57
+    },
+    {
+      "name": "AllowanceExhausted",
+      "code": 58
+    },
+    {
+      "name": "InvalidSchedule",
+      "code": 59
     }
   ]
 }
