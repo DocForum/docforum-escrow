@@ -86,6 +86,7 @@ __all__ = [
     "StreamTopUpUnsupportedError",
     "InvalidSettlementAmountError",
     "SettlementNotSupportedError",
+    "AttesterNotConfiguredError",
 ]
 
 # The contract's `Error` enum. tests/test_errors.py checks this against
@@ -142,6 +143,7 @@ CONTRACT_ERROR_NAMES: dict[int, str] = {
     51: "StreamTopUpUnsupported",
     52: "InvalidSettlementAmount",
     53: "SettlementNotSupported",
+    54: "AttesterNotConfigured",
 }
 
 
@@ -564,6 +566,13 @@ class SettlementNotSupportedError(ContractError):
 
     code = 53
     contract_error = "SettlementNotSupported"
+
+
+class AttesterNotConfiguredError(ContractError):
+    """Contract error 54: ``AttesterNotConfigured``."""
+
+    code = 54
+    contract_error = "AttesterNotConfigured"
 
 
 _CLASSES: dict[int, type[ContractError]] = {

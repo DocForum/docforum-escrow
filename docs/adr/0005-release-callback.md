@@ -56,3 +56,11 @@ state transition explicit.
   callback failure visible without giving the payee control over refunds.
 - This change is testnet-only until the independent security review required
   by Phase E4 is complete.
+
+## Addendum (Issue #286): Payee transfer behavior
+
+When `transfer_payee` reassigns payout rights to a new payee, `notify_payee` is
+automatically reset to `false`. This prevents an escrow from becoming permanently
+unreleasable with `CallbackFailed` if the new payee is a standard account (`G...`)
+or a contract that does not implement the `on_escrow_released` hook. The new payee
+receives standard push token payout upon release without a callback.

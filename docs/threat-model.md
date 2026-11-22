@@ -344,6 +344,8 @@ pause custodian.
 - The payee must authorize creation when `notify_payee` is true. Only use it
   for a contract address implementing `on_escrow_released(u64, i128)`; a
   consenting address without the method cannot complete release. See ADR 0005.
+- When `transfer_payee` reassigns payout rights to a new payee, `notify_payee` is automatically reset to `false` (issue #286). This ensures that transferring an escrow to a plain account or a contract without the callback hook cannot leave the escrow permanently unreleasable with `CallbackFailed`.
+
 ### T5 — Malicious or non-standard `token` · **Medium**
 `token` is any address the payer supplies. The contract trusts it to
 behave like SEP-41.
@@ -511,6 +513,30 @@ TTL-extended (see T6), so the counter can outlive the escrows it sums.
   release) or to any third party; the destination is fixed at creation
   and visible, so this is a disclosed property of the deal, not a hidden
   one.
+
+#### Role-overlap matrix (issue #300)
+
+Role overlap is allowed unless a row says otherwise. The payer chooses these
+addresses at creation, so the overlap is part of the deal and must be visible
+to the payee in `get_escrow` before relying on the escrow.
+
+| Overlap | Allowed? | Implication |
+|---|---|---|
+| `payer == payee` | Yes | Release pays the payer; this is a valid self-funded escrow. |
+| `payer == releaser` | Yes | The payer can choose release or refund, so the payee has no independent settlement protection. |
+| `payer == refund_to` | Yes | This is the default refund destination. |
+| `payer == fee_recipient` | Yes | The payer receives the configured release fee. |
+| `payee == releaser` | Yes | The payee may authorize its own release. |
+| `payee == refund_to` | Yes | A refund sends the funds to the payee. |
+| `payee == fee_recipient` | Yes | The payee receives both the fee and the release remainder. |
+| `releaser == refund_to` | Yes | The releaser can direct a refund to itself when the payer configured it. |
+| `releaser == fee_recipient` | Yes | The releaser receives the configured release fee. |
+| `refund_to == fee_recipient` | Yes | The same destination receives a refund or the release fee, as applicable. |
+
+The contract address is not a user-role overlap: it is rejected as
+`refund_to` or `fee_recipient` because funds sent there would be permanently
+stranded. Contract-self `payee` and `releaser` remain the separate design
+question tracked by issue #8 and are not changed here.
 
 ### T9 — `condition_ref` is public · **Low (privacy)**
 - Everything in `EscrowData` is publicly readable on-chain forever,
@@ -742,6 +768,43 @@ escrow.
     documented to work while `Funded` regardless of `refund_after`; consumers
     who need time‑bounded release should use the single‑releaser path with
     `release_not_before`.
+
+### T25 — `attester` key compromised, lost, or attestation replayed · **Medium**
+
+- **What changed:** Phase E5 (issue #42) lets an escrow carry an optional
+  `attester` (an ed25519 public key), and lets anyone submit a signed
+  attestation to release it via `release_with_attestation`. The attester
+  signs offline with a cold key; the releaser no longer has to be online,
+  funded, or holding a hot key at release time. The attestation is a
+  signature over a domain-separated message (contract id, network id,
+  escrow id, action `release`) verified with `env.crypto().ed25519_verify`.
+- **Key compromised:** if the attester key is stolen, the attacker can sign
+  a release attestation for any escrow naming that attester and submit it
+  at any time, so the payout happens early. Blast radius is limited to
+  escrows naming that attester; the releaser and payer keys are unaffected,
+  and the releaser can still refund (only to the payer) while the escrow
+  is `Funded`, if they spot the compromise in time. Treat the attester key
+  like the releaser key in T1: cold storage, single purpose, rotate the
+  escrow rather than the key if it is exposed.
+- **Key lost:** if the attester key is lost, the attestation path is dead,
+  but the escrow is not stuck — the stored releaser can still release, and
+  the refund path is unchanged. A lost attester key is a degraded release
+  path, not a loss of funds.
+- **Replay:** an attestation cannot be replayed on another contract or
+  another network — the signed message binds the contract id and the
+  network id, and a testnet attestation will not verify on mainnet. It
+  cannot be reused on the same escrow either: release settles the escrow,
+  so a second submission fails. The verification cost is a single
+  `ed25519_verify` call, the same primitive the host uses for auth checks;
+  no measurement was run for this change, so the cost still needs a
+  testnet run to confirm.
+- **What is still missing:** there is no way to rotate or revoke an
+  attester once set, and no way to list escrows by attester. A compromised
+  attester stays valid for every escrow that names it until each one
+  settles. Tracked as a follow-up, not a blocker.
+- **Residual risk:** accepted. The cold-key attestation path is strictly
+  safer than the hot-key releaser path it replaces (T1), and the same
+  escrow is still releasable by its releaser.
 
 ## 8. Traceability table
 

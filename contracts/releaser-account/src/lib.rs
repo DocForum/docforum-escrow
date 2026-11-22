@@ -12,6 +12,13 @@ use soroban_sdk::{
 const MAX_SIGNERS: u32 = 20;
 
 #[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SettleAction {
+    Release,
+    Refund,
+}
+
+#[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignerSignature {
     pub public_key: BytesN<32>,
@@ -137,8 +144,11 @@ impl ReleaserAccount {
     }
 
     pub fn window_usage(env: Env, window: u32) -> u32 {
+        // Temporary storage: an expired counter is simply absent, so this
+        // returns 0 instead of trapping. Callers can therefore read a past
+        // window safely after it has rolled off.
         env.storage()
-            .persistent()
+            .temporary()
             .get(&DataKey::WindowUsage(window))
             .unwrap_or(0)
     }
@@ -246,9 +256,7 @@ impl CustomAccountInterface for ReleaserAccount {
         auth_contexts: Vec<Context>,
     ) -> Result<(), Error> {
         let escrow: Address = get(&env, &DataKey::Escrow);
-        if !release_or_refund_only(&env, &escrow, &auth_contexts) {
-            return Err(Error::UnauthorizedContext);
-        }
+        let op_count = authorize_context(&env, &escrow, &auth_contexts)?;
         let payload = signature_payload.to_bytes();
         verify_signatures(
             &env,
@@ -257,30 +265,73 @@ impl CustomAccountInterface for ReleaserAccount {
             get(&env, &DataKey::Threshold),
             get(&env, &DataKey::SignerCount),
         )?;
-        consume_operation_slot(&env)
+        consume_operation_slots(&env, op_count)
     }
 }
 
-fn release_or_refund_only(env: &Env, escrow: &Address, contexts: &Vec<Context>) -> bool {
-    // One account auth entry authorizes one escrow operation. Additional or
+fn authorize_context(env: &Env, escrow: &Address, contexts: &Vec<Context>) -> Result<u32, Error> {
+    // One account auth entry authorizes one escrow operation or batch. Additional or
     // nested auth contexts are rejected rather than implicitly covered.
     if contexts.len() != 1 {
-        return false;
+        return Err(Error::UnauthorizedContext);
     }
     let Some(Context::Contract(context)) = contexts.first() else {
-        return false;
+        return Err(Error::UnauthorizedContext);
     };
-    if context.contract != *escrow
-        || (context.fn_name != Symbol::new(env, "release")
-            && context.fn_name != Symbol::new(env, "refund"))
-        || context.args.len() != 2
-    {
-        return false;
+    if context.contract != *escrow {
+        return Err(Error::UnauthorizedContext);
     }
-    let caller_val = context.args.get(1).unwrap();
-    Address::try_from_val(env, &caller_val)
-        .map(|caller| caller == env.current_contract_address())
-        .unwrap_or(false)
+
+    let is_release = context.fn_name == Symbol::new(env, "release");
+    let is_refund = context.fn_name == Symbol::new(env, "refund");
+    let is_rotate = context.fn_name == Symbol::new(env, "rotate_releaser");
+    let is_settle_many = context.fn_name == Symbol::new(env, "settle_many");
+
+    if (is_release || is_refund) && context.args.len() == 2 {
+        let caller_val = context.args.get(1).unwrap();
+        let is_self = Address::try_from_val(env, &caller_val)
+            .map(|caller| caller == env.current_contract_address())
+            .unwrap_or(false);
+        if !is_self {
+            return Err(Error::UnauthorizedContext);
+        }
+        return Ok(1);
+    }
+
+    if is_rotate && context.args.len() == 3 {
+        let caller_val = context.args.get(1).unwrap();
+        let is_self = Address::try_from_val(env, &caller_val)
+            .map(|caller| caller == env.current_contract_address())
+            .unwrap_or(false);
+        if !is_self {
+            return Err(Error::UnauthorizedContext);
+        }
+        return Ok(1);
+    }
+
+    if is_settle_many && context.args.len() == 2 {
+        let caller_val = context.args.get(0).unwrap();
+        let is_self = Address::try_from_val(env, &caller_val)
+            .map(|caller| caller == env.current_contract_address())
+            .unwrap_or(false);
+        if !is_self {
+            return Err(Error::UnauthorizedContext);
+        }
+        let ops_val = context.args.get(1).unwrap();
+        let Ok(ops) = Vec::<(u64, SettleAction)>::try_from_val(env, &ops_val) else {
+            return Err(Error::UnauthorizedContext);
+        };
+        if ops.is_empty() {
+            return Err(Error::UnauthorizedContext);
+        }
+        return Ok(ops.len());
+    }
+
+    Err(Error::UnauthorizedContext)
+}
+
+fn escrow_operation_only(env: &Env, escrow: &Address, contexts: &Vec<Context>) -> bool {
+    authorize_context(env, escrow, contexts).is_ok()
 }
 
 fn verify_signatures(
@@ -317,19 +368,36 @@ fn verify_signatures(
     Ok(())
 }
 
-fn consume_operation_slot(env: &Env) -> Result<(), Error> {
+fn consume_operation_slots(env: &Env, count: u32) -> Result<(), Error> {
     let cap: u32 = get(env, &DataKey::MaxOperationsPerWindow);
     let window_ledgers: u32 = get(env, &DataKey::WindowLedgers);
     let window = env.ledger().sequence().saturating_sub(1) / window_ledgers;
     let key = DataKey::WindowUsage(window);
-    let used: u32 = env.storage().persistent().get(&key).unwrap_or(0);
-    if used >= cap {
+    // Window counters live in temporary storage: they are only relevant for
+    // the duration of their window and can be recreated (with a fresh count)
+    // afterwards, so they no longer pay persistent rent forever.
+    let used: u32 = env.storage().temporary().get(&key).unwrap_or(0);
+    let new_used = used.checked_add(count).ok_or(Error::RateLimited)?;
+    if new_used > cap {
         return Err(Error::RateLimited);
     }
-    env.storage().persistent().set(&key, &(used + 1));
-    let ttl = env.storage().max_ttl();
-    env.storage().persistent().extend_ttl(&key, ttl - 1, ttl);
+    env.storage().temporary().set(&key, &new_used);
+    // TTL arithmetic: window index `w` covers ledgers
+    //   [w * window_ledgers + 1, (w + 1) * window_ledgers].
+    // In the worst case the counter is created on the first ledger of its
+    // window, so it must live at least `window_ledgers` ledgers to reach the
+    // window's last ledger; add a 1-ledger margin so it can never expire
+    // before the window ends (which would let the cap be bypassed). Clamp to
+    // the network maximum so we never request more than `max_ttl`.
+    let ttl = (window_ledgers + 1).min(env.storage().max_ttl());
+    env.storage()
+        .temporary()
+        .extend_ttl(&key, ttl.saturating_sub(1), ttl);
     Ok(())
+}
+
+fn consume_operation_slot(env: &Env) -> Result<(), Error> {
+    consume_operation_slots(env, 1)
 }
 
 fn management_digest(env: &Env, action: &ManagementAction, nonce: u64) -> Hash<32> {
