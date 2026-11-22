@@ -1,0 +1,21 @@
+{
+  "name": "@docforum/escrow-github-action",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --minify --platform=node --format=cjs --alias:@stellar/stellar-sdk/rpc=./node_modules/@stellar/stellar-sdk/lib/esm/rpc/index.js --alias:@stellar/stellar-sdk/contract=./node_modules/@stellar/stellar-sdk/lib/esm/contract/index.js --alias:@stellar/stellar-sdk=./node_modules/@stellar/stellar-sdk/lib/esm/index.js --outfile=dist/index.js && perl -pi -e 's/[ \\t]+$//' dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@actions/core": "^2.0.1",
+    "@actions/github": "^9.0.0",
+    "@stellar/stellar-sdk": "^16.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.6.2",
+    "vitest": "^4.1.11"
+  }
+}
