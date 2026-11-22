@@ -27,13 +27,15 @@ The current contract does not implement a general dispute system, milestone sett
 
 ## TLC installation and run command
 
-The checker used for this repo was downloaded from the official TLA+ release:
+The checker used for this repo is TLA+ v1.7.4, downloaded from the official
+release and verified against its pinned SHA-256:
 
 ```bash
 mkdir -p /tmp/tlaplus
 curl -fsSL -H 'User-Agent: Mozilla/5.0' \
   -o /tmp/tlaplus/tla2tools.jar \
   https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+echo '936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  /tmp/tlaplus/tla2tools.jar' | sha256sum -c -
 ```
 
 Then run:
@@ -42,6 +44,9 @@ Then run:
 cd /workspaces/docforum-escrow
 java -jar /tmp/tlaplus/tla2tools.jar -config spec/Escrow.cfg spec/Escrow.tla
 ```
+
+CI runs this exact command whenever `spec/**` changes and on its nightly
+schedule.
 
 ## Verified result
 

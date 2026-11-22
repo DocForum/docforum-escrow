@@ -687,7 +687,16 @@ dependencies = [
 name = "docforum-escrow"
 version = "0.0.0"
 dependencies = [
+ "docforum-escrow-interface",
+ "ed25519-dalek",
  "proptest",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "docforum-escrow-interface"
+version = "0.1.0"
+dependencies = [
  "soroban-sdk",
 ]
 

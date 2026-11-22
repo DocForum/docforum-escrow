@@ -29,8 +29,10 @@ with `SettleAction = Release | Refund`.
    *that escrow's* stored releaser set. A batch can never settle an escrow
    whose releaser is someone else: that op returns `Unauthorized`. M-of-N
    escrows with threshold > 1 return `ThresholdNotMet` (use the approval
-   entry points). A `Refund` op opens to anyone once `refund_after` has
-   passed, as `refund` does, and still pays only the stored `refund_to`.
+   entry points). A `Refund` op accepts the stored payee's voluntary-refund
+   path at any time while funded, or opens to anyone once `refund_after` has
+   passed, as `refund` does; it still pays only the stored `refund_to` and
+   emits `PayeeRefunded` for the voluntary path.
 
 2. **Best-effort, not atomic.** One result per op, in input order.
    - `Ok(())`: this call settled the escrow.

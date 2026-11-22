@@ -229,6 +229,12 @@
                   },
                   {
                     "key": {
+                      "symbol": "attester"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "condition_ref"
                     },
                     "val": {
@@ -409,6 +415,12 @@
                     "val": {
                       "i128": "0"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "attester"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {

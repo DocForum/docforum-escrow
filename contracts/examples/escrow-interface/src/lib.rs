@@ -46,9 +46,7 @@ impl EscrowInterfaceExample {
 mod tests {
     use super::*;
     use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
-    use soroban_sdk::{
-        testutils::Address as _, token::StellarAssetClient, Address, Vec,
-    };
+    use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, Vec};
 
     #[test]
     fn nested_interface_call_creates_and_releases() {
