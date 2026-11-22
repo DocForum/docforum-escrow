@@ -480,6 +480,7 @@ export const Errors = {
    * `attester` configured (Phase E5, issue #42).
    */
   54: {message:"AttesterNotConfigured"},
+  /**
    * `fund_next` before the next period is due (issue #115).
    */
   11500: {message:"ScheduleTooEarly"},

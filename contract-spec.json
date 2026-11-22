@@ -440,8 +440,8 @@
     {
       "name": "AttesterNotConfigured",
       "code": 54
-      },
-      {
+    },
+    {
       "name": "ScheduleTooEarly",
       "code": 11500
     },

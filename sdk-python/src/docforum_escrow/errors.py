@@ -583,6 +583,8 @@ class AttesterNotConfiguredError(ContractError):
 
     code = 54
     contract_error = "AttesterNotConfigured"
+
+
 class ScheduleTooEarlyError(ContractError):
     """Contract error 11500: ``ScheduleTooEarly``."""
 
