@@ -11,6 +11,7 @@
 ## Contract surface
 ```
 __constructor(allowed_tokens: Vec<Address>, pause_admin: Address)    // immutable token allowlist (empty = allow all) + the one pause custodian; no setter, no upgrade
+get_allowed_tokens() -> Vec<Address>   // IMPLEMENTED (issue #299) — read-only immutable deploy-time allowlist (empty = any token)
 pause(caller) -> result                // IMPLEMENTED (Phase E5, ADR 0011) — custodian only; blocks every deposit path, never release/refund
 unpause(caller) -> result              // IMPLEMENTED (Phase E5, ADR 0011) — custodian only; re-opens new deposits
 is_paused() -> bool                    // IMPLEMENTED (Phase E5, ADR 0011) — read-only pause flag
@@ -198,6 +199,9 @@ Ed25519 keys. Soroban authorization signatures cover the host-generated
 payload, including the nonce and invocation context. The account rejects
 authorization contexts other than one `release` or `refund` call on its
 configured escrow. Signer additions/removals and threshold changes use a
+
+The account also accepts one `rotate_releaser` context on its configured escrow when it is the context's `caller`; the payer's separate authorization remains required, and the rotation consumes one per-window operation slot (ADR 0008).
+
 separate signed management digest bound to the account and a monotonic
 management nonce. See [ADR 0005](docs/adr/0005-custom-releaser-account.md).
 

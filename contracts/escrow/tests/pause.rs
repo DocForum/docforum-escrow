@@ -29,6 +29,72 @@ const CREATED_AT: u64 = 1_000;
 /// The escrow's optional timeout deadline — always strictly after CREATED_AT.
 const DEADLINE: u64 = 1_100;
 
+// Keep this classification next to the pause regression tests.  The interface
+// snapshot is checked in at the repository root, so the test can fail when a
+// new public entry point is added without deciding whether it is a deposit
+// path (and therefore must be guarded by pause).
+const DEPOSIT_ENTRYPOINTS: &[&str] = &[
+    "create_split_escrow",
+    "create_escrow",
+    "create_escrow_release_time",
+    "create_escrow_with_acceptance",
+    "create_escrow_with_releasers",
+    "create_escrows",
+    "create_streamed_escrow",
+    "create_pooled_escrow",
+    "contribute",
+    "top_up",
+];
+
+const NON_DEPOSIT_ENTRYPOINTS: &[&str] = &[
+    "__constructor",
+    "get_allowed_tokens",
+    "version",
+    "accept",
+    "pause",
+    "unpause",
+    "is_paused",
+    "get_pause_admin",
+    "transfer_payee",
+    "claim_refund",
+    "solvency",
+    "get_pooled",
+    "get_contribution",
+    "next_escrow_id",
+    "get_escrows",
+    "get_status",
+    "get_escrow",
+    "extend_refund_after",
+    "release",
+    "release_with_approvals",
+    "settle_many",
+    "refund",
+    "cancel",
+    "refund_with_approvals",
+    "rotate_releaser",
+    "rotate_releaser_with_approvals",
+    "settle",
+    "get_vesting",
+    "withdraw",
+];
+
+fn snapshot_function_names() -> std::vec::Vec<&'static str> {
+    let snapshot = include_str!("../../../contract-spec.json");
+    let functions = snapshot
+        .split_once("\"functions\": [")
+        .and_then(|(_, rest)| rest.split_once("],\n  \"errors\""))
+        .expect("contract-spec.json must contain a functions section")
+        .0;
+    functions
+        .lines()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("\"name\": \"")?
+                .strip_suffix("\",")
+        })
+        .collect()
+}
+
 fn setup_asset<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
     let admin = Address::generate(env);
     let contract_id = env.register_stellar_asset_contract_v2(admin);
@@ -103,6 +169,31 @@ fn assert_contract_error<T: core::fmt::Debug, E: core::fmt::Debug>(
     match result {
         Err(Ok(err)) => assert_eq!(err, expected),
         other => panic!("expected contract error {expected:?}, got {other:?}"),
+    }
+}
+
+#[test]
+fn every_contract_entrypoint_has_a_pause_classification() {
+    let snapshot = snapshot_function_names();
+    let mut classified: std::vec::Vec<&str> = DEPOSIT_ENTRYPOINTS.to_vec();
+    classified.extend_from_slice(NON_DEPOSIT_ENTRYPOINTS);
+
+    assert_eq!(
+        snapshot.len(),
+        classified.len(),
+        "update pause classification"
+    );
+    for name in &snapshot {
+        assert!(
+            classified.contains(&name),
+            "unclassified contract entry point: {name}"
+        );
+    }
+    for name in classified {
+        assert!(
+            snapshot.contains(&name),
+            "classification is not in contract spec: {name}"
+        );
     }
 }
 
