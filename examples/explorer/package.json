@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "build": "npm --prefix ../../sdk run build && tsc --noEmit && vite build",
+    "build": "npm --prefix ../../sdk run build && tsc --noEmit && vite build --base=/docforum-escrow/explorer/",
     "dev": "npm --prefix ../../sdk run build && vite",
     "preview": "vite preview"
   },

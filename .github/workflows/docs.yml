@@ -1,7 +1,7 @@
 name: API reference
 
-# Builds the generated TypeDoc API reference for @docforum/escrow-sdk and
-# publishes it to GitHub Pages on every push to main.
+# Builds the TypeDoc API reference and the static escrow explorer, then
+# publishes both under the existing GitHub Pages deployment.
 #
 # One-time human step (same category as the npm trusted-publishing setup in
 # CONTRIBUTING.md): a maintainer must enable Pages for the repo with
@@ -23,18 +23,19 @@ jobs:
   build:
     name: Build reference
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: sdk
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: sdk/package-lock.json
-      - run: npm ci
-      - run: npm run docs
+          cache-dependency-path: |
+            sdk/package-lock.json
+            examples/explorer/package-lock.json
+      - run: npm ci --prefix sdk
+      - run: npm --prefix sdk run docs
+      - run: npm ci --prefix examples/explorer && npm --prefix examples/explorer run build
+      - run: mkdir -p sdk/docs-api/explorer && cp -R examples/explorer/dist/. sdk/docs-api/explorer/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: sdk/docs-api

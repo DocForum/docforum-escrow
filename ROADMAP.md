@@ -484,11 +484,6 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   idempotent reads across healthy providers. Writes remain single-provider and
   must verify a submitted transaction hash before any caller-controlled retry.
 
-- [x] Static, read-only escrow explorer (issue #130): `examples/explorer/`
-  reads escrow terms, token metadata, settlement status and retained lifecycle
-  events from testnet RPC, shows T8 warnings, and deploys to GitHub Pages on
-  pushes to `main`. No wallet or signing capability is included.
-
 ## Phase E7 — Verification, testing & release engineering
 - [ ] Assert exact auth trees throughout contract tests (issue #105). This contribution strengthens `create_escrow`, `release`, and `refund` with complete tree comparisons and a wrong-signer creation regression; remaining contract-test modules still need conversion.
 - [x] Contract version and reproducible build provenance exposed in the
