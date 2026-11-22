@@ -2,6 +2,19 @@
 
 use crate::*;
 
+/// How an escrow's funds arrive (issue #115): a normal creation pulls
+/// them with `transfer` under the payer's signature; a recurring period
+/// pulls them with `transfer_from` under the payer's pre-granted
+/// allowance, so the keeper triggering it needs no signature.
+pub(crate) enum Funding {
+    /// Pull with `token.transfer`, payer authorizes this invocation.
+    Transfer,
+    /// Pull with `token.transfer_from` under an existing allowance.
+    /// The payer does not authorize this invocation; the allowance is
+    /// the authorization.
+    Allowance,
+}
+
 impl EscrowContract {
     pub(crate) fn create_escrow_inner(
         env: &Env,
@@ -19,6 +32,7 @@ impl EscrowContract {
         release_not_before: Option<u64>,
         fee_recipient: Option<Address>,
         fee_bps: Option<u32>,
+        attester: Option<BytesN<32>>,
         payer_already_authorized: bool,
     ) -> Result<u64, Error> {
         Self::create_escrow_with_payees_inner(
@@ -37,8 +51,10 @@ impl EscrowContract {
             release_not_before,
             fee_recipient,
             fee_bps,
+            attester,
             payer_already_authorized,
             None,
+            Funding::Transfer,
         )
     }
 
@@ -58,8 +74,10 @@ impl EscrowContract {
         release_not_before: Option<u64>,
         fee_recipient: Option<Address>,
         fee_bps: Option<u32>,
+        attester: Option<BytesN<32>>,
         payer_already_authorized: bool,
         payee_shares: Option<Vec<PayeeShare>>,
+        funding: Funding,
     ) -> Result<u64, Error> {
         // Every creation entry point funnels through here, so this one
         // check covers all deposit paths: while paused, no new escrow can
@@ -169,7 +187,10 @@ impl EscrowContract {
             payee.require_auth();
         }
 
-        Self::transfer_in_exact(env, &token, &payer, amount)?;
+        match funding {
+            Funding::Transfer => Self::transfer_in_exact(env, &token, &payer, amount)?,
+            Funding::Allowance => Self::transfer_from_exact(env, &token, &payer, amount)?,
+        }
 
         let id = Self::next_id(env);
         let data = EscrowData {
@@ -190,6 +211,7 @@ impl EscrowContract {
             release_not_before,
             fee_recipient,
             fee_bps,
+            attester,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         env.storage()
@@ -557,6 +579,25 @@ impl EscrowContract {
         Ok(data)
     }
 
+    /// Resolves the same caller-dependent refund path as `refund` without
+    /// requiring auth a second time. The batch entry point authenticates its
+    /// caller once, then uses this helper so a payee-initiated refund has the
+    /// same authorization and event semantics as the single-entry point.
+    pub(crate) fn refund_checks_for_caller(
+        env: &Env,
+        escrow_id: u64,
+        caller: &Address,
+    ) -> Result<(EscrowData, bool), Error> {
+        let loaded = Self::load(env, escrow_id)?;
+        if caller == &loaded.payee {
+            Self::reject_pooled(env, escrow_id)?;
+            Self::check_funded(&loaded)?;
+            Ok((loaded, true))
+        } else {
+            Ok((Self::refund_checks(env, escrow_id, caller)?, false))
+        }
+    }
+
     /// One `settle_many` op. Every rejection is returned before any state
     /// changes: the action's own checks, then `settle()`'s pre-write
     /// release checks (`release_not_before`, payee acceptance), run here
@@ -570,7 +611,7 @@ impl EscrowContract {
         caller: &Address,
         action: SettleAction,
     ) -> Result<(), Error> {
-        let (mut data, settled) = match action {
+        let (mut data, settled, payee_initiated) = match action {
             SettleAction::Release => {
                 let data = Self::release_checks(env, escrow_id, caller)?;
                 if data
@@ -582,15 +623,25 @@ impl EscrowContract {
                 if data.requires_acceptance && data.accepted_at.is_none() {
                     return Err(Error::AcceptanceRequired);
                 }
-                (data, EscrowStatus::Released)
+                (data, EscrowStatus::Released, false)
             }
-            SettleAction::Refund => (
-                Self::refund_checks(env, escrow_id, caller)?,
-                EscrowStatus::Refunded,
-            ),
+            SettleAction::Refund => {
+                let (data, payee_initiated) =
+                    Self::refund_checks_for_caller(env, escrow_id, caller)?;
+                (data, EscrowStatus::Refunded, payee_initiated)
+            }
         };
         if let Err(error) = Self::settle_full(env, escrow_id, &mut data, settled) {
             panic_with_error!(env, error);
+        }
+        if payee_initiated {
+            PayeeRefunded {
+                escrow_id,
+                payer: data.payer,
+                payee: data.payee,
+                amount: data.amount,
+            }
+            .publish(env);
         }
         Ok(())
     }

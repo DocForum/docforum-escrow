@@ -335,7 +335,10 @@ fn creation_requires_payer_auth_with_nested_token_transfer_tree() {
         sub_invokes: &sub_invokes,
     };
 
-    env.mock_auths(&[MockAuth { address: &payer, invoke: &create }]);
+    env.mock_auths(&[MockAuth {
+        address: &payer,
+        invoke: &create,
+    }]);
     let id = client.create_escrow(
         &payer,
         &payee,
@@ -350,10 +353,80 @@ fn creation_requires_payer_auth_with_nested_token_transfer_tree() {
         &None,
     );
 
-    auth::assert_auth_addresses(&env, &[payer.clone()]);
+    auth::assert_auth_tree(&env, &payer, &create);
     assert_eq!(token.balance(&payer), 700);
     assert_eq!(token.balance(&contract_id), 300);
     assert_eq!(client.get_status(&id), EscrowStatus::Funded);
+}
+
+#[test]
+fn creation_rejects_a_wrong_signer_even_with_the_exact_transfer_tree() {
+    let env = Env::default();
+    env.mock_all_auths(); // authorize fixture minting only
+    let (token_id, token, asset) = setup(&env);
+    let payer = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    asset.mint(&payer, &1_000);
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let condition_ref = String::from_str(&env, "wrong-create-signer");
+
+    let transfer = MockAuthInvoke {
+        contract: &token_id,
+        fn_name: "transfer",
+        args: (payer.clone(), contract_id.clone(), 300i128).into_val(&env),
+        sub_invokes: &[],
+    };
+    let sub_invokes = [transfer];
+    let create = MockAuthInvoke {
+        contract: &contract_id,
+        fn_name: "create_escrow",
+        args: (
+            payer.clone(),
+            payee,
+            token_id.clone(),
+            300i128,
+            condition_ref.clone(),
+            releaser,
+            None::<u64>,
+            false,
+            None::<Address>,
+            None::<Address>,
+            None::<u32>,
+        )
+            .into_val(&env),
+        sub_invokes: &sub_invokes,
+    };
+
+    env.mock_auths(&[MockAuth {
+        address: &stranger,
+        invoke: &create,
+    }]);
+    let result = client.try_create_escrow(
+        &payer,
+        &Address::generate(&env),
+        &token_id,
+        &300,
+        &condition_ref,
+        &Address::generate(&env),
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+    );
+
+    assert!(result.is_err());
+    assert_eq!(token.balance(&payer), 1_000);
+    assert!(matches!(
+        client.try_get_status(&0),
+        Err(Ok(docforum_escrow::Error::NotFound))
+    ));
 }
 
 fn batch_of(env: &Env, token: &Address, count: u32) -> Vec<docforum_escrow::CreateItem> {

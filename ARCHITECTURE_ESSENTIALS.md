@@ -11,6 +11,7 @@
 ## Contract surface
 ```
 __constructor(allowed_tokens: Vec<Address>, pause_admin: Address)    // immutable token allowlist (empty = allow all) + the one pause custodian; no setter, no upgrade
+get_allowed_tokens() -> Vec<Address>   // IMPLEMENTED (issue #299) — read-only immutable deploy-time allowlist (empty = any token)
 pause(caller) -> result                // IMPLEMENTED (Phase E5, ADR 0011) — custodian only; blocks every deposit path, never release/refund
 unpause(caller) -> result              // IMPLEMENTED (Phase E5, ADR 0011) — custodian only; re-opens new deposits
 is_paused() -> bool                    // IMPLEMENTED (Phase E5, ADR 0011) — read-only pause flag
@@ -23,6 +24,8 @@ create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id 
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
 cancel(escrow_id, payer) -> ()   // payer-authorized, only while Funded + requires_acceptance + not yet accepted; funds to refund_to, status Cancelled (ADR 0010); not deployed yet
 create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, deployed on testnet
+create_escrow_with_attester(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to, attester) -> escrow_id // Phase E5, issue #42 — like create_escrow, plus an optional ed25519 attester key
+release_with_attestation(escrow_id, signature) -> () // Phase E5, issue #42 — releases on a signed off-chain attestation; anyone may submit, the signature is the authority
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded | Cancelled — IMPLEMENTED + LIVE ON TESTNET (Phase E1); also answers for settled ids from the `Status` entry that outlives the record (ADR 0013)
 get_escrow(escrow_id) -> EscrowData    // read-only, Funded escrows only (NotFound once settled, ADR 0013): payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after, refund_to, fee_recipient, fee_bps — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
 release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser, threshold must be 1, only while Funded
@@ -198,6 +201,9 @@ Ed25519 keys. Soroban authorization signatures cover the host-generated
 payload, including the nonce and invocation context. The account rejects
 authorization contexts other than one `release` or `refund` call on its
 configured escrow. Signer additions/removals and threshold changes use a
+
+The account also accepts one `rotate_releaser` context on its configured escrow when it is the context's `caller`; the payer's separate authorization remains required, and the rotation consumes one per-window operation slot (ADR 0008).
+
 separate signed management digest bound to the account and a monotonic
 management nonce. See [ADR 0005](docs/adr/0005-custom-releaser-account.md).
 
