@@ -38,6 +38,22 @@ impl EscrowContract {
             .unwrap_or(0)
     }
 
+    /// Checks the shared token pool before an outbound payout. A token may
+    /// have clawed funds back after an escrow was created, leaving the
+    /// contract balance below the amount it still owes. Return a stable
+    /// contract error before settlement changes state or calls the token.
+    pub(crate) fn check_pool_sufficient(
+        env: &Env,
+        token: &Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        let balance = token::Client::new(env, token).balance(&env.current_contract_address());
+        if balance < amount {
+            return Err(Error::PoolInsufficient);
+        }
+        Ok(())
+    }
+
     pub(crate) fn add_liability(env: &Env, token: &Address, amount: i128) -> Result<(), Error> {
         let updated = Self::liability(env, token)
             .checked_add(amount)

@@ -171,6 +171,14 @@ impl FailingPayoutToken {
             .set(&MockKey::PayoutBlocked, &true);
     }
 
+    /// Simulates an issuer clawback from the escrow contract after funding.
+    pub fn clawback(env: Env, from: Address, amount: i128) {
+        let balance = mock_balance(&env, &from);
+        env.storage()
+            .persistent()
+            .set(&MockKey::Balance(from), &(balance - amount));
+    }
+
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
         let armed: bool = env
             .storage()
@@ -310,6 +318,68 @@ fn failed_payout_leaves_the_escrow_funded() {
     assert_eq!(client.get_status(&escrow_id), EscrowStatus::Funded);
     assert_eq!(token.balance(&contract_id), 300);
     assert_eq!(token.balance(&payee), 0);
+}
+
+#[test]
+fn clawback_returns_pool_insufficient_before_release_or_refund() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let token_id = env.register(FailingPayoutToken, ());
+    let token = FailingPayoutTokenClient::new(&env, &token_id);
+    let payer = Address::generate(&env);
+    token.set_balance(&payer, &1_000);
+
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let first = client.create_escrow(
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(&env, "clawback-release"),
+        &releaser,
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+    );
+    let second = client.create_escrow(
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(&env, "clawback-refund"),
+        &releaser,
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+    );
+    assert_eq!(token.balance(&contract_id), 600);
+
+    token.clawback(&contract_id, &301);
+    assert_eq!(token.balance(&contract_id), 299);
+
+    assert_eq!(
+        client.try_release(&first, &releaser),
+        Err(Ok(Error::PoolInsufficient))
+    );
+    assert_eq!(
+        client.try_refund(&second, &releaser),
+        Err(Ok(Error::PoolInsufficient))
+    );
+    assert_eq!(client.get_status(&first), EscrowStatus::Funded);
+    assert_eq!(client.get_status(&second), EscrowStatus::Funded);
+    assert_eq!(token.balance(&payee), 0);
+    assert_eq!(token.balance(&payer), 400);
 }
 
 #[test]

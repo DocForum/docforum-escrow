@@ -108,7 +108,7 @@ pub enum Error {
     DuplicatePayee = 43,
     InvalidBasisPoints = 44,
     SplitAmountOverflow = 45,
-    /// The contract's token balance is below the requested stream payout.
+    /// The contract's token balance is below the requested payout.
     PoolInsufficient = 47,
     /// `withdraw`/`get_vesting` on an escrow without a schedule.
     NotStreamed = 48,

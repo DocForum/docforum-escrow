@@ -342,6 +342,11 @@ impl EscrowContract {
         };
         let payout = payee_amount - fee;
 
+        // Check the shared token pool before changing settlement state or
+        // invoking the token. A post-creation clawback must produce a clear,
+        // retryable contract error rather than an opaque token failure.
+        Self::check_pool_sufficient(env, &data.token, data.amount)?;
+
         // Effects before interactions: the state write lands before any
         // token call, so a re-entrant token cannot see a still-`Funded`
         // escrow (threat model T4).
