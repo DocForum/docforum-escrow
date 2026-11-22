@@ -137,15 +137,15 @@ pub enum Error {
     /// `attester` configured (Phase E5, issue #42).
     AttesterNotConfigured = 54,
     /// `fund_next` before the next period is due (issue #115).
-    ScheduleTooEarly = 11500,
+    ScheduleTooEarly = 55,
     /// `fund_next` after every period was funded (issue #115).
-    ScheduleComplete = 11501,
+    ScheduleComplete = 56,
     /// `fund_next` or a second `cancel_schedule` on a cancelled schedule
     /// (issue #115).
-    ScheduleCancelled = 11502,
+    ScheduleCancelled = 57,
     /// The payer's allowance for this contract is below one period's
     /// amount — or has expired, which reads as zero (issue #115).
-    AllowanceExhausted = 11503,
+    AllowanceExhausted = 58,
     /// A schedule with a zero period or zero total periods (issue #115).
-    InvalidSchedule = 11504,
+    InvalidSchedule = 59,
 }

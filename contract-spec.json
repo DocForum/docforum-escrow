@@ -443,23 +443,23 @@
     },
     {
       "name": "ScheduleTooEarly",
-      "code": 11500
+      "code": 55
     },
     {
       "name": "ScheduleComplete",
-      "code": 11501
+      "code": 56
     },
     {
       "name": "ScheduleCancelled",
-      "code": 11502
+      "code": 57
     },
     {
       "name": "AllowanceExhausted",
-      "code": 11503
+      "code": 58
     },
     {
       "name": "InvalidSchedule",
-      "code": 11504
+      "code": 59
     }
   ]
 }

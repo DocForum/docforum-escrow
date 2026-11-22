@@ -71,7 +71,7 @@ use soroban_sdk::{
 
 // Bump this value whenever a contract interface or behavior change is made.
 // CI checks this constant against the base branch when this file changes.
-pub const CONTRACT_VERSION: &str = "3.2.0";
+pub const CONTRACT_VERSION: &str = "3.3.0";
 
 include!(concat!(env!("OUT_DIR"), "/contract_metadata.rs"));
 
