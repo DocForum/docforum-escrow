@@ -459,6 +459,18 @@
                       "val": {
                         "u64": "1"
                       }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "TrustedSources"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": []
+                      }
                     }
                   ]
                 }

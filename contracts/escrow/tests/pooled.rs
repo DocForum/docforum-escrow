@@ -58,7 +58,7 @@ fn setup(env: &Env, target: i128) -> Fixture<'_> {
     let payee = Address::generate(env);
     let releaser = Address::generate(env);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(env), Vec::<Address>::new(env)));
     let client = EscrowContractClient::new(env, &contract_id);
     let id = client.create_pooled_escrow(
         &creator,
@@ -461,7 +461,7 @@ fn pooled_creation_validation() {
     let creator = Address::generate(&env);
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
     let client = EscrowContractClient::new(&env, &contract_id);
     let ref_str = String::from_str(&env, "pooled");
 
@@ -529,7 +529,7 @@ fn pooled_creation_respects_the_token_allowlist() {
 
     let mut allowlist = Vec::new(&env);
     allowlist.push_back(allowed.clone());
-    let contract_id = env.register(EscrowContract, (allowlist,));
+    let contract_id = env.register(EscrowContract, (allowlist, Vec::<Address>::new(&env)));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     assert_eq!(
@@ -719,7 +719,7 @@ fn ordinary_escrows_are_unaffected() {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
     let client = EscrowContractClient::new(&env, &contract_id);
     let id = client.create_escrow(
         &payer,

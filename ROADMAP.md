@@ -157,6 +157,13 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `docs/testnet-deployments.md`.
 ## Phase E5 — Contract features
 
+- [x] **Consented migration of funded escrows** (issue #117, ADR 0012) —
+  new deployments can constructor-allowlist old source addresses;
+  `export_to` requires payer + sole-releaser consent and atomically calls
+  `import_from`, transfers funds, and marks the source `Migrated`. Pooled
+  escrows are excluded, current testnet deployments predate the entry points,
+  and two-instance success/rollback tests cover the bridge.
+
 - [x] Optional escrow-wide earliest release time (issue #43, ADR 0009); refund path remains independent.
 - [x] Two-party releaser rotation (issue #23): current releaser and payer authorize; only funded single-releaser escrows can rotate. Contract and payee addresses are rejected.
 

@@ -8,7 +8,7 @@
 #
 # Usage:
 #   scripts/deploy [--network testnet] [--wasm PATH] [--expected-wasm-hash HEX]
-#                  [--allowed-tokens C...,C...] [--no-record]
+#                  [--allowed-tokens C...,C...] [--trusted-sources C...,C...] [--no-record]
 #   scripts/deploy --dry-run        # same flow against a local quickstart
 #
 # Options:
@@ -24,6 +24,8 @@
 #   --allowed-tokens LIST    Comma-separated constructor allowlist. Default:
 #                            the network's native XLM asset contract. Pass an
 #                            empty string to allow any token.
+#   --trusted-sources LIST   Comma-separated old escrow contract IDs trusted
+#                            for migration imports. Default: empty.
 #   --no-record              Deploy and verify, but write no record.
 #   -h, --help               Show this help.
 #
@@ -53,6 +55,7 @@ wasm_path=""
 expected_hash=""
 allowed_tokens_set=false
 allowed_tokens=""
+trusted_sources=""
 record=true
 
 while [[ $# -gt 0 ]]; do
@@ -62,6 +65,7 @@ while [[ $# -gt 0 ]]; do
     --wasm) wasm_path="${2:?--wasm needs a path}"; shift 2 ;;
     --expected-wasm-hash) expected_hash="${2:?--expected-wasm-hash needs a value}"; shift 2 ;;
     --allowed-tokens) allowed_tokens="${2-}"; allowed_tokens_set=true; shift 2 ;;
+    --trusted-sources) trusted_sources="${2-}"; shift 2 ;;
     --no-record) record=false; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; die "unknown argument: $1" ;;
@@ -201,6 +205,7 @@ if [[ "$allowed_tokens_set" == false ]]; then
   allowed_tokens="$native_token"
 fi
 allowed_json="$(node -e 'const l=process.argv[1].split(",").map(s=>s.trim()).filter(Boolean);console.log(JSON.stringify(l))' "$allowed_tokens")"
+trusted_json="$(node -e 'const l=process.argv[1].split(",").map(s=>s.trim()).filter(Boolean);console.log(JSON.stringify(l))' "$trusted_sources")"
 
 # --- Upload + deploy -------------------------------------------------------------
 log "Uploading WASM to $network"
@@ -209,9 +214,9 @@ upload_tx="$(tx_of_last)"
 [[ "$uploaded_hash" == "$wasm_hash" ]] ||
   die "uploaded WASM hash $uploaded_hash does not match local $wasm_hash."
 
-log "Deploying with allowed_tokens=$allowed_json"
+log "Deploying with allowed_tokens=$allowed_json trusted_sources=$trusted_json"
 contract_id="$(submit contract deploy --wasm-hash "$wasm_hash" --source deployer "${net_args[@]}" \
-  -- --allowed_tokens "$allowed_json" | tail -n 1)"
+  -- --allowed_tokens "$allowed_json" --trusted_sources "$trusted_json" | tail -n 1)"
 deploy_tx="$(tx_of_last)"
 [[ "$contract_id" =~ ^C[A-Z2-7]{55}$ ]] || die "unexpected contract id: $contract_id"
 log "Contract $contract_id"

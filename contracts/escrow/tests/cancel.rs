@@ -42,7 +42,7 @@ fn fund<'a>(env: &'a Env, requires_acceptance: bool, refund_after: Option<u64>) 
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract_id = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
     let client = EscrowContractClient::new(env, &contract_id);
     let condition = String::from_str(env, "opaque-condition-ref");
     let escrow_id = if requires_acceptance {

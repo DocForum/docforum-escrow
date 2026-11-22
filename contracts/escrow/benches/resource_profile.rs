@@ -26,7 +26,7 @@ fn fixture() -> Fixture<'static> {
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
     asset.mint(&payer, &10_000);
-    let contract = env.register(EscrowContract, (Vec::<Address>::new(&env),));
+    let contract = env.register(EscrowContract, (Vec::<Address>::new(&env), Vec::<Address>::new(&env)));
     let client = EscrowContractClient::new(&env, &contract);
     Fixture { env, client, payer, payee, releaser, token }
 }

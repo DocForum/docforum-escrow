@@ -10,7 +10,7 @@
 
 ## Contract surface
 ```
-__constructor(allowed_tokens: Vec<Address>)    // immutable token allowlist; empty means allow all
+__constructor(allowed_tokens: Vec<Address>, trusted_sources: Vec<Address>)    // immutable token + migration-source allowlists
 create_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to) -> escrow_id   // Phase E5 callback + sponsored refund destination (ADR 0009); deployed on testnet
 create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id   // optional payee acceptance gate; deployed on testnet
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
@@ -29,6 +29,8 @@ claim_refund(escrow_id, contributor) -> () // IMPLEMENTED (issue #113) — pull-
 get_pooled(escrow_id) -> PooledData  // read-only: funding_target, funding_deadline — errors NotPooled (26) on non-pooled ids
 get_contribution(escrow_id, contributor) -> Option<Contribution> // read-only: one contributor's record (amount, refunded); None if never contributed
 rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue #23) — single-releaser escrow only; current releaser and payer authorize; funded only
+export_to(escrow_id, new_contract, payer, releaser) -> new_escrow_id // IMPLEMENTED (issue #117, ADR 0012) — payer + sole releaser authorize; atomic transfer to a trusted deployment
+import_from(source, source_escrow_id, data) -> new_escrow_id // IMPLEMENTED (issue #117, ADR 0012) — source address must be constructor-allowlisted; funded non-pooled payloads only
 ```
 
 No new contract-level role came in with the M-of-N work: `releasers` is
@@ -104,6 +106,16 @@ may not be the contract itself (`InvalidRefundTo`); omitted, it equals
 "release → stored `payee`, refund → stored `refund_to`". Make sure the
 destination can hold the token: if the transfer to it fails, so does the
 refund.
+
+Migration (Phase E5, issue #117, `docs/adr/0012`) is a source-to-target
+bridge between immutable deployments, not an upgrade hook. The receiving
+deployment stores an immutable `trusted_sources` address allowlist in its
+constructor. `export_to` requires the stored payer and sole releaser to
+authorize, imports the record, transfers the exact token balance, and marks
+the source record `Migrated`; any failure rolls the transaction back. Existing
+testnet deployments cannot use this path because their WASM has no migration
+entry points; keep those contract IDs configured and settle their escrows
+under the old rules.
 
 `release_with_approvals`/`refund_with_approvals` check that at least
 `threshold` distinct releasers each authorized this exact invocation.

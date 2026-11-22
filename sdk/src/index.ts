@@ -66,7 +66,7 @@ export {
 } from "./deployments.js";
 export type { FactoryClientConfig, DeployInstanceParams, DeployInstanceResult, FactoryInstance } from "./factory.js";
 
-export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Cancelled";
+export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Cancelled" | "Migrated";
 
 /**
  * One tranche of a milestone schedule. A milestone escrow is a *group* of

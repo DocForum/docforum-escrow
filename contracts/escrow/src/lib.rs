@@ -14,6 +14,8 @@
 // releaser set (`create_escrow_with_releasers`) — see docs/adr/0007.
 // Single-releaser escrows are stored as a one-address set with threshold 1
 // and behave exactly as before.
+// Phase E5 (issue #117): a funded escrow can be exported to a trusted,
+// newer deployment with payer + releaser consent; see docs/adr/0012.
 // Phase E5 (issue #113): pooled escrows funded by multiple payers —
 // `create_pooled_escrow` + `contribute` + pull-based `claim_refund`, see
 // docs/adr/0011. Pooled escrows add two storage records (funding config,
@@ -65,6 +67,8 @@ pub enum EscrowStatus {
     /// The payer withdrew the funds before the payee accepted — see
     /// docs/adr/0010. Terminal, like `Released` and `Refunded`.
     Cancelled,
+    /// The escrow's funds and record were moved to a trusted deployment.
+    Migrated,
 }
 
 #[contracttype]
@@ -156,6 +160,7 @@ enum DataKey {
     NextId,
     Status(u64),
     AllowedTokens,
+    TrustedSources,
     /// Pooled escrows only (issue #113): immutable funding config.
     /// Soroban encodes enum variants by name, so appending these two
     /// variants does not disturb any existing storage entry.
@@ -250,6 +255,13 @@ pub enum Error {
     NotSupportedForPooled = 33,
     /// The funding deadline was not strictly in the future at creation.
     InvalidFundingDeadline = 34,
+    /// The receiving deployment does not trust the exporting deployment's
+    /// WASM hash, or the import payload is not a live escrow.
+    UntrustedMigrationSource = 35,
+    /// Migration is only supported for ordinary single-deployment escrows;
+    /// pooled escrows have additional contribution storage that cannot be
+    /// represented by the migration payload.
+    MigrationNotSupported = 36,
 }
 
 #[contract]
@@ -259,10 +271,97 @@ pub struct EscrowContract;
 impl EscrowContract {
     /// Sets the immutable token allowlist at deployment. An empty list
     /// preserves the legacy behavior and allows any token address.
-    pub fn __constructor(env: Env, allowed_tokens: Vec<Address>) {
+    pub fn __constructor(
+        env: Env,
+        allowed_tokens: Vec<Address>,
+        trusted_sources: Vec<Address>,
+    ) {
         env.storage()
             .instance()
             .set(&DataKey::AllowedTokens, &allowed_tokens);
+        env.storage()
+            .instance()
+            .set(&DataKey::TrustedSources, &trusted_sources);
+    }
+
+    /// Exports one funded, non-pooled escrow to a trusted deployment. Both
+    /// stored releasers and the payer authorize this exact call. The target
+    /// import and token transfer happen inside this invocation, so any
+    /// failure rolls back both deployments and the funds stay in the source.
+    pub fn export_to(
+        env: Env,
+        escrow_id: u64,
+        new_contract: Address,
+        payer: Address,
+        releaser: Address,
+    ) -> Result<u64, Error> {
+        payer.require_auth();
+        releaser.require_auth();
+        let mut data = Self::load(&env, escrow_id)?;
+        Self::reject_pooled(&env, escrow_id)?;
+        Self::check_funded(&data)?;
+        if data.payer != payer || data.threshold != 1 || data.releasers.len() != 1 {
+            return Err(Error::Unauthorized);
+        }
+        if data.releasers.get(0) != Some(releaser.clone()) {
+            return Err(Error::Unauthorized);
+        }
+
+        let source = env.current_contract_address();
+        let new_id: u64 = env.invoke_contract(
+            &new_contract,
+            &soroban_sdk::Symbol::new(&env, "import_from"),
+            (source.clone(), escrow_id, data.clone()).into_val(&env),
+        );
+
+        let token_client = token::Client::new(&env, &data.token);
+        let target_balance_before = token_client.balance(&new_contract);
+        token_client.transfer(&source, &new_contract, &data.amount);
+        let target_balance_after = token_client.balance(&new_contract);
+        if target_balance_after.checked_sub(target_balance_before) != Some(data.amount) {
+            return Err(Error::BalanceMismatch);
+        }
+
+        data.status = EscrowStatus::Migrated;
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage().persistent().set(&DataKey::Status(escrow_id), &data.status);
+        env.events().publish((symbol_short!("migrated"), escrow_id), (new_contract, new_id));
+        Ok(new_id)
+    }
+
+    /// Imports a source payload. The source must be a contract address fixed
+    /// in this deployment's constructor. `source.require_auth`
+    /// prevents a direct caller from fabricating a source contract call.
+    pub fn import_from(
+        env: Env,
+        source: Address,
+        _source_escrow_id: u64,
+        data: EscrowData,
+    ) -> Result<u64, Error> {
+        source.require_auth();
+        let trusted: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::TrustedSources)
+            .unwrap_or(Vec::new(&env));
+        let trusted_source = Self::contains(&trusted, &source);
+        if !trusted_source || source == env.current_contract_address() || data.status != EscrowStatus::Funded {
+            return Err(Error::UntrustedMigrationSource);
+        }
+        let allowed_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedTokens)
+            .unwrap_or(Vec::new(&env));
+        if !allowed_tokens.is_empty() && !Self::contains(&allowed_tokens, &data.token) {
+            return Err(Error::DisallowedToken);
+        }
+        Self::validate_import(&env, &data)?;
+        let id = Self::next_id(&env);
+        env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        env.storage().persistent().set(&DataKey::Status(id), &data.status);
+        Self::publish_state(&env, symbol_short!("imported"), id, &data);
+        Ok(id)
     }
 
     /// Locks `amount` of `token` pulled from `payer`, held for `payee`,
@@ -1196,6 +1295,7 @@ impl EscrowContract {
             EscrowStatus::Released => symbol_short!("released"),
             EscrowStatus::Refunded => symbol_short!("refunded"),
             EscrowStatus::Cancelled => symbol_short!("cancelled"),
+            EscrowStatus::Migrated => symbol_short!("migrated"),
         };
         Self::publish_state(env, action, escrow_id, data);
         Ok(())
@@ -1209,6 +1309,7 @@ impl EscrowContract {
             EscrowStatus::Released => symbol_short!("Released"),
             EscrowStatus::Refunded => symbol_short!("Refunded"),
             EscrowStatus::Cancelled => symbol_short!("Cancelled"),
+            EscrowStatus::Migrated => symbol_short!("Migrated"),
         };
         env.events().publish(
             (symbol_short!("ESCROW"), action, id),
@@ -1296,6 +1397,35 @@ impl EscrowContract {
             }
         }
         false
+    }
+
+    fn validate_import(env: &Env, data: &EscrowData) -> Result<(), Error> {
+        if data.amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if data.releasers.len() == 0 || data.threshold == 0 || data.threshold > data.releasers.len() {
+            return Err(Error::InvalidThreshold);
+        }
+        if data.condition_ref.len() > MAX_CONDITION_REF_LEN {
+            return Err(Error::ConditionRefTooLong);
+        }
+        Self::check_releaser_set(env, &data.releasers, data.threshold)?;
+        if data.refund_to == env.current_contract_address() {
+            return Err(Error::InvalidRefundTo);
+        }
+        if let Some(deadline) = data.refund_after {
+            if deadline <= env.ledger().timestamp() {
+                return Err(Error::InvalidRefundAfter);
+            }
+        }
+        if let Some(release_time) = data.release_not_before {
+            if release_time < env.ledger().timestamp()
+                || data.refund_after.is_some_and(|refund_time| release_time > refund_time)
+            {
+                return Err(Error::InvalidReleaseNotBefore);
+            }
+        }
+        Ok(())
     }
 
     fn next_id(env: &Env) -> u64 {

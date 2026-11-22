@@ -6,6 +6,7 @@ const ESCROW_STATUSES: ReadonlySet<string> = new Set<EscrowStatus>([
   "Released",
   "Refunded",
   "Cancelled",
+  "Migrated",
 ]);
 
 function fail(field: string, expected: string, value: unknown): never {
