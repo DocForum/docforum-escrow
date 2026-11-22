@@ -6,6 +6,7 @@ import type {
   Signer as StellarSigner,
 } from "@stellar/stellar-sdk/contract";
 
+/** Network context supplied to every signing operation. */
 export interface SignerOptions {
   networkPassphrase: string;
   address: string;
@@ -13,8 +14,11 @@ export interface SignerOptions {
 
 /** A transport-independent signer for account, wallet, KMS, or HSM backends. */
 export interface Signer {
+  /** Returns the Stellar public key associated with this signer. */
   publicKey(): string;
+  /** Signs a transaction XDR and returns the signed transaction XDR. */
   signTransaction(xdr: string, opts: SignerOptions): Promise<string>;
+  /** Signs a Soroban authorization entry when the backend supports it. */
   signAuthEntry?(authEntry: string, opts: SignerOptions): Promise<string>;
 }
 
@@ -50,10 +54,12 @@ export class KeypairSigner implements Signer {
     private readonly networkPassphrase: string,
   ) {}
 
+  /** Returns the public key of the wrapped keypair. */
   publicKey(): string {
     return this.keypair.publicKey();
   }
 
+  /** Signs a transaction after checking that it targets the configured network. */
   async signTransaction(xdr: string, opts: SignerOptions): Promise<string> {
     try {
       checkNetwork(opts, this.networkPassphrase, "transaction");
@@ -66,6 +72,7 @@ export class KeypairSigner implements Signer {
     }
   }
 
+  /** Signs an authorization entry after checking the configured network. */
   async signAuthEntry(authEntry: string, opts: SignerOptions): Promise<string> {
     try {
       checkNetwork(opts, this.networkPassphrase, "auth-entry");
@@ -77,10 +84,12 @@ export class KeypairSigner implements Signer {
   }
 }
 
+/** Endpoint and request options for a remote signing service. */
 export interface RemoteSignerOptions {
   url: string;
   publicKey: string;
   headers?: Record<string, string>;
+  /** Optional fetch implementation for custom runtimes and tests. */
   fetch?: typeof fetch;
 }
 
@@ -95,14 +104,17 @@ export class RemoteSigner implements Signer {
     }
   }
 
+  /** Returns the public key configured for the remote signer. */
   publicKey(): string {
     return this.options.publicKey;
   }
 
+  /** Requests a remote signature for transaction XDR. */
   signTransaction(xdr: string, opts: SignerOptions): Promise<string> {
     return this.requestSigning("transaction", xdr, opts);
   }
 
+  /** Requests a remote signature for a Soroban authorization entry. */
   signAuthEntry(authEntry: string, opts: SignerOptions): Promise<string> {
     return this.requestSigning("auth-entry", authEntry, opts);
   }
