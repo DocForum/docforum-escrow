@@ -19,6 +19,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install SDK dependencies
+        run: npm --prefix sdk ci
+      - name: Install and build the action
+        run: npm --prefix action ci && npm --prefix action run build
       - name: Run escrow action on testnet
         uses: ./action
         with:

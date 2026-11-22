@@ -8,5 +8,6 @@ sdk/docs-api/
 .env.local
 *.log
 .DS_Store
+action/dist/
 __pycache__/
 *.pyc
