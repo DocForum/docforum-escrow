@@ -137,8 +137,11 @@ impl ReleaserAccount {
     }
 
     pub fn window_usage(env: Env, window: u32) -> u32 {
+        // Temporary storage: an expired counter is simply absent, so this
+        // returns 0 instead of trapping. Callers can therefore read a past
+        // window safely after it has rolled off.
         env.storage()
-            .persistent()
+            .temporary()
             .get(&DataKey::WindowUsage(window))
             .unwrap_or(0)
     }
@@ -325,13 +328,25 @@ fn consume_operation_slot(env: &Env) -> Result<(), Error> {
     let window_ledgers: u32 = get(env, &DataKey::WindowLedgers);
     let window = env.ledger().sequence().saturating_sub(1) / window_ledgers;
     let key = DataKey::WindowUsage(window);
-    let used: u32 = env.storage().persistent().get(&key).unwrap_or(0);
+    // Window counters live in temporary storage: they are only relevant for
+    // the duration of their window and can be recreated (with a fresh count)
+    // afterwards, so they no longer pay persistent rent forever.
+    let used: u32 = env.storage().temporary().get(&key).unwrap_or(0);
     if used >= cap {
         return Err(Error::RateLimited);
     }
-    env.storage().persistent().set(&key, &(used + 1));
-    let ttl = env.storage().max_ttl();
-    env.storage().persistent().extend_ttl(&key, ttl - 1, ttl);
+    env.storage().temporary().set(&key, &(used + 1));
+    // TTL arithmetic: window index `w` covers ledgers
+    //   [w * window_ledgers + 1, (w + 1) * window_ledgers].
+    // In the worst case the counter is created on the first ledger of its
+    // window, so it must live at least `window_ledgers` ledgers to reach the
+    // window's last ledger; add a 1-ledger margin so it can never expire
+    // before the window ends (which would let the cap be bypassed). Clamp to
+    // the network maximum so we never request more than `max_ttl`.
+    let ttl = (window_ledgers + 1).min(env.storage().max_ttl());
+    env.storage()
+        .temporary()
+        .extend_ttl(&key, ttl.saturating_sub(1), ttl);
     Ok(())
 }
 
