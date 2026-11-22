@@ -28,7 +28,7 @@
     },
     {
       "name": "create_escrow_with_options",
-      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, options: EscrowOptions,",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, query_options: EscrowOptions,",
       "return": "Result<u64, Error>"
     },
     {
