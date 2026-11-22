@@ -56,9 +56,10 @@ impl EscrowContract {
     /// - `Release`: `caller` must be a releaser of that escrow with
     ///   threshold 1, the escrow must be `Funded`, a pooled escrow must be
     ///   fully funded, and `release_not_before`/payee acceptance apply.
-    /// - `Refund`: pooled escrows are rejected; `caller` must be a releaser
-    ///   (threshold 1) unless `refund_after` has passed, in which case
-    ///   anyone may refund — always to the stored `refund_to`.
+    /// - `Refund`: pooled escrows are rejected; `caller` may be the stored
+    ///   payee for a voluntary refund, or must be a releaser (threshold 1)
+    ///   unless `refund_after` has passed, in which case anyone may refund —
+    ///   always to the stored `refund_to`.
     ///
     /// `caller` authorizes the whole batch once. Per-op authority comes
     /// only from each escrow's own stored releaser set, so a batch can never
@@ -106,7 +107,9 @@ impl EscrowContract {
     ///
     /// - the escrow's releaser (docs/adr/0002), always; or
     /// - **anyone**, once `refund_after` has been reached — the timeout
-    ///   refund path for a lost/unsignable releaser key (docs/adr/0004).
+    ///   refund path for a lost/unsignable releaser key (docs/adr/0004); or
+    /// - the stored payee, at any time while the escrow is `Funded`, as a
+    ///   voluntary refund that emits `PayeeRefunded` (ADR 0010).
     ///
     /// The destination never changes: timeout or not, funds only ever go
     /// to the stored `refund_to`, which no caller can influence. With no
@@ -126,17 +129,8 @@ impl EscrowContract {
         Self::extend_instance_ttl(&env);
         caller.require_auth();
 
-        let loaded = Self::load(&env, escrow_id)?;
-        let payee_initiated = caller == loaded.payee;
-        let mut data = if payee_initiated {
-            // Keep pooled refunds pull-based and require a funded escrow for
-            // the payee-authorized path, which bypasses the releaser check.
-            Self::reject_pooled(&env, escrow_id)?;
-            Self::check_funded(&loaded)?;
-            loaded
-        } else {
-            Self::refund_checks(&env, escrow_id, &caller)?
-        };
+        let (mut data, payee_initiated) =
+            Self::refund_checks_for_caller(&env, escrow_id, &caller)?;
         Self::settle_full(&env, escrow_id, &mut data, EscrowStatus::Refunded)?;
         if payee_initiated {
             PayeeRefunded {
