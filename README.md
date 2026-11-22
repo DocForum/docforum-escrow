@@ -107,13 +107,23 @@ Requires a Rust toolchain with the `wasm32v1-none` target.
 git clone https://github.com/DocForum/docforum-escrow.git
 cd docforum-escrow/contracts/escrow
 
-# Run the test suite (28 tests, all passing today)
+# Run the test suite (31 tests, all passing today)
 cargo test
 
 # Build the deployable contract
 cargo build --target wasm32v1-none --release
 # → target/wasm32v1-none/release/docforum_escrow.wasm
+
+# Static analysis + supply-chain gates (the same checks CI requires)
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo deny check
+cargo audit --deny yanked --ignore RUSTSEC-2026-0387
 ```
+
+`cargo deny`/`cargo audit` need the pinned tools installed — see
+[`docs/supply-chain.md`](docs/supply-chain.md) for versions, the Scout
+command, and the triage record for every suppressed finding.
 
 Already deployed to Stellar **testnet** — see
 [`docs/testnet-deployments.md`](docs/testnet-deployments.md) for the
@@ -129,7 +139,8 @@ The TypeScript SDK (`sdk/`) is still a placeholder — see
 | Doc | Purpose |
 |---|---|
 | [`ARCHITECTURE_ESSENTIALS.md`](ARCHITECTURE_ESSENTIALS.md) | Stack, contract surface, hard rules (no PHI ever, tests required for contract changes, testnet-only until security review). |
-| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E4 breakdown and current status. |
+| [`ROADMAP.md`](ROADMAP.md) | Phase E1–E7 breakdown and current status. |
+| [`docs/supply-chain.md`](docs/supply-chain.md) | rustfmt/clippy/Scout/cargo-deny/cargo-audit gates, pinned versions, and the reason for every suppression. |
 | [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Rules for coding agents working in this repo — read `README.md` + `ARCHITECTURE_ESSENTIALS.md` first; you should rarely need `docforum-core`'s docs to work here. |
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
 

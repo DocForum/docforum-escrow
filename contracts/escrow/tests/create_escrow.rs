@@ -62,8 +62,24 @@ fn create_escrow_assigns_sequential_ids() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let first = client.create_escrow(&payer, &payee, &token_id, &100, &String::from_str(&env, "ref-a"), &releaser, &None);
-    let second = client.create_escrow(&payer, &payee, &token_id, &100, &String::from_str(&env, "ref-b"), &releaser, &None);
+    let first = client.create_escrow(
+        &payer,
+        &payee,
+        &token_id,
+        &100,
+        &String::from_str(&env, "ref-a"),
+        &releaser,
+        &None,
+    );
+    let second = client.create_escrow(
+        &payer,
+        &payee,
+        &token_id,
+        &100,
+        &String::from_str(&env, "ref-b"),
+        &releaser,
+        &None,
+    );
 
     assert_eq!(first, 0);
     assert_eq!(second, 1);
@@ -82,7 +98,15 @@ fn create_escrow_rejects_non_positive_amount() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let result = client.try_create_escrow(&payer, &payee, &token_id, &0, &String::from_str(&env, "ref"), &releaser, &None);
+    let result = client.try_create_escrow(
+        &payer,
+        &payee,
+        &token_id,
+        &0,
+        &String::from_str(&env, "ref"),
+        &releaser,
+        &None,
+    );
     assert!(result.is_err());
 }
 

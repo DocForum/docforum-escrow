@@ -3,7 +3,7 @@
 > Update this file on every contribution that starts/completes/blocks an
 > item below.
 
-**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use.**
+**Status: Phase E1 done. Phase E2 done and live on testnet. Phase E3's `create_escrow`/`get_status`/`release`/`refund` wrapping done; SDK distribution decided (issue #5 closed — GitHub Release tarball, ADR 0003). Phase E4 (security review, issue #6) in progress: threat model drafted (`docs/threat-model.md`) and the timeout-refund item closed (issue #11 — ADR 0004 + implementation, live on testnet); independent review not yet done — blocking for any mainnet use. Phase E7's Rust static-analysis and supply-chain gate done (issue #107 — rustfmt, clippy, Scout, cargo-deny, cargo-audit, all pinned and required).**
 
 ## Phase E1 — Contract skeleton
 - [x] Soroban project scaffold (`contracts/escrow`), builds to wasm
@@ -121,6 +121,22 @@
 - [ ] Related, not in the checklist: [#13](https://github.com/DocForum/docforum-escrow/issues/13) `get_escrow`
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
+
+## Phase E7 — Verification, testing & release engineering
+- [x] Rust static analysis and supply-chain gate (issue #107). CI now
+  runs `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`
+  with selected pedantic lints (the three ABI-imposed allowances each
+  have a written reason in `Cargo.toml`); CoinFabrik Scout 0.3.17 with
+  `--cicd` (any enabled-detector finding fails the job); cargo-deny
+  0.22.0 (`deny.toml`: advisories, licences, duplicate crates, sources);
+  and cargo-audit 0.23.0 (`--deny yanked`). Rust (`rust-toolchain.toml`
+  + the CI action) and every tool are version-pinned. Every detector
+  exclusion, advisory ignore and duplicate skip is recorded with a
+  reason and exit condition in [`docs/supply-chain.md`](docs/supply-chain.md).
+  The contract-side cleanups made for the triage (inline the id
+  allocation after `require_auth`, `saturating_add`, avoid
+  divide-before-multiply in the fee mock) are behaviour-neutral; 31/31
+  tests and the wasm release build still pass. Closes issue #107.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -296,6 +312,26 @@
   succeeds. **Not yet done:** the current testnet deployment (source
   `7a595d8`) predates #17, so it doesn't include the balance-delta check
   — needs a redeploy.
+- 2026-11-22 — Closed issue #107 (Phase E7): added the Rust
+  static-analysis and supply-chain gate. `rust-toolchain.toml` pins
+  1.91.0; `cargo fmt --check` and pedantic `cargo clippy -- -D warnings`
+  are required checks; Scout 0.3.17 runs with `--cicd` so any
+  enabled-detector finding fails; cargo-deny 0.22.0 checks advisories,
+  licences, duplicate crates and sources from `deny.toml`; cargo-audit
+  0.23.0 fails on vulnerabilities and yanked crates. Tool versions and
+  binary checksums are pinned in `.github/workflows/ci.yml`. Triage:
+  one advisory ignore (`RUSTSEC-2026-0387`, host-only `crypto-bigint` via
+  `soroban-sdk` 27.0.6), three Scout detector exclusions (SDK version
+  pin, test-only assertions, read-only storage getters), and the
+  inherited cargo-audit informational warnings are documented in
+  `docs/supply-chain.md`. Code cleanups from the triage: the id
+  allocation is inlined into `create_escrow` after `require_auth` (no
+  helper writes storage on its own), `saturating_add` replaces an
+  unchecked `+`, missing `# Errors` docs were added, and the
+  fee-on-transfer mock avoids divide-before-multiply. 31/31 tests and
+  the wasm release build pass. Required-check enforcement of the seven
+  job names is a repo-admin branch-protection step, listed in
+  `docs/supply-chain.md`.
 - 2026-10-08 — Restored two sets of ROADMAP entries lost in merge
   conflict resolution: #17's (issue #12, balance-delta check — Phase E4
   item and its 2026-10-07 changelog entry, summarised here: contract

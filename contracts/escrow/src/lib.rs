@@ -14,7 +14,9 @@
 // consuming application (docforum-core), never here.
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, String,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -79,6 +81,18 @@ impl EscrowContract {
     /// back to `payer` (docs/adr/0004); `None` means no timeout.
     /// Requires `payer` auth (the contract moves their funds). Returns
     /// the new escrow's id.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::InvalidAmount`] if `amount` is zero or negative.
+    /// - [`Error::InvalidRefundAfter`] if `refund_after` is not strictly in
+    ///   the future.
+    /// - [`Error::BalanceMismatch`] if the contract's token balance did not
+    ///   rise by exactly `amount` across the transfer (a lying or
+    ///   short-delivering token).
+    ///
+    /// A revert from the token contract itself is propagated rather than
+    /// mapped to one of these variants.
     pub fn create_escrow(
         env: Env,
         payer: Address,
@@ -108,7 +122,17 @@ impl EscrowContract {
             return Err(Error::BalanceMismatch);
         }
 
-        let id = Self::next_id(&env);
+        // Allocate the id after `payer.require_auth()` above. Keeping the
+        // storage write in this function (rather than a helper) makes the
+        // authorization-to-write relationship explicit for reviewers and
+        // for Scout's `set-contract-storage` detector. `saturating_add`
+        // avoids an unchecked `+`; reaching the u64 limit would require
+        // more escrows than can ever be funded.
+        let id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::NextId, &id.saturating_add(1));
+
         let data = EscrowData {
             payer,
             payee,
@@ -123,7 +147,11 @@ impl EscrowContract {
         Ok(id)
     }
 
-    /// Read-only status query. Errors if `escrow_id` doesn't exist.
+    /// Read-only status query.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::NotFound`] if `escrow_id` does not exist.
     pub fn get_status(env: Env, escrow_id: u64) -> Result<EscrowStatus, Error> {
         let data: EscrowData = env
             .storage()
@@ -137,7 +165,11 @@ impl EscrowContract {
     /// payer, payee, token, amount, `condition_ref`, status, `releaser`
     /// and `refund_after`. Exists so payees and integrators can check
     /// the deadline before relying on a `Funded` escrow (docs/adr/0004,
-    /// threat model T8). Errors on an unknown id.
+    /// threat model T8).
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::NotFound`] if `escrow_id` does not exist.
     pub fn get_escrow(env: Env, escrow_id: u64) -> Result<EscrowData, Error> {
         env.storage()
             .persistent()
@@ -151,6 +183,13 @@ impl EscrowContract {
     /// escrow doesn't exist, `caller` isn't the releaser, or the escrow
     /// isn't currently `Funded` (no double-release, no releasing a
     /// refunded escrow).
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::NotFound`] if `escrow_id` does not exist.
+    /// - [`Error::Unauthorized`] if `caller` is not the escrow's `releaser`.
+    /// - [`Error::NotFunded`] if the escrow is already `Released` or
+    ///   `Refunded`.
     ///
     /// Deliberately **not** gated by `refund_after` (docs/adr/0004): after
     /// the deadline the releaser can still release, racing any timeout
@@ -175,7 +214,9 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payee, &data.amount);
 
         data.status = EscrowStatus::Released;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
     }
 
@@ -189,6 +230,14 @@ impl EscrowContract {
     /// The destination never changes: timeout or not, funds only ever go
     /// back to the stored `payer`. With no `refund_after` set, behaviour
     /// is identical to before the timeout existed — releaser only.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::NotFound`] if `escrow_id` does not exist.
+    /// - [`Error::Unauthorized`] if `caller` is neither the escrow's
+    ///   `releaser` nor authorised by a passed `refund_after` deadline.
+    /// - [`Error::NotFunded`] if the escrow is already `Released` or
+    ///   `Refunded`.
     pub fn refund(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
@@ -213,13 +262,9 @@ impl EscrowContract {
         token_client.transfer(&env.current_contract_address(), &data.payer, &data.amount);
 
         data.status = EscrowStatus::Refunded;
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &data);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &data);
         Ok(())
-    }
-
-    fn next_id(env: &Env) -> u64 {
-        let id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
-        env.storage().instance().set(&DataKey::NextId, &(id + 1));
-        id
     }
 }

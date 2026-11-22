@@ -75,6 +75,17 @@ way. Baking healthcare-specific logic into the contract is exactly the
 scope creep this repo exists to avoid (see README "why this repo exists,
 honestly").
 
+## Verification gates
+`contracts/escrow/` is gated by the same checks locally and in CI: `cargo
+test`, a wasm32v1-none release build, `cargo fmt --check`, `cargo clippy
+--all-targets -- -D warnings` (pedantic, with the ABI-imposed allowances
+and written reasons in `Cargo.toml`), CoinFabrik Scout 0.3.17, cargo-deny
+0.22.0 (advisories, licences, duplicate crates, sources) and cargo-audit
+0.23.0. Rust and every tool are pinned; see `docs/supply-chain.md` for the
+versions, the detector exclusions and the triage record. A new finding is
+a CI failure, not a warning to ignore — suppressions need a reason and an
+exit condition in that document.
+
 ## Hard rules
 1. **No PHI, ever, anywhere in this repo.** Not in tests, not in example
    fixtures, not in comments. This repo should be safely public and

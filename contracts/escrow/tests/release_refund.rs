@@ -49,7 +49,14 @@ fn fund_escrow(env: &Env, amount: i128) -> Fixture<'_> {
         &None,
     );
 
-    Fixture { client, token, payer, payee, releaser, escrow_id }
+    Fixture {
+        client,
+        token,
+        payer,
+        payee,
+        releaser,
+        escrow_id,
+    }
 }
 
 // --- release() ---

@@ -14,11 +14,9 @@
 // contract's balance, so `create_escrow` verifies the balance rises by
 // exactly `amount` and rejects the escrow otherwise.
 
-use docforum_escrow::{EscrowContract, EscrowContractClient, Error};
+use docforum_escrow::{Error, EscrowContract, EscrowContractClient};
 use soroban_sdk::{
-    contract, contractimpl, contracttype,
-    testutils::Address as _,
-    Address, Env, String,
+    contract, contractimpl, contracttype, testutils::Address as _, Address, Env, String,
 };
 
 #[contracttype]
@@ -61,11 +59,19 @@ impl LyingToken {
             .set(&MockKey::Balance(id), &amount);
     }
 
+    #[must_use]
     pub fn balance(env: Env, id: Address) -> i128 {
         mock_balance(&env, &id)
     }
 
-    // The lie: reports success, moves nothing.
+    // The lie: reports success, moves nothing. The underscore-prefixed
+    // parameters are required by the SEP-41-shaped ABI and are read by the
+    // generated `contractimpl` code, so clippy's used_underscore_binding
+    // heuristic is a false positive here.
+    #[allow(
+        clippy::used_underscore_binding,
+        reason = "contractimpl macro reads these otherwise-unused ABI parameters"
+    )]
     pub fn transfer(_env: Env, _from: Address, _to: Address, _amount: i128) {}
 }
 
@@ -82,12 +88,16 @@ impl FeeOnTransferToken {
             .set(&MockKey::Balance(id), &amount);
     }
 
+    #[must_use]
     pub fn balance(env: Env, id: Address) -> i128 {
         mock_balance(&env, &id)
     }
 
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
-        mock_debit_credit(&env, &from, &to, amount, amount * 9 / 10);
+        // Deliver 90% without a divide-before-multiply expression (Scout's
+        // `divide-before-multiply` detector flags that pattern). Amounts in
+        // these tests are multiples of 10, so this is exactly 90%.
+        mock_debit_credit(&env, &from, &to, amount, amount - amount / 10);
     }
 }
 
@@ -104,6 +114,7 @@ impl ReentrantToken {
             .set(&MockKey::Balance(id), &amount);
     }
 
+    #[must_use]
     pub fn balance(env: Env, id: Address) -> i128 {
         mock_balance(&env, &id)
     }
@@ -112,9 +123,15 @@ impl ReentrantToken {
     /// fires when the escrow contract's outbound transfer flows through
     /// `transfer` — i.e. during `release`, not during `create_escrow`.
     pub fn arm(env: Env, escrow: Address, escrow_id: u64, caller: Address) {
-        env.storage().persistent().set(&MockKey::AttackEscrow, &escrow);
-        env.storage().persistent().set(&MockKey::AttackId, &escrow_id);
-        env.storage().persistent().set(&MockKey::AttackCaller, &caller);
+        env.storage()
+            .persistent()
+            .set(&MockKey::AttackEscrow, &escrow);
+        env.storage()
+            .persistent()
+            .set(&MockKey::AttackId, &escrow_id);
+        env.storage()
+            .persistent()
+            .set(&MockKey::AttackCaller, &caller);
     }
 
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
@@ -122,14 +139,20 @@ impl ReentrantToken {
 
         // Inert until armed; once armed, the re-entry fires when the
         // escrow contract's outbound transfer flows through here.
-        let attack_escrow: Option<Address> =
-            env.storage().persistent().get(&MockKey::AttackEscrow);
+        let attack_escrow: Option<Address> = env.storage().persistent().get(&MockKey::AttackEscrow);
         if let Some(attack_escrow) = attack_escrow {
             if from == attack_escrow {
-                let escrow_id: u64 =
-                    env.storage().persistent().get(&MockKey::AttackId).unwrap();
-                let caller: Address =
-                    env.storage().persistent().get(&MockKey::AttackCaller).unwrap();
+                let Some(escrow_id) = env.storage().persistent().get::<_, u64>(&MockKey::AttackId)
+                else {
+                    return;
+                };
+                let Some(caller) = env
+                    .storage()
+                    .persistent()
+                    .get::<_, Address>(&MockKey::AttackCaller)
+                else {
+                    return;
+                };
                 let client = EscrowContractClient::new(&env, &attack_escrow);
                 // Re-entry attempt: the escrow contract is already on
                 // the call stack. Whatever the host does with this
