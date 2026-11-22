@@ -143,7 +143,7 @@ CONTRACT_ERROR_NAMES: dict[int, str] = {
     51: "StreamTopUpUnsupported",
     52: "InvalidSettlementAmount",
     53: "SettlementNotSupported",
-    4200: "AttesterNotConfigured",
+    54: "AttesterNotConfigured",
 }
 
 
@@ -569,9 +569,9 @@ class SettlementNotSupportedError(ContractError):
 
 
 class AttesterNotConfiguredError(ContractError):
-    """Contract error 4200: ``AttesterNotConfigured``."""
+    """Contract error 54: ``AttesterNotConfigured``."""
 
-    code = 4200
+    code = 54
     contract_error = "AttesterNotConfigured"
 
 

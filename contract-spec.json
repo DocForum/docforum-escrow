@@ -419,7 +419,7 @@
     },
     {
       "name": "AttesterNotConfigured",
-      "code": 4200
+      "code": 54
     }
   ]
 }
