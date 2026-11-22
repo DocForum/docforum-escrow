@@ -5,7 +5,7 @@
 - **Deciders:** contract maintainers
 - **Related:** [ADR 0001](0001-generic-escrow-not-healthcare-specific.md)
   (who, not why), [ADR 0011](0011-pooled-escrow-funding.md) (deposit
-  paths and the pause), `docs/threat-model.md` T115.
+  paths and the pause), `docs/threat-model.md` T26.
 
 ## Context
 
@@ -135,6 +135,6 @@ fails further funding with `ScheduleComplete`.
 - No SDK work in this change: keepers and integrators call the new
   entry points directly. The generated spec and SDK bindings need
   regenerating after this lands, as with any new entry point.
-- New provisional error codes 11500–11504 (`ScheduleTooEarly`,
-  `ScheduleComplete`, `ScheduleCancelled`, `AllowanceExhausted`,
-  `InvalidSchedule`); a maintainer assigns final codes at the fold.
+- New error codes 55–59 (`ScheduleTooEarly`, `ScheduleComplete`,
+  `ScheduleCancelled`, `AllowanceExhausted`, `InvalidSchedule`), provisional
+  11500–11504 until the contract 3.3.0 fold.
