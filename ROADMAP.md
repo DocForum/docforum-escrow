@@ -356,6 +356,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   key or error code.
 - [x] List escrows by payer or payee (issue #33, ADR 0015): decided **off-chain**, so the contract is unchanged. The `ESCROW` event (issue #9) already carries `payer`/`payee`, and the issue #87 indexer already stores them, so the query is an index filter; `EscrowIndexerClient.listEscrows` gained optional `payer`/`payee` filters. No redeploy; SDK minor, additive.
 - [x] Attestation-based release (issue #42): optional `attester` (ed25519 public key) at creation and `release_with_attestation(escrow_id, signature)`, verified over a domain-separated message (contract id, network id, escrow id, action). Tests: `contracts/escrow/tests/attestation.rs`. **Not yet on testnet.**
+- [x] Recurring escrows funded through token allowances (issue #115, ADR 0015): `create_schedule` records a payer/payee/token/amount/period/count schedule; any keeper may call `fund_next` when a period is due, pulling exactly one period's amount via `transfer_from` under the payer's SEP-41 allowance and creating a normal escrow for it; the payer may cancel at any time. Tests: `contracts/escrow/tests/recurring.rs`. **Not yet on testnet.**
 
 ## Phase E6 — SDK & integrator tooling
 - [x] Typed SDK errors mapped from the contract error enum (issue #61):
@@ -1447,3 +1448,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   - Issue #296: align `settle_many` refund operations with the single-escrow `refund` path so the stored payee can voluntarily refund a funded escrow; the batch emits the same `PayeeRefunded` event and keeps pooled escrows excluded from push refunds.
   - Issue #42: attestation-based release. New `create_escrow_with_attester` and `release_with_attestation` entry points, an optional `attester` field on `EscrowData`, and a new `AttesterNotConfigured` error (provisional code 4200). No existing entry point or stored field changes shape.
   Final error codes: Error::AttesterNotConfigured 4200 -> 54.
+- 2026-11-22 — Issue #115 (Phase E5): recurring escrows funded through token allowances (ADR 0015). `create_schedule` records a payer/payee/token/amount/period/count schedule; any keeper may call `fund_next` when a period is due, pulling exactly one period's amount via `transfer_from` under the payer's SEP-41 allowance and creating a normal escrow for it; the payer may cancel at any time. Tests: `contracts/escrow/tests/recurring.rs`.
+- 2026-11-22 — Contract 3.3.0 (was 3.2.0), folded from 1 change(s):
+  - Issue #115: recurring escrows funded through token allowances (ADR 0015). New `create_schedule`/`fund_next`/`cancel_schedule`/`get_schedule` entry points, `RecurringSchedule` storage, and `ScheduleTooEarly`, `ScheduleComplete`, `ScheduleCancelled`, `AllowanceExhausted`, `InvalidSchedule` errors; period escrows are created through the existing creation path, so no existing entry point changes.
+  Final error codes: Error::ScheduleTooEarly 11500 -> 55, Error::ScheduleComplete 11501 -> 56, Error::ScheduleCancelled 11502 -> 57, Error::AllowanceExhausted 11503 -> 58, Error::InvalidSchedule 11504 -> 59.

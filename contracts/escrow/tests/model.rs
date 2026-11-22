@@ -47,6 +47,7 @@ enum Phase {
     Funded,
     Released,
     Refunded,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +55,11 @@ enum Failure {
     Unauthorized,
     NotFunded,
     InvalidAmount,
+    AcceptanceRequired,
+    AcceptanceNotConfigured,
+    AlreadyAccepted,
+    InvalidNewPayee,
+    InvalidReleaser,
 }
 
 /// The model's prediction for one operation: `Ok`, or the error the contract
@@ -69,11 +75,19 @@ enum Op {
     Release { as_releaser: bool },
     /// A refund attempt; `as_releaser` picks the authorized caller.
     Refund { as_releaser: bool },
+    /// The current payee records acceptance (or an impostor tries to).
+    Accept { as_payee: bool },
+    /// The payer cancels an unaccepted acceptance-gated escrow (or an impostor tries to).
+    Cancel { as_payer: bool },
+    /// Move the payout destination while the escrow is funded.
+    TransferPayee { as_payee: bool },
+    /// Replace the single releaser with payer and current-releaser consent.
+    RotateReleaser { as_releaser: bool },
     /// Move the ledger clock forward.
     Advance { seconds: u64 },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Model {
     phase: Phase,
     /// Amount currently escrowed (sum of the original amount and top-ups).
@@ -82,16 +96,38 @@ struct Model {
     paid_in: i128,
     refund_after: Option<u64>,
     now: u64,
+    requires_acceptance: bool,
+    accepted: bool,
+    payee: Address,
+    replacement_payee: Address,
+    releaser: Address,
+    replacement_releaser: Address,
+    payout_payee: Option<Address>,
 }
 
 impl Model {
-    fn new(amount: i128, refund_after: Option<u64>) -> Self {
+    fn new(
+        amount: i128,
+        refund_after: Option<u64>,
+        payee: Address,
+        replacement_payee: Address,
+        releaser: Address,
+        replacement_releaser: Address,
+        requires_acceptance: bool,
+    ) -> Self {
         Model {
             phase: Phase::Funded,
             amount,
             paid_in: amount,
             refund_after,
             now: CREATED_AT,
+            requires_acceptance,
+            accepted: false,
+            payee,
+            replacement_payee,
+            releaser,
+            replacement_releaser,
+            payout_payee: None,
         }
     }
 
@@ -128,7 +164,11 @@ impl Model {
                 if !as_releaser {
                     return Err(Failure::Unauthorized);
                 }
+                if self.requires_acceptance && !self.accepted {
+                    return Err(Failure::AcceptanceRequired);
+                }
                 self.phase = Phase::Released;
+                self.payout_payee = Some(self.payee.clone());
                 Ok(())
             }
             Op::Refund { as_releaser } => {
@@ -144,25 +184,78 @@ impl Model {
                 self.phase = Phase::Refunded;
                 Ok(())
             }
+            Op::Accept { as_payee } => {
+                if self.phase != Phase::Funded {
+                    return Err(Failure::NotFunded);
+                }
+                if !as_payee {
+                    return Err(Failure::Unauthorized);
+                }
+                if !self.requires_acceptance {
+                    return Err(Failure::AcceptanceNotConfigured);
+                }
+                if self.accepted {
+                    return Err(Failure::AlreadyAccepted);
+                }
+                self.accepted = true;
+                Ok(())
+            }
+            Op::Cancel { as_payer } => {
+                if self.phase != Phase::Funded {
+                    return Err(Failure::NotFunded);
+                }
+                if !as_payer {
+                    return Err(Failure::Unauthorized);
+                }
+                if !self.requires_acceptance {
+                    return Err(Failure::AcceptanceNotConfigured);
+                }
+                if self.accepted {
+                    return Err(Failure::AlreadyAccepted);
+                }
+                self.phase = Phase::Cancelled;
+                Ok(())
+            }
+            Op::TransferPayee { as_payee } => {
+                if self.phase != Phase::Funded {
+                    return Err(Failure::NotFunded);
+                }
+                if !as_payee {
+                    return Err(Failure::Unauthorized);
+                }
+                self.payee = self.replacement_payee.clone();
+                Ok(())
+            }
+            Op::RotateReleaser { as_releaser } => {
+                if self.phase != Phase::Funded {
+                    return Err(Failure::NotFunded);
+                }
+                if !as_releaser {
+                    return Err(Failure::Unauthorized);
+                }
+                self.releaser = self.replacement_releaser.clone();
+                Ok(())
+            }
         }
     }
 
     fn expected_contract_balance(&self) -> i128 {
         match self.phase {
             Phase::Funded => self.amount,
-            Phase::Released | Phase::Refunded => 0,
+            Phase::Released | Phase::Refunded | Phase::Cancelled => 0,
         }
     }
 
-    fn expected_payee_balance(&self) -> i128 {
-        match self.phase {
-            Phase::Released => self.amount,
-            _ => 0,
+    fn expected_payee_balance(&self, payee: &Address) -> i128 {
+        if self.phase == Phase::Released && self.payout_payee.as_ref() == Some(payee) {
+            self.amount
+        } else {
+            0
         }
     }
 
     fn expected_payer_balance(&self) -> i128 {
-        let refunded = if self.phase == Phase::Refunded {
+        let refunded = if matches!(self.phase, Phase::Refunded | Phase::Cancelled) {
             self.amount
         } else {
             0
@@ -181,7 +274,9 @@ struct Fixture<'a> {
     token: TokenClient<'a>,
     payer: Address,
     payee: Address,
+    replacement_payee: Address,
     releaser: Address,
+    replacement_releaser: Address,
     stranger: Address,
     escrow_id: u64,
 }
@@ -199,7 +294,12 @@ fn quiet_env() -> Env {
     env
 }
 
-fn fixture<'a>(env: &'a Env, amount: i128, refund_after: Option<u64>) -> Fixture<'a> {
+fn fixture<'a>(
+    env: &'a Env,
+    amount: i128,
+    refund_after: Option<u64>,
+    requires_acceptance: bool,
+) -> Fixture<'a> {
     env.ledger().set_timestamp(CREATED_AT);
     env.mock_all_auths();
 
@@ -210,7 +310,9 @@ fn fixture<'a>(env: &'a Env, amount: i128, refund_after: Option<u64>) -> Fixture
 
     let payer = Address::generate(env);
     let payee = Address::generate(env);
+    let replacement_payee = Address::generate(env);
     let releaser = Address::generate(env);
+    let replacement_releaser = Address::generate(env);
     let stranger = Address::generate(env);
     asset.mint(&payer, &INITIAL_BALANCE);
 
@@ -223,7 +325,7 @@ fn fixture<'a>(env: &'a Env, amount: i128, refund_after: Option<u64>) -> Fixture
         ),
     );
     let client = EscrowContractClient::new(env, &contract_id);
-    let escrow_id = client.create_escrow(
+    let escrow_id = client.create_escrow_with_acceptance(
         &payer,
         &payee,
         &sac.address(),
@@ -231,9 +333,7 @@ fn fixture<'a>(env: &'a Env, amount: i128, refund_after: Option<u64>) -> Fixture
         &String::from_str(env, "property-model-condition"),
         &releaser,
         &refund_after,
-        &false,
-        &None,
-        &None,
+        &requires_acceptance,
         &None,
     );
 
@@ -243,7 +343,9 @@ fn fixture<'a>(env: &'a Env, amount: i128, refund_after: Option<u64>) -> Fixture
         token,
         payer,
         payee,
+        replacement_payee,
         releaser,
+        replacement_releaser,
         stranger,
         escrow_id,
     }
@@ -253,16 +355,15 @@ fn status_of(client: &EscrowContractClient, escrow_id: u64) -> Phase {
     match client.get_status(&escrow_id) {
         EscrowStatus::Funded => Phase::Funded,
         EscrowStatus::Released => Phase::Released,
-        // Cancelled is unreachable for these fixtures (no acceptance gate)
-        // and the model has no state for it.
-        EscrowStatus::Refunded | EscrowStatus::Cancelled => Phase::Refunded,
+        EscrowStatus::Refunded => Phase::Refunded,
+        EscrowStatus::Cancelled => Phase::Cancelled,
     }
 }
 
 /// Run one operation against the contract and coerce the result into the
 /// model's vocabulary. Panics on any unexpected error variant so a new error
 /// is never silently mapped onto an old one.
-fn call(env: &Env, f: &Fixture, op: Op) -> Predicted {
+fn call(env: &Env, f: &Fixture, model: &Model, op: Op) -> Predicted {
     match op {
         Op::Advance { seconds } => {
             let now = env.ledger().timestamp();
@@ -278,7 +379,7 @@ fn call(env: &Env, f: &Fixture, op: Op) -> Predicted {
         },
         Op::Release { as_releaser } => {
             let caller = if as_releaser {
-                &f.releaser
+                &model.releaser
             } else {
                 &f.stranger
             };
@@ -286,12 +387,13 @@ fn call(env: &Env, f: &Fixture, op: Op) -> Predicted {
                 Ok(Ok(())) => Ok(()),
                 Err(Ok(Error::NotFunded)) => Err(Failure::NotFunded),
                 Err(Ok(Error::Unauthorized)) => Err(Failure::Unauthorized),
+                Err(Ok(Error::AcceptanceRequired)) => Err(Failure::AcceptanceRequired),
                 other => panic!("release: unexpected result {other:?}"),
             }
         }
         Op::Refund { as_releaser } => {
             let caller = if as_releaser {
-                &f.releaser
+                &model.releaser
             } else {
                 &f.stranger
             };
@@ -300,6 +402,60 @@ fn call(env: &Env, f: &Fixture, op: Op) -> Predicted {
                 Err(Ok(Error::NotFunded)) => Err(Failure::NotFunded),
                 Err(Ok(Error::Unauthorized)) => Err(Failure::Unauthorized),
                 other => panic!("refund: unexpected result {other:?}"),
+            }
+        }
+        Op::Accept { as_payee } => {
+            let caller = if as_payee { &model.payee } else { &f.stranger };
+            match f.client.try_accept(&f.escrow_id, caller) {
+                Ok(Ok(())) => Ok(()),
+                Err(Ok(Error::NotFunded)) => Err(Failure::NotFunded),
+                Err(Ok(Error::Unauthorized)) => Err(Failure::Unauthorized),
+                Err(Ok(Error::AcceptanceNotConfigured)) => Err(Failure::AcceptanceNotConfigured),
+                Err(Ok(Error::AlreadyAccepted)) => Err(Failure::AlreadyAccepted),
+                other => panic!("accept: unexpected result {other:?}"),
+            }
+        }
+        Op::Cancel { as_payer } => {
+            let caller = if as_payer { &f.payer } else { &f.stranger };
+            match f.client.try_cancel(&f.escrow_id, caller) {
+                Ok(Ok(())) => Ok(()),
+                Err(Ok(Error::NotFunded)) => Err(Failure::NotFunded),
+                Err(Ok(Error::Unauthorized)) => Err(Failure::Unauthorized),
+                Err(Ok(Error::AcceptanceNotConfigured)) => Err(Failure::AcceptanceNotConfigured),
+                Err(Ok(Error::AlreadyAccepted)) => Err(Failure::AlreadyAccepted),
+                other => panic!("cancel: unexpected result {other:?}"),
+            }
+        }
+        Op::TransferPayee { as_payee } => {
+            let caller = if as_payee { &model.payee } else { &f.stranger };
+            match f
+                .client
+                .try_transfer_payee(&f.escrow_id, caller, &f.replacement_payee)
+            {
+                Ok(Ok(())) => Ok(()),
+                Err(Ok(Error::NotFunded)) => Err(Failure::NotFunded),
+                Err(Ok(Error::NotFound)) => Err(Failure::NotFunded),
+                Err(Ok(Error::Unauthorized)) => Err(Failure::Unauthorized),
+                Err(Ok(Error::InvalidNewPayee)) => Err(Failure::InvalidNewPayee),
+                other => panic!("transfer_payee: unexpected result {other:?}"),
+            }
+        }
+        Op::RotateReleaser { as_releaser } => {
+            let caller = if as_releaser {
+                &model.releaser
+            } else {
+                &f.stranger
+            };
+            match f
+                .client
+                .try_rotate_releaser(&f.escrow_id, caller, &f.replacement_releaser)
+            {
+                Ok(Ok(())) => Ok(()),
+                Err(Ok(Error::NotFunded)) => Err(Failure::NotFunded),
+                Err(Ok(Error::Unauthorized)) => Err(Failure::Unauthorized),
+                Err(Ok(Error::InvalidReleaser)) => Err(Failure::InvalidReleaser),
+                Err(Ok(Error::ThresholdNotMet)) => Err(Failure::InvalidReleaser),
+                other => panic!("rotate_releaser: unexpected result {other:?}"),
             }
         }
     }
@@ -320,6 +476,10 @@ fn arb_op() -> impl Strategy<Value = Op> {
         arb_amount().prop_map(|amount| Op::TopUp { amount }),
         any::<bool>().prop_map(|as_releaser| Op::Release { as_releaser }),
         any::<bool>().prop_map(|as_releaser| Op::Refund { as_releaser }),
+        any::<bool>().prop_map(|as_payee| Op::Accept { as_payee }),
+        any::<bool>().prop_map(|as_payer| Op::Cancel { as_payer }),
+        any::<bool>().prop_map(|as_payee| Op::TransferPayee { as_payee }),
+        any::<bool>().prop_map(|as_releaser| Op::RotateReleaser { as_releaser }),
         (1u64..=200u64).prop_map(|seconds| Op::Advance { seconds }),
     ]
 }
@@ -348,15 +508,25 @@ proptest! {
     fn contract_matches_reference_model(
         initial in 1i128..=100i128,
         refund_after in prop_oneof![Just(None), (CREATED_AT + 1..=CREATED_AT + 400).prop_map(Some)],
+        requires_acceptance in any::<bool>(),
         ops in prop::collection::vec(arb_op(), 1..30),
     ) {
         let env = quiet_env();
-        let f = fixture(&env, initial, refund_after);
-        let mut model = Model::new(initial, refund_after);
+        let f = fixture(&env, initial, refund_after, requires_acceptance);
+        let mut model = Model::new(
+            initial,
+            refund_after,
+            f.payee.clone(),
+            f.replacement_payee.clone(),
+            f.releaser.clone(),
+            f.replacement_releaser.clone(),
+            requires_acceptance,
+        );
 
         for (index, op) in ops.iter().copied().enumerate() {
+            let before = model.clone();
             let predicted = model.apply(op);
-            let actual = call(&env, &f, op);
+            let actual = call(&env, &f, &before, op);
 
             prop_assert_eq!(
                 actual, predicted,
@@ -391,8 +561,13 @@ proptest! {
             );
             prop_assert_eq!(
                 f.token.balance(&f.payee),
-                model.expected_payee_balance(),
+                model.expected_payee_balance(&f.payee),
                 "payee balance after step {:?}", op
+            );
+            prop_assert_eq!(
+                f.token.balance(&f.replacement_payee),
+                model.expected_payee_balance(&f.replacement_payee),
+                "replacement payee balance after step {:?}", op
             );
             prop_assert_eq!(
                 f.token.balance(&f.payer),
@@ -428,7 +603,7 @@ proptest! {
         overdue_by in 0u64..=10_000u64,
     ) {
         let env = quiet_env();
-        let f = fixture(&env, amount, Some(DEADLINE));
+        let f = fixture(&env, amount, Some(DEADLINE), false);
         env.ledger().set_timestamp(DEADLINE + overdue_by);
 
         prop_assert_eq!(
@@ -451,7 +626,7 @@ proptest! {
     #[test]
     fn timeout_refund_opens_exactly_at_deadline(amount in 1i128..=100i128) {
         let env = quiet_env();
-        let f = fixture(&env, amount, Some(DEADLINE));
+        let f = fixture(&env, amount, Some(DEADLINE), false);
 
         env.ledger().set_timestamp(DEADLINE - 1);
         prop_assert_eq!(
@@ -477,7 +652,7 @@ proptest! {
         elapsed in 0u64..=1_000_000u64,
     ) {
         let env = quiet_env();
-        let f = fixture(&env, amount, None);
+        let f = fixture(&env, amount, None, false);
         env.ledger().set_timestamp(CREATED_AT + elapsed);
 
         prop_assert_eq!(

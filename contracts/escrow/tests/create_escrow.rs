@@ -675,3 +675,53 @@ fn max_create_batch_fits_mainnet_limits() {
         "events {events_bytes} + return {return_bytes} bytes"
     );
 }
+
+#[test]
+fn create_escrow_rejects_contract_as_payee_or_releaser() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (token_id, _token, asset) = setup(&env);
+    let payer = Address::generate(&env);
+    let external = Address::generate(&env);
+    asset.mint(&payer, &1_000);
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            Vec::<Address>::new(&env),
+            Address::generate(&env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
+        ),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let payee_result = client.try_create_escrow(
+        &payer,
+        &contract_id,
+        &token_id,
+        &100,
+        &String::from_str(&env, "contract-payee"),
+        &external,
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+    );
+    let releaser_result = client.try_create_escrow(
+        &payer,
+        &external,
+        &token_id,
+        &100,
+        &String::from_str(&env, "contract-releaser"),
+        &contract_id,
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+    );
+
+    assert!(payee_result.is_err());
+    assert!(releaser_result.is_err());
+    assert_eq!(asset.balance(&payer), 1_000);
+}

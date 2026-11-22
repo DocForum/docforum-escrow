@@ -59,6 +59,63 @@ fn unauthorized_sac_payee_leaves_escrow_funded_and_can_be_retried() {
     assert_eq!(token.balance(&payee), 300);
 }
 
+#[test]
+fn unauthorized_sac_fee_recipient_blocks_release_atomically_and_can_be_retried() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract_v2(admin);
+    token_id.issuer().set_flag(IssuerFlags::RevocableFlag);
+    let token = TokenClient::new(&env, &token_id.address());
+    let asset = StellarAssetClient::new(&env, &token_id.address());
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    asset.mint(&payer, &1_000);
+
+    let contract_id = env.register(
+        EscrowContract,
+        (
+            soroban_sdk::Vec::<Address>::new(&env),
+            soroban_sdk::Address::generate(&env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
+        ),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let escrow_id = client.create_escrow(
+        &payer,
+        &payee,
+        &token_id.address(),
+        &300,
+        &String::from_str(&env, "undeliverable-sac-fee-recipient"),
+        &releaser,
+        &None,
+        &false,
+        &None,
+        &Some(fee_recipient.clone()),
+        &Some(1_000),
+    );
+
+    // Fee transfer is first. A deauthorized destination blocks the whole
+    // release, and Soroban rolls back status and liability changes.
+    asset.set_authorized(&fee_recipient, &false);
+    let rejected = client.try_release(&escrow_id, &releaser);
+    assert_eq!(rejected, Err(Ok(Error::Undeliverable)));
+    assert_eq!(client.get_status(&escrow_id), EscrowStatus::Funded);
+    assert_eq!(token.balance(&contract_id), 300);
+    assert_eq!(token.balance(&fee_recipient), 0);
+    assert_eq!(token.balance(&payee), 0);
+
+    asset.set_authorized(&fee_recipient, &true);
+    client.release(&escrow_id, &releaser);
+    assert_eq!(client.get_status(&escrow_id), EscrowStatus::Released);
+    assert_eq!(token.balance(&fee_recipient), 30);
+    assert_eq!(token.balance(&payee), 270);
+    assert_eq!(token.balance(&contract_id), 0);
+}
+
 #[contract]
 struct RejectingPayee;
 
