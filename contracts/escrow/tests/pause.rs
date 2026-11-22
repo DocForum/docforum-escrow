@@ -38,6 +38,7 @@ const DEPOSIT_ENTRYPOINTS: &[&str] = &[
     "create_escrow",
     "create_escrow_release_time",
     "create_escrow_with_acceptance",
+    "create_escrow_with_attester",
     "create_escrow_with_releasers",
     "create_escrows",
     "create_streamed_escrow",
@@ -68,6 +69,7 @@ const NON_DEPOSIT_ENTRYPOINTS: &[&str] = &[
     "close_failed_round",
     "release",
     "release_with_approvals",
+    "release_with_attestation",
     "settle_many",
     "refund",
     "cancel",
@@ -400,6 +402,24 @@ fn paused_blocks_the_other_creation_entry_points_and_top_up() {
             &f.releaser,
             &None,
             &true,
+            &None,
+        ),
+        Error::Paused,
+    );
+
+    // `create_escrow_with_attester` funnels through the same creation
+    // path, so it is paused too.
+    assert_contract_error(
+        f.client.try_create_escrow_with_attester(
+            &f.payer,
+            &f.payee,
+            &f.token_id,
+            &100,
+            &String::from_str(&env, "blocked-attester"),
+            &f.releaser,
+            &None,
+            &false,
+            &None,
             &None,
         ),
         Error::Paused,

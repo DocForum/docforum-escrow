@@ -94,6 +94,7 @@ impl EscrowContract {
             // pooled total to the payee in full.
             fee_recipient: None,
             fee_bps: None,
+            attester: None,
         };
         env.storage().persistent().set(&DataKey::Escrow(id), &data);
         env.storage()
