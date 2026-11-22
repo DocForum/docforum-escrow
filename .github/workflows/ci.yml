@@ -9,6 +9,19 @@ on:
     - cron: '0 3 * * *'
 
 jobs:
+  factory-contract:
+    name: Escrow factory contract
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/factory
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.96.0
+      - name: Test factory contract
+        run: cargo test
+
   contract-interface:
     name: Contract interface snapshot
     runs-on: ubuntu-latest
