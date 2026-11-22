@@ -178,6 +178,8 @@ pub enum DataKey {
     NextId,
     Status(u64),
     AllowedTokens,
+    /// Immutable per-token maximum escrow amounts set by `__constructor`.
+    AmountCaps,
     /// The one address allowed to `pause`/`unpause` — set once by
     /// `__constructor`, never changeable afterwards (docs/adr/0011).
     PauseAdmin,

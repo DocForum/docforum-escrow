@@ -7,7 +7,8 @@ impl EscrowContract {
     /// Sets the immutable token allowlist at deployment. An empty list
     /// preserves the legacy behavior and allows any token address.
     ///
-    /// Also stores the single address permitted to `pause`/`unpause`
+    /// Also stores immutable per-token amount caps and the single address
+    /// permitted to `pause`/`unpause`
     /// (docs/adr/0011). There is no setter, so the custodian cannot be
     /// changed after deployment — a new custodian means a new deployment.
     /// No auth is required here: the constructor runs as part of deploying
@@ -16,10 +17,25 @@ impl EscrowContract {
     /// The custodian is deliberately weak: its only power is to refuse
     /// **new** deposits. It cannot release, refund, edit an escrow, or
     /// upgrade anything.
-    pub fn __constructor(env: Env, allowed_tokens: Vec<Address>, pause_admin: Address) {
+    pub fn __constructor(
+        env: Env,
+        allowed_tokens: Vec<Address>,
+        pause_admin: Address,
+        amount_caps: Vec<(Address, i128)>,
+    ) {
+        let mut seen = Vec::new(&env);
+        for (token, max_amount) in amount_caps.iter() {
+            if max_amount <= 0 || Self::contains(&seen, &token) {
+                panic_with_error!(&env, Error::InvalidAmountCap);
+            }
+            seen.push_back(token);
+        }
         env.storage()
             .instance()
             .set(&DataKey::AllowedTokens, &allowed_tokens);
+        env.storage()
+            .instance()
+            .set(&DataKey::AmountCaps, &amount_caps);
         Self::extend_instance_ttl(&env);
         env.storage()
             .instance()

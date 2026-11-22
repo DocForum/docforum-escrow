@@ -34,6 +34,7 @@ impl EscrowContract {
             return Err(Error::NotFunded);
         }
         let updated_amount = data.amount.checked_add(amount).ok_or(Error::Overflow)?;
+        Self::check_amount_cap(&env, &data.token, updated_amount)?;
         // The fee is a bps of the escrowed amount, so a top-up grows it; fail
         // now (before the transfer) if the larger amount would overflow the
         // fee math, rather than at release (docs/adr/0010).

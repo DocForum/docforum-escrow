@@ -26,6 +26,7 @@ fn unauthorized_sac_payee_leaves_escrow_funded_and_can_be_retried() {
         (
             soroban_sdk::Vec::<Address>::new(&env),
             soroban_sdk::Address::generate(&env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
         ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);

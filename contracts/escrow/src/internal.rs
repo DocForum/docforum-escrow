@@ -79,6 +79,7 @@ impl EscrowContract {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
+        Self::check_amount_cap(env, &token, amount)?;
         let payees = if let Some(payees) = payee_shares {
             if payees.is_empty() {
                 return Err(Error::InvalidPayeeList);
@@ -220,6 +221,26 @@ impl EscrowContract {
                 return Err(Error::DuplicateReleaser);
             }
             seen.push_back(releaser);
+        }
+        Ok(())
+    }
+
+    /// Enforces the immutable constructor cap against the complete amount
+    /// held by one escrow. A token without a table entry is uncapped.
+    pub(crate) fn check_amount_cap(
+        env: &Env,
+        token: &Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        let caps: Vec<(Address, i128)> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AmountCaps)
+            .unwrap_or(Vec::new(env));
+        for (capped_token, max_amount) in caps.iter() {
+            if capped_token == *token && amount > max_amount {
+                return Err(Error::AmountCapExceeded);
+            }
         }
         Ok(())
     }

@@ -26,7 +26,7 @@ fn version_reports_the_contract_semver() {
     let env = Env::default();
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -49,7 +49,7 @@ fn create_escrow_locks_funds_and_reports_funded() {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -94,7 +94,7 @@ fn create_escrow_assigns_sequential_ids() {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -141,7 +141,7 @@ fn create_escrow_rejects_non_positive_amount() {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -168,7 +168,7 @@ fn get_status_errors_for_unknown_escrow() {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -189,7 +189,7 @@ fn create_escrow_rejects_condition_ref_that_is_too_long() {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -244,7 +244,7 @@ fn callback_opt_in_requires_payee_authorization() {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
     let condition_ref = String::from_str(&env, "payee-opt-in-auth");
@@ -303,7 +303,7 @@ fn creation_requires_payer_auth_with_nested_token_transfer_tree() {
     asset.mint(&payer, &1_000);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
     let condition_ref = String::from_str(&env, "exact-create-auth");
@@ -371,7 +371,7 @@ fn creation_rejects_a_wrong_signer_even_with_the_exact_transfer_tree() {
     asset.mint(&payer, &1_000);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
     let condition_ref = String::from_str(&env, "wrong-create-signer");
@@ -451,7 +451,7 @@ fn create_escrows_rejects_one_item_over_the_batch_limit() {
     let (token, _, asset) = setup(&env);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
     let payer = Address::generate(&env);
@@ -480,7 +480,7 @@ fn create_escrows_creates_every_item_in_input_order() {
     let (token, token_client, asset) = setup(&env);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
     let payer = Address::generate(&env);
@@ -511,7 +511,7 @@ fn create_escrows_needs_one_payer_authorization_covering_every_transfer() {
     let (token, token_client, asset) = setup(&env);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
     let payer = Address::generate(&env);
@@ -553,7 +553,7 @@ fn create_escrows_reverts_the_whole_batch_when_one_item_is_invalid() {
     let (token, token_client, asset) = setup(&env);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
     let payer = Address::generate(&env);
@@ -587,7 +587,7 @@ fn max_create_batch_fits_mainnet_limits() {
     let (token, _, asset) = setup(&env);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
     let payer = Address::generate(&env);

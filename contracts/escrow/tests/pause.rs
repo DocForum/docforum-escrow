@@ -127,7 +127,7 @@ fn deploy<'a>(env: &'a Env) -> Fixture<'a> {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(env), custodian.clone()),
+        (Vec::<Address>::new(env), custodian.clone(), Vec::<(Address, i128)>::new(env)),
     );
     let client = EscrowContractClient::new(env, &contract_id);
 

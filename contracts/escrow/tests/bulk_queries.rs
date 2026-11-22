@@ -12,7 +12,7 @@ fn bulk_queries_return_records_unknowns_and_next_id() {
     soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&payer, &100);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
     assert_eq!(client.next_escrow_id(), 0);
@@ -47,7 +47,7 @@ fn bulk_query_cap_is_enforced_before_reads() {
     }
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
     assert!(matches!(

@@ -26,7 +26,7 @@ fn funded_escrow(
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(env), Address::generate(env)),
+        (Vec::<Address>::new(env), Address::generate(env), Vec::<(Address, i128)>::new(env)),
     );
     let client = EscrowContractClient::new(env, &contract_id);
     let id = client.create_escrow(
@@ -148,7 +148,7 @@ fn quorum_escrow(
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(env), Address::generate(env)),
+        (Vec::<Address>::new(env), Address::generate(env), Vec::<(Address, i128)>::new(env)),
     );
     let client = EscrowContractClient::new(env, &contract_id);
     let mut releasers = Vec::new(env);

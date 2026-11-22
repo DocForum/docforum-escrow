@@ -51,7 +51,7 @@ fn fund_escrow(env: &Env, refund_after: Option<u64>) -> Fixture<'_> {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(env), Address::generate(env)),
+        (Vec::<Address>::new(env), Address::generate(env), Vec::<(Address, i128)>::new(env)),
     );
     let client = EscrowContractClient::new(env, &contract_id);
 
@@ -127,7 +127,7 @@ fn create_escrow_rejects_deadline_already_passed_or_now() {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -395,7 +395,7 @@ fn get_escrow_errors_for_unknown_escrow() {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 

@@ -41,6 +41,7 @@ fn setup<'a>(env: &Env, release_at: Option<u64>, refund_at: Option<u64>) -> Fixt
         (
             soroban_sdk::Vec::<Address>::new(env),
             Address::generate(env),
+            soroban_sdk::Vec::<(Address, i128)>::new(env),
         ),
     );
     let client = EscrowContractClient::new(env, &contract_id);
@@ -120,6 +121,7 @@ fn creation_rejects_release_time_in_the_past_or_after_refund_deadline() {
         (
             soroban_sdk::Vec::<Address>::new(&env),
             Address::generate(&env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
         ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);

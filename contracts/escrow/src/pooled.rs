@@ -49,6 +49,7 @@ impl EscrowContract {
         if funding_target <= 0 {
             return Err(Error::InvalidAmount);
         }
+        Self::check_amount_cap(&env, &token, funding_target)?;
         if funding_deadline <= env.ledger().timestamp() {
             return Err(Error::InvalidFundingDeadline);
         }
@@ -170,6 +171,7 @@ impl EscrowContract {
             .checked_add(amount)
             .ok_or(Error::Overflow)?;
         let funded = data.amount.checked_add(amount).ok_or(Error::Overflow)?;
+        Self::check_amount_cap(&env, &data.token, funded)?;
         data.amount = funded;
         env.storage().persistent().set(&key, &contribution);
         env.storage()

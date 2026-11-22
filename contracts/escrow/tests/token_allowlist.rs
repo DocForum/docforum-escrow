@@ -82,7 +82,7 @@ fn get_allowed_tokens_returns_the_configured_list_in_order() {
 
     let contract_id = env.register(
         EscrowContract,
-        (allowlist.clone(), Address::generate(&env)),
+        (allowlist.clone(), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -96,7 +96,7 @@ fn get_allowed_tokens_returns_empty_for_an_open_allowlist() {
     let env = Env::default();
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -114,7 +114,7 @@ fn empty_allowlist_preserves_open_token_behavior() {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
 

@@ -31,6 +31,7 @@ fn setup(env: &Env) -> Fixture<'_> {
         (
             soroban_sdk::Vec::<Address>::new(env),
             Address::generate(env),
+            soroban_sdk::Vec::<(Address, i128)>::new(env),
         ),
     );
     let client = EscrowContractClient::new(env, &contract_id);
@@ -100,6 +101,7 @@ fn legacy_creation_keeps_acceptance_opt_out() {
         (
             soroban_sdk::Vec::<Address>::new(&env),
             Address::generate(&env),
+            soroban_sdk::Vec::<(Address, i128)>::new(&env),
         ),
     );
     let client = EscrowContractClient::new(&env, &contract_id);

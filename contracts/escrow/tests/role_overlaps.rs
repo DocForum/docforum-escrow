@@ -54,7 +54,7 @@ fn assert_overlap_is_allowed(overlap: Overlap, settle_as_refund: bool) {
     asset.mint(&payer, &1_000);
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(&env), Address::generate(&env), Vec::<(Address, i128)>::new(&env)),
     );
     let client = EscrowContractClient::new(&env, &contract_id);
     let id = client

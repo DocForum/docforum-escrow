@@ -41,7 +41,7 @@ fn setup(env: &Env) -> Fixture<'_> {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(env), Address::generate(env)),
+        (Vec::<Address>::new(env), Address::generate(env), Vec::<(Address, i128)>::new(env)),
     );
     let client = EscrowContractClient::new(env, &contract_id);
 
@@ -85,7 +85,7 @@ fn setup_with_notify(env: &Env, notify_payee: bool) -> Fixture<'_> {
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(env), Address::generate(env)),
+        (Vec::<Address>::new(env), Address::generate(env), Vec::<(Address, i128)>::new(env)),
     );
     let client = EscrowContractClient::new(env, &contract_id);
 

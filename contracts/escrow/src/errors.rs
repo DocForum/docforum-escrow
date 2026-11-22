@@ -133,4 +133,9 @@ pub enum Error {
     /// `unpause` on a running contract. The transition did not happen, so
     /// no event is emitted.
     NotPaused = 40,
+    /// A deposit would make one escrow exceed its immutable per-token cap.
+    AmountCapExceeded = 5600,
+    /// The constructor cap table contains a non-positive amount or duplicate
+    /// token.
+    InvalidAmountCap = 5601,
 }
