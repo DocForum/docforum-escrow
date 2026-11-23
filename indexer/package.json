@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "node --experimental-strip-types --test tests/network.test.mjs",
     "codegen": "subql codegen",
     "build": "subql build",
     "start": "subql-node -f .",

@@ -26,6 +26,19 @@ jobs:
       - name: SDK constants mirror the contract
         run: node scripts/check-sdk-constants.mjs
 
+  config-guards:
+    name: Indexer and verifier configuration guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Node 22 strips TypeScript types, so the indexer config test exercises
+      # the same module project.ts imports without installing SubQuery deps.
+      - run: node --experimental-strip-types --test indexer/tests/network.test.mjs
+      - run: node --test scripts/verify-deployment.test.mjs
+
   contract-fuzz:
     name: Contract cargo-fuzz (${{ github.event_name == 'schedule' && 'nightly' || 'PR' }})
     runs-on: ubuntu-latest
