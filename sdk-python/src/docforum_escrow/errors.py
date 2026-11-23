@@ -80,6 +80,7 @@ __all__ = [
     "SplitAmountOverflowError",
     "InvalidRefundExtensionError",
     "PoolInsufficientError",
+    "DuplicateConditionRefError",
     "NotStreamedError",
     "InvalidVestingScheduleError",
     "NothingToWithdrawError",
@@ -154,6 +155,7 @@ CONTRACT_ERROR_NAMES: dict[int, str] = {
     57: "ScheduleCancelled",
     58: "AllowanceExhausted",
     59: "InvalidSchedule",
+    4700: "DuplicateConditionRef",
 }
 
 
@@ -618,6 +620,13 @@ class InvalidScheduleError(ContractError):
 
     code = 59
     contract_error = "InvalidSchedule"
+
+
+class DuplicateConditionRefError(ContractError):
+    """Contract error 4700: ``DuplicateConditionRef``."""
+
+    code = 4700
+    contract_error = "DuplicateConditionRef"
 
 
 _CLASSES: dict[int, type[ContractError]] = {

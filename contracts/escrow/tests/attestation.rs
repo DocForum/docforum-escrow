@@ -124,8 +124,7 @@ fn release_with_attestation_pays_payee_and_marks_released() {
     let signature = sign(&env, &f, &f.contract_id, f.escrow_id);
 
     // The submitter needs no authorization at all: anyone may submit.
-    f.client
-        .release_with_attestation(&f.escrow_id, &signature);
+    f.client.release_with_attestation(&f.escrow_id, &signature);
     assert!(env.auths().is_empty());
 
     assert_eq!(f.token.balance(&f.payee), 300);
@@ -209,8 +208,7 @@ fn release_with_attestation_cannot_be_replayed() {
     let f = fund_attested_escrow(&env, 300);
     let signature = sign(&env, &f, &f.contract_id, f.escrow_id);
 
-    f.client
-        .release_with_attestation(&f.escrow_id, &signature);
+    f.client.release_with_attestation(&f.escrow_id, &signature);
     let second = f
         .client
         .try_release_with_attestation(&f.escrow_id, &signature);
@@ -241,9 +239,7 @@ fn release_with_attestation_needs_an_attester() {
         &None,
         &None,
     );
-    let result = f
-        .client
-        .try_release_with_attestation(&plain_id, &signature);
+    let result = f.client.try_release_with_attestation(&plain_id, &signature);
 
     assert_eq!(result, Err(Ok(Error::AttesterNotConfigured)));
     assert_eq!(f.client.get_status(&plain_id), EscrowStatus::Funded);
