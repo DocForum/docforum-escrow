@@ -48,6 +48,20 @@ var (
 	// ErrTimeout means the client gave up waiting for the transaction to
 	// reach a terminal state at Config.PollTimeout.
 	ErrTimeout = errors.New("escrow: timed out waiting for transaction")
+
+	// ErrVersionUnavailable means the deployment has no version() function.
+	// Use errors.Is with it, or errors.As to *VersionUnavailableError for the
+	// contract id.
+	ErrVersionUnavailable = errors.New("escrow: deployment has no version() function")
+
+	// ErrUnsupportedContractVersion means version() returned a value outside
+	// the range this SDK supports. Use errors.As to
+	// *UnsupportedContractVersionError for the reported version.
+	ErrUnsupportedContractVersion = errors.New("escrow: unsupported contract version")
+
+	// ErrAuthorizationExpired means a relayed authorization's auth entry has
+	// expired and must be produced again by the releaser.
+	ErrAuthorizationExpired = errors.New("escrow: relayed authorization expired")
 )
 
 // contractErrorNames maps the contract's `Error` enum (contracts/escrow/src/lib.rs)

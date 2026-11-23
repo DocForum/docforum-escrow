@@ -110,6 +110,7 @@ func main() {
 | `PollTimeout` | `60s` |
 | `PollInterval` | `500ms` |
 | `Signer` | none (constructor succeeds; RPC calls return `ErrSignerRequired`) |
+| `ContractVersionCheck` | `ContractVersionCheckOff` |
 
 `New` rejects the public-network passphrase with `ErrNetworkMismatch`.
 `client.CheckNetwork(ctx)` additionally checks the RPC server's passphrase
@@ -139,6 +140,18 @@ func (*Client) Refund(ctx context.Context, escrowID uint64) (TxResult, error)
 func (*Client) TopUp(ctx context.Context, escrowID uint64, amount *big.Int) (TxResult, error)
 func (*Client) ReleaseWithApprovals(ctx context.Context, escrowID uint64, approvers []Signer) (TxResult, error)
 func (*Client) RefundWithApprovals(ctx context.Context, escrowID uint64, approvers []Signer) (TxResult, error)
+
+// Contract state reads
+func (*Client) Version(ctx context.Context) (string, error)
+func (*Client) IsPaused(ctx context.Context) (bool, error)
+func (*Client) GetPauseAdmin(ctx context.Context) (*string, error)
+func (*Client) Solvency(ctx context.Context, token string) (SolvencyReport, error)
+func (*Client) VerifyContractVersion(ctx context.Context) error
+
+// Relayed settlement (releaser signs auth only; another account pays the fee)
+func (*Client) AuthorizeRelease(ctx context.Context, escrowID uint64, relayer string) (RelayedAuthorization, error)
+func (*Client) AuthorizeRefund(ctx context.Context, escrowID uint64, relayer string) (RelayedAuthorization, error)
+func (*Client) SubmitRelayed(ctx context.Context, settlement SettlementMethod, authorization RelayedAuthorization, relayer Signer) (TxResult, error)
 ```
 
 `EscrowStatus` is a typed enum: `EscrowStatusFunded` (0),
@@ -154,6 +167,58 @@ and an i128 can exceed `int64` by design.
 `Amount`, `ConditionRef`, `Releasers`, `Threshold`, `RefundAfter`,
 `NotifyPayee`, `Status`, plus `RequiresAcceptance` and `AcceptedAt` when the
 deployment has those fields.
+
+## Version, pause and solvency reads
+
+`Version`, `IsPaused`, `GetPauseAdmin` and `Solvency` are simulated read calls,
+so they need a `Signer` to simulate from (like `GetStatus`/`GetEscrow`) but send
+nothing. `Solvency` returns `{ Balance, Liabilities, Solvent }` for one token;
+`Solvent` is `Balance >= Liabilities`.
+
+`Config.ContractVersionCheck` verifies `version()` lazily, once, before the first
+write:
+
+| Value | Behaviour |
+|---|---|
+| `ContractVersionCheckOff` (default) | no version call |
+| `ContractVersionCheckAuto` | checks once; a deployment with no `version()` is allowed through, a version outside the supported range is rejected |
+| `ContractVersionCheckRequired` | as Auto, but a deployment with no `version()` is rejected too |
+
+The supported range is `>=2.0.0 <4.0.0`, the same as the TypeScript SDK's
+`SUPPORTED_CONTRACT_VERSIONS`; change `SupportedContractVersionMin`/
+`SupportedContractVersionMax` together with it. A missing `version()` returns
+`*VersionUnavailableError` (`errors.Is(err, ErrVersionUnavailable)`); an
+out-of-range one returns `*UnsupportedContractVersionError`
+(`ErrUnsupportedContractVersion`). `client.VerifyContractVersion(ctx)` runs the
+same check on demand. Failed lookups in Auto mode are not cached, so a
+transient RPC error is retried on the next write.
+
+## Relayed release and refund
+
+`AuthorizeRelease` / `AuthorizeRefund` let a releaser holding a cold key sign
+only its short-lived contract auth entry; a separate relayer then pays the fee
+and submits:
+
+```go
+// Releaser process: the configured signer is the releaser.
+auth, err := releaserClient.AuthorizeRelease(ctx, escrowID, relayerAddress)
+// Send `auth` (a `RelayedAuthorization`) to the relayer over a private channel.
+
+// Relayer process: no release/refund key needed.
+result, err := relayerClient.SubmitRelayed(ctx, escrow.SettlementRelease, auth, relayerSigner)
+```
+
+`RelayedAuthorization` carries `Transaction` (the simulated transaction as
+JSON) and `ExpiresAtLedger` (10 ledgers, like the TypeScript SDK). The JSON is
+the TypeScript SDK's `RelayedAuthorization.transaction` format
+(`AssembledTransaction.toJSON()`), so an authorization produced by either SDK
+can be submitted by the other. `SubmitRelayed` rejects an expired
+authorization (`ErrAuthorizationExpired`), a settlement that does not match the
+signed envelope, an envelope that is not exactly one `invokeContract` call to
+this contract's `release`/`refund` (no memo, no fee bump), and a relayer that is
+not the envelope's source (`ErrUnsupportedAuthorization`). The releaser must be
+a `*KeypairSigner`, because its auth entry is signed locally; the relayer may be
+any `Signer`.
 
 ## Error handling
 
