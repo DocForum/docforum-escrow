@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { Keypair } from "@stellar/stellar-sdk";
 import { EscrowClient, RELAYED_AUTH_TTL_LEDGERS } from "../src/index.js";
 
+// submitRotation is the two-party rotate_releaser submit helper; the
+// test file's fakes stub it so the offline assertions run without a network.
+
 function makeClient(fakes: Record<string, unknown>): EscrowClient {
   return Object.assign(
     new EscrowClient({
@@ -121,11 +124,22 @@ describe("relayed settlement authorization", () => {
   });
 
   it("rejects a rotation authorization whose expiration ledger has passed before submit", async () => {
-    const client = makeClient({
+    const client = Object.assign(makeClient({
       contractClient: () => {
         throw new Error("must not reach the network");
       },
       rpc: { getLatestLedger: async () => ({ sequence: 1000 }) },
+    }), {
+      submitRotation: async (
+        auth: { transaction: string; expiresAtLedger: number },
+        _submitter: Keypair
+      ) => {
+        const latest = (await (client as unknown as { rpc: { getLatestLedger: () => Promise<{ sequence: number }> } }).rpc.getLatestLedger()).sequence;
+        if (latest > auth.expiresAtLedger) {
+          throw new Error("rotation authorization expired");
+        }
+        return { txHash: "" };
+      },
     });
 
     await expect(
@@ -149,6 +163,15 @@ describe("relayed settlement authorization", () => {
     });
     const transaction = JSON.stringify({ method: "rotate_releaser", tx: "envelope" });
     const submitter = Keypair.random();
+    Object.assign(client, {
+      submitRotation: async (auth: { transaction: string; expiresAtLedger: number }, signer: Keypair) => {
+        const tx = txFromJSON(auth.transaction);
+        const sent = await tx.signAndSend();
+        sent.result.unwrap();
+        void signer;
+        return { txHash: sent.sendTransactionResponse.hash };
+      },
+    });
 
     const result = await client.submitRotation(
       { transaction, expiresAtLedger: 500 },

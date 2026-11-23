@@ -166,6 +166,7 @@ export * from "./networks.js";
 export * from "./pooled.js";
 export * from "./prepare-submit.js";
 export * from "./relayed-auth.js";
+export * from "./rotation.js";
 export * from "./rpc-providers.js";
 export * from "./solvency.js";
 

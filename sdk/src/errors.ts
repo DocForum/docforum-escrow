@@ -82,7 +82,11 @@ export class NetworkMismatchError extends EscrowError {
   }
 }
 
-/** Thrown when a signed authorization entry has passed its expiration ledger before submission. */
+/**
+ * Thrown when a signed authorization entry has passed its expiration ledger
+ * before submission (or when a rotation authorization is found to be expired
+ * client-side before it is submitted).
+ */
 export class AuthorizationExpiredError extends EscrowError {
   readonly expirationLedger: number;
   readonly currentLedger: number;
