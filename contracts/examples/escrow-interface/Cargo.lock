@@ -572,7 +572,6 @@ dependencies = [
 name = "docforum-escrow"
 version = "0.0.0"
 dependencies = [
- "docforum-escrow-interface",
  "soroban-sdk",
 ]
 
