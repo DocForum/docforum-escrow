@@ -39,7 +39,7 @@ import {
 } from "./instrumentation.js";
 import type { FactoryClient as FactoryClientType } from "./factory.js";
 import { contractSigner, signerAddress, type EscrowSigner } from "./signers/types.js";
-import { ContractError, NetworkMismatchError, NotFundedError, toEscrowError } from "./errors.js";
+import { ContractError, NetworkMismatchError, NotFundedError, WaitTimeoutError, toEscrowError } from "./errors.js";
 import { getTokenInfo as readTokenInfo, rpcTokenInfoSource, type TokenInfo } from "./amounts.js";
 import {
   PreparedTransactionExpiredError,
@@ -101,6 +101,7 @@ export {
   SimulationFailure,
   SubmissionFailure,
   UnauthorizedError,
+  WaitTimeoutError,
   contractErrorName,
   toEscrowError,
 } from "./errors.js";
@@ -186,12 +187,12 @@ import { type ArchivedEntryBehavior } from "./archived-entries.js";
 import { type BatchCreateItem, type BatchItemResult, type BatchOptions, BatchPartialFailureError, type BatchSettleOperation, MAX_BATCH_SIZE } from "./batch.js";
 import { type EscrowClientConfig } from "./client-config.js";
 import { UnsupportedContractVersionError, isSupportedContractVersion } from "./contract-version.js";
-import { type CancelParams, type CreateEscrowParams, type CreateQuorumEscrowParams, type Escrow, type EscrowStatus, type ExtendRefundAfterParams, MAX_CONDITION_REF_LENGTH, MAX_FEE_BPS, MAX_RELEASERS, type ReleaseOrRefundParams, type SettlementApprovalsParams } from "./escrow-types.js";
+import { type CancelParams, type CreateEscrowParams, type CreateQuorumEscrowParams, type Escrow, type EscrowStatus, type ExtendRefundAfterParams, MAX_CONDITION_REF_LENGTH, MAX_FEE_BPS, MAX_RELEASERS, type ReleaseOrRefundParams, type SettlementApprovalsParams, TERMINAL_ESCROW_STATUSES } from "./escrow-types.js";
 import { type EscrowEvent, type EscrowEventType, EventCursorExpiredError, type GetEventsParams, type GetEventsResult, type SubscribeOptions } from "./events.js";
 import { type EstimateCallParams, type FeeBumpOptions, type FeeBumpResult, type FeeEstimate, type GuardResult, MaxFeeExceededError, SponsorshipGuardError, computeFeeEstimate } from "./fees.js";
-import { EMPTY_SPAN_ATTRIBUTES, MISSING_FUNCTION_ERROR, TESTNET_NETWORK_PASSPHRASE, TESTNET_RPC_URL, assertLedgerWindow, assertPositiveAmount, batchErrorMessage, contractAddressOf, isRetentionError, lifecycleCallSigner, safeScValToNative, sendErrorName, trancheOf } from "./internal.js";
+import { EMPTY_SPAN_ATTRIBUTES, MISSING_FUNCTION_ERROR, TESTNET_NETWORK_PASSPHRASE, TESTNET_RPC_URL, abortReason, assertLedgerWindow, assertPositiveAmount, batchErrorMessage, contractAddressOf, isRetentionError, lifecycleCallSigner, safeScValToNative, sendErrorName, trancheOf } from "./internal.js";
 import { LedgerClock, type LedgerTime, type LedgerTimeOptions, type LatestLedger } from "./ledger-time.js";
-import { type AcceptParams, type EscrowPreconditionCode, EscrowPreconditionError, type LifecycleCall, type LifecycleMethod, PREPARED_AUTH_TTL_LEDGERS, type PrepareLifecycleParams, type PreparedLifecycleCall, type TopUpParams, type TransferPayeeParams } from "./lifecycle.js";
+import { type AcceptParams, DEFAULT_WAIT_POLL_INTERVAL_MS, type EscrowPreconditionCode, EscrowPreconditionError, type LifecycleCall, type LifecycleMethod, PREPARED_AUTH_TTL_LEDGERS, type PrepareLifecycleParams, type PreparedLifecycleCall, type TopUpParams, type TransferPayeeParams, type WaitForStatusOptions, type WaitForStatusResult } from "./lifecycle.js";
 import { type CreateStreamedEscrowParams, type VestingInfo, type WithdrawParams, validateVestingSchedule } from "./vesting.js";
 import { type CreateMilestoneEscrowParams, type Milestone, type MilestoneEscrow, MilestoneEscrowPartialError, type RefundMilestoneParams, type ReleaseMilestoneParams, milestoneConditionRef, validateMilestoneSchedule } from "./milestones.js";
 import { MAINNET_NETWORK_PASSPHRASE, MainnetNotAllowedError } from "./networks.js";
@@ -793,6 +794,100 @@ export class EscrowClient {
       { address: signerAddress(params.payer) },
     );
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Waits for `escrowId` to reach one of `targetStatuses`, polling `getStatus`
+   * until it does. Resolves with `{ escrowId, status }` rather than a full
+   * escrow, because a settled escrow's record is reclaimed (docs/adr/0013).
+   *
+   * Rejects with {@link WaitTimeoutError} when `timeoutMs` elapses, and also
+   * when the escrow settles on a terminal status outside the target set (for
+   * example, waiting for `Released` but the escrow was `Refunded`) — in both
+   * cases `lastStatus` is what was last observed. An unknown `escrowId`
+   * rejects with the same `NotFoundError` `getStatus` raises. Aborting via
+   * `signal` rejects with the signal's `reason` (an `AbortError` by default).
+   *
+   * No timer or poll survives resolution, rejection or abort.
+   *
+   * @param escrowId The escrow to watch.
+   * @param targetStatuses The statuses that resolve the wait; must not be empty.
+   * @param options Deadline, poll interval and cancellation signal.
+   */
+  async waitForStatus(
+    escrowId: bigint,
+    targetStatuses: ReadonlyArray<EscrowStatus>,
+    options: WaitForStatusOptions,
+  ): Promise<WaitForStatusResult> {
+    const { timeoutMs, signal } = options;
+    const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_WAIT_POLL_INTERVAL_MS;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      throw new RangeError("timeoutMs must be a positive number of milliseconds.");
+    }
+    if (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 1) {
+      throw new RangeError("pollIntervalMs must be at least 1.");
+    }
+    if (targetStatuses.length === 0) throw new RangeError("targetStatuses must name at least one status.");
+    if (signal?.aborted) throw abortReason(signal);
+
+    const targets = new Set(targetStatuses);
+    return new Promise<WaitForStatusResult>((resolve, reject) => {
+      let lastStatus: EscrowStatus | undefined;
+      let settled = false;
+      let pollTimer: ReturnType<typeof setTimeout> | undefined;
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+
+      // Every settle path runs cleanup, so no timer or abort listener outlives the wait.
+      const settle = (complete: () => void): void => {
+        if (settled) return;
+        settled = true;
+        if (pollTimer !== undefined) clearTimeout(pollTimer);
+        if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+        pollTimer = deadlineTimer = undefined;
+        signal?.removeEventListener("abort", onAbort);
+        complete();
+      };
+      const fail = (error: unknown): void => settle(() => reject(error));
+      const timeoutError = (message: string): WaitTimeoutError =>
+        new WaitTimeoutError(message, lastStatus, [...targetStatuses]);
+      // A read already in flight when this fires must not schedule another poll.
+      function onAbort(): void { if (signal) fail(abortReason(signal)); }
+
+      deadlineTimer = setTimeout(() => {
+        fail(timeoutError(
+          `waitForStatus for escrow ${escrowId} timed out after ${timeoutMs}ms`
+          + ` (last status: ${lastStatus ?? "none observed"}).`,
+        ));
+      }, timeoutMs);
+      signal?.addEventListener("abort", onAbort, { once: true });
+
+      const poll = async (): Promise<void> => {
+        pollTimer = undefined;
+        if (settled) return;
+        let status: EscrowStatus;
+        try {
+          status = await this.getStatus(escrowId);
+        } catch (error) {
+          fail(error);
+          return;
+        }
+        if (settled) return;
+        lastStatus = status;
+        if (targets.has(status)) {
+          settle(() => resolve({ escrowId, status }));
+          return;
+        }
+        if (TERMINAL_ESCROW_STATUSES.has(status)) {
+          fail(timeoutError(
+            `Escrow ${escrowId} settled as ${status}, outside the target set`
+            + ` (${[...targets].join(", ")}).`,
+          ));
+          return;
+        }
+        pollTimer = setTimeout(() => { void poll(); }, pollIntervalMs);
+      };
+      void poll();
+    });
   }
 
   /**

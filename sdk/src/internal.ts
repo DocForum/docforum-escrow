@@ -57,6 +57,11 @@ export function lifecycleCallSigner(call: LifecycleCall): string {
   return call.payer;
 }
 
+/** The rejection value for an aborted wait: the signal's reason, or a standard `AbortError`. */
+export function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("This operation was aborted", "AbortError");
+}
+
 /** Throws unless `value` is a positive whole number of ledgers. */
 export function assertLedgerWindow(name: string, value: number): void {
   if (!Number.isInteger(value) || value < 1) {

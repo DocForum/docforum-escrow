@@ -1,4 +1,5 @@
 import { CONTRACT_ERROR_NAMES } from "./contract-errors.generated.js";
+import type { EscrowStatus } from "./escrow-types.js";
 
 /** Base class for every error the SDK throws from a contract call. */
 export class EscrowError extends Error {
@@ -123,6 +124,26 @@ export function toEscrowError(error: unknown, stage: "simulation" | "submission"
     return new SimulationFailure(message, cause);
   }
   return stage === "submission" ? new SubmissionFailure(message, cause) : new SimulationFailure(message, cause);
+}
+
+/**
+ * Thrown by `waitForStatus` when the wait ends without reaching a target
+ * status: either `timeoutMs` elapsed, or the escrow settled on a terminal
+ * status outside the target set (e.g. waiting for `Released` but it was
+ * `Refunded`). `lastStatus` is the last status observed, or `undefined` if
+ * no read completed before the timeout.
+ */
+export class WaitTimeoutError extends EscrowError {
+  /** The last status observed, or `undefined` if none was read before the timeout. */
+  readonly lastStatus: EscrowStatus | undefined;
+  /** The target statuses the caller was waiting for. */
+  readonly targetStatuses: ReadonlyArray<EscrowStatus>;
+  constructor(message: string, lastStatus: EscrowStatus | undefined, targetStatuses: ReadonlyArray<EscrowStatus>, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "WaitTimeoutError";
+    this.lastStatus = lastStatus;
+    this.targetStatuses = targetStatuses;
+  }
 }
 
 /** The contract's name for an error `code`, e.g. `NotFound` for 1, or `undefined`. */
