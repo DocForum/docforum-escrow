@@ -6,7 +6,9 @@ on:
       - "contract-v*"
 
 permissions:
-  contents: write
+  contents: write   # upload the WASM and its SHA-256 as release assets
+  id-token: write   # Sigstore-backed build provenance for the attestation
+  attestations: write
 
 jobs:
   release:
@@ -30,6 +32,14 @@ jobs:
           set -eu
           wasm=contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm
           sha256sum "$wasm" | awk '{ print $1 "  docforum_escrow.wasm" }' > docforum_escrow.wasm.sha256
+
+      # Issue #351: tie the published bytes to this workflow run so a reader can
+      # verify where and how they were built (`gh attestation verify`), not just
+      # rebuild them. Subject path is the exact file uploaded below.
+      - name: Attest WASM build provenance
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm
 
       - name: Publish WASM and SHA-256 as release assets
         uses: softprops/action-gh-release@v2
