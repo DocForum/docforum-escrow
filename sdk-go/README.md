@@ -110,6 +110,7 @@ func main() {
 | `PollTimeout` | `60s` |
 | `PollInterval` | `500ms` |
 | `Signer` | none (constructor succeeds; RPC calls return `ErrSignerRequired`) |
+| `ContractVersionCheck` | `ContractVersionCheckOff` |
 
 `New` rejects the public-network passphrase with `ErrNetworkMismatch`.
 `client.CheckNetwork(ctx)` additionally checks the RPC server's passphrase
@@ -144,6 +145,18 @@ func (*Client) Refund(ctx context.Context, escrowID uint64) (TxResult, error)
 func (*Client) TopUp(ctx context.Context, escrowID uint64, amount *big.Int) (TxResult, error)
 func (*Client) ReleaseWithApprovals(ctx context.Context, escrowID uint64, approvers []Signer) (TxResult, error)
 func (*Client) RefundWithApprovals(ctx context.Context, escrowID uint64, approvers []Signer) (TxResult, error)
+
+// Contract state reads
+func (*Client) Version(ctx context.Context) (string, error)
+func (*Client) IsPaused(ctx context.Context) (bool, error)
+func (*Client) GetPauseAdmin(ctx context.Context) (*string, error)
+func (*Client) Solvency(ctx context.Context, token string) (SolvencyReport, error)
+func (*Client) VerifyContractVersion(ctx context.Context) error
+
+// Relayed settlement (releaser signs auth only; another account pays the fee)
+func (*Client) AuthorizeRelease(ctx context.Context, escrowID uint64, relayer string) (RelayedAuthorization, error)
+func (*Client) AuthorizeRefund(ctx context.Context, escrowID uint64, relayer string) (RelayedAuthorization, error)
+func (*Client) SubmitRelayed(ctx context.Context, settlement SettlementMethod, authorization RelayedAuthorization, relayer Signer) (TxResult, error)
 func (*Client) CreatePooledEscrow(ctx context.Context, CreatePooledEscrowParams) (CreateEscrowResult, error)
 func (*Client) Contribute(ctx context.Context, escrowID uint64, payer Signer, amount *big.Int) (TxResult, error)
 func (*Client) ClaimRefund(ctx context.Context, escrowID uint64, contributor Signer) (TxResult, error)
