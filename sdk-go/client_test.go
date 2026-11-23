@@ -434,6 +434,18 @@ func TestCreateEscrowsArgs(t *testing.T) {
 		}
 	}
 
+	// Soroban rejects an ScMap whose keys are not sorted, so the encoded
+	// items must come out in ascending symbol order (not struct field order).
+	for i := range items {
+		entries := **items[i].Map
+		for j := 1; j < len(entries); j++ {
+			prev, cur := string(*entries[j-1].Key.Sym), string(*entries[j].Key.Sym)
+			if prev >= cur {
+				t.Fatalf("item %d map keys not sorted: %q before %q", i, prev, cur)
+			}
+		}
+	}
+
 	// Every item is validated before encoding, so a bad item is rejected
 	// instead of being sent.
 	if _, err := createEscrowsArgs(payer, []CreateItem{{Payee: "GNOTANADDRESS", Token: testContractID, Amount: big.NewInt(1), Releaser: releaser}}); err == nil {

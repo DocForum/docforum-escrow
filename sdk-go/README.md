@@ -199,9 +199,12 @@ _, err = client.Cancel(ctx, created.EscrowID, payer)
 ```
 
 `Accept` and `Cancel` race on one ledger state: whichever lands first wins, and
-the other fails (`ErrAlreadyAccepted` / `ErrNotFound`). A funded escrow can
-still be reassigned by its current payee before it settles — a wallet rotation,
-not key-loss recovery:
+the loser fails — `ErrAlreadyAccepted` if the payee accepted first, or
+`ErrNotFunded` if the payer's cancel settled the escrow first. A settled id
+keeps its status entry (ADR 0013), so state-changing entry points answer
+`ErrNotFunded` for it; only an id that never existed is `ErrNotFound`. A funded
+escrow can still be reassigned by its current payee before it settles — a
+wallet rotation, not key-loss recovery:
 
 ```go
 _, err = client.TransferPayee(ctx, escrowID, currentPayeeSigner, newPayeeAddress)

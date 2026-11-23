@@ -574,6 +574,9 @@ func decodeEscrow(v xdr.ScVal) (Escrow, error) {
 
 // createItemScVal encodes one CreateItem the way create_escrows takes it:
 // a contracttype struct as a symbol-keyed map with refund_after as an option.
+// Soroban rejects an ScMap whose keys are not in ascending key order ("ScMap
+// was not sorted by key for conversion to host object"), so the entries are
+// written in symbol sort order rather than struct field order.
 func createItemScVal(item CreateItem) (xdr.ScVal, error) {
 	payee, err := scvAddress(item.Payee)
 	if err != nil {
@@ -592,12 +595,12 @@ func createItemScVal(item CreateItem) (xdr.ScVal, error) {
 		return xdr.ScVal{}, err
 	}
 	return scvMap([]xdr.ScMapEntry{
-		{Key: scvSymbol("payee"), Val: payee},
-		{Key: scvSymbol("token"), Val: token},
 		{Key: scvSymbol("amount"), Val: amount},
 		{Key: scvSymbol("condition_ref"), Val: scvString(item.ConditionRef)},
-		{Key: scvSymbol("releaser"), Val: releaser},
+		{Key: scvSymbol("payee"), Val: payee},
 		{Key: scvSymbol("refund_after"), Val: scvOptionU64(item.RefundAfter)},
+		{Key: scvSymbol("releaser"), Val: releaser},
+		{Key: scvSymbol("token"), Val: token},
 	}), nil
 }
 

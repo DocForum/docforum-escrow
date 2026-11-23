@@ -354,9 +354,11 @@ func TestIntegrationCancelBeforeAcceptance(t *testing.T) {
 	if _, err := client.GetEscrow(ctx, created.EscrowID); !errors.Is(err, escrow.ErrNotFound) {
 		t.Fatalf("get escrow after cancel = %v, want ErrNotFound", err)
 	}
-	// Cancel is only for a not-yet-accepted acceptance escrow.
-	if _, err := client.Cancel(ctx, created.EscrowID, payer); !errors.Is(err, escrow.ErrNotFound) {
-		t.Fatalf("second cancel = %v, want ErrNotFound", err)
+	// Cancel is only for a not-yet-accepted acceptance escrow. A settled id
+	// keeps its Status entry, so `load` answers NotFunded (ADR 0013) — the
+	// same answer it gave before the record was reclaimed.
+	if _, err := client.Cancel(ctx, created.EscrowID, payer); !errors.Is(err, escrow.ErrNotFunded) {
+		t.Fatalf("second cancel = %v, want ErrNotFunded", err)
 	}
 }
 
