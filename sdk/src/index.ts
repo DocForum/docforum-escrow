@@ -39,7 +39,7 @@ import {
 } from "./instrumentation.js";
 import type { FactoryClient as FactoryClientType } from "./factory.js";
 import { contractSigner, signerAddress, type EscrowSigner } from "./signers/types.js";
-import { NetworkMismatchError, toEscrowError } from "./errors.js";
+import { ContractError, NetworkMismatchError, NotFundedError, toEscrowError } from "./errors.js";
 import { getTokenInfo as readTokenInfo, rpcTokenInfoSource, type TokenInfo } from "./amounts.js";
 import {
   PreparedTransactionExpiredError,
