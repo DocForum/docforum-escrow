@@ -243,6 +243,9 @@ pub enum DataKey {
     Withdrawn(u64),
     /// Streamed escrows only (issue #44): immutable original amount.
     TotalAmount(u64),
+    /// Optional creation idempotency index: one escrow id per `(payer,
+    /// condition_ref)` while the index entry remains live.
+    UniqueRef(Address, String),
     /// Issue #115: a recurring funding schedule (ADR 0015).
     RecurringSchedule(u64),
     /// Issue #115: next schedule id counter.

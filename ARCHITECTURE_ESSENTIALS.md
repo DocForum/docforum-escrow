@@ -391,7 +391,7 @@ UI components or styling. It depends on TanStack Query v5 as a peer and
 requires `EscrowProvider` (client) inside the app's `QueryClientProvider`.
 
 - `useEscrow(id)` polls `getEscrow` and stops at terminal statuses
-  (`Released`/`Refunded`).
+  (`Released`/`Refunded`/`Cancelled`).
 - `useEscrowActions(signer)` wraps creation/settlement, invalidates the
   matching query, and returns user rejection as `{ status: "rejected" }`.
 - `useEscrowTimeline(escrow)` counts down to `refundAfter`. Documented caveat:

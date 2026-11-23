@@ -53,5 +53,8 @@ fn settle_many_accepts_payee_voluntary_refund_and_emits_payee_event() {
     assert_eq!(events.len(), 2);
     assert_eq!(events[1], expected.to_xdr(&env, &contract_id));
     assert_eq!(client.get_status(&escrow_id), EscrowStatus::Refunded);
-    assert_eq!(soroban_sdk::token::TokenClient::new(&env, &token_id).balance(&payer), 100);
+    assert_eq!(
+        soroban_sdk::token::TokenClient::new(&env, &token_id).balance(&payer),
+        100
+    );
 }
