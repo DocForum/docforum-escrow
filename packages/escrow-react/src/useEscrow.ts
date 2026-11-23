@@ -18,10 +18,11 @@ export interface UseEscrowOptions {
 /**
  * Fetch one escrow and keep it fresh until it settles.
  *
- * Polling stops automatically once the status is `Released` or `Refunded`
- * (terminal), and never runs at all for a call that already returned a
- * terminal status. Transient read errors keep polling as long as data is not
- * terminal, so a dropped RPC connection doesn't freeze the UI.
+ * Polling stops automatically once the status is terminal — `Released`,
+ * `Refunded` or `Cancelled` (see `isTerminalStatus`) — and never runs at all
+ * for a call that already returned a terminal status. Transient read errors
+ * keep polling as long as data is not terminal, so a dropped RPC connection
+ * doesn't freeze the UI.
  */
 export function useEscrow(
   escrowId: bigint,
