@@ -922,6 +922,12 @@
                   },
                   {
                     "key": {
+                      "symbol": "attester"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "condition_ref"
                     },
                     "val": {
@@ -1105,6 +1111,12 @@
                     "val": {
                       "i128": "3"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "attester"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {
@@ -1293,6 +1305,12 @@
                   },
                   {
                     "key": {
+                      "symbol": "attester"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "condition_ref"
                     },
                     "val": {
@@ -1473,6 +1491,12 @@
                     "val": {
                       "i128": "5"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "attester"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {

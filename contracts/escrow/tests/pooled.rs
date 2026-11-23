@@ -279,10 +279,9 @@ fn failed_round_refunds_every_contributor_exactly() {
     assert_eq!(f.token.balance(&c), 10);
     assert_eq!(f.token.balance(&f.contract_id), 0);
     assert_eq!(f.token.balance(&f.payee), 0);
-    // A failed round never settles: `get_status` still reports `Funded`
-    // (settlement vocabulary), the funding state is `get_pooled`'s job.
-    assert_eq!(f.client.get_status(&f.id), EscrowStatus::Funded);
-    assert_eq!(f.client.get_escrow(&f.id).amount, 0);
+    // The final claim settles the failed round and reclaims its escrow record.
+    assert_eq!(f.client.get_status(&f.id), EscrowStatus::Refunded);
+    assert!(f.client.try_get_escrow(&f.id).is_err());
 
     // Someone with no recorded contribution gets nothing.
     assert_eq!(
@@ -673,7 +672,7 @@ fn release_and_refund_can_never_share_funds() {
     assert_eq!(f2.token.balance(&b), 30);
     assert_eq!(
         f2.client.try_release(&f2.id, &f2.releaser),
-        Err(Ok(Error::FundingIncomplete))
+        Err(Ok(Error::NotFunded))
     );
     assert_eq!(
         f2.client.try_claim_refund(&f2.id, &b),
@@ -861,6 +860,26 @@ fn claim_refund_emits_an_event() {
                 f.contract_id.clone(),
                 (symbol_short!("claimed"), f.id).into_val(&env),
                 (a.clone(), 30i128).into_val(&env),
+            ),
+            (
+                f.contract_id.clone(),
+                (symbol_short!("ESCROW"), symbol_short!("refunded"), f.id).into_val(&env),
+                (
+                    f.creator.clone(),
+                    f.payee.clone(),
+                    f.token.address.clone(),
+                    0i128,
+                    String::from_str(&env, "pooled-condition"),
+                    vec![&env, f.releaser.clone()],
+                    1u32,
+                    Option::<u64>::None,
+                    false,
+                    false,
+                    Option::<u64>::None,
+                    symbol_short!("Refunded"),
+                    (Option::<Address>::None, Option::<u32>::None),
+                )
+                    .into_val(&env),
             ),
         ]
     );
