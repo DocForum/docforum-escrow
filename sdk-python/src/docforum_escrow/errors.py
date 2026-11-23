@@ -92,6 +92,12 @@ __all__ = [
     "ScheduleCancelledError",
     "AllowanceExhaustedError",
     "InvalidScheduleError",
+    "InvalidMilestonesError",
+    "NotMilestoneError",
+    "InvalidMilestoneIndexError",
+    "MilestoneAlreadyReleasedError",
+    "MilestoneReleaseRequiredError",
+    "TooManyMilestonesError",
 ]
 
 # The contract's `Error` enum. tests/test_errors.py checks this against
@@ -154,6 +160,12 @@ CONTRACT_ERROR_NAMES: dict[int, str] = {
     57: "ScheduleCancelled",
     58: "AllowanceExhausted",
     59: "InvalidSchedule",
+    2101: "InvalidMilestones",
+    2102: "NotMilestone",
+    2103: "InvalidMilestoneIndex",
+    2104: "MilestoneAlreadyReleased",
+    2105: "MilestoneReleaseRequired",
+    2106: "TooManyMilestones",
 }
 
 
@@ -618,6 +630,48 @@ class InvalidScheduleError(ContractError):
 
     code = 59
     contract_error = "InvalidSchedule"
+
+
+class InvalidMilestonesError(ContractError):
+    """Contract error 2101: ``InvalidMilestones``."""
+
+    code = 2101
+    contract_error = "InvalidMilestones"
+
+
+class NotMilestoneError(ContractError):
+    """Contract error 2102: ``NotMilestone``."""
+
+    code = 2102
+    contract_error = "NotMilestone"
+
+
+class InvalidMilestoneIndexError(ContractError):
+    """Contract error 2103: ``InvalidMilestoneIndex``."""
+
+    code = 2103
+    contract_error = "InvalidMilestoneIndex"
+
+
+class MilestoneAlreadyReleasedError(ContractError):
+    """Contract error 2104: ``MilestoneAlreadyReleased``."""
+
+    code = 2104
+    contract_error = "MilestoneAlreadyReleased"
+
+
+class MilestoneReleaseRequiredError(ContractError):
+    """Contract error 2105: ``MilestoneReleaseRequired``."""
+
+    code = 2105
+    contract_error = "MilestoneReleaseRequired"
+
+
+class TooManyMilestonesError(ContractError):
+    """Contract error 2106: ``TooManyMilestones``."""
+
+    code = 2106
+    contract_error = "TooManyMilestones"
 
 
 _CLASSES: dict[int, type[ContractError]] = {
