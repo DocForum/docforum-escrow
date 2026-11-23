@@ -27,6 +27,35 @@ impl EscrowContract {
         releaser: Address,
         funding_deadline: u64,
     ) -> Result<u64, Error> {
+        Self::create_pooled_release_deadline(
+            env,
+            creator,
+            payee,
+            token,
+            funding_target,
+            condition_ref,
+            releaser,
+            funding_deadline,
+            None,
+        )
+    }
+
+    /// Creates a pooled escrow with an optional release deadline (issue #288).
+    /// If `release_deadline` is set, it must be strictly after `funding_deadline`.
+    /// When the release deadline passes on a fully funded pool without release,
+    /// contributors may pull their contributions back with `claim_refund`,
+    /// ensuring that a lost releaser key does not lock pool funds forever.
+    pub fn create_pooled_release_deadline(
+        env: Env,
+        creator: Address,
+        payee: Address,
+        token: Address,
+        funding_target: i128,
+        condition_ref: String,
+        releaser: Address,
+        funding_deadline: u64,
+        release_deadline: Option<u64>,
+    ) -> Result<u64, Error> {
         // Creating a pooled escrow opens a new deposit target, so the
         // emergency pause gates it like every other creation entry point
         // (docs/adr/0011): while paused no id is consumed and nothing is
@@ -51,6 +80,11 @@ impl EscrowContract {
         }
         if funding_deadline <= env.ledger().timestamp() {
             return Err(Error::InvalidFundingDeadline);
+        }
+        if let Some(rd) = release_deadline {
+            if rd <= funding_deadline {
+                return Err(Error::InvalidReleaseDeadline);
+            }
         }
         if condition_ref.len() > MAX_CONDITION_REF_LEN {
             return Err(Error::ConditionRefTooLong);
@@ -105,8 +139,10 @@ impl EscrowContract {
             &PooledData {
                 funding_target,
                 funding_deadline,
+                release_deadline,
             },
         );
+        Self::extend_escrow_ttl(&env, id, release_deadline);
         Self::publish_state(&env, symbol_short!("created"), id, &data);
         Ok(id)
     }
@@ -223,12 +259,19 @@ impl EscrowContract {
         };
         let pooled = Self::pooled_data(&env, escrow_id)?;
         Self::check_funded(&data)?;
-        if env.ledger().timestamp() < pooled.funding_deadline {
+        let now = env.ledger().timestamp();
+        let funding_failed = now >= pooled.funding_deadline && data.amount < pooled.funding_target;
+        let release_timeout = pooled.release_deadline.is_some_and(|rd| now >= rd);
+
+        if !funding_failed && !release_timeout {
+            if now < pooled.funding_deadline {
+                return Err(Error::RefundNotOpen);
+            }
+            if data.amount >= pooled.funding_target {
+                // The round succeeded and release deadline has not passed: release, don't refund.
+                return Err(Error::FundingTargetReached);
+            }
             return Err(Error::RefundNotOpen);
-        }
-        if data.amount >= pooled.funding_target {
-            // The round succeeded: release, don't refund.
-            return Err(Error::FundingTargetReached);
         }
 
         let mut contribution: Contribution = env

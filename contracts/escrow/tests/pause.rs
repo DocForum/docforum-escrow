@@ -44,6 +44,7 @@ const DEPOSIT_ENTRYPOINTS: &[&str] = &[
     "create_escrows",
     "create_streamed_escrow",
     "create_pooled_escrow",
+    "create_pooled_release_deadline",
     "fund_next",
     "contribute",
     "top_up",
@@ -91,7 +92,10 @@ fn snapshot_function_names() -> std::vec::Vec<&'static str> {
     let snapshot = include_str!("../../../contract-spec.json");
     let functions = snapshot
         .split_once("\"functions\": [")
-        .and_then(|(_, rest)| rest.split_once("],\n  \"errors\""))
+        .and_then(|(_, rest)| {
+            rest.split_once("],\n  \"errors\"")
+                .or_else(|| rest.split_once("],\r\n  \"errors\""))
+        })
         .expect("contract-spec.json must contain a functions section")
         .0;
     functions
