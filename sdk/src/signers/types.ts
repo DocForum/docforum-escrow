@@ -5,19 +5,35 @@
 // `Keypair` is accepted anywhere a `Signer` is, so server users keep working
 // without importing any wallet code.
 import type { Keypair } from "@stellar/stellar-sdk";
-import type { Signer } from "@stellar/stellar-sdk/contract";
+import type { Signer as StellarSigner } from "@stellar/stellar-sdk/contract";
+import { isPluggableSigner, toStellarSigner, type Signer } from "./signer.js";
+
+export {
+  KeypairSigner,
+  RemoteSigner,
+  SignerError,
+  type RemoteSignerOptions,
+  type Signer,
+  type SignerOptions,
+} from "./signer.js";
 
 /**
  * Anything the SDK can use to sign: a local `Keypair` (Node/scripts) or a
  * SEP-43 `Signer` (browser wallets, smart accounts, hardware).
  */
-export type EscrowSigner = Keypair | Signer;
+export type EscrowSigner = Keypair | StellarSigner | Signer;
 
 /** The address an `EscrowSigner` signs as. */
 export function signerAddress(signer: EscrowSigner): string {
+  if (isPluggableSigner(signer)) return signer.publicKey();
   const withAddress = signer as { address?: unknown };
   if (typeof withAddress.address === "string") return withAddress.address;
   return (signer as Keypair).publicKey();
+}
+
+/** @internal Adapt the SDK signer to the generated Stellar contract client. */
+export function contractSigner(signer: EscrowSigner, networkPassphrase: string): Keypair | StellarSigner {
+  return isPluggableSigner(signer) ? toStellarSigner(signer, networkPassphrase) : signer;
 }
 
 /**

@@ -11,8 +11,8 @@
 //! Period escrows already created are independent records and are
 //! unaffected by a cancel.
 
-use crate::*;
 use crate::internal::Funding;
+use crate::*;
 
 #[contractimpl]
 impl EscrowContract {
@@ -163,6 +163,7 @@ impl EscrowContract {
             None,
             true,
             None,
+            false,
             Funding::Allowance,
         )?;
         schedule.periods_funded = schedule

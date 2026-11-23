@@ -37,6 +37,11 @@
       "return": "Result<u64, Error>"
     },
     {
+      "name": "create_escrow_with_uniqueness",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, notify_payee: bool, refund_to: Option<Address>, fee_recipient: Option<Address>, fee_bps: Option<u32>, unique_ref: bool,",
+      "return": "Result<u64, Error>"
+    },
+    {
       "name": "create_escrow_release_time",
       "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, notify_payee: bool, refund_to: Option<Address>, release_not_before: Option<u64>, fee_recipient: Option<Address>, fee_bps: Option<u32>,",
       "return": "Result<u64, Error>"
@@ -127,13 +132,18 @@
       "return": "Result<Option<Contribution>, Error>"
     },
     {
+      "name": "get_unique_escrow",
+      "args": "env: Env, payer: Address, condition_ref: String",
+      "return": "Option<u64>"
+    },
+    {
       "name": "next_escrow_id",
       "args": "env: Env",
       "return": "u64"
     },
     {
       "name": "get_escrows",
-      "args": "env: Env, ids: Vec<u64>,",
+      "args": "env: Env, ids: Vec<u64>",
       "return": "Result<Vec<Option<EscrowData>>, Error>"
     },
     {
@@ -460,6 +470,10 @@
     {
       "name": "InvalidSchedule",
       "code": 59
+    },
+    {
+      "name": "DuplicateConditionRef",
+      "code": 4700
     }
   ]
 }
