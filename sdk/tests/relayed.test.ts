@@ -119,4 +119,44 @@ describe("relayed settlement authorization", () => {
       client.submitRelayed("release", { transaction: "{", expiresAtLedger: 10 }, Keypair.random())
     ).rejects.toThrow(/not valid JSON/);
   });
+
+  it("rejects a rotation authorization whose expiration ledger has passed before submit", async () => {
+    const client = makeClient({
+      contractClient: () => {
+        throw new Error("must not reach the network");
+      },
+      rpc: { getLatestLedger: async () => ({ sequence: 1000 }) },
+    });
+
+    await expect(
+      client.submitRotation(
+        { transaction: JSON.stringify({ method: "rotate_releaser" }), expiresAtLedger: 999 },
+        Keypair.random()
+      )
+    ).rejects.toThrow(/expired/);
+  });
+
+  it("submits a rotation with the submitter's signature only, after both auth entries are present", async () => {
+    const unwrap = vi.fn();
+    const signAndSend = vi.fn(async () => ({
+      result: { unwrap },
+      sendTransactionResponse: { hash: "rot456" },
+    }));
+    const txFromJSON = vi.fn(() => ({ signAndSend }));
+    const client = makeClient({
+      contractClient: () => ({ txFromJSON }),
+      rpc: { getLatestLedger: async () => ({ sequence: 10 }) },
+    });
+    const transaction = JSON.stringify({ method: "rotate_releaser", tx: "envelope" });
+    const submitter = Keypair.random();
+
+    const result = await client.submitRotation(
+      { transaction, expiresAtLedger: 500 },
+      submitter
+    );
+
+    expect(result.txHash).toBe("rot456");
+    expect(txFromJSON).toHaveBeenCalledWith(transaction);
+    expect(signAndSend).toHaveBeenCalledTimes(1);
+  });
 });

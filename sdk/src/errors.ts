@@ -82,6 +82,20 @@ export class NetworkMismatchError extends EscrowError {
   }
 }
 
+/** Thrown when a signed authorization entry has passed its expiration ledger before submission. */
+export class AuthorizationExpiredError extends EscrowError {
+  readonly expirationLedger: number;
+  readonly currentLedger: number;
+  constructor(expirationLedger: number, currentLedger: number, options?: ErrorOptions) {
+    super(
+      `Authorization expired at ledger ${expirationLedger} (current ledger ${currentLedger}); re-prepare the rotation.`,
+      options,
+    );
+    this.expirationLedger = expirationLedger;
+    this.currentLedger = currentLedger;
+  }
+}
+
 const knownContractErrors: Record<number, (message: string, options?: ErrorOptions) => ContractError> = {
   [codeFor("NotFound")]: (message, options) => new NotFoundError(message, options),
   [codeFor("InvalidAmount")]: (message, options) => new InvalidAmountContractError(message, options),

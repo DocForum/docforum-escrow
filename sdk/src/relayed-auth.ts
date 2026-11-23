@@ -24,3 +24,32 @@ export const RELAYED_AUTH_TTL_LEDGERS = 10;
 // ---------------------------------------------------------------------------
 // Prepare / sign / submit (issue #58)
 // ---------------------------------------------------------------------------
+
+/**
+ * Returns true when an auth entry signed for `expiresAtLedger` can no longer
+ * be submitted at `currentLedger`. Auth entries are valid through their
+ * expiration ledger inclusive, so they expire once the current ledger is
+ * strictly greater than `expiresAtLedger`.
+ */
+export function isRelayedAuthExpired(
+  expiresAtLedger: number,
+  currentLedger: number,
+): boolean {
+  return currentLedger > expiresAtLedger;
+}
+
+/**
+ * Throws a clear error if the auth entry has already expired at the given
+ * ledger. Intended to be called before submitting a collected authorization.
+ */
+export function assertRelayedAuthNotExpired(
+  auth: RelayedAuthorization,
+  currentLedger: number,
+): void {
+  if (isRelayedAuthExpired(auth.expiresAtLedger, currentLedger)) {
+    throw new Error(
+      `Authorization expired at ledger ${auth.expiresAtLedger}; current ledger is ${currentLedger}. ` +
+        "Re-prepare the transaction and collect fresh signatures.",
+    );
+  }
+}
