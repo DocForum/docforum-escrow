@@ -350,6 +350,145 @@ jobs:
 
       - run: npm run test:runtime
 
+  sdk-local-integration:
+    name: TypeScript SDK (local Quickstart integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: sdk
+    env:
+      QUICKSTART_IMAGE: stellar/quickstart@sha256:4f8dfd693deba57fddef7f0bc722e4782c2e606c8675e3adc5438cebae249295
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+
+      - name: Restore cached Quickstart image
+        id: quickstart-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/stellar-quickstart.tar
+          key: ${{ runner.os }}-stellar-quickstart-4f8dfd693deba57fddef7f0bc722e4782c2e606c8675e3adc5438cebae249295
+
+      - name: Load or pull Quickstart image
+        run: |
+          set -euo pipefail
+          image_tar="${{ runner.temp }}/stellar-quickstart.tar"
+          if [ -f "$image_tar" ]; then
+            docker load --input "$image_tar"
+          else
+            docker pull "$QUICKSTART_IMAGE"
+            docker save "$QUICKSTART_IMAGE" --output "$image_tar"
+          fi
+
+      - name: Start local Quickstart
+        run: |
+          set -euo pipefail
+          docker run --detach --name stellar \
+            --env NETWORK=local \
+            --env ENABLE_SOROBAN_RPC=true \
+            --publish 8000:8000 \
+            "$QUICKSTART_IMAGE"
+
+      - name: Wait for local Quickstart RPC
+        working-directory: .
+        run: |
+          set -euo pipefail
+          rpc_url="http://localhost:8000/rpc"
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent --show-error -X POST "$rpc_url" \
+              -H 'Content-Type: application/json' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' >/dev/null; then
+              echo "RPC is healthy after ${attempt} attempt(s)."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::local Quickstart RPC did not become healthy"
+          docker logs stellar || true
+          exit 1
+
+      - name: Install Rust toolchain (wasm target)
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: wasm32v1-none
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/target
+          key: ${{ runner.os }}-cargo-local-sdk-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+
+      - name: Build escrow contract WASM
+        working-directory: contracts/escrow
+        run: cargo build --target wasm32v1-none --release
+
+      - name: Install pinned Stellar CLI
+        working-directory: .
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version=//p' scripts/stellar-cli-version)
+          checksum=$(sed -n 's/^linux-x86_64-sha256=//p' scripts/stellar-cli-version)
+          url="https://github.com/stellar/stellar-cli/releases/download/v${version}/stellar-cli-${version}-x86_64-unknown-linux-gnu.tar.gz"
+          curl --fail --silent --show-error --location -o /tmp/stellar-cli.tar.gz "$url"
+          echo "${checksum}  /tmp/stellar-cli.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf /tmp/stellar-cli.tar.gz -C "$HOME/.local/bin"
+          "$HOME/.local/bin/stellar" --version
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Configure local network and deploy contract
+        working-directory: .
+        run: |
+          set -euo pipefail
+          stellar network add escrow-local \
+            --rpc-url "http://localhost:8000/rpc" \
+            --network-passphrase "Standalone Network ; February 2017"
+          stellar keys generate deployer --network escrow-local --overwrite
+          for attempt in $(seq 1 60); do
+            if stellar keys fund deployer --network escrow-local; then break; fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "::error::local Quickstart Friendbot did not fund deployer"
+              exit 1
+            fi
+            sleep 2
+          done
+          stellar contract asset deploy --asset native --source-account deployer \
+            --network escrow-local --alias native-token
+          token_id=$(stellar contract alias show native-token --network escrow-local)
+          stellar contract deploy \
+            --wasm contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm \
+            --source-account deployer --network escrow-local --alias escrow \
+            -- --allowed_tokens '[]' --pause_admin "$(stellar keys public-key deployer)"
+          contract_id=$(stellar contract alias show escrow --network escrow-local)
+          {
+            echo "ESCROW_INTEGRATION_NETWORK=local"
+            echo "STELLAR_RPC_URL=http://localhost:8000/rpc"
+            echo "STELLAR_FRIENDBOT_URL=http://localhost:8000/friendbot"
+            echo "STELLAR_NETWORK_PASSPHRASE=Standalone Network ; February 2017"
+            echo "ESCROW_CONTRACT_ID=$contract_id"
+            echo "ESCROW_TOKEN_ID=$token_id"
+          } >> "$GITHUB_ENV"
+
+      - name: Install SDK dependencies
+        run: npm ci
+
+      - name: Run SDK integration suite against local Quickstart
+        run: npm run test:integration:local
+
+      - name: Stop local Quickstart
+        if: always()
+        working-directory: .
+        run: docker rm --force stellar || true
+
   sdk-docs:
     name: SDK API reference (TypeDoc + missing-doc lint)
     runs-on: ubuntu-latest

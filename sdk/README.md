@@ -210,3 +210,31 @@ await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser 
 ```
 
 The amount helpers are additive and follow strict semver for the SDK. Existing callers that pass raw `bigint` amounts continue to work unchanged.
+
+# Local quickstart integration tests
+
+The live integration suite defaults to Stellar testnet:
+
+```bash
+npm run test:integration
+```
+
+To run the same suite against an ephemeral local network, start a pinned
+Stellar Quickstart node, build and deploy the contract, then provide the
+deployed contract and native-token IDs:
+
+```bash
+docker run --rm -d --name docforum-quickstart -e NETWORK=local -e ENABLE_SOROBAN_RPC=true -p 8000:8000 stellar/quickstart@sha256:4f8dfd693deba57fddef7f0bc722e4782c2e606c8675e3adc5438cebae249295
+scripts/deploy --dry-run --no-record
+ESCROW_INTEGRATION_NETWORK=local \
+  STELLAR_RPC_URL=http://localhost:8000/rpc \
+  STELLAR_NETWORK_PASSPHRASE='Standalone Network ; February 2017' \
+  ESCROW_CONTRACT_ID=<deployed-contract-id> \
+  ESCROW_TOKEN_ID=<native-token-id> \
+  npm run test:integration
+docker rm -f docforum-quickstart
+```
+
+CI uses the same flow after waiting for the RPC health endpoint and deploying
+fresh WASM. The local suite uses Quickstart's local Friendbot and never touches
+Stellar testnet or production funds.

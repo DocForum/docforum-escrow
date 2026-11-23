@@ -28,7 +28,7 @@ import {
   nativeToScVal,
 } from "@stellar/stellar-sdk";
 import {
-  EscrowClient,
+  EscrowClient as BaseEscrowClient,
   EscrowPreconditionError,
   FactoryClient,
   PreparedTransactionExpiredError,
@@ -44,8 +44,31 @@ import { Server as RpcServer } from "@stellar/stellar-sdk/rpc";
 // Newest testnet deployment recorded by scripts/deploy (deployments.json), so
 // a redeploy needs no edit here. Overridable via env to test another instance.
 // Public contract addresses, not secrets.
-const CONTRACT_ID = process.env.TESTNET_CONTRACT_ID ?? knownContractId("testnet");
-const NATIVE_XLM_SAC = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+const IS_LOCAL = process.env.ESCROW_INTEGRATION_NETWORK === "local";
+const RPC_URL = process.env.STELLAR_RPC_URL ??
+  (IS_LOCAL ? "http://localhost:8000/rpc" : "https://soroban-testnet.stellar.org");
+const NETWORK_PASSPHRASE = process.env.STELLAR_NETWORK_PASSPHRASE ??
+  "Test SDF Network ; September 2015";
+const CONTRACT_ID = process.env.ESCROW_CONTRACT_ID ?? process.env.TESTNET_CONTRACT_ID ?? knownContractId("testnet");
+const NATIVE_XLM_SAC = process.env.ESCROW_TOKEN_ID ?? "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+const FRIENDBOT_URL = process.env.STELLAR_FRIENDBOT_URL ??
+  (IS_LOCAL ? "http://localhost:8000/friendbot" : "https://friendbot.stellar.org");
+
+class EscrowClient extends BaseEscrowClient {
+  constructor(config: ConstructorParameters<typeof BaseEscrowClient>[0]) {
+    super({
+      ...config,
+      ...(IS_LOCAL
+        ? {
+            rpcUrl: RPC_URL,
+            networkPassphrase: NETWORK_PASSPHRASE,
+            allowHttp: true,
+            verifyNetwork: true,
+          }
+        : {}),
+    });
+  }
+}
 // Phase E6 factory contract deployed on testnet alongside the
 // instance contract above. Overridable via env for forks that deploy
 // their own factory. Public contract address, not a secret.
@@ -54,14 +77,14 @@ const NATIVE_XLM_SAC = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
 const FACTORY_ID = process.env.TESTNET_FACTORY_ID ?? "CBCYSOQ3HKYQDHLSHTFNIAA7X2NUGJVYOCN24DCVT46VG4YI6DMNARMD";
 // The repo ships no factory contract, so the live factory suites only run when
 // a factory is actually deployed and TESTNET_FACTORY_ID points at it.
-const describeFactory = process.env.TESTNET_FACTORY_ID ? describe : describe.skip;
+const describeFactory = process.env.TESTNET_FACTORY_ID && !IS_LOCAL ? describe : describe.skip;
 
 // The 2026-10-24 testnet deployment, which predates `version()`.
 const LEGACY_CONTRACT_ID = "CDX2JEMA5SO7GZVXDNGDDB35GPV43J7BUTYYH77ALAT72S65GOW5KNEO";
 
 async function fundedKeypair(): Promise<Keypair> {
   const kp = Keypair.random();
-  const url = `https://friendbot.stellar.org?addr=${encodeURIComponent(kp.publicKey())}`;
+  const url = `${FRIENDBOT_URL}?addr=${encodeURIComponent(kp.publicKey())}`;
   // Friendbot is rate-limited independently of the test assertions. Retry
   // only transient funding/network failures; transaction and assertion
   // failures are never retried.
@@ -88,7 +111,7 @@ async function fundedKeypair(): Promise<Keypair> {
 // take over a minute on a slow night. This applies to this file only.
 vi.setConfig({ testTimeout: 120_000 });
 
-describe("EscrowClient against live testnet", () => {
+describe(`EscrowClient against live ${IS_LOCAL ? "local quickstart" : "testnet"}`, () => {
   it("creates, funds, and releases an escrow end-to-end", async () => {
     const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
     const client = new EscrowClient({ contractId: CONTRACT_ID });
@@ -116,7 +139,7 @@ describe("EscrowClient against live testnet", () => {
     await expect(client.verifyContractVersion()).resolves.toBeUndefined();
   }, 60_000);
 
-  it("reports an older deployment with no version() as null", async () => {
+  it.skipIf(IS_LOCAL)("reports an older deployment with no version() as null", async () => {
     const client = new EscrowClient({ contractId: LEGACY_CONTRACT_ID });
     expect(await client.getContractVersion()).toBeNull();
     await expect(client.verifyContractVersion()).rejects.toBeInstanceOf(UnsupportedContractVersionError);
@@ -521,11 +544,11 @@ describe("Prepare / sign / submit against live testnet (issue #58)", () => {
 });
 
 describe("Offline release and refund against live testnet (issue #59)", () => {
-  const PASSPHRASE = "Test SDF Network ; September 2015";
+  const PASSPHRASE = NETWORK_PASSPHRASE;
 
   /** A funded classic account whose three signers have weight 1 and thresholds of 2. */
   async function twoOfThree(): Promise<{ account: Keypair; signers: Keypair[] }> {
-    const rpc = new RpcServer("https://soroban-testnet.stellar.org");
+    const rpc = new RpcServer(RPC_URL);
     const account = await fundedKeypair();
     const signers = [Keypair.random(), Keypair.random(), Keypair.random()];
     let builder = new TransactionBuilder(await rpc.getAccount(account.publicKey()), {
@@ -606,7 +629,7 @@ describe("Offline release and refund against live testnet (issue #59)", () => {
     const signedXdr = signCopy(prepared.xdr, releaser);
 
     // Any other transaction from the source account invalidates the prepared one.
-    const rpc = new RpcServer("https://soroban-testnet.stellar.org");
+    const rpc = new RpcServer(RPC_URL);
     const bump = new TransactionBuilder(await rpc.getAccount(releaser.publicKey()), {
       fee: BASE_FEE,
       networkPassphrase: PASSPHRASE,
