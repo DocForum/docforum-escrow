@@ -38,8 +38,8 @@ import {
   type InstrumentationOptions,
 } from "./instrumentation.js";
 import type { FactoryClient as FactoryClientType } from "./factory.js";
-import { signerAddress, type EscrowSigner } from "./signers/types.js";
-import { ContractError, NetworkMismatchError, NotFundedError, toEscrowError } from "./errors.js";
+import { contractSigner, signerAddress, type EscrowSigner } from "./signers/types.js";
+import { NetworkMismatchError, toEscrowError } from "./errors.js";
 import { getTokenInfo as readTokenInfo, rpcTokenInfoSource, type TokenInfo } from "./amounts.js";
 import {
   PreparedTransactionExpiredError,
@@ -78,7 +78,16 @@ export {
   type TokenInfoSource,
   type TokenInfoSourceOptions,
 } from "./amounts.js";
-export { signerAddress, type EscrowSigner } from "./signers/types.js";
+export {
+  KeypairSigner,
+  RemoteSigner,
+  SignerError,
+  signerAddress,
+  type EscrowSigner,
+  type RemoteSignerOptions,
+  type Signer,
+  type SignerOptions,
+} from "./signers/types.js";
 export {
   BalanceMismatchError,
   ContractError,
@@ -409,7 +418,10 @@ export class EscrowClient {
       networkPassphrase: this.networkPassphrase,
       allowHttp: this.allowHttp,
       ...(effectiveSigner
-        ? { publicKey: signerAddress(effectiveSigner), signTransaction: effectiveSigner }
+        ? {
+            publicKey: signerAddress(effectiveSigner),
+            signTransaction: contractSigner(effectiveSigner, this.networkPassphrase),
+          }
         : {}),
     });
   }
@@ -1208,7 +1220,10 @@ export class EscrowClient {
     }
     const client = this.contractClientForAddress(prepared.source);
     const tx = client.txFromJSON<Result<void>>(prepared.transaction);
-    await tx.signAuthEntries({ signAuthEntry: signer, expiration: prepared.expiresAtLedger });
+    await tx.signAuthEntries({
+      signAuthEntry: contractSigner(signer, this.networkPassphrase),
+      expiration: prepared.expiresAtLedger,
+    });
     return {
       ...prepared,
       transaction: tx.toJSON(),
@@ -1983,7 +1998,7 @@ export class EscrowClient {
     // its own auth; only the releaser's separate auth entry needs signing here.
     if (tx.needsNonInvokerSigningBy().includes(params.releaser.publicKey())) {
       await tx.signAuthEntries({
-        signAuthEntry: params.releaser,
+        signAuthEntry: contractSigner(params.releaser, this.networkPassphrase),
         expiration: expiresAtLedger,
       });
     }
@@ -2217,7 +2232,7 @@ export class EscrowClient {
           // Every non-invoker approver signs the contract auth entry. This is
           // part of the "sign" phase, so one span covers all signatures.
           for (const signer of additionalSigners) {
-            await tx.signAuthEntries({ signAuthEntry: signer });
+            await tx.signAuthEntries({ signAuthEntry: contractSigner(signer, this.networkPassphrase) });
           }
         },
       },
@@ -2292,7 +2307,9 @@ export class EscrowClient {
             throw new Error(`extend_refund_after needs authorization from ${unknown.join(", ")}, which is neither the payer nor the releaser.`);
           }
           if (pending.includes(releaser)) {
-            await tx.signAuthEntries({ signAuthEntry: params.releaser });
+            await tx.signAuthEntries({
+              signAuthEntry: contractSigner(params.releaser, this.networkPassphrase),
+            });
           }
         },
       },
