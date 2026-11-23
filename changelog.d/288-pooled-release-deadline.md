@@ -1,0 +1,1 @@
+Issue #288 (Phase E5): added `create_pooled_release_deadline` to create pooled escrows with an optional `release_deadline`. If a fully funded pool's releaser key is lost or fails to release by the deadline, contributors may recover their funds via `claim_refund`, ensuring pools cannot be permanently locked.

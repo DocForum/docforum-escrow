@@ -903,3 +903,220 @@ fn create_pooled_escrow_accepts_a_condition_ref_at_the_length_limit() {
 
     assert_eq!(f.client.get_status(&id), EscrowStatus::Funded);
 }
+
+fn setup_with_release_deadline(env: &Env, target: i128, release_deadline: Option<u64>) -> Fixture<'_> {
+    env.mock_all_auths();
+    env.ledger().set_timestamp(CREATED_AT);
+
+    let token_id = env
+        .register_stellar_asset_contract_v2(Address::generate(env))
+        .address();
+    let token = TokenClient::new(env, &token_id);
+    let asset = StellarAssetClient::new(env, &token_id);
+    let creator = Address::generate(env);
+    let payee = Address::generate(env);
+    let releaser = Address::generate(env);
+
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
+    let client = EscrowContractClient::new(env, &contract_id);
+    let id = client.create_pooled_release_deadline(
+        &creator,
+        &payee,
+        &token_id,
+        &target,
+        &String::from_str(env, "pooled-condition"),
+        &releaser,
+        &DEADLINE,
+        &release_deadline,
+    );
+    Fixture {
+        client,
+        token,
+        asset,
+        contract_id,
+        creator,
+        payee,
+        releaser,
+        id,
+    }
+}
+
+#[test]
+fn release_deadline_must_be_strictly_after_funding_deadline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(CREATED_AT);
+
+    let token_id = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
+    let creator = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // release_deadline == funding_deadline is rejected
+    let res_equal = client.try_create_pooled_release_deadline(
+        &creator,
+        &payee,
+        &token_id,
+        &100,
+        &String::from_str(&env, "pooled-condition"),
+        &releaser,
+        &DEADLINE,
+        &Some(DEADLINE),
+    );
+    assert_eq!(res_equal, Err(Ok(Error::InvalidReleaseDeadline)));
+
+    // release_deadline < funding_deadline is rejected
+    let res_earlier = client.try_create_pooled_release_deadline(
+        &creator,
+        &payee,
+        &token_id,
+        &100,
+        &String::from_str(&env, "pooled-condition"),
+        &releaser,
+        &DEADLINE,
+        &Some(DEADLINE - 10),
+    );
+    assert_eq!(res_earlier, Err(Ok(Error::InvalidReleaseDeadline)));
+
+    // release_deadline > funding_deadline succeeds
+    let id = client.create_pooled_release_deadline(
+        &creator,
+        &payee,
+        &token_id,
+        &100,
+        &String::from_str(&env, "pooled-condition"),
+        &releaser,
+        &DEADLINE,
+        &Some(DEADLINE + 500),
+    );
+    let pooled = client.get_pooled(&id);
+    assert_eq!(pooled.release_deadline, Some(DEADLINE + 500));
+}
+
+#[test]
+fn fully_funded_pool_releases_normally_before_release_deadline() {
+    let env = Env::default();
+    let release_deadline = DEADLINE + 500;
+    let f = setup_with_release_deadline(&env, 100, Some(release_deadline));
+    let a = contributor(&f, &env, 60);
+    let b = contributor(&f, &env, 40);
+
+    f.client.contribute(&f.id, &a, &60);
+    f.client.contribute(&f.id, &b, &40);
+
+    // Advance past funding deadline, but before release deadline
+    env.ledger().set_timestamp(DEADLINE + 100);
+
+    // Releaser releases before release deadline
+    f.client.release(&f.id, &f.releaser);
+
+    assert_eq!(f.client.get_status(&f.id), EscrowStatus::Released);
+    assert_eq!(f.token.balance(&f.payee), 100);
+}
+
+#[test]
+fn fully_funded_pool_claims_open_after_release_deadline() {
+    let env = Env::default();
+    let release_deadline = DEADLINE + 500;
+    let f = setup_with_release_deadline(&env, 100, Some(release_deadline));
+    let a = contributor(&f, &env, 60);
+    let b = contributor(&f, &env, 40);
+
+    f.client.contribute(&f.id, &a, &60);
+    f.client.contribute(&f.id, &b, &40);
+
+    // Before release deadline, claim is blocked because target is met
+    env.ledger().set_timestamp(DEADLINE + 100);
+    let err_before = f.client.try_claim_refund(&f.id, &a);
+    assert_eq!(err_before, Err(Ok(Error::FundingTargetReached)));
+
+    // Advance past release deadline: lost releaser key recovery
+    env.ledger().set_timestamp(release_deadline);
+
+    // Claims are now open to each contributor
+    f.client.claim_refund(&f.id, &a);
+    assert_eq!(f.token.balance(&a), 60);
+
+    f.client.claim_refund(&f.id, &b);
+    assert_eq!(f.token.balance(&b), 40);
+
+    // Escrow amount is 0 and solvency is strictly preserved
+    assert_eq!(f.client.get_status(&f.id), EscrowStatus::Refunded);
+    assert!(f.client.try_get_escrow(&f.id).is_err());
+    let (bal, liab) = f.client.solvency(&f.token.address);
+    assert_eq!(bal, 0);
+    assert_eq!(liab, 0);
+}
+
+#[test]
+fn claim_after_release_deadline_blocks_subsequent_release() {
+    let env = Env::default();
+    let release_deadline = DEADLINE + 500;
+    let f = setup_with_release_deadline(&env, 100, Some(release_deadline));
+    let a = contributor(&f, &env, 60);
+    let b = contributor(&f, &env, 40);
+
+    f.client.contribute(&f.id, &a, &60);
+    f.client.contribute(&f.id, &b, &40);
+
+    // Advance to release deadline
+    env.ledger().set_timestamp(release_deadline);
+
+    // Contributor a claims refund first
+    f.client.claim_refund(&f.id, &a);
+    assert_eq!(f.token.balance(&a), 60);
+
+    // Subsequent release attempt fails because pool is partly drained
+    let rel_err = f.client.try_release(&f.id, &f.releaser);
+    assert_eq!(rel_err, Err(Ok(Error::FundingIncomplete)));
+    assert_eq!(f.token.balance(&f.payee), 0);
+}
+
+#[test]
+fn release_wins_over_claim_at_boundary() {
+    let env = Env::default();
+    let release_deadline = DEADLINE + 500;
+    let f = setup_with_release_deadline(&env, 100, Some(release_deadline));
+    let a = contributor(&f, &env, 100);
+    f.client.contribute(&f.id, &a, &100);
+
+    // Exactly at release deadline, release lands first
+    env.ledger().set_timestamp(release_deadline);
+    f.client.release(&f.id, &f.releaser);
+
+    assert_eq!(f.client.get_status(&f.id), EscrowStatus::Released);
+    assert_eq!(f.token.balance(&f.payee), 100);
+
+    // Claim refund after release fails NotFunded
+    let claim_err = f.client.try_claim_refund(&f.id, &a);
+    assert_eq!(claim_err, Err(Ok(Error::NotFunded)));
+}
+
+#[test]
+fn pooled_escrow_without_deadline_keeps_existing_behavior() {
+    let env = Env::default();
+    let f = setup(&env, 100);
+    let a = contributor(&f, &env, 100);
+    f.client.contribute(&f.id, &a, &100);
+
+    // Much later in time, with no release deadline set, claims stay blocked
+    env.ledger().set_timestamp(DEADLINE + 10_000);
+    let claim_err = f.client.try_claim_refund(&f.id, &a);
+    assert_eq!(claim_err, Err(Ok(Error::FundingTargetReached)));
+
+    // Releaser can release normally
+    f.client.release(&f.id, &f.releaser);
+    assert_eq!(f.client.get_status(&f.id), EscrowStatus::Released);
+    assert_eq!(f.token.balance(&f.payee), 100);
+}
