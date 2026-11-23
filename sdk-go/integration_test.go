@@ -464,14 +464,17 @@ func TestIntegrationBatchCreateAndSettle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The payees are fresh addresses, so each payout must cover the SAC's
+	// 1 XLM minimum for creating the destination account — below it the
+	// release transfer fails and the whole batch reverts as Undeliverable.
 	payees := []string{keypair.MustRandom().Address(), keypair.MustRandom().Address()}
 	refundAfter := uint64(time.Now().Unix()) + 3_600
 
 	created, err := client.CreateEscrows(ctx, escrow.CreateEscrowsParams{
 		Payer: payer.Address(),
 		Items: []escrow.CreateItem{
-			{Payee: payees[0], Token: os.Getenv("ESCROW_TOKEN_ID"), Amount: big.NewInt(1_000_000), ConditionRef: fmt.Sprintf("go-sdk-batch-a-%d", time.Now().UnixNano()), Releaser: payer.Address()},
-			{Payee: payees[1], Token: os.Getenv("ESCROW_TOKEN_ID"), Amount: big.NewInt(2_000_000), ConditionRef: fmt.Sprintf("go-sdk-batch-b-%d", time.Now().UnixNano()), Releaser: payer.Address(), RefundAfter: &refundAfter},
+			{Payee: payees[0], Token: os.Getenv("ESCROW_TOKEN_ID"), Amount: big.NewInt(10_000_000), ConditionRef: fmt.Sprintf("go-sdk-batch-a-%d", time.Now().UnixNano()), Releaser: payer.Address()},
+			{Payee: payees[1], Token: os.Getenv("ESCROW_TOKEN_ID"), Amount: big.NewInt(20_000_000), ConditionRef: fmt.Sprintf("go-sdk-batch-b-%d", time.Now().UnixNano()), Releaser: payer.Address(), RefundAfter: &refundAfter},
 		},
 	})
 	if err != nil {
@@ -479,6 +482,27 @@ func TestIntegrationBatchCreateAndSettle(t *testing.T) {
 	}
 	if len(created.EscrowIDs) != 2 || len(created.TxHashes) != 1 {
 		t.Fatalf("create result = %d ids / %d tx hashes, want 2/1", len(created.EscrowIDs), len(created.TxHashes))
+	}
+	// The batch's CreateItem maps reach the contract as written: same order
+	// as the input, with refund_after carrying the option.
+	for i, want := range []struct {
+		payee    string
+		amount   int64
+		refunded bool
+	}{
+		{payee: payees[0], amount: 10_000_000},
+		{payee: payees[1], amount: 20_000_000, refunded: true},
+	} {
+		stored, err := client.GetEscrow(ctx, created.EscrowIDs[i])
+		if err != nil {
+			t.Fatalf("get escrow %d: %v", i, err)
+		}
+		if stored.Payee != want.payee || stored.Amount.Cmp(big.NewInt(want.amount)) != 0 {
+			t.Fatalf("escrow %d stored %s/%s, want %s/%d", i, stored.Payee, stored.Amount, want.payee, want.amount)
+		}
+		if (stored.RefundAfter != nil) != want.refunded {
+			t.Fatalf("escrow %d refund_after = %v, want set = %t", i, stored.RefundAfter, want.refunded)
+		}
 	}
 
 	settled, err := client.SettleMany(ctx, []escrow.SettleOp{
