@@ -4,13 +4,15 @@
  * never imports the wallet package and runs in CI without a browser.
  */
 import { describe, expect, it, vi } from "vitest";
-import { Keypair } from "@stellar/stellar-sdk";
+import { Account, Keypair, TransactionBuilder } from "@stellar/stellar-sdk";
 import { signerAddress } from "../src/signers/types.js";
 import {
   WalletsKitSigner,
   type WalletsKitLike,
 } from "../src/signers/wallets-kit.js";
 import {
+  KeypairSigner,
+  RemoteSigner,
   WALLET_USER_REJECTED,
   WalletNetworkMismatchError,
   WalletSigningUnsupportedError,
@@ -174,5 +176,44 @@ describe("WalletsKitSigner", () => {
   it("works with a local Keypair through the shared address helper", () => {
     const keypair = Keypair.random();
     expect(signerAddress(keypair)).toBe(keypair.publicKey());
+  });
+});
+
+describe("pluggable signers", () => {
+  it("signs an envelope with KeypairSigner and passes the network", async () => {
+    const keypair = Keypair.random();
+    const signer = new KeypairSigner(keypair, TESTNET);
+    const transaction = new TransactionBuilder(new Account(keypair.publicKey(), "1"), {
+      fee: "100",
+      networkPassphrase: TESTNET,
+    }).setTimeout(30).build();
+
+    const signed = await signer.signTransaction(transaction.toXDR(), {
+      networkPassphrase: TESTNET,
+      address: keypair.publicKey(),
+    });
+
+    expect(TransactionBuilder.fromXDR(signed, TESTNET).signatures).toHaveLength(1);
+  });
+
+  it("uses a remote signer without exposing a secret key", async () => {
+    const request = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        kind: "transaction",
+        networkPassphrase: TESTNET,
+      });
+      return new Response(JSON.stringify({ signedXdr: "signed-envelope" }), { status: 200 });
+    });
+    const signer = new RemoteSigner({
+      url: "https://signer.example.test/sign",
+      publicKey: Keypair.random().publicKey(),
+      fetch: request,
+    });
+
+    await expect(signer.signTransaction("unsigned-envelope", {
+      networkPassphrase: TESTNET,
+      address: signer.publicKey(),
+    })).resolves.toBe("signed-envelope");
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });

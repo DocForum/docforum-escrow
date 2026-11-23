@@ -24,6 +24,8 @@ create_escrow_with_acceptance(..., requires_acceptance, refund_to) -> escrow_id 
 accept(escrow_id, payee) -> ()   // payee-authorized, one-time acceptance before release; deployed on testnet
 cancel(escrow_id, payer) -> ()   // payer-authorized, only while Funded + requires_acceptance + not yet accepted; funds to refund_to, status Cancelled (ADR 0010); not deployed yet
 create_escrow_with_releasers(payer, payee, token, amount, condition_ref, releasers, threshold, refund_after, notify_payee, refund_to) -> escrow_id // IMPLEMENTED (Phase E5, issue #119, ADR 0007) — M-of-N, deployed on testnet
+create_escrow_with_attester(payer, payee, token, amount, condition_ref, releaser, refund_after, notify_payee, refund_to, attester) -> escrow_id // Phase E5, issue #42 — like create_escrow, plus an optional ed25519 attester key
+release_with_attestation(escrow_id, signature) -> () // Phase E5, issue #42 — releases on a signed off-chain attestation; anyone may submit, the signature is the authority
 get_status(escrow_id) -> EscrowStatus  // enum: Funded | Released | Refunded | Cancelled — IMPLEMENTED + LIVE ON TESTNET (Phase E1); also answers for settled ids from the `Status` entry that outlives the record (ADR 0013)
 get_escrow(escrow_id) -> EscrowData    // read-only, Funded escrows only (NotFound once settled, ADR 0013): payer, payee, token, amount, condition_ref, status, releasers, threshold, refund_after, refund_to, fee_recipient, fee_bps — IMPLEMENTED (Phase E4 + E5; `releaser` became `releasers`+`threshold` in #119)
 release(escrow_id, caller) -> result   // IMPLEMENTED (Phase E2) — a releaser, threshold must be 1, only while Funded
@@ -41,6 +43,10 @@ get_pooled(escrow_id) -> PooledData  // read-only: funding_target, funding_deadl
 get_contribution(escrow_id, contributor) -> Option<Contribution> // read-only: one contributor's record (amount, refunded); None if never contributed
 rotate_releaser(escrow_id, caller, new_releaser) -> result // IMPLEMENTED (issue #23) — single-releaser escrow only; current releaser and payer authorize; funded only
 solvency(token) -> (balance, liabilities) // IMPLEMENTED (Phase E5, issue #39) — read-only; liabilities = sum of `amount` over Funded escrows in `token`, kept in persistent `Liability(token)` (TTL re-extended on every write) and updated in the same invocation as every create/top_up/contribute (+) and release/refund/cancel/claim_refund (−); not deployed on testnet yet
+create_schedule(payer, payee, token, amount, condition_ref, releaser, refund_after_seconds, period_seconds, total_periods, first_due) -> schedule_id // IMPLEMENTED (Phase E5, issue #115, ADR 0015) — recurring escrows funded through SEP-41 allowances; payer authorizes once, any keeper funds due periods; payer may cancel
+fund_next(schedule_id) -> escrow_id // IMPLEMENTED (Phase E5, issue #115) — keeper-triggered; pulls exactly one period amount with transfer_from under the payer's allowance and creates a normal escrow; fails early, on exhaustion, or when complete/cancelled
+cancel_schedule(schedule_id, payer) -> () // IMPLEMENTED (Phase E5, issue #115) — payer only; period escrows already created are unaffected
+get_schedule(schedule_id) -> RecurringSchedule // read-only schedule record
 ```
 
 ## Events
@@ -385,7 +391,7 @@ UI components or styling. It depends on TanStack Query v5 as a peer and
 requires `EscrowProvider` (client) inside the app's `QueryClientProvider`.
 
 - `useEscrow(id)` polls `getEscrow` and stops at terminal statuses
-  (`Released`/`Refunded`).
+  (`Released`/`Refunded`/`Cancelled`).
 - `useEscrowActions(signer)` wraps creation/settlement, invalidates the
   matching query, and returns user rejection as `{ status: "rejected" }`.
 - `useEscrowTimeline(escrow)` counts down to `refundAfter`. Documented caveat:

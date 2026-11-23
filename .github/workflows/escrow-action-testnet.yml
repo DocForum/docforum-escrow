@@ -1,0 +1,40 @@
+name: Escrow action testnet example
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: create, release, refund, or status
+        required: true
+        default: status
+      escrow_id:
+        description: Existing escrow id for status/release/refund
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  escrow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install SDK dependencies
+        run: npm --prefix sdk ci
+      - name: Install and build the action
+        run: npm --prefix action ci && npm --prefix action run build
+      - name: Run escrow action on testnet
+        uses: ./action
+        with:
+          mode: ${{ inputs.mode }}
+          contract-id: CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H
+          escrow-id: ${{ inputs.escrow_id }}
+          signer-secret: ${{ secrets.STELLAR_TESTNET_SECRET }}
+          payee: ${{ vars.ESCROW_PAYEE }}
+          token: CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
+          amount: ${{ vars.ESCROW_AMOUNT }}
+          condition-ref: github:${{ github.repository }}:${{ github.run_id }}
+          releaser: ${{ vars.ESCROW_RELEASER }}

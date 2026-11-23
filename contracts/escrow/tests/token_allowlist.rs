@@ -80,10 +80,7 @@ fn get_allowed_tokens_returns_the_configured_list_in_order() {
     allowlist.push_back(allowed_a.clone());
     allowlist.push_back(allowed_b.clone());
 
-    let contract_id = env.register(
-        EscrowContract,
-        (allowlist.clone(), Address::generate(&env)),
-    );
+    let contract_id = env.register(EscrowContract, (allowlist.clone(), Address::generate(&env)));
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Integrators read this on-chain instead of trusting deployment notes;
