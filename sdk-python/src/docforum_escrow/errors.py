@@ -149,11 +149,11 @@ CONTRACT_ERROR_NAMES: dict[int, str] = {
     52: "InvalidSettlementAmount",
     53: "SettlementNotSupported",
     54: "AttesterNotConfigured",
-    11500: "ScheduleTooEarly",
-    11501: "ScheduleComplete",
-    11502: "ScheduleCancelled",
-    11503: "AllowanceExhausted",
-    11504: "InvalidSchedule",
+    55: "ScheduleTooEarly",
+    56: "ScheduleComplete",
+    57: "ScheduleCancelled",
+    58: "AllowanceExhausted",
+    59: "InvalidSchedule",
 }
 
 
@@ -586,37 +586,37 @@ class AttesterNotConfiguredError(ContractError):
 
 
 class ScheduleTooEarlyError(ContractError):
-    """Contract error 11500: ``ScheduleTooEarly``."""
+    """Contract error 55: ``ScheduleTooEarly``."""
 
-    code = 11500
+    code = 55
     contract_error = "ScheduleTooEarly"
 
 
 class ScheduleCompleteError(ContractError):
-    """Contract error 11501: ``ScheduleComplete``."""
+    """Contract error 56: ``ScheduleComplete``."""
 
-    code = 11501
+    code = 56
     contract_error = "ScheduleComplete"
 
 
 class ScheduleCancelledError(ContractError):
-    """Contract error 11502: ``ScheduleCancelled``."""
+    """Contract error 57: ``ScheduleCancelled``."""
 
-    code = 11502
+    code = 57
     contract_error = "ScheduleCancelled"
 
 
 class AllowanceExhaustedError(ContractError):
-    """Contract error 11503: ``AllowanceExhausted``."""
+    """Contract error 58: ``AllowanceExhausted``."""
 
-    code = 11503
+    code = 58
     contract_error = "AllowanceExhausted"
 
 
 class InvalidScheduleError(ContractError):
-    """Contract error 11504: ``InvalidSchedule``."""
+    """Contract error 59: ``InvalidSchedule``."""
 
-    code = 11504
+    code = 59
     contract_error = "InvalidSchedule"
 
 

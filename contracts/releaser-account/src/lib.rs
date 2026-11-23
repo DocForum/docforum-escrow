@@ -284,22 +284,38 @@ fn authorize_context(env: &Env, escrow: &Address, contexts: &Vec<Context>) -> Re
 
     let is_release = context.fn_name == Symbol::new(env, "release");
     let is_refund = context.fn_name == Symbol::new(env, "refund");
+    let is_release_with_approvals = context.fn_name == Symbol::new(env, "release_with_approvals");
+    let is_refund_with_approvals = context.fn_name == Symbol::new(env, "refund_with_approvals");
     let is_rotate = context.fn_name == Symbol::new(env, "rotate_releaser");
-    let is_settle_many = context.fn_name == Symbol::new(env, "settle_many");
-
-    if (is_release || is_refund) && context.args.len() == 2 {
-        let caller_val = context.args.get(1).unwrap();
-        let is_self = Address::try_from_val(env, &caller_val)
-            .map(|caller| caller == env.current_contract_address())
-            .unwrap_or(false);
-        if !is_self {
+    if context.contract != *escrow {
+        return Err(Error::UnauthorizedContext);
+    }
+    if is_release_with_approvals || is_refund_with_approvals {
+        if context.args.len() != 2 {
             return Err(Error::UnauthorizedContext);
         }
-        return Ok(1);
+        let Some(approvers_val) = context.args.get(1) else {
+            return Err(Error::UnauthorizedContext);
+        };
+        let Ok(approvers) = Vec::<Address>::try_from_val(env, &approvers_val) else {
+            return Err(Error::UnauthorizedContext);
+        };
+        return if approvers
+            .iter()
+            .any(|approver| approver == env.current_contract_address())
+        {
+            Ok(1)
+        } else {
+            Err(Error::UnauthorizedContext)
+        };
     }
+    let is_settle_many = context.fn_name == Symbol::new(env, "settle_many");
 
-    if is_rotate && context.args.len() == 3 {
-        let caller_val = context.args.get(1).unwrap();
+    if (is_release || is_refund || is_rotate) && context.args.len() == if is_rotate { 3 } else { 2 }
+    {
+        let Some(caller_val) = context.args.get(1) else {
+            return Err(Error::UnauthorizedContext);
+        };
         let is_self = Address::try_from_val(env, &caller_val)
             .map(|caller| caller == env.current_contract_address())
             .unwrap_or(false);
@@ -310,14 +326,18 @@ fn authorize_context(env: &Env, escrow: &Address, contexts: &Vec<Context>) -> Re
     }
 
     if is_settle_many && context.args.len() == 2 {
-        let caller_val = context.args.get(0).unwrap();
+        let Some(caller_val) = context.args.get(0) else {
+            return Err(Error::UnauthorizedContext);
+        };
         let is_self = Address::try_from_val(env, &caller_val)
             .map(|caller| caller == env.current_contract_address())
             .unwrap_or(false);
         if !is_self {
             return Err(Error::UnauthorizedContext);
         }
-        let ops_val = context.args.get(1).unwrap();
+        let Some(ops_val) = context.args.get(1) else {
+            return Err(Error::UnauthorizedContext);
+        };
         let Ok(ops) = Vec::<(u64, SettleAction)>::try_from_val(env, &ops_val) else {
             return Err(Error::UnauthorizedContext);
         };
@@ -330,6 +350,7 @@ fn authorize_context(env: &Env, escrow: &Address, contexts: &Vec<Context>) -> Re
     Err(Error::UnauthorizedContext)
 }
 
+#[cfg(test)]
 fn escrow_operation_only(env: &Env, escrow: &Address, contexts: &Vec<Context>) -> bool {
     authorize_context(env, escrow, contexts).is_ok()
 }
@@ -396,6 +417,7 @@ fn consume_operation_slots(env: &Env, count: u32) -> Result<(), Error> {
     Ok(())
 }
 
+#[cfg(test)]
 fn consume_operation_slot(env: &Env) -> Result<(), Error> {
     consume_operation_slots(env, 1)
 }
