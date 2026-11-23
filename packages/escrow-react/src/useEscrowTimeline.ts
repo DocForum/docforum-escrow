@@ -31,7 +31,7 @@ export interface EscrowTimeline {
   expired: boolean;
   /** The escrow's stored status, if known. */
   status?: EscrowStatus;
-  /** `Released`/`Refunded` — the countdown no longer matters. */
+  /** `Released`/`Refunded`/`Cancelled` — the countdown no longer matters. */
   isTerminal: boolean;
   /** Whether the escrow has a deadline at all. */
   hasDeadline: boolean;
@@ -41,7 +41,7 @@ export interface EscrowTimeline {
  * Countdown to an escrow's `refundAfter` deadline, derived from a fetched
  * escrow. It renders nothing and fetches nothing: pass the result of
  * `useEscrow(id)` and the hook re-renders once per tick until the deadline or
- * a terminal status is reached.
+ * a terminal status (`Released`, `Refunded`, `Cancelled`) is reached.
  *
  * ```tsx
  * const { data } = useEscrow(id);
