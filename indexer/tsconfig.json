@@ -10,11 +10,5 @@
     "outDir": "dist",
     "types": ["node"]
   },
-  "ts-node": {
-    "transpileOnly": true,
-    "moduleTypes": {
-      "**/*.ts": "cjs"
-    }
-  },
   "include": ["src/**/*.ts"]
 }

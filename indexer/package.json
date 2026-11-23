@@ -2,7 +2,6 @@
   "name": "@docforum/escrow-indexer",
   "private": true,
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/network.test.mjs",
     "codegen": "subql codegen",
     "build": "subql build",
     "test": "vitest run",

@@ -27,16 +27,16 @@ jobs:
         run: node scripts/check-sdk-constants.mjs
 
   config-guards:
-    name: Indexer and verifier configuration guards
+    name: Verifier configuration guards
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # Node 22 strips TypeScript types, so the indexer config test exercises
-      # the same module project.ts imports without installing SubQuery deps.
-      - run: node --experimental-strip-types --test indexer/tests/network.test.mjs
+      # No install step: the verifier test uses a stubbed Stellar CLI and this
+      # script's own copy of build-wasm.sh. The indexer's network tests run in
+      # the `indexer` job through vitest.
       - run: node --test scripts/verify-deployment.test.mjs
 
   contract-fuzz:
