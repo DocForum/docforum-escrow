@@ -81,10 +81,36 @@ func scvSymbol(s string) xdr.ScVal {
 	return val
 }
 
-// scvStatus encodes an EscrowStatus the way the contract's unit enum is
-// represented in Soroban: a one-element vec holding the variant name.
+// scvEnumVariant encodes one variant of a unit-only contract enum the way
+// Soroban represents it: a one-element vec holding the variant name, e.g.
+// ScvVec([ScvSymbol("Funded")]), never a bare integer.
+func scvEnumVariant(name string) xdr.ScVal {
+	return scvVec([]xdr.ScVal{scvSymbol(name)})
+}
+
+// scvStatus encodes an EscrowStatus as a contract enum variant.
 func scvStatus(s EscrowStatus) xdr.ScVal {
-	return scvVec([]xdr.ScVal{scvSymbol(s.String())})
+	return scvEnumVariant(s.String())
+}
+
+// scvSettleAction encodes one SettleAction for settle_many's ops vec.
+func scvSettleAction(action SettleAction) (xdr.ScVal, error) {
+	if !action.IsValid() {
+		return xdr.ScVal{}, fmt.Errorf("%w: unknown settle action %d", ErrInvalidArgument, uint32(action))
+	}
+	return scvEnumVariant(action.String()), nil
+}
+
+// scvContractError encodes a contract error code as the ScVal error the
+// contract itself returns for an `Err` variant (`SCV_ERROR` with error type
+// `SCE_CONTRACT`). It is only needed by tests: the client never sends a
+// contract error.
+func scvContractError(code uint32) (xdr.ScVal, error) {
+	contractCode := xdr.Uint32(code)
+	return xdr.NewScVal(xdr.ScValTypeScvError, xdr.ScError{
+		Type:         xdr.ScErrorTypeSceContract,
+		ContractCode: &contractCode,
+	})
 }
 
 func scvBytes(b []byte) xdr.ScVal {
@@ -262,6 +288,114 @@ func decodeVec(v xdr.ScVal) ([]xdr.ScVal, error) {
 	return []xdr.ScVal(**v.Vec), nil
 }
 
+// decodeU64Vec decodes a Vec<u64>, as returned by create_escrows.
+func decodeU64Vec(v xdr.ScVal) ([]uint64, error) {
+	values, err := decodeVec(v)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]uint64, 0, len(values))
+	for i, value := range values {
+		id, err := decodeU64(value)
+		if err != nil {
+			return nil, fmt.Errorf("escrow: create_escrows result %d: %w", i, err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// decodeSettleResults decodes settle_many's Vec<Result<(), Error>>. Soroban
+// encodes a Result as its Ok value or as the error value itself, so each
+// element is ScvVoid for Ok(()) (that op settled its escrow) or an
+// SCV_ERROR carrying the contract's code for Err (that op was rejected and
+// its escrow was left untouched). A nil entry means success.
+func decodeSettleResults(v xdr.ScVal) ([]error, error) {
+	values, err := decodeVec(v)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]error, len(values))
+	for i, value := range values {
+		switch value.Type {
+		case xdr.ScValTypeScvVoid:
+			// Ok(()): this op settled its escrow.
+		case xdr.ScValTypeScvError:
+			code, ok := contractCodeFromScVal(value)
+			if !ok {
+				return nil, fmt.Errorf("escrow: settle_many result %d is not a contract error", i)
+			}
+			results[i] = NewContractError(code)
+		default:
+			return nil, fmt.Errorf("escrow: settle_many result %d has unexpected ScVal type %s", i, value.Type)
+		}
+	}
+	return results, nil
+}
+
+// decodePooledData decodes the contracttype PooledData struct.
+func decodePooledData(v xdr.ScVal) (PooledData, error) {
+	fields, err := decodeMap(v)
+	if err != nil {
+		return PooledData{}, err
+	}
+	target, ok := fields["funding_target"]
+	if !ok {
+		return PooledData{}, fmt.Errorf("escrow: PooledData missing field %q", "funding_target")
+	}
+	fundingTarget, err := decodeI128(target)
+	if err != nil {
+		return PooledData{}, err
+	}
+	deadline, ok := fields["funding_deadline"]
+	if !ok {
+		return PooledData{}, fmt.Errorf("escrow: PooledData missing field %q", "funding_deadline")
+	}
+	fundingDeadline, err := decodeU64(deadline)
+	if err != nil {
+		return PooledData{}, err
+	}
+	return PooledData{FundingTarget: fundingTarget, FundingDeadline: fundingDeadline}, nil
+}
+
+// decodeContribution decodes the contracttype Contribution struct.
+func decodeContribution(v xdr.ScVal) (Contribution, error) {
+	fields, err := decodeMap(v)
+	if err != nil {
+		return Contribution{}, err
+	}
+	amount, ok := fields["amount"]
+	if !ok {
+		return Contribution{}, fmt.Errorf("escrow: Contribution missing field %q", "amount")
+	}
+	contributed, err := decodeI128(amount)
+	if err != nil {
+		return Contribution{}, err
+	}
+	refunded, ok := fields["refunded"]
+	if !ok {
+		return Contribution{}, fmt.Errorf("escrow: Contribution missing field %q", "refunded")
+	}
+	isRefunded, err := decodeBool(refunded)
+	if err != nil {
+		return Contribution{}, err
+	}
+	return Contribution{Amount: contributed, Refunded: isRefunded}, nil
+}
+
+// decodeOptionContribution decodes get_contribution's Option<Contribution>:
+// ScvVoid is None (the address never contributed) and an ScVal map is Some.
+func decodeOptionContribution(v xdr.ScVal) (*Contribution, error) {
+	if v.Type == xdr.ScValTypeScvVoid {
+		return nil, nil
+	}
+	contribution, err := decodeContribution(v)
+	if err != nil {
+		return nil, err
+	}
+	return &contribution, nil
+}
+
 func decodeMap(v xdr.ScVal) (map[string]xdr.ScVal, error) {
 	if v.Type != xdr.ScValTypeScvMap || v.Map == nil {
 		return nil, fmt.Errorf("escrow: expected map ScVal, got %s", v.Type)
@@ -297,6 +431,8 @@ func decodeStatus(v xdr.ScVal) (EscrowStatus, error) {
 		return EscrowStatusReleased, nil
 	case "Refunded":
 		return EscrowStatusRefunded, nil
+	case "Cancelled":
+		return EscrowStatusCancelled, nil
 	default:
 		return 0, fmt.Errorf("escrow: unknown EscrowStatus variant %q", name)
 	}
@@ -434,6 +570,48 @@ func decodeEscrow(v xdr.ScVal) (Escrow, error) {
 	}
 
 	return result, nil
+}
+
+// createItemScVal encodes one CreateItem the way create_escrows takes it:
+// a contracttype struct as a symbol-keyed map with refund_after as an option.
+// Soroban rejects an ScMap whose keys are not in ascending key order ("ScMap
+// was not sorted by key for conversion to host object"), so the entries are
+// written in symbol sort order rather than struct field order.
+func createItemScVal(item CreateItem) (xdr.ScVal, error) {
+	payee, err := scvAddress(item.Payee)
+	if err != nil {
+		return xdr.ScVal{}, err
+	}
+	token, err := scvAddress(item.Token)
+	if err != nil {
+		return xdr.ScVal{}, err
+	}
+	amount, err := scvI128(item.Amount)
+	if err != nil {
+		return xdr.ScVal{}, err
+	}
+	releaser, err := scvAddress(item.Releaser)
+	if err != nil {
+		return xdr.ScVal{}, err
+	}
+	return scvMap([]xdr.ScMapEntry{
+		{Key: scvSymbol("amount"), Val: amount},
+		{Key: scvSymbol("condition_ref"), Val: scvString(item.ConditionRef)},
+		{Key: scvSymbol("payee"), Val: payee},
+		{Key: scvSymbol("refund_after"), Val: scvOptionU64(item.RefundAfter)},
+		{Key: scvSymbol("releaser"), Val: releaser},
+		{Key: scvSymbol("token"), Val: token},
+	}), nil
+}
+
+// settleOpScVal encodes one (escrow_id, SettleAction) tuple for settle_many.
+// Soroban represents a tuple as a vec of its elements.
+func settleOpScVal(op SettleOp) (xdr.ScVal, error) {
+	action, err := scvSettleAction(op.Action)
+	if err != nil {
+		return xdr.ScVal{}, err
+	}
+	return scvVec([]xdr.ScVal{scvU64(op.EscrowID), action}), nil
 }
 
 // escrowDataScVal is the inverse of decodeEscrow. It is used by unit tests today
