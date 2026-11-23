@@ -2,11 +2,13 @@ package escrow
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/stellar/go-stellar-sdk/clients/rpcclient"
@@ -39,6 +41,36 @@ const (
 	MaxSettleOps = 12
 )
 
+// ContractVersionCheck selects how the client checks the deployment's
+// version() against the range the SDK supports (contract-version.go).
+type ContractVersionCheck int
+
+const (
+	// ContractVersionCheckOff never asks the contract for its version. This is
+	// the default, so read-only callers and local fakes make no extra call.
+	ContractVersionCheckOff ContractVersionCheck = iota
+	// ContractVersionCheckAuto checks once, lazily, before the first write. A
+	// deployment that cannot be read is retried on the next call; a version
+	// outside the supported range is rejected.
+	ContractVersionCheckAuto
+	// ContractVersionCheckRequired is like Auto, but a deployment without a
+	// version() entry point is rejected as well
+	// (ErrVersionUnavailable), instead of being allowed through.
+	ContractVersionCheckRequired
+)
+
+// rpcClient is the subset of *rpcclient.Client the SDK calls. Tests substitute
+// a fake so read paths can be exercised offline.
+type rpcClient interface {
+	Close() error
+	GetNetwork(ctx context.Context) (protocol.GetNetworkResponse, error)
+	GetLatestLedger(ctx context.Context) (protocol.GetLatestLedgerResponse, error)
+	LoadAccount(ctx context.Context, address string) (txnbuild.Account, error)
+	SimulateTransaction(ctx context.Context, request protocol.SimulateTransactionRequest) (protocol.SimulateTransactionResponse, error)
+	SendTransaction(ctx context.Context, request protocol.SendTransactionRequest) (protocol.SendTransactionResponse, error)
+	PollTransactionWithOptions(ctx context.Context, txHash string, opts rpcclient.PollTransactionOptions) (protocol.GetTransactionResponse, error)
+}
+
 // Config configures a Client.
 type Config struct {
 	// RPCURL is the Soroban RPC endpoint. Defaults to the SDF testnet RPC.
@@ -63,11 +95,14 @@ type Config struct {
 	// currently needs an account to simulate from and returns
 	// ErrSignerRequired when nil.
 	Signer Signer
+	// ContractVersionCheck optionally verifies the deployment's version()
+	// before the first write. Defaults to ContractVersionCheckOff.
+	ContractVersionCheck ContractVersionCheck
 }
 
 // Client is a Go client for the docforum-escrow Soroban contract.
 type Client struct {
-	rpc               *rpcclient.Client
+	rpc               rpcClient
 	contractID        string
 	contractAddress   xdr.ScAddress
 	networkPassphrase string
@@ -75,6 +110,12 @@ type Client struct {
 	pollTimeout       time.Duration
 	pollInterval      time.Duration
 	txTimeout         time.Duration
+
+	// contractVersionCheck selects the lazy version check; versionMu guards
+	// its cache so one Client can be shared between goroutines.
+	contractVersionCheck   ContractVersionCheck
+	versionMu              sync.Mutex
+	contractVersionChecked bool
 }
 
 // New validates cfg and creates a client. It does not make network requests;
@@ -127,14 +168,15 @@ func New(cfg Config) (*Client, error) {
 	}
 
 	return &Client{
-		rpc:               rpcclient.NewClient(rpcURL, httpClient),
-		contractID:        cfg.ContractID,
-		contractAddress:   contractAddress,
-		networkPassphrase: passphrase,
-		signer:            cfg.Signer,
-		pollTimeout:       pollTimeout,
-		pollInterval:      pollInterval,
-		txTimeout:         txTimeout,
+		rpc:                  rpcclient.NewClient(rpcURL, httpClient),
+		contractID:           cfg.ContractID,
+		contractAddress:      contractAddress,
+		networkPassphrase:    passphrase,
+		signer:               cfg.Signer,
+		pollTimeout:          pollTimeout,
+		pollInterval:         pollInterval,
+		txTimeout:            txTimeout,
+		contractVersionCheck: cfg.ContractVersionCheck,
 	}, nil
 }
 
@@ -1129,11 +1171,15 @@ func (c *Client) settleWithApprovals(ctx context.Context, method string, escrowI
 	return result, err
 }
 
-// execute runs the full Soroban flow: load sequence, build + simulate, apply
-// resource data and auth, sign, submit, poll, and decode the return value.
+// execute runs the full Soroban flow: check the contract version (when
+// configured), load sequence, build + simulate, apply resource data and auth,
+// sign, submit, poll, and decode the return value.
 func (c *Client) execute(ctx context.Context, method string, args []xdr.ScVal, signers []Signer) (*xdr.ScVal, TxResult, error) {
 	if len(signers) == 0 || signers[0] == nil {
 		return nil, TxResult{}, ErrSignerRequired
+	}
+	if err := c.ensureContractVersionChecked(ctx); err != nil {
+		return nil, TxResult{}, err
 	}
 	source := signers[0]
 
@@ -1189,19 +1235,34 @@ func (c *Client) execute(ctx context.Context, method string, args []xdr.ScVal, s
 		return nil, TxResult{}, fmt.Errorf("%w: %v", ErrWalletRejected, err)
 	}
 
+	result, returnValue, err := c.submitEnvelope(ctx, method, signedXDR)
+	if err != nil {
+		return nil, TxResult{}, err
+	}
+	return returnValue, result, nil
+}
+
+// submitEnvelope sends an already-signed envelope and polls it to a terminal
+// state, returning its transaction result and contract return value (if any).
+func (c *Client) submitEnvelope(ctx context.Context, method, signedXDR string) (TxResult, *xdr.ScVal, error) {
 	sent, err := c.rpc.SendTransaction(ctx, protocol.SendTransactionRequest{Transaction: signedXDR})
 	if err != nil {
-		return nil, TxResult{}, fmt.Errorf("escrow: send transaction: %w", err)
+		return TxResult{}, nil, fmt.Errorf("escrow: send transaction: %w", err)
 	}
 	txHash := sent.Hash
 	if txHash == "" {
-		txHash, err = transaction.HashHex(c.networkPassphrase)
-		if err != nil {
-			return nil, TxResult{}, fmt.Errorf("escrow: hash transaction: %w", err)
+		var envelope xdr.TransactionEnvelope
+		if err := xdr.SafeUnmarshalBase64(signedXDR, &envelope); err != nil {
+			return TxResult{}, nil, fmt.Errorf("escrow: decode signed envelope: %w", err)
 		}
+		hash, err := network.HashTransactionInEnvelope(envelope, c.networkPassphrase)
+		if err != nil {
+			return TxResult{}, nil, fmt.Errorf("escrow: hash transaction: %w", err)
+		}
+		txHash = hex.EncodeToString(hash[:])
 	}
 	if sent.Status == "ERROR" {
-		return nil, TxResult{}, errorFromSendFailure(sent)
+		return TxResult{}, nil, errorFromSendFailure(sent)
 	}
 
 	pollCtx, cancel := context.WithTimeout(ctx, c.pollTimeout)
@@ -1210,19 +1271,19 @@ func (c *Client) execute(ctx context.Context, method string, args []xdr.ScVal, s
 	final, err := c.rpc.PollTransactionWithOptions(pollCtx, txHash, pollOptions)
 	if err != nil {
 		if pollCtx.Err() != nil {
-			return nil, TxResult{}, fmt.Errorf("%w: %s (tx %s)", ErrTimeout, method, txHash)
+			return TxResult{}, nil, fmt.Errorf("%w: %s (tx %s)", ErrTimeout, method, txHash)
 		}
-		return nil, TxResult{}, fmt.Errorf("escrow: poll transaction: %w", err)
+		return TxResult{}, nil, fmt.Errorf("escrow: poll transaction: %w", err)
 	}
 	if final.Status != protocol.TransactionStatusSuccess {
-		return nil, TxResult{}, errorFromTransaction(final)
+		return TxResult{}, nil, errorFromTransaction(final)
 	}
 
 	returnValue, err := returnValueFromMeta(final.ResultMetaXDR)
 	if err != nil {
-		return nil, TxResult{}, err
+		return TxResult{}, nil, err
 	}
-	return returnValue, TxResult{TxHash: txHash, Ledger: final.Ledger}, nil
+	return TxResult{TxHash: txHash, Ledger: final.Ledger}, returnValue, nil
 }
 
 func (c *Client) prepareAuthEntries(simulation protocol.SimulateTransactionResponse, signers []Signer, sourceAddress string) ([]xdr.SorobanAuthorizationEntry, error) {
