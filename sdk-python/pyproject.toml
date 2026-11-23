@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "docforum-escrow"
+version = "0.1.0"
+description = "Python client for the docforum-escrow Soroban contract (testnet only)"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "DocForum" }]
+keywords = ["stellar", "soroban", "escrow"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Typing :: Typed",
+]
+dependencies = ["stellar-sdk>=17,<18"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff==0.17.6", "mypy>=1.10,<3"]
+
+[project.urls]
+Repository = "https://github.com/DocForum/docforum-escrow"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/docforum_escrow"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: talks to a real Soroban RPC; skipped unless ESCROW_INTEGRATION=1"]
+addopts = "-m 'not integration'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true
+files = ["src"]

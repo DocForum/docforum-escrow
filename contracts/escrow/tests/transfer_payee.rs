@@ -9,7 +9,7 @@
 //   - the contract's own address
 //   - the payer's address
 
-use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
+use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus, SettleAction};
 use soroban_sdk::{
     testutils::Address as _,
     token::{StellarAssetClient, TokenClient},
@@ -70,6 +70,50 @@ fn setup(env: &Env) -> Fixture<'_> {
     }
 }
 
+fn setup_with_notify(env: &Env, notify_payee: bool) -> Fixture<'_> {
+    env.mock_all_auths();
+
+    let token_contract = env.register_stellar_asset_contract_v2(Address::generate(env));
+    let token_id = token_contract.address();
+    let token = TokenClient::new(env, &token_id);
+    let asset = StellarAssetClient::new(env, &token_id);
+
+    let payer = Address::generate(env);
+    let payee = Address::generate(env);
+    let releaser = Address::generate(env);
+    asset.mint(&payer, &1_000);
+
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
+    let client = EscrowContractClient::new(env, &contract_id);
+
+    let escrow_id = client.create_escrow(
+        &payer,
+        &payee,
+        &token_id,
+        &500,
+        &String::from_str(env, "opaque-condition-ref"),
+        &releaser,
+        &None,
+        &notify_payee,
+        &None,
+        &None,
+        &None,
+    );
+
+    Fixture {
+        client,
+        token,
+        payer,
+        payee,
+        releaser,
+        contract_id,
+        escrow_id,
+    }
+}
+
 // --- happy path ---
 
 #[test]
@@ -78,8 +122,7 @@ fn transfer_payee_updates_stored_payee() {
     let f = setup(&env);
     let new_payee = Address::generate(&env);
 
-    f.client
-        .transfer_payee(&f.escrow_id, &f.payee, &new_payee);
+    f.client.transfer_payee(&f.escrow_id, &f.payee, &new_payee);
 
     let data = f.client.get_escrow(&f.escrow_id);
     assert_eq!(data.payee, new_payee);
@@ -92,16 +135,12 @@ fn release_after_transfer_pays_new_payee_not_old() {
     let f = setup(&env);
     let new_payee = Address::generate(&env);
 
-    f.client
-        .transfer_payee(&f.escrow_id, &f.payee, &new_payee);
+    f.client.transfer_payee(&f.escrow_id, &f.payee, &new_payee);
     f.client.release(&f.escrow_id, &f.releaser);
 
     assert_eq!(f.token.balance(&new_payee), 500);
     assert_eq!(f.token.balance(&f.payee), 0); // old payee gets nothing
-    assert_eq!(
-        f.client.get_status(&f.escrow_id),
-        EscrowStatus::Released
-    );
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Released);
 }
 
 #[test]
@@ -110,16 +149,12 @@ fn refund_after_transfer_still_returns_to_payer() {
     let f = setup(&env);
     let new_payee = Address::generate(&env);
 
-    f.client
-        .transfer_payee(&f.escrow_id, &f.payee, &new_payee);
+    f.client.transfer_payee(&f.escrow_id, &f.payee, &new_payee);
     f.client.refund(&f.escrow_id, &f.releaser);
 
     assert_eq!(f.token.balance(&f.payer), 1_000); // full refund
     assert_eq!(f.token.balance(&new_payee), 0);
-    assert_eq!(
-        f.client.get_status(&f.escrow_id),
-        EscrowStatus::Refunded
-    );
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Refunded);
 }
 
 #[test]
@@ -129,10 +164,8 @@ fn payee_can_transfer_multiple_times_before_release() {
     let payee_b = Address::generate(&env);
     let payee_c = Address::generate(&env);
 
-    f.client
-        .transfer_payee(&f.escrow_id, &f.payee, &payee_b);
-    f.client
-        .transfer_payee(&f.escrow_id, &payee_b, &payee_c);
+    f.client.transfer_payee(&f.escrow_id, &f.payee, &payee_b);
+    f.client.transfer_payee(&f.escrow_id, &payee_b, &payee_c);
     f.client.release(&f.escrow_id, &f.releaser);
 
     assert_eq!(f.token.balance(&payee_c), 500);
@@ -234,10 +267,7 @@ fn transfer_payee_rejects_after_release() {
         .try_transfer_payee(&f.escrow_id, &f.payee, &new_payee);
 
     assert!(result.is_err());
-    assert_eq!(
-        f.client.get_status(&f.escrow_id),
-        EscrowStatus::Released
-    );
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Released);
 }
 
 #[test]
@@ -252,10 +282,7 @@ fn transfer_payee_rejects_after_refund() {
         .try_transfer_payee(&f.escrow_id, &f.payee, &new_payee);
 
     assert!(result.is_err());
-    assert_eq!(
-        f.client.get_status(&f.escrow_id),
-        EscrowStatus::Refunded
-    );
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Refunded);
 }
 
 #[test]
@@ -264,9 +291,49 @@ fn transfer_payee_rejects_unknown_escrow_id() {
     let f = setup(&env);
     let new_payee = Address::generate(&env);
 
-    let result = f
-        .client
-        .try_transfer_payee(&999u64, &f.payee, &new_payee);
+    let result = f.client.try_transfer_payee(&999u64, &f.payee, &new_payee);
 
     assert!(result.is_err());
+}
+
+#[test]
+fn transfer_payee_clears_notify_payee_and_allows_release() {
+    let env = Env::default();
+    let f = setup_with_notify(&env, true);
+    let new_payee = Address::generate(&env);
+
+    // Prior to transfer, notify_payee is true
+    let data_before = f.client.get_escrow(&f.escrow_id);
+    assert!(data_before.notify_payee);
+
+    // Payee transfers to a standard account address (which has no callback hook)
+    f.client.transfer_payee(&f.escrow_id, &f.payee, &new_payee);
+
+    // After transfer, notify_payee is cleared to false (issue #286)
+    let data_after = f.client.get_escrow(&f.escrow_id);
+    assert!(!data_after.notify_payee);
+    assert_eq!(data_after.payee, new_payee);
+
+    // Release succeeds without attempting callback on the new payee account
+    f.client.release(&f.escrow_id, &f.releaser);
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Released);
+    assert_eq!(f.token.balance(&new_payee), 500);
+    assert_eq!(f.token.balance(&f.payee), 0);
+}
+
+#[test]
+fn transfer_payee_clears_notify_payee_and_allows_settle_many_release() {
+    let env = Env::default();
+    let f = setup_with_notify(&env, true);
+    let new_payee = Address::generate(&env);
+
+    f.client.transfer_payee(&f.escrow_id, &f.payee, &new_payee);
+
+    let ops = soroban_sdk::vec![&env, (f.escrow_id, SettleAction::Release)];
+
+    let results = f.client.settle_many(&f.releaser, &ops);
+    assert_eq!(results.len(), 1);
+    assert!(results.get(0).unwrap().is_ok());
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Released);
+    assert_eq!(f.token.balance(&new_payee), 500);
 }

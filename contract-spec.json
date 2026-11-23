@@ -7,9 +7,24 @@
       "return": ""
     },
     {
+      "name": "get_allowed_tokens",
+      "args": "env: Env",
+      "return": "Vec<Address>"
+    },
+    {
       "name": "version",
       "args": "env: Env",
       "return": "String"
+    },
+    {
+      "name": "create_escrow_with_attester",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, notify_payee: bool, refund_to: Option<Address>, attester: Option<BytesN<32>>,",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "release_with_attestation",
+      "args": "env: Env, escrow_id: u64, signature: BytesN<64>,",
+      "return": "Result<(), Error>"
     },
     {
       "name": "create_split_escrow",
@@ -19,6 +34,11 @@
     {
       "name": "create_escrow",
       "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, notify_payee: bool, refund_to: Option<Address>, fee_recipient: Option<Address>, fee_bps: Option<u32>,",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "create_escrow_with_uniqueness",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after: Option<u64>, notify_payee: bool, refund_to: Option<Address>, fee_recipient: Option<Address>, fee_bps: Option<u32>, unique_ref: bool,",
       "return": "Result<u64, Error>"
     },
     {
@@ -82,6 +102,11 @@
       "return": "Result<u64, Error>"
     },
     {
+      "name": "create_pooled_release_deadline",
+      "args": "env: Env, creator: Address, payee: Address, token: Address, funding_target: i128, condition_ref: String, releaser: Address, funding_deadline: u64, release_deadline: Option<u64>,",
+      "return": "Result<u64, Error>"
+    },
+    {
       "name": "contribute",
       "args": "env: Env, escrow_id: u64, payer: Address, amount: i128",
       "return": "Result<(), Error>"
@@ -89,6 +114,11 @@
     {
       "name": "claim_refund",
       "args": "env: Env, escrow_id: u64, contributor: Address",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "close_failed_round",
+      "args": "env: Env, escrow_id: u64",
       "return": "Result<(), Error>"
     },
     {
@@ -107,6 +137,21 @@
       "return": "Result<Option<Contribution>, Error>"
     },
     {
+      "name": "get_unique_escrow",
+      "args": "env: Env, payer: Address, condition_ref: String",
+      "return": "Option<u64>"
+    },
+    {
+      "name": "next_escrow_id",
+      "args": "env: Env",
+      "return": "u64"
+    },
+    {
+      "name": "get_escrows",
+      "args": "env: Env, ids: Vec<u64>",
+      "return": "Result<Vec<Option<EscrowData>>, Error>"
+    },
+    {
       "name": "get_status",
       "args": "env: Env, escrow_id: u64",
       "return": "Result<EscrowStatus, Error>"
@@ -115,6 +160,26 @@
       "name": "get_escrow",
       "args": "env: Env, escrow_id: u64",
       "return": "Result<EscrowData, Error>"
+    },
+    {
+      "name": "create_schedule",
+      "args": "env: Env, payer: Address, payee: Address, token: Address, amount: i128, condition_ref: String, releaser: Address, refund_after_seconds: Option<u64>, period_seconds: u64, total_periods: u32, first_due: u64,",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "fund_next",
+      "args": "env: Env, schedule_id: u64",
+      "return": "Result<u64, Error>"
+    },
+    {
+      "name": "cancel_schedule",
+      "args": "env: Env, schedule_id: u64, payer: Address",
+      "return": "Result<(), Error>"
+    },
+    {
+      "name": "get_schedule",
+      "args": "env: Env, schedule_id: u64",
+      "return": "Result<RecurringSchedule, Error>"
     },
     {
       "name": "extend_refund_after",
@@ -386,6 +451,38 @@
     {
       "name": "NotPaused",
       "code": 40
+    },
+    {
+      "name": "AttesterNotConfigured",
+      "code": 54
+    },
+    {
+      "name": "ScheduleTooEarly",
+      "code": 55
+    },
+    {
+      "name": "ScheduleComplete",
+      "code": 56
+    },
+    {
+      "name": "ScheduleCancelled",
+      "code": 57
+    },
+    {
+      "name": "AllowanceExhausted",
+      "code": 58
+    },
+    {
+      "name": "InvalidSchedule",
+      "code": 59
+    },
+    {
+      "name": "DuplicateConditionRef",
+      "code": 4700
+    },
+    {
+      "name": "InvalidReleaseDeadline",
+      "code": 28800
     }
   ]
 }

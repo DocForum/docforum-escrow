@@ -244,7 +244,7 @@
                   }
                 ]
               },
-              "durability": "persistent",
+              "durability": "temporary",
               "val": {
                 "u32": 2
               }
@@ -252,7 +252,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 6312008
+        "live_until": 24
       },
       {
         "entry": {
@@ -271,7 +271,7 @@
                   }
                 ]
               },
-              "durability": "persistent",
+              "durability": "temporary",
               "val": {
                 "u32": 1
               }
@@ -279,7 +279,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 6312010
+        "live_until": 26
       },
       {
         "entry": {

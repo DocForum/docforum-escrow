@@ -1,1 +1,0 @@
-Issue #78 (Phase E6): added `checkSolvency({ contractId, tokens })` to the SDK, returning balance vs liabilities per token from the on-chain `solvency` view, with an events-based fallback for deployments that predate it, plus a `check-solvency` CLI command that exits 1 on a shortfall. No contract change, so the generated bindings are unchanged.
