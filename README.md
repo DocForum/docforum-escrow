@@ -352,7 +352,7 @@ On other systems, install Stellar CLI 28.1.0 using its official
 instructions and check `stellar --version` before continuing.
 
 From the repository root, run the verifier with the contract ID. It builds
-the current source and fetches deployed WASM from testnet:
+the current source and cross-checks the deployed WASM against its record:
 
 ```bash
 bash scripts/verify-deployment CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H
