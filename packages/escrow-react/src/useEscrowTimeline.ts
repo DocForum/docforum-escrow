@@ -12,8 +12,8 @@ export interface UseEscrowTimelineOptions {
    *
    * `refundAfter` is a **ledger timestamp** in unix seconds (the contract
    * compares it to the ledger close time, not your machine's clock). A local
-   * countdown is therefore advisory: derive this offset from
-   * `getLatestLedger().closeTime * 1000 - Date.now()` so client clock drift
+   * countdown is therefore advisory: pass the result of
+   * `client.ledgerClockOffset()` so client clock drift
    * does not show a deadline as passed when the contract still rejects the
    * timeout refund, or vice versa.
    */

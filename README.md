@@ -52,7 +52,7 @@ the top at release and never on a refund — see
 topped up by the original payer, and `get_status`/`get_escrow` are
 read-only (`get_escrow` is for funded escrows; a settled escrow's record is
 reclaimed, so use `get_status` and the state event:
-[ADR 0013](docs/adr/0013-reclaim-storage-for-settled-escrows.md)). `settle_many` releases or refunds up to 20 escrows in one
+[ADR 0013](docs/adr/0013-reclaim-storage-for-settled-escrows.md)). `settle_many` releases or refunds up to 12 escrows in one
 transaction with per-op results (the fast response to a leaked releaser
 key, see [ADR 0012](docs/adr/0012-batch-settlement-best-effort.md)). A token
 allowlist and an optional emergency-pause custodian are fixed at deploy
