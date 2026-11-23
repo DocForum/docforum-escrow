@@ -7,7 +7,9 @@ impl EscrowContract {
     /// Rotates a funded escrow's releaser. Both the current releaser and
     /// payer must authorize the change; the payer's consent prevents a
     /// compromised releaser from silently appointing an attacker. The
-    /// replacement cannot be the contract itself or the payee.
+    /// replacement cannot be the current releaser (a no-op rotation would
+    /// rewrite the same data and emit a misleading `rotate` event), the
+    /// contract itself, or the payee.
     pub fn rotate_releaser(
         env: Env,
         escrow_id: u64,
@@ -28,7 +30,10 @@ impl EscrowContract {
         if data.status != EscrowStatus::Funded {
             return Err(Error::NotFunded);
         }
-        if new_releaser == env.current_contract_address() || new_releaser == data.payee {
+        if new_releaser == previous_releaser
+            || new_releaser == env.current_contract_address()
+            || new_releaser == data.payee
+        {
             return Err(Error::InvalidReleaser);
         }
 

@@ -70,6 +70,12 @@ fn final_contributor_claim_closes_failed_round() {
     assert_eq!(f.client.get_status(&f.id), EscrowStatus::Refunded);
     assert!(f.client.try_get_escrow(&f.id).is_err());
     assert_eq!(f.client.solvency(&f.token), (0, 0));
-    assert_eq!(soroban_sdk::token::TokenClient::new(&env, &f.token).balance(&contributor), 30);
-    assert_eq!(soroban_sdk::token::TokenClient::new(&env, &f.token).balance(&f.contract_id), 0);
+    assert_eq!(
+        soroban_sdk::token::TokenClient::new(&env, &f.token).balance(&contributor),
+        30
+    );
+    assert_eq!(
+        soroban_sdk::token::TokenClient::new(&env, &f.token).balance(&f.contract_id),
+        0
+    );
 }

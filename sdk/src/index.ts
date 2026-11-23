@@ -27,6 +27,7 @@ import {
   type EscrowStatus as GeneratedEscrowStatus,
   type PooledData as GeneratedPooledData,
   type Contribution as GeneratedContribution,
+  type VestingInfo as GeneratedVestingInfo,
 } from "./generated/contract-client.js";
 import { decodeEscrowDataFromScVal } from "./escrow-data.js";
 import {
@@ -37,7 +38,7 @@ import {
   type InstrumentationOptions,
 } from "./instrumentation.js";
 import type { FactoryClient as FactoryClientType } from "./factory.js";
-import { signerAddress, type EscrowSigner } from "./signers/types.js";
+import { contractSigner, signerAddress, type EscrowSigner } from "./signers/types.js";
 import { NetworkMismatchError, toEscrowError } from "./errors.js";
 import { getTokenInfo as readTokenInfo, rpcTokenInfoSource, type TokenInfo } from "./amounts.js";
 import {
@@ -77,7 +78,16 @@ export {
   type TokenInfoSource,
   type TokenInfoSourceOptions,
 } from "./amounts.js";
-export { signerAddress, type EscrowSigner } from "./signers/types.js";
+export {
+  KeypairSigner,
+  RemoteSigner,
+  SignerError,
+  signerAddress,
+  type EscrowSigner,
+  type RemoteSignerOptions,
+  type Signer,
+  type SignerOptions,
+} from "./signers/types.js";
 export {
   BalanceMismatchError,
   ContractError,
@@ -169,6 +179,7 @@ export * from "./relayed-auth.js";
 export * from "./rotation.js";
 export * from "./rpc-providers.js";
 export * from "./solvency.js";
+export * from "./vesting.js";
 
 import { type ArchivedEntryBehavior } from "./archived-entries.js";
 import { type BatchCreateItem, type BatchItemResult, type BatchOptions, BatchPartialFailureError, type BatchSettleOperation, MAX_BATCH_SIZE } from "./batch.js";
@@ -179,6 +190,7 @@ import { type EscrowEvent, type EscrowEventType, EventCursorExpiredError, type G
 import { type EstimateCallParams, type FeeBumpOptions, type FeeBumpResult, type FeeEstimate, type GuardResult, MaxFeeExceededError, SponsorshipGuardError, computeFeeEstimate } from "./fees.js";
 import { EMPTY_SPAN_ATTRIBUTES, MISSING_FUNCTION_ERROR, TESTNET_NETWORK_PASSPHRASE, TESTNET_RPC_URL, assertLedgerWindow, assertPositiveAmount, batchErrorMessage, contractAddressOf, isRetentionError, lifecycleCallSigner, safeScValToNative, sendErrorName, trancheOf } from "./internal.js";
 import { type AcceptParams, type EscrowPreconditionCode, EscrowPreconditionError, type LifecycleCall, type LifecycleMethod, PREPARED_AUTH_TTL_LEDGERS, type PrepareLifecycleParams, type PreparedLifecycleCall, type TopUpParams, type TransferPayeeParams } from "./lifecycle.js";
+import { type CreateStreamedEscrowParams, type VestingInfo, type WithdrawParams, validateVestingSchedule } from "./vesting.js";
 import { type CreateMilestoneEscrowParams, type Milestone, type MilestoneEscrow, MilestoneEscrowPartialError, type RefundMilestoneParams, type ReleaseMilestoneParams, milestoneConditionRef, validateMilestoneSchedule } from "./milestones.js";
 import { MAINNET_NETWORK_PASSPHRASE, MainnetNotAllowedError } from "./networks.js";
 import { type ClaimRefundParams, type ContributeParams, type ContributionRecord, type CreatePooledEscrowParams, type PooledEscrow, type SolvencyReport } from "./pooled.js";
@@ -392,7 +404,10 @@ export class EscrowClient {
       networkPassphrase: this.networkPassphrase,
       allowHttp: this.allowHttp,
       ...(effectiveSigner
-        ? { publicKey: signerAddress(effectiveSigner), signTransaction: effectiveSigner }
+        ? {
+            publicKey: signerAddress(effectiveSigner),
+            signTransaction: contractSigner(effectiveSigner, this.networkPassphrase),
+          }
         : {}),
     });
   }
@@ -544,6 +559,80 @@ export class EscrowClient {
       { address: signerAddress(params.payer) },
     );
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /** Creates a fixed-total linear vesting stream with an optional cliff. */
+  async createStreamedEscrow(
+    params: CreateStreamedEscrowParams,
+  ): Promise<{ escrowId: bigint; txHash: string }> {
+    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+      throw new Error(
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`,
+      );
+    }
+    if (params.amount <= 0n) throw new RangeError(`amount must be positive, got ${params.amount}`);
+    validateVestingSchedule(params.schedule);
+    const client = this.contractClient(params.payer);
+    const sent = await this.invoke(
+      "create_streamed_escrow",
+      undefined,
+      () => client.create_streamed_escrow({
+        payer: signerAddress(params.payer),
+        payee: params.payee,
+        token: params.token,
+        amount: params.amount,
+        condition_ref: params.conditionRef,
+        releaser: params.releaser,
+        refund_after: params.refundAfter,
+        schedule: {
+          start: params.schedule.start,
+          end: params.schedule.end,
+          cliff: params.schedule.cliff,
+        },
+      }),
+      { address: signerAddress(params.payer) },
+    );
+    return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /** Reads the current schedule, vested amount, withdrawn amount, and claimable amount. */
+  async getVesting(escrowId: bigint): Promise<VestingInfo> {
+    await this.ensureNetworkVerified();
+    const client = this.contractClient();
+    try {
+      const tx = await tracePhase(
+        this.instrumentation,
+        "simulate",
+        this.spanAttributesIfEnabled("get_vesting", escrowId),
+        () => client.get_vesting({ escrow_id: escrowId }),
+      );
+      const data: GeneratedVestingInfo = tx.result.unwrap();
+      return {
+        schedule: {
+          start: data.schedule.start,
+          end: data.schedule.end,
+          cliff: data.schedule.cliff ?? undefined,
+        },
+        totalAmount: data.total_amount,
+        vestedAmount: data.vested_amount,
+        withdrawnAmount: data.withdrawn_amount,
+        claimableAmount: data.claimable_amount,
+      };
+    } catch (error) {
+      throw toEscrowError(error);
+    }
+  }
+
+  /** Withdraws the currently claimable vested amount to the stream payee. */
+  async withdraw(params: WithdrawParams): Promise<{ amount: bigint; txHash: string }> {
+    const client = this.contractClient(params.payee);
+    const sent = await this.invoke(
+      "withdraw",
+      params.escrowId,
+      () => client.withdraw({ escrow_id: params.escrowId, payee: signerAddress(params.payee) }),
+      { address: signerAddress(params.payee) },
+    );
+    return { amount: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
   }
 
   /**
@@ -976,7 +1065,10 @@ export class EscrowClient {
     }
     const client = this.contractClientForAddress(prepared.source);
     const tx = client.txFromJSON<Result<void>>(prepared.transaction);
-    await tx.signAuthEntries({ signAuthEntry: signer, expiration: prepared.expiresAtLedger });
+    await tx.signAuthEntries({
+      signAuthEntry: contractSigner(signer, this.networkPassphrase),
+      expiration: prepared.expiresAtLedger,
+    });
     return {
       ...prepared,
       transaction: tx.toJSON(),
@@ -1738,7 +1830,7 @@ export class EscrowClient {
     // its own auth; only the releaser's separate auth entry needs signing here.
     if (tx.needsNonInvokerSigningBy().includes(params.releaser.publicKey())) {
       await tx.signAuthEntries({
-        signAuthEntry: params.releaser,
+        signAuthEntry: contractSigner(params.releaser, this.networkPassphrase),
         expiration: expiresAtLedger,
       });
     }
@@ -1972,7 +2064,7 @@ export class EscrowClient {
           // Every non-invoker approver signs the contract auth entry. This is
           // part of the "sign" phase, so one span covers all signatures.
           for (const signer of additionalSigners) {
-            await tx.signAuthEntries({ signAuthEntry: signer });
+            await tx.signAuthEntries({ signAuthEntry: contractSigner(signer, this.networkPassphrase) });
           }
         },
       },
@@ -2047,7 +2139,9 @@ export class EscrowClient {
             throw new Error(`extend_refund_after needs authorization from ${unknown.join(", ")}, which is neither the payer nor the releaser.`);
           }
           if (pending.includes(releaser)) {
-            await tx.signAuthEntries({ signAuthEntry: params.releaser });
+            await tx.signAuthEntries({
+              signAuthEntry: contractSigner(params.releaser, this.networkPassphrase),
+            });
           }
         },
       },

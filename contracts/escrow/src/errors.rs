@@ -148,4 +148,7 @@ pub enum Error {
     AllowanceExhausted = 58,
     /// A schedule with a zero period or zero total periods (issue #115).
     InvalidSchedule = 59,
+    /// A uniqueness-enabled creation used an already-indexed pair. Use
+    /// `get_unique_escrow` to recover the original escrow id.
+    DuplicateConditionRef = 4700,
 }
