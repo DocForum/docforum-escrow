@@ -23,6 +23,8 @@ jobs:
             echo "::error::sdk/src/deployments.generated.ts is out of date. Run: node scripts/deploy-record.mjs --sync"
             exit 1
           }
+      - name: SDK constants mirror the contract
+        run: node scripts/check-sdk-constants.mjs
 
   contract-fuzz:
     name: Contract cargo-fuzz (${{ github.event_name == 'schedule' && 'nightly' || 'PR' }})

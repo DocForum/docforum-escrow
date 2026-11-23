@@ -1,3 +1,4 @@
+import { type SettlementReason } from "./preflight.js";
 import { type EscrowSigner } from "./signers/types.js";
 
 /** Options shared by the lifecycle amendment methods. */
@@ -44,14 +45,21 @@ export type EscrowPreconditionCode =
   | "Unauthorized"
   | "InvalidNewPayee"
   | "AcceptanceNotConfigured"
-  | "AlreadyAccepted";
+  | "AlreadyAccepted"
+  | SettlementReason;
+
+/**
+ * A call a client-side precondition check can refuse: a lifecycle amendment,
+ * or a settlement (`release`/`refund`, issue #332).
+ */
+export type PreconditionMethod = LifecycleMethod | "release" | "refund";
 
 /** Thrown before any transaction is built when a client-side check fails. */
 export class EscrowPreconditionError extends Error {
   readonly name = "EscrowPreconditionError";
   readonly code: EscrowPreconditionCode;
-  readonly method: LifecycleMethod;
-  constructor(method: LifecycleMethod, code: EscrowPreconditionCode, message: string) {
+  readonly method: PreconditionMethod;
+  constructor(method: PreconditionMethod, code: EscrowPreconditionCode, message: string) {
     super(`${method}: ${message}`);
     this.method = method;
     this.code = code;

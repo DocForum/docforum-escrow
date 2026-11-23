@@ -186,6 +186,14 @@ export interface ReleaseOrRefundParams {
    * `refundWithApprovals`.
    */
   caller: EscrowSigner;
+  /**
+   * Run the client-side settlement preflight (`canRelease`/`canRefund`)
+   * before simulating, and throw `EscrowPreconditionError` carrying the
+   * contract's own reason instead of paying for a transaction it would
+   * reject (issue #332). Costs one extra read-only simulation. Default
+   * `false`: the contract stays the authority either way.
+   */
+  checkPreconditions?: boolean;
 }
 
 /** Creation parameters for an M-of-N releaser escrow (docs/adr/0007). */

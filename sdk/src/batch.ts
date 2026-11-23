@@ -9,6 +9,16 @@ import { type CreateEscrowParams } from "./escrow-types.js";
  */
 export const MAX_BATCH_SIZE = 16;
 
+/**
+ * Maximum number of operations in one on-chain `settle_many` call — must
+ * match the contract's `MAX_SETTLE_OPS` (currently 12, see docs/adr/0012).
+ * `settleMany` in this SDK sends one `release`/`refund` per operation instead,
+ * so it chunks by {@link MAX_BATCH_SIZE}; this constant is for callers that
+ * build the contract's `settle_many` invocation themselves. Keep in sync with
+ * the contract: `scripts/check-sdk-constants.mjs` fails CI on a mismatch.
+ */
+export const MAX_SETTLE_OPS = 12;
+
 /** One escrow to create in a batched `createEscrows` call. */
 export interface BatchCreateItem extends CreateEscrowParams {}
 
