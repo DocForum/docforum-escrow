@@ -62,6 +62,57 @@ and the per-op results say exactly which ones landed. Integrators that need
 all-or-nothing can check the results in simulation and only submit a batch
 with no `Err`.
 
+### A hostile callback payee can block the batch (issue #367)
+
+`notify_payee` is the payee's opt-in to `on_escrow_released` (ADR 0005).
+The callback runs **after** the transfer and after the `Released` write, so a
+callback that returns an error or burns the transaction budget cannot be
+reported as a clean per-op `Err`: the invocation aborts and everything in the
+batch is rolled back, including releases that already paid out. A payee
+contract controls its own callback entirely, so it can fail on demand. Every
+`settle_many` batch that includes one of its escrows then reverts, in full,
+for as long as it likes. During the T1 race-to-settle that is a cheap denial
+of service against every other escrow in the batch, paid for by the payee.
+
+`tests/settle_many.rs::hostile_callback_payee_reverts_a_batch_of_valid_releases`
+pins this: three valid releases and one rejecting callback in one batch leave
+all four escrows `Funded` and no token balance changed.
+
+**Mitigation — settle callback release ops individually.** Release escrows
+whose creation set `notify_payee` in a single-op transaction each, and keep
+them out of shared batches. A failing callback then reverts only its own
+escrow, and the rest settle normally
+(`::isolating_the_callback_escrow_lets_the_valid_releases_settle`). Refund
+ops never invoke the payee callback (threat model T11), so a `Refund` op for
+a `notify_payee` escrow can stay in a normal batch
+(`::refund_ops_never_invoke_the_payee_callback`).
+
+This is operational guidance because the contract cannot fix it without
+changing callback semantics: a callback failure is a post-effect failure, and
+swallowing it would let a release commit without notifying the payee that
+opted in. Integrators therefore isolate on the caller side: the SDK's
+`settleMany` already sends one `release`/`refund` transaction per operation,
+so a callback failure is contained to its own op, and
+`scripts/settle-outcomes.py` submits one escrow per transaction for the same
+reason (see `docs/runbooks/releaser-compromise.md`).
+
+**Proposed contract-side change (not implemented here; needs a contract PR).**
+One of:
+
+- A new batch action that skips the callback (for example `ReleaseSilent`),
+  so a defender can settle a `notify_payee` escrow in a batch at the cost of
+  the notification. The payee opted in to being notified, so this weakens
+  the ADR 0005 promise and needs an explicit decision.
+- Run the callback as a separate, per-op-optional step after the batch
+  commits, which turns a post-effect failure into state the caller can retry
+  instead of a revert. That changes the callback's ordering guarantee for
+  single `release` too, so it is a contract-version event.
+
+Either is deliberately out of scope for issue #367: it would change the
+contract surface, `CONTRACT_VERSION`, the generated bindings and the callback
+ADR, and the operational rule above already removes the DoS for callers that
+follow the runbook.
+
 ### Why 20 (measured)
 
 Measured with the release WASM in the soroban-sdk 27 test host against the
