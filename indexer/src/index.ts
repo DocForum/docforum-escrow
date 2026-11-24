@@ -1,1 +1,1 @@
-export { handleEscrowEvent } from "./mappings/index.js";
+export { handleEscrowEvent } from "./mappings/index";

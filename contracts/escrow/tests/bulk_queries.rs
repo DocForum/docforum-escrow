@@ -1,11 +1,13 @@
-use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus, Error, MAX_GET_ESCROWS};
+use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus, MAX_GET_ESCROWS};
 use soroban_sdk::{testutils::Address as _, Address, Env, String, Vec};
 
 #[test]
 fn bulk_queries_return_records_unknowns_and_next_id() {
     let env = Env::default();
     env.mock_all_auths();
-    let token = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
+    let token = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
@@ -33,7 +35,10 @@ fn bulk_queries_return_records_unknowns_and_next_id() {
     let ids = soroban_sdk::vec![&env, id, 999];
     let records = client.get_escrows(&ids);
     assert_eq!(records.len(), 2);
-    assert_eq!(records.get(0).unwrap().unwrap().status, EscrowStatus::Funded);
+    assert_eq!(
+        records.get(0).unwrap().unwrap().status,
+        EscrowStatus::Funded
+    );
     assert!(records.get(1).unwrap().is_none());
 }
 

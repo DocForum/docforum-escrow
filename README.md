@@ -52,7 +52,7 @@ the top at release and never on a refund — see
 topped up by the original payer, and `get_status`/`get_escrow` are
 read-only (`get_escrow` is for funded escrows; a settled escrow's record is
 reclaimed, so use `get_status` and the state event:
-[ADR 0013](docs/adr/0013-reclaim-storage-for-settled-escrows.md)). `settle_many` releases or refunds up to 20 escrows in one
+[ADR 0013](docs/adr/0013-reclaim-storage-for-settled-escrows.md)). `settle_many` releases or refunds up to 12 escrows in one
 transaction with per-op results (the fast response to a leaked releaser
 key, see [ADR 0012](docs/adr/0012-batch-settlement-best-effort.md)). A token
 allowlist and an optional emergency-pause custodian are fixed at deploy
@@ -352,7 +352,7 @@ On other systems, install Stellar CLI 28.1.0 using its official
 instructions and check `stellar --version` before continuing.
 
 From the repository root, run the verifier with the contract ID. It builds
-the current source and fetches deployed WASM from testnet:
+the current source and cross-checks the deployed WASM against its record:
 
 ```bash
 bash scripts/verify-deployment CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H
@@ -665,6 +665,26 @@ generated SDK bindings match the contract WASM (issue #121):
 | [#6 Threat model + external security review](https://github.com/DocForum/docforum-escrow/issues/6) | E4 | High |
 
 Full breakdown: [`ROADMAP.md`](ROADMAP.md).
+
+### SDK/contract compatibility
+
+The `SDK/contract compatibility` workflow builds each `sdk-v*` contract tag,
+deploys the artifacts to a local network, and exercises current-SDK reads and
+settlement against those deployments. It also checks the last two SDK releases
+against the current contract. Missing results fail the job, while
+known-incompatible ABI pairs are listed explicitly.
+
+| SDK release | Contract deployment | Result |
+| --- | --- | --- |
+| `sdk-v0.1.0` | `sdk-v0.1.0` | verified read/settle |
+| `sdk-v0.1.0` | `sdk-v0.2.0` | verified read/settle |
+| `sdk-v0.1.0` | `main` | known-incompatible: legacy create ABI |
+| `sdk-v0.2.0` | `sdk-v0.1.0` | verified read/settle |
+| `sdk-v0.2.0` | `sdk-v0.2.0` | verified read/settle |
+| `sdk-v0.2.0` | `main` | known-incompatible: legacy create ABI |
+| `main` | `sdk-v0.1.0` | verified read/settle |
+| `main` | `sdk-v0.2.0` | verified read/settle |
+| `main` | `main` | verified read/settle |
 
 ## Contributing
 

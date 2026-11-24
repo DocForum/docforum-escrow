@@ -23,6 +23,21 @@ jobs:
             echo "::error::sdk/src/deployments.generated.ts is out of date. Run: node scripts/deploy-record.mjs --sync"
             exit 1
           }
+      - name: SDK constants mirror the contract
+        run: node scripts/check-sdk-constants.mjs
+
+  config-guards:
+    name: Verifier configuration guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # No install step: the verifier test uses a stubbed Stellar CLI and this
+      # script's own copy of build-wasm.sh. The indexer's network tests run in
+      # the `indexer` job through vitest.
+      - run: node --test scripts/verify-deployment.test.mjs
 
   contract-fuzz:
     name: Contract cargo-fuzz (${{ github.event_name == 'schedule' && 'nightly' || 'PR' }})
@@ -84,12 +99,85 @@ jobs:
           path: contracts/escrow/fuzz/artifacts
           if-no-files-found: ignore
 
+  # Issue #315: keep the bounded TLA+ model executable so specification edits
+  # fail CI on parse errors, invariant violations, or temporal-property failures.
+  tlc:
+    name: TLA+ escrow model (TLC)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check whether the model changed
+        id: spec-changes
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const isSpecFile = (path) => path.startsWith('spec/');
+            let files = [];
+            if (context.eventName === 'schedule') {
+              core.setOutput('changed', 'true');
+              return;
+            }
+            if (context.eventName === 'pull_request') {
+              files = await github.paginate(github.rest.pulls.listFiles, {
+                ...context.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              });
+            } else if (context.eventName === 'push') {
+              const comparison = await github.rest.repos.compareCommits({
+                ...context.repo,
+                base: context.payload.before,
+                head: context.sha,
+              });
+              files = comparison.data.files || [];
+            }
+            core.setOutput('changed', String(files.some((file) => isSpecFile(file.filename))));
+
+      - name: Download pinned TLC
+        if: steps.spec-changes.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/tla2tools.jar \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo '936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  /tmp/tla2tools.jar' | sha256sum -c -
+
+      - name: Run TLC with the committed model configuration
+        if: steps.spec-changes.outputs.changed == 'true'
+        run: java -jar /tmp/tla2tools.jar -config spec/Escrow.cfg spec/Escrow.tla
+
   resource-baseline:
     name: Resource cost baseline
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check public function baseline
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.96.0
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/target
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+
+      # Issue #319: the baseline check reads measured costs now, so CI takes the
+      # measurement with the profile bench. The bench profiles every function
+      # twice and fails when the runs disagree, which is what makes comparing
+      # against benchmarks/baseline.json meaningful.
+      - name: Profile public function resources
+        working-directory: contracts/escrow
+        run: cargo bench --bench resource_profile -- --out ../../benchmarks/resource-profile.json
+
+      - name: Compare measured costs with the baseline
         run: python3 scripts/check-resource-baseline.py
 
   contract:
@@ -109,6 +197,10 @@ jobs:
         if: github.event_name == 'pull_request'
         working-directory: .
         run: node scripts/check-contract-change.mjs "origin/${{ github.base_ref }}"
+
+      - name: Test contract-change tooling
+        working-directory: .
+        run: node --test scripts/contract-change.test.mjs
 
       - name: No tracked backup files
         working-directory: .
@@ -158,6 +250,10 @@ jobs:
             exit 1
           fi
           echo "Committed test snapshots match this run."
+
+      - name: Fail if test snapshots are orphaned
+        working-directory: .
+        run: node scripts/check-orphaned-snapshots.mjs
 
       - name: cargo build --release (wasm)
         run: cargo build --target wasm32v1-none --release
@@ -263,13 +359,9 @@ jobs:
       - name: Verify CJS, ESM, and browser package entrypoints
         run: npm run smoke
 
-      # Offline only: events fixture decoding plus quorum input validation.
-      # Never the live testnet suite (see the note at the end of this file).
+      # The offline project includes every non-network SDK test automatically.
+      # Never run the live project in PR CI (see the note at the end of this file).
       - run: npm run test:offline
-
-      - run: npm run test:milestones
-
-      - run: npm run test:unit
 
       - run: npm run test:runtime
 
@@ -348,9 +440,9 @@ jobs:
       - run: npm run test:browser
         working-directory: sdk
 
-      # Deliberately NOT run here: `npm run test:integration`
-      # (tests/testnet-integration.test.ts) depends on live testnet and
-      # Friendbot funding. Runtime checks use local fixtures only.
+      # Deliberately NOT run here: `npm run test:integration` selects the
+      # live project, which depends on testnet/Friendbot funding. Runtime
+      # checks use local fixtures only.
 
   escrow-react:
     name: React hooks package
@@ -378,3 +470,75 @@ jobs:
         working-directory: packages/escrow-react
       - run: npm run build
         working-directory: packages/escrow-react
+
+  # Issue #347: the indexer has its own pinned dependencies and tests. The job
+  # only does work when indexer/** changed (or on the nightly schedule), so an
+  # unrelated PR does not pay for codegen + build + tests.
+  indexer:
+    name: Indexer (codegen + build + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check whether the indexer changed
+        id: indexer-changes
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const isIndexerFile = (path) => path.startsWith('indexer/');
+            let files = [];
+            if (context.eventName === 'schedule') {
+              core.setOutput('changed', 'true');
+              return;
+            }
+            if (context.eventName === 'pull_request') {
+              files = await github.paginate(github.rest.pulls.listFiles, {
+                ...context.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              });
+            } else if (context.eventName === 'push') {
+              const comparison = await github.rest.repos.compareCommits({
+                ...context.repo,
+                base: context.payload.before,
+                head: context.sha,
+              });
+              files = comparison.data.files || [];
+            }
+            core.setOutput('changed', String(files.some((file) => isIndexerFile(file.filename))));
+
+      - uses: actions/setup-node@v4
+        if: steps.indexer-changes.outputs.changed == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: indexer/package-lock.json
+
+      - name: Install indexer dependencies
+        if: steps.indexer-changes.outputs.changed == 'true'
+        working-directory: indexer
+        run: npm ci
+
+      # src/types and project.yaml are generated (not committed); see
+      # indexer/README.md. project.ts needs a contract id and start ledger, so
+      # the build-time values are placeholders for codegen/build only.
+      - name: Codegen
+        if: steps.indexer-changes.outputs.changed == 'true'
+        working-directory: indexer
+        env:
+          DOCFORUM_ESCROW_CONTRACT_ID: CDX2JEMA5SO7GZVXDNGDDB35GPV43J7BUTYYH77ALAT72S65GOW5KNEO
+          DOCFORUM_START_LEDGER: '1'
+        run: npm run codegen
+
+      - name: Build
+        if: steps.indexer-changes.outputs.changed == 'true'
+        working-directory: indexer
+        env:
+          DOCFORUM_ESCROW_CONTRACT_ID: CDX2JEMA5SO7GZVXDNGDDB35GPV43J7BUTYYH77ALAT72S65GOW5KNEO
+          DOCFORUM_START_LEDGER: '1'
+        run: npm run build
+
+      - name: Test
+        if: steps.indexer-changes.outputs.changed == 'true'
+        working-directory: indexer
+        run: npm test
