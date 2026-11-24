@@ -1,3 +1,8 @@
+---
+file: ARCHITECTURE_ESSENTIALS.md
+section: Signer interface and browser wallets (issue #127)
+---
+
 Issue #125 documentation fragment: add the Ledger signer entry point
 `@docforum/escrow-sdk/signers/ledger` to the SDK documentation and describe
 that it signs transaction envelopes and Soroban authorization preimages via an

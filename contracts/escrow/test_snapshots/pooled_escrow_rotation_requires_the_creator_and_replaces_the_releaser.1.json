@@ -686,6 +686,12 @@
                     "val": {
                       "i128": "300"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "release_deadline"
+                    },
+                    "val": "void"
                   }
                 ]
               }
