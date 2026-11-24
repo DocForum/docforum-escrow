@@ -97,25 +97,38 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_REF: ${{ inputs.ref }}
-          SOURCE_SHA: ${{ github.sha }}
           DEPLOY_NOTES: ${{ inputs.notes }}
         run: |
           set -euo pipefail
+          # The commit that was actually deployed (inputs.ref), not the
+          # workflow's own ref (github.sha).
+          source_sha=$(git rev-parse HEAD)
           branch="deploy/testnet-${GITHUB_RUN_ID}"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout -b "$branch"
           git add deployments.json docs/testnet-deployments.md sdk/src/deployments.generated.ts
-          git commit -m "docs: record testnet deployment from ${SOURCE_SHA}"
-          git push --set-upstream origin "$branch"
+          git commit -m "docs: record testnet deployment from ${source_sha}"
+          # Checkout ran with persist-credentials: false so the deploy step
+          # never saw the token; authenticate only for this push.
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+            push --set-upstream origin "$branch"
+          # Build the body in a file: a multi-line --body string would put
+          # unindented lines inside this run block and break the YAML.
+          {
+            echo 'Closes #90'
+            echo
+            echo "Triggered by @${GITHUB_ACTOR} via the Testnet deploy workflow (run ${GITHUB_RUN_ID})."
+            echo
+            echo "Source ref: \`${SOURCE_REF}\`"
+            echo "Source commit: \`${source_sha}\`"
+            if [ -n "$DEPLOY_NOTES" ]; then
+              echo
+              echo "$DEPLOY_NOTES"
+            fi
+          } > "$RUNNER_TEMP/pr-body.md"
           gh pr create \
             --base main \
             --head "$branch" \
-            --title "chore(deploy): record testnet deployment from ${SOURCE_SHA}" \
-            --body "Closes #90
-
-Triggered by @${GITHUB_ACTOR} via the Testnet deploy workflow (run ${GITHUB_RUN_ID}).
-
-Source ref: \`${SOURCE_REF}\`
-Source commit: \`${SOURCE_SHA}\`
-${DEPLOY_NOTES}"
+            --title "chore(deploy): record testnet deployment from ${source_sha}" \
+            --body-file "$RUNNER_TEMP/pr-body.md"
