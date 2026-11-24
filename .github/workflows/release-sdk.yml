@@ -6,23 +6,27 @@ on:
       - "sdf-v*"
 
 permissions:
-  contents: write   # attach the packed tarball to the GitHub Release
-  id-token: write   # npm trusted publishing (OIDC) and the build attestation
-  attestations: write
+  contents: read
 
 jobs:
   release:
     name: Build, test, and publish the SDK
     runs-on: ubuntu-latest
+    # contents: write attaches the release tarball; id-token enables npm
+    # trusted publishing and provenance; attestations: write publishes it.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     defaults:
       run:
         working-directory: sdk/
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
@@ -67,7 +71,7 @@ jobs:
         run: npm publish --provenance --access public
 
       - name: Attach tarball to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: sdk/*.tgz
           generate_release_notes: true
