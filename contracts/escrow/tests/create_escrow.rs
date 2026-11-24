@@ -82,6 +82,172 @@ fn create_escrow_locks_funds_and_reports_funded() {
 }
 
 #[test]
+fn uniqueness_rejects_duplicate_and_returns_original_id_via_query() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (token_id, _token, asset) = setup(&env);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    asset.mint(&payer, &1_000);
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let condition_ref = String::from_str(&env, "same-agreement");
+
+    let first = client.create_escrow_with_uniqueness(
+        &payer,
+        &payee,
+        &token_id,
+        &100,
+        &condition_ref,
+        &releaser,
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+        &true,
+    );
+    assert_eq!(
+        client.try_create_escrow_with_uniqueness(
+            &payer,
+            &payee,
+            &token_id,
+            &100,
+            &condition_ref,
+            &releaser,
+            &None,
+            &false,
+            &None,
+            &None,
+            &None,
+            &true,
+        ),
+        Err(Ok(docforum_escrow::Error::DuplicateConditionRef))
+    );
+    assert_eq!(
+        client.get_unique_escrow(&payer, &condition_ref),
+        Some(first)
+    );
+    assert_eq!(client.next_escrow_id(), 1);
+}
+
+#[test]
+fn uniqueness_is_scoped_to_payer_and_disabled_creation_allows_duplicates() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (token_id, _token, asset) = setup(&env);
+    let payer_a = Address::generate(&env);
+    let payer_b = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    asset.mint(&payer_a, &1_000);
+    asset.mint(&payer_b, &1_000);
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let condition_ref = String::from_str(&env, "same-ref");
+
+    let first = client.create_escrow_with_uniqueness(
+        &payer_a,
+        &payee,
+        &token_id,
+        &100,
+        &condition_ref,
+        &releaser,
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+        &true,
+    );
+    let second = client.create_escrow_with_uniqueness(
+        &payer_b,
+        &payee,
+        &token_id,
+        &100,
+        &condition_ref,
+        &releaser,
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+        &true,
+    );
+    let legacy = client.create_escrow(
+        &payer_a,
+        &payee,
+        &token_id,
+        &100,
+        &condition_ref,
+        &releaser,
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+    );
+    assert_eq!((first, second, legacy), (0, 1, 2));
+}
+
+#[test]
+fn uniqueness_key_survives_settlement_and_blocks_recreation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (token_id, _token, asset) = setup(&env);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releaser = Address::generate(&env);
+    asset.mint(&payer, &1_000);
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let condition_ref = String::from_str(&env, "settled-agreement");
+    let id = client.create_escrow_with_uniqueness(
+        &payer,
+        &payee,
+        &token_id,
+        &100,
+        &condition_ref,
+        &releaser,
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+        &true,
+    );
+    client.release(&id, &releaser);
+    assert_eq!(client.get_unique_escrow(&payer, &condition_ref), Some(id));
+    assert_eq!(
+        client.try_create_escrow_with_uniqueness(
+            &payer,
+            &payee,
+            &token_id,
+            &100,
+            &condition_ref,
+            &releaser,
+            &None,
+            &false,
+            &None,
+            &None,
+            &None,
+            &true,
+        ),
+        Err(Ok(docforum_escrow::Error::DuplicateConditionRef))
+    );
+}
+
+#[test]
 fn create_escrow_assigns_sequential_ids() {
     let env = Env::default();
     env.mock_all_auths();

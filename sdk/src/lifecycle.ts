@@ -1,4 +1,25 @@
+import { type EscrowStatus } from "./escrow-types.js";
+import { type SettlementReason } from "./preflight.js";
 import { type EscrowSigner } from "./signers/types.js";
+
+/** Options for {@link EscrowClient.waitForStatus}. */
+export interface WaitForStatusOptions {
+  /** Overall deadline in milliseconds, measured from the call. Must be positive. */
+  timeoutMs: number;
+  /** Delay between status reads in milliseconds. Default {@link DEFAULT_WAIT_POLL_INTERVAL_MS}. */
+  pollIntervalMs?: number;
+  /** Cancels the wait; it rejects with the signal's `reason`, or an `AbortError`. */
+  signal?: AbortSignal;
+}
+
+/** What {@link EscrowClient.waitForStatus} resolves with once a target status is observed. */
+export interface WaitForStatusResult {
+  escrowId: bigint;
+  status: EscrowStatus;
+}
+
+/** Default delay between `waitForStatus` status reads, in milliseconds. */
+export const DEFAULT_WAIT_POLL_INTERVAL_MS = 1_000;
 
 /** Options shared by the lifecycle amendment methods. */
 export interface LifecycleCallOptions {
@@ -44,14 +65,21 @@ export type EscrowPreconditionCode =
   | "Unauthorized"
   | "InvalidNewPayee"
   | "AcceptanceNotConfigured"
-  | "AlreadyAccepted";
+  | "AlreadyAccepted"
+  | SettlementReason;
+
+/**
+ * A call a client-side precondition check can refuse: a lifecycle amendment,
+ * or a settlement (`release`/`refund`, issue #332).
+ */
+export type PreconditionMethod = LifecycleMethod | "release" | "refund";
 
 /** Thrown before any transaction is built when a client-side check fails. */
 export class EscrowPreconditionError extends Error {
   readonly name = "EscrowPreconditionError";
   readonly code: EscrowPreconditionCode;
-  readonly method: LifecycleMethod;
-  constructor(method: LifecycleMethod, code: EscrowPreconditionCode, message: string) {
+  readonly method: PreconditionMethod;
+  constructor(method: PreconditionMethod, code: EscrowPreconditionCode, message: string) {
     super(`${method}: ${message}`);
     this.method = method;
     this.code = code;

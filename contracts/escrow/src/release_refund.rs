@@ -129,8 +129,7 @@ impl EscrowContract {
         Self::extend_instance_ttl(&env);
         caller.require_auth();
 
-        let (mut data, payee_initiated) =
-            Self::refund_checks_for_caller(&env, escrow_id, &caller)?;
+        let (mut data, payee_initiated) = Self::refund_checks_for_caller(&env, escrow_id, &caller)?;
         Self::settle_full(&env, escrow_id, &mut data, EscrowStatus::Refunded)?;
         if payee_initiated {
             PayeeRefunded {

@@ -57,4 +57,6 @@ export const CONTRACT_ERROR_NAMES = {
   57: "ScheduleCancelled",
   58: "AllowanceExhausted",
   59: "InvalidSchedule",
+  4700: "DuplicateConditionRef",
+  28800: "InvalidReleaseDeadline",
 } as const;

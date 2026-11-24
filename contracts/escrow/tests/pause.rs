@@ -40,10 +40,11 @@ const DEPOSIT_ENTRYPOINTS: &[&str] = &[
     "create_escrow_with_acceptance",
     "create_escrow_with_attester",
     "create_escrow_with_releasers",
+    "create_escrow_with_uniqueness",
     "create_escrows",
     "create_streamed_escrow",
     "create_pooled_escrow",
-    "create_pooled_quorum_escrow",
+    "create_pooled_release_deadline",
     "fund_next",
     "contribute",
     "top_up",
@@ -67,6 +68,7 @@ const NON_DEPOSIT_ENTRYPOINTS: &[&str] = &[
     "get_escrows",
     "get_status",
     "get_escrow",
+    "get_unique_escrow",
     "extend_refund_after",
     "close_failed_round",
     "release",
@@ -90,7 +92,10 @@ fn snapshot_function_names() -> std::vec::Vec<&'static str> {
     let snapshot = include_str!("../../../contract-spec.json");
     let functions = snapshot
         .split_once("\"functions\": [")
-        .and_then(|(_, rest)| rest.split_once("],\n  \"errors\""))
+        .and_then(|(_, rest)| {
+            rest.split_once("],\n  \"errors\"")
+                .or_else(|| rest.split_once("],\r\n  \"errors\""))
+        })
         .expect("contract-spec.json must contain a functions section")
         .0;
     functions
@@ -452,10 +457,7 @@ fn paused_blocks_the_other_creation_entry_points_and_top_up() {
 
     // `fund_next` is a deposit path as well: blocked before it pulls from
     // the payer's allowance.
-    assert_contract_error(
-        f.client.try_fund_next(&schedule_id),
-        Error::Paused,
-    );
+    assert_contract_error(f.client.try_fund_next(&schedule_id), Error::Paused);
 
     assert_eq!(f.token.balance(&f.payer), 900);
     assert_eq!(f.token.balance(&f.contract_id), 100);

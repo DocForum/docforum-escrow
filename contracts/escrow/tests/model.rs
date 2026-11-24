@@ -233,6 +233,11 @@ impl Model {
                 if !as_releaser {
                     return Err(Failure::Unauthorized);
                 }
+                // A no-op rotation is rejected (issue #297), after the caller
+                // check, exactly like the contract.
+                if self.releaser == self.replacement_releaser {
+                    return Err(Failure::InvalidReleaser);
+                }
                 self.releaser = self.replacement_releaser.clone();
                 Ok(())
             }

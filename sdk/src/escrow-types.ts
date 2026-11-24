@@ -7,6 +7,16 @@ import { type EscrowSigner } from "./signers/types.js";
  */
 export type EscrowStatus = "Funded" | "Released" | "Refunded" | "Cancelled";
 
+/**
+ * Statuses an escrow never leaves. A settled escrow's record is reclaimed
+ * (docs/adr/0013), so `getEscrow` fails for these; `getStatus` still answers.
+ */
+export const TERMINAL_ESCROW_STATUSES: ReadonlySet<EscrowStatus> = new Set([
+  "Released",
+  "Refunded",
+  "Cancelled",
+]);
+
 /** Arguments for {@link EscrowClient.extendRefundAfter}: both payer and releaser must sign. */
 export interface ExtendRefundAfterParams {
   escrowId: bigint;
@@ -186,6 +196,14 @@ export interface ReleaseOrRefundParams {
    * `refundWithApprovals`.
    */
   caller: EscrowSigner;
+  /**
+   * Run the client-side settlement preflight (`canRelease`/`canRefund`)
+   * before simulating, and throw `EscrowPreconditionError` carrying the
+   * contract's own reason instead of paying for a transaction it would
+   * reject (issue #332). Costs one extra read-only simulation. Default
+   * `false`: the contract stays the authority either way.
+   */
+  checkPreconditions?: boolean;
 }
 
 /** Creation parameters for an M-of-N releaser escrow (docs/adr/0007). */

@@ -23,6 +23,21 @@ jobs:
             echo "::error::sdk/src/deployments.generated.ts is out of date. Run: node scripts/deploy-record.mjs --sync"
             exit 1
           }
+      - name: SDK constants mirror the contract
+        run: node scripts/check-sdk-constants.mjs
+
+  config-guards:
+    name: Verifier configuration guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # No install step: the verifier test uses a stubbed Stellar CLI and this
+      # script's own copy of build-wasm.sh. The indexer's network tests run in
+      # the `indexer` job through vitest.
+      - run: node --test scripts/verify-deployment.test.mjs
 
   contract-fuzz:
     name: Contract cargo-fuzz (${{ github.event_name == 'schedule' && 'nightly' || 'PR' }})
@@ -455,3 +470,75 @@ jobs:
         working-directory: packages/escrow-react
       - run: npm run build
         working-directory: packages/escrow-react
+
+  # Issue #347: the indexer has its own pinned dependencies and tests. The job
+  # only does work when indexer/** changed (or on the nightly schedule), so an
+  # unrelated PR does not pay for codegen + build + tests.
+  indexer:
+    name: Indexer (codegen + build + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check whether the indexer changed
+        id: indexer-changes
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const isIndexerFile = (path) => path.startsWith('indexer/');
+            let files = [];
+            if (context.eventName === 'schedule') {
+              core.setOutput('changed', 'true');
+              return;
+            }
+            if (context.eventName === 'pull_request') {
+              files = await github.paginate(github.rest.pulls.listFiles, {
+                ...context.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              });
+            } else if (context.eventName === 'push') {
+              const comparison = await github.rest.repos.compareCommits({
+                ...context.repo,
+                base: context.payload.before,
+                head: context.sha,
+              });
+              files = comparison.data.files || [];
+            }
+            core.setOutput('changed', String(files.some((file) => isIndexerFile(file.filename))));
+
+      - uses: actions/setup-node@v4
+        if: steps.indexer-changes.outputs.changed == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: indexer/package-lock.json
+
+      - name: Install indexer dependencies
+        if: steps.indexer-changes.outputs.changed == 'true'
+        working-directory: indexer
+        run: npm ci
+
+      # src/types and project.yaml are generated (not committed); see
+      # indexer/README.md. project.ts needs a contract id and start ledger, so
+      # the build-time values are placeholders for codegen/build only.
+      - name: Codegen
+        if: steps.indexer-changes.outputs.changed == 'true'
+        working-directory: indexer
+        env:
+          DOCFORUM_ESCROW_CONTRACT_ID: CDX2JEMA5SO7GZVXDNGDDB35GPV43J7BUTYYH77ALAT72S65GOW5KNEO
+          DOCFORUM_START_LEDGER: '1'
+        run: npm run codegen
+
+      - name: Build
+        if: steps.indexer-changes.outputs.changed == 'true'
+        working-directory: indexer
+        env:
+          DOCFORUM_ESCROW_CONTRACT_ID: CDX2JEMA5SO7GZVXDNGDDB35GPV43J7BUTYYH77ALAT72S65GOW5KNEO
+          DOCFORUM_START_LEDGER: '1'
+        run: npm run build
+
+      - name: Test
+        if: steps.indexer-changes.outputs.changed == 'true'
+        working-directory: indexer
+        run: npm test

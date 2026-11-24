@@ -266,7 +266,11 @@ fn profile_once() -> std::vec::Vec<Measurement> {
 }
 
 /// Explain why two runs disagree, if they do.
-fn determinism_failure(first: &[Measurement], other: &[Measurement], run: usize) -> Option<StdString> {
+fn determinism_failure(
+    first: &[Measurement],
+    other: &[Measurement],
+    run: usize,
+) -> Option<StdString> {
     if first.len() != other.len() {
         return Some(format!(
             "run 1 profiled {} functions but run {} profiled {}",
@@ -305,7 +309,11 @@ fn snapshot_json(measurements: &[Measurement], runs: usize) -> StdString {
     let _ = writeln!(json, "  \"runs\": {runs},");
     let _ = writeln!(json, "  \"functions\": {{");
     for (index, measurement) in measurements.iter().enumerate() {
-        let comma = if index + 1 == measurements.len() { "" } else { "," };
+        let comma = if index + 1 == measurements.len() {
+            ""
+        } else {
+            ","
+        };
         let _ = writeln!(json, "{}{comma}", measurement.to_json());
     }
     let _ = writeln!(json, "  }}");
@@ -314,7 +322,10 @@ fn snapshot_json(measurements: &[Measurement], runs: usize) -> StdString {
 }
 
 fn print_table(measurements: &[Measurement]) {
-    eprintln!("{:<32} {:>12} {:>12}", "function", "cpu_insns", "memory_bytes");
+    eprintln!(
+        "{:<32} {:>12} {:>12}",
+        "function", "cpu_insns", "memory_bytes"
+    );
     for measurement in measurements {
         eprintln!(
             "{:<32} {:>12} {:>12}",
@@ -355,7 +366,10 @@ fn parse_options(mut args: impl Iterator<Item = StdString>) -> Result<Options, S
                 }
             }
             "--help" | "-h" => {
-                return Err("usage: cargo bench --bench resource_profile -- [--out <path>] [--runs <n>]".to_string())
+                return Err(
+                    "usage: cargo bench --bench resource_profile -- [--out <path>] [--runs <n>]"
+                        .to_string(),
+                )
             }
             other => return Err(format!("unknown argument {other:?}")),
         }
