@@ -505,8 +505,8 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 - [x] **Nightly testnet escrow lifecycle soak** (issue #108) —
   `.github/workflows/nightly-testnet-soak.yml` runs the SDK live integration
   suite nightly with generated identities, transient Friendbot retries,
-  release/refund paths, and a short timeout refund. Quorum coverage remains
-  skipped until the documented testnet contract supports it. Failures
+  release/refund paths, and a short timeout refund. Quorum, cancel, pooled
+  rounds, the protocol fee, settleMany, the pause reads and transferPayee run too. Failures
   update one tracking issue in place and classify contract-missing resets,
   infrastructure failures, and SDK test failures. Manual dispatch includes
   a forced-failure reporting check.

@@ -42,9 +42,7 @@ impl EscrowContract {
         }
         Self::transfer_in_exact(&env, &data.token, &payer, amount)?;
         data.amount = updated_amount;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &data);
+        Self::write_escrow(&env, escrow_id, &data);
         Self::extend_escrow_ttl(&env, escrow_id, data.refund_after);
         env.events().publish(
             (symbol_short!("top_up"), escrow_id),

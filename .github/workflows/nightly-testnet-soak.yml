@@ -38,6 +38,12 @@ jobs:
 
       - run: npm ci
 
+      # Issue #353: the suite runs every deployed feature with no opt-in env
+      # flags -- quorum, cancel, pooled rounds (succeed and fail), a protocol-fee
+      # release, two-op settleMany, the pause reads and transferPayee. The extra
+      # cases reuse one funded identity set per run, so Friendbot use stays
+      # bounded; the classifier below is what still separates a testnet reset
+      # from an SDK failure.
       - name: Run full live testnet integration suite
         id: integration
         run: |
