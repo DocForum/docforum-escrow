@@ -67,6 +67,21 @@ def check_workflow(source: str, filename: str) -> list[str]:
     return errors
 
 
+PIN_HINT = """
+How to fix: pin each action to the full commit SHA of a release tag and keep
+the tag as a comment, for example:
+
+    uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+To look up the SHA for a tag (annotated tags need the second command):
+
+    gh api repos/<owner>/<repo>/git/ref/tags/<tag> --jq .object
+    gh api repos/<owner>/<repo>/git/tags/<sha-from-above> --jq .object.sha
+
+Local actions (uses: ./path) don't need a pin. Dependabot updates the pins
+weekly once they're on main."""
+
+
 def workflow_files(directory: Path = WORKFLOWS) -> list[Path]:
     return sorted((*directory.rglob("*.yml"), *directory.rglob("*.yaml")))
 
@@ -77,6 +92,7 @@ def main() -> int:
     if errors:
         for error in errors:
             print(f"::error::{error}", file=sys.stderr)
+        print(PIN_HINT, file=sys.stderr)
         return 1
     print(f"Verified immutable third-party action pins in {len(files)} workflow files.")
     return 0
