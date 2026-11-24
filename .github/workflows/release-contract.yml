@@ -6,17 +6,21 @@ on:
       - "contract-v*"
 
 permissions:
-  contents: write   # upload the WASM and its SHA-256 as release assets
-  id-token: write   # Sigstore-backed build provenance for the attestation
-  attestations: write
+  contents: read
 
 jobs:
   release:
     name: Build and publish reproducible testnet contract artifact
     runs-on: ubuntu-latest
     container: rust:1.96.0-bookworm
+    # contents: write publishes release assets; the OIDC and attestations
+    # scopes attach the Sigstore build provenance to the WASM artifact.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install WASM target
         run: rustup target add wasm32v1-none
@@ -42,7 +46,7 @@ jobs:
           subject-path: contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm
 
       - name: Publish WASM and SHA-256 as release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
             contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm
