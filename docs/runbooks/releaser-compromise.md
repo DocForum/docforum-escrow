@@ -142,6 +142,25 @@ approved and observed outcome, so add it to the incident timeline and
 reconcile the payout by hand. A run whose only settlements were external exits
 0; a run with failed submissions exits 1 and prints the ids to retry.
 
+### Escrows with a payee callback (release only)
+
+Release escrows created with `notify_payee` in **their own single-op
+transaction**, never in a shared `settle_many` batch. The callback runs after
+the payout, so a payee contract that fails it on demand would revert the
+whole batch and take every other escrow in it down with it (issue #367,
+ADR 0012, threat model T11). `scripts/settle-outcomes.py` already submits one
+escrow per transaction, so the outcome file needs no change; the rule only
+constrains any faster path you build around it, such as a raw `settle_many`
+batch.
+
+Find these escrows before settling: `get_escrow` returns `notify_payee`, and
+the indexer's `Escrow.notifyPayee` carries the same flag. For a `release`
+outcome, settle it alone and treat `CallbackFailed` (error 9) as "the payee's
+callback refused" — the escrow is untouched, so retry later or hand it to the
+outcome owner. **Refunds are exempt:** `refund` and a `Refund` batch op never
+invoke the payee callback, so `notify_payee` refund escrows can be settled in
+normal batches.
+
 ## 5. Verify
 
 Reconcile every escrow in the outcome file: status is `Released` or
