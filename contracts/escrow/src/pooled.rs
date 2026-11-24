@@ -128,7 +128,7 @@ impl EscrowContract {
             fee_bps: None,
             attester: None,
         };
-        env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        Self::write_escrow(&env, id, &data);
         env.storage()
             .persistent()
             .set(&DataKey::Status(id), &data.status);
@@ -207,9 +207,7 @@ impl EscrowContract {
         let funded = data.amount.checked_add(amount).ok_or(Error::Overflow)?;
         data.amount = funded;
         env.storage().persistent().set(&key, &contribution);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &data);
+        Self::write_escrow(&env, escrow_id, &data);
         env.events().publish(
             (symbol_short!("contrib"), escrow_id),
             (payer, amount, funded),
@@ -303,9 +301,7 @@ impl EscrowContract {
                 .persistent()
                 .set(&DataKey::Status(escrow_id), &data.status);
         } else {
-            env.storage()
-                .persistent()
-                .set(&DataKey::Escrow(escrow_id), &data);
+            Self::write_escrow(&env, escrow_id, &data);
         }
         // Issue #39: the pooled total just dropped by `refund_amount`.
         Self::sub_liability(&env, &data.token, refund_amount)?;

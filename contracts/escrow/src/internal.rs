@@ -225,7 +225,7 @@ impl EscrowContract {
             fee_bps,
             attester,
         };
-        env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        Self::write_escrow(env, id, &data);
         env.storage()
             .persistent()
             .set(&DataKey::Status(id), &data.status);
@@ -399,9 +399,7 @@ impl EscrowContract {
             // Pooled escrows keep their full record: contributions, pull-based
             // refunds and `get_pooled` all read it after settlement, so
             // reclaiming it would change those reads (docs/adr/0013).
-            env.storage()
-                .persistent()
-                .set(&DataKey::Escrow(escrow_id), data);
+            Self::write_escrow(env, escrow_id, data);
             env.storage().persistent().extend_ttl(
                 &DataKey::Escrow(escrow_id),
                 SETTLED_ESCROW_TTL_THRESHOLD,
@@ -691,7 +689,7 @@ impl EscrowContract {
     /// `NotFunded` — what it returned before the record was reclaimed
     /// (docs/adr/0013) — and only a never-created id is `NotFound`.
     pub(crate) fn load(env: &Env, escrow_id: u64) -> Result<EscrowData, Error> {
-        if let Some(data) = env.storage().persistent().get(&DataKey::Escrow(escrow_id)) {
+        if let Some(data) = Self::read_escrow(env, escrow_id) {
             return Ok(data);
         }
         if env.storage().persistent().has(&DataKey::Status(escrow_id)) {

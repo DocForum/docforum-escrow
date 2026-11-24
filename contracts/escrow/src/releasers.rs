@@ -41,9 +41,7 @@ impl EscrowContract {
         let mut releasers = Vec::new(&env);
         releasers.push_back(new_releaser.clone());
         data.releasers = releasers;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &data);
+        Self::write_escrow(&env, escrow_id, &data);
         Self::extend_escrow_ttl(&env, escrow_id, data.refund_after);
         env.events().publish(
             (symbol_short!("rotate"), escrow_id),
@@ -98,9 +96,7 @@ impl EscrowContract {
             }
         }
         data.releasers = releasers;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &data);
+        Self::write_escrow(&env, escrow_id, &data);
         Self::extend_escrow_ttl(&env, escrow_id, data.refund_after);
         env.events().publish(
             (symbol_short!("rotate"), escrow_id),
