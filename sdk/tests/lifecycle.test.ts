@@ -140,6 +140,122 @@ describe("accept", () => {
   });
 });
 
+describe("transferPayee", () => {
+  const newPayee = Keypair.random();
+
+  it("calls transfer_payee as the current payee", async () => {
+    const transfer_payee = vi.fn(async () => sendableTx("transfer-hash"));
+    const client = makeClient({ getEscrow: async () => escrow(), contractClient: () => ({ transfer_payee }) });
+
+    const result = await client.transferPayee({
+      escrowId: 7n,
+      currentPayee: payee,
+      newPayee: newPayee.publicKey(),
+    });
+
+    expect(result.txHash).toBe("transfer-hash");
+    expect(transfer_payee).toHaveBeenCalledWith({
+      escrow_id: 7n,
+      current_payee: payee.publicKey(),
+      new_payee: newPayee.publicKey(),
+    });
+  });
+
+  it("accepts a SEP-43 signer for the current payee", async () => {
+    const transfer_payee = vi.fn(async () => sendableTx());
+    const signer = { address: payee.publicKey() };
+    const client = makeClient({ getEscrow: async () => escrow(), contractClient: () => ({ transfer_payee }) });
+
+    await client.transferPayee({ escrowId: 1n, currentPayee: signer as never, newPayee: newPayee.publicKey() });
+
+    expect(transfer_payee).toHaveBeenCalledWith({
+      escrow_id: 1n,
+      current_payee: payee.publicKey(),
+      new_payee: newPayee.publicKey(),
+    });
+  });
+
+  it("rejects a caller who is not the current payee", async () => {
+    const client = makeClient({ getEscrow: async () => escrow() });
+    await expectPrecondition(
+      client.transferPayee({ escrowId: 1n, currentPayee: payer, newPayee: newPayee.publicKey() }),
+      "Unauthorized",
+    );
+  });
+
+  it.each(["Released", "Refunded", "Cancelled"] as const)("rejects a %s escrow", async (status) => {
+    const client = makeClient({ getEscrow: async () => escrow({ status }) });
+    await expectPrecondition(
+      client.transferPayee({ escrowId: 1n, currentPayee: payee, newPayee: newPayee.publicKey() }),
+      "NotFunded",
+    );
+  });
+
+  it("rejects the payer as the new payee, like the contract", async () => {
+    const client = makeClient({ getEscrow: async () => escrow() });
+    await expectPrecondition(
+      client.transferPayee({ escrowId: 1n, currentPayee: payee, newPayee: payer.publicKey() }),
+      "InvalidNewPayee",
+    );
+  });
+
+  it("rejects the contract id as the new payee, like the contract", async () => {
+    const client = makeClient({ getEscrow: async () => escrow() });
+    await expectPrecondition(
+      client.transferPayee({ escrowId: 1n, currentPayee: payee, newPayee: client.contractId }),
+      "InvalidNewPayee",
+    );
+  });
+
+  it("checks caller, then status, then new payee, like the contract", async () => {
+    const wrongCaller = makeClient({ getEscrow: async () => escrow({ status: "Released" }) });
+    await expectPrecondition(
+      wrongCaller.transferPayee({ escrowId: 1n, currentPayee: payer, newPayee: payer.publicKey() }),
+      "Unauthorized",
+    );
+    const wrongStatus = makeClient({ getEscrow: async () => escrow({ status: "Refunded" }) });
+    await expectPrecondition(
+      wrongStatus.transferPayee({ escrowId: 1n, currentPayee: payee, newPayee: payer.publicKey() }),
+      "NotFunded",
+    );
+  });
+
+  it("works on escrows without the acceptance gate or after acceptance", async () => {
+    const transfer_payee = vi.fn(async () => sendableTx());
+    const noGate = makeClient({
+      getEscrow: async () => escrow({ requiresAcceptance: false }),
+      contractClient: () => ({ transfer_payee }),
+    });
+    await noGate.transferPayee({ escrowId: 1n, currentPayee: payee, newPayee: newPayee.publicKey() });
+
+    const accepted = makeClient({
+      getEscrow: async () => escrow({ acceptedAt: 1_700_000_000n }),
+      contractClient: () => ({ transfer_payee }),
+    });
+    await accepted.transferPayee({ escrowId: 1n, currentPayee: payee, newPayee: newPayee.publicKey() });
+    expect(transfer_payee).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips the read when checkPreconditions is false", async () => {
+    const getEscrow = vi.fn();
+    const client = makeClient({ getEscrow, contractClient: () => ({ transfer_payee: async () => sendableTx() }) });
+    await client.transferPayee({
+      escrowId: 1n,
+      currentPayee: payee,
+      newPayee: payer.publicKey(),
+      checkPreconditions: false,
+    });
+    expect(getEscrow).not.toHaveBeenCalled();
+  });
+
+  it("names the method in the error", async () => {
+    const client = makeClient({ getEscrow: async () => escrow({ status: "Cancelled" }) });
+    await expect(
+      client.transferPayee({ escrowId: 1n, currentPayee: payee, newPayee: newPayee.publicKey() }),
+    ).rejects.toThrow(/^transfer_payee: /);
+  });
+});
+
 describe("cancel", () => {
   it("calls cancel as the payer", async () => {
     const cancel = vi.fn(async () => sendableTx("cancel-hash"));
@@ -297,5 +413,123 @@ describe("prepare → sign → submit", () => {
       source: relayer.publicKey(),
     });
     await expect(client.submitLifecycleCall(prepared, Keypair.random())).rejects.toThrow(/source/);
+  });
+
+  it("reports malformed JSON plainly", async () => {
+    const client = flowClient([]);
+    await expect(
+      client.submitLifecycleCall(
+        { method: "top_up", transaction: "{", source: relayer.publicKey(), pendingSigners: [], expiresAtLedger: 1 },
+        relayer,
+      ),
+    ).rejects.toThrow(/not valid JSON/);
+  });
+
+  it("checks preconditions before simulating", async () => {
+    const client = makeClient({ getEscrow: async () => escrow({ status: "Released" }) });
+    await expectPrecondition(
+      client.prepareLifecycleCall({
+        call: { method: "top_up", escrowId: 3n, payer: payer.publicKey(), amount: 10n },
+      }),
+      "NotFunded",
+    );
+  });
+
+  it("defaults the source to the call's own signer", async () => {
+    const client = makeClient({
+      getEscrow: async () => escrow(),
+      rpc: { getLatestLedger: async () => ({ sequence: 1 }) },
+      contractClientForAddress: () => ({ accept: async () => fakeAssembled("accept", []) }),
+    });
+    const prepared = await client.prepareLifecycleCall({
+      call: { method: "accept", escrowId: 3n, payee: payee.publicKey() },
+    });
+    expect(prepared.source).toBe(payee.publicKey());
+    expect(prepared.pendingSigners).toEqual([]);
+  });
+
+  it("prepares a transfer_payee call for the current payee to sign elsewhere", async () => {
+    const newPayee = Keypair.random();
+    const relayer = Keypair.random();
+    const client = makeClient({
+      getEscrow: async () => escrow(),
+      rpc: { getLatestLedger: async () => ({ sequence: 1000 }) },
+      contractClientForAddress: () => ({
+        transfer_payee: async () => fakeAssembled("transfer_payee", [payee.publicKey()]),
+      }),
+    });
+    const prepared = await client.prepareLifecycleCall({
+      call: { method: "transfer_payee", escrowId: 3n, currentPayee: payee.publicKey(), newPayee: newPayee.publicKey() },
+      source: relayer.publicKey(),
+    });
+    expect(prepared.method).toBe("transfer_payee");
+    expect(prepared.source).toBe(relayer.publicKey());
+    expect(prepared.pendingSigners).toEqual([payee.publicKey()]);
+    expect(JSON.parse(JSON.stringify(prepared))).toEqual(prepared);
+  });
+
+  it("rejects a prepared transfer_payee that would fail preconditions", async () => {
+    const client = makeClient({ getEscrow: async () => escrow({ status: "Released" }) });
+    await expectPrecondition(
+      client.prepareLifecycleCall({
+        call: {
+          method: "transfer_payee",
+          escrowId: 3n,
+          currentPayee: payee.publicKey(),
+          newPayee: payer.publicKey(),
+        },
+      }),
+      "NotFunded",
+    );
+  });
+});
+
+describe("createEscrow with requiresAcceptance", () => {
+  const base = {
+    payer,
+    payee: payee.publicKey(),
+    token: Keypair.random().publicKey(),
+    amount: 10n,
+    conditionRef: "ref",
+    releaser: releaser.publicKey(),
+  };
+
+  it("uses create_escrow_with_acceptance", async () => {
+    const unwrap = vi.fn(() => 12n);
+    const create_escrow_with_acceptance = vi.fn(async () => ({
+      isReadCall: false,
+      sign: async () => {},
+      send: async () => ({ result: { unwrap }, sendTransactionResponse: { hash: "h" } }),
+    }));
+    const client = makeClient({ contractClient: () => ({ create_escrow_with_acceptance }) });
+
+    const result = await client.createEscrow({ ...base, requiresAcceptance: true });
+
+    expect(result.escrowId).toBe(12n);
+    expect(create_escrow_with_acceptance).toHaveBeenCalledWith(
+      expect.objectContaining({ requires_acceptance: true, payer: payer.publicKey(), releaser: releaser.publicKey() }),
+    );
+  });
+
+  it("rejects combinations the contract has no entry point for", async () => {
+    const client = makeClient({ contractClient: () => ({}) });
+    await expect(client.createEscrow({ ...base, requiresAcceptance: true, notifyPayee: true })).rejects.toThrow(
+      /cannot be combined/,
+    );
+    await expect(
+      client.createEscrow({ ...base, requiresAcceptance: true, releaseNotBefore: 5n }),
+    ).rejects.toThrow(/cannot be combined/);
+  });
+
+  it("rejects fees before calling the acceptance-only entry point", async () => {
+    const client = makeClient({ contractClient: () => ({}) });
+    await expect(
+      client.createEscrow({
+        ...base,
+        requiresAcceptance: true,
+        feeRecipient: Keypair.random().publicKey(),
+        feeBps: 100,
+      }),
+    ).rejects.toThrow(/cannot be combined/);
   });
 });

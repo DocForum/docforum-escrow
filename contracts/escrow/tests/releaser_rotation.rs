@@ -1,9 +1,15 @@
-use docforum_escrow::{EscrowContract, EscrowContractClient};
+use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus, SettleAction};
 use soroban_sdk::{
-    testutils::{Address as _, MockAuth, MockAuthInvoke},
+    symbol_short,
+    testutils::{Address as _, Events as _, Ledger as _, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, IntoVal, String, Vec,
+    vec, Address, Env, IntoVal, String, Vec,
 };
+
+/// Ledger close time at escrow creation.
+const CREATED_AT: u64 = 1_000;
+/// A `refund_after` deadline strictly after `CREATED_AT`.
+const DEADLINE: u64 = 1_100;
 
 fn funded_escrow(
     env: &Env,
@@ -43,6 +49,89 @@ fn funded_escrow(
         &None,
     );
     (client, token, payer, payee, releaser, id)
+}
+
+/// A funded single-releaser escrow with a `refund_after` deadline.
+fn escrow_with_refund_after(
+    env: &Env,
+) -> (
+    EscrowContractClient<'_>,
+    TokenClient<'_>,
+    Address,
+    Address,
+    Address,
+    u64,
+) {
+    env.ledger().set_timestamp(CREATED_AT);
+    let token_id = env
+        .register_stellar_asset_contract_v2(Address::generate(env))
+        .address();
+    let token = TokenClient::new(env, &token_id);
+    let payer = Address::generate(env);
+    let payee = Address::generate(env);
+    let releaser = Address::generate(env);
+    StellarAssetClient::new(env, &token_id).mint(&payer, &1_000);
+
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
+    let client = EscrowContractClient::new(env, &contract_id);
+    let id = client.create_escrow(
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(env, "rotation-deadline-test"),
+        &releaser,
+        &Some(DEADLINE),
+        &false,
+        &None,
+        &None,
+        &None,
+    );
+    (client, token, payer, payee, releaser, id)
+}
+
+/// A pooled escrow whose creator is the stored payer and whose single
+/// releaser is `releaser` (docs/adr/0011).
+#[allow(clippy::type_complexity)]
+fn pooled_escrow(
+    env: &Env,
+) -> (
+    EscrowContractClient<'_>,
+    TokenClient<'_>,
+    StellarAssetClient<'_>,
+    Address,
+    Address,
+    Address,
+    u64,
+) {
+    env.ledger().set_timestamp(CREATED_AT);
+    let token_id = env
+        .register_stellar_asset_contract_v2(Address::generate(env))
+        .address();
+    let token = TokenClient::new(env, &token_id);
+    let asset = StellarAssetClient::new(env, &token_id);
+    let creator = Address::generate(env);
+    let payee = Address::generate(env);
+    let releaser = Address::generate(env);
+
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
+    let client = EscrowContractClient::new(env, &contract_id);
+    let id = client.create_pooled_escrow(
+        &creator,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(env, "pooled-rotation-test"),
+        &releaser,
+        &DEADLINE,
+    );
+    (client, token, asset, creator, payee, releaser, id)
 }
 
 #[test]
@@ -124,4 +213,408 @@ fn rotation_rejects_contract_and_payee_as_new_releaser() {
     assert!(client
         .try_rotate_releaser(&id, &old_releaser, &contract_address)
         .is_err());
+}
+
+/// Creates a 2-of-3 quorum escrow (issue #294), mirroring
+/// `tests/quorum.rs`. Returns the client, payer, payee, releaser set and
+/// escrow id.
+fn quorum_escrow(
+    env: &Env,
+) -> (
+    EscrowContractClient<'_>,
+    Address,
+    Address,
+    Vec<Address>,
+    u64,
+) {
+    let token_id = env
+        .register_stellar_asset_contract_v2(Address::generate(env))
+        .address();
+    let asset = StellarAssetClient::new(env, &token_id);
+    let payer = Address::generate(env);
+    let payee = Address::generate(env);
+    asset.mint(&payer, &1_000);
+
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
+    let client = EscrowContractClient::new(env, &contract_id);
+    let mut releasers = Vec::new(env);
+    for _ in 0..3 {
+        releasers.push_back(Address::generate(env));
+    }
+    let id = client.create_escrow_with_releasers(
+        &payer,
+        &payee,
+        &token_id,
+        &300,
+        &String::from_str(env, "quorum-rotation-test"),
+        &releasers,
+        &2,
+        &None,
+        &false,
+        &None,
+    );
+    (client, payer, payee, releasers, id)
+}
+
+#[test]
+fn no_op_rotation_is_rejected_without_state_or_event_changes() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, _payer, _payee, releaser, id) = funded_escrow(&env);
+
+    assert_eq!(
+        client.try_rotate_releaser(&id, &releaser, &releaser),
+        Err(Ok(Error::InvalidReleaser))
+    );
+
+    let data = client.get_escrow(&id);
+    assert_eq!(data.status, EscrowStatus::Funded);
+    assert_eq!(data.threshold, 1);
+    assert_eq!(data.releasers.len(), 1);
+    assert_eq!(data.releasers.get(0), Some(releaser));
+    assert_eq!(
+        env.events()
+            .all()
+            .filter_by_contract(&client.address)
+            .events()
+            .len(),
+        0,
+        "a rejected no-op rotation must not emit an event"
+    );
+}
+
+#[test]
+fn wrong_caller_gets_unauthorized_before_invalid_releaser() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, _payer, _payee, releaser, id) = funded_escrow(&env);
+    let stranger = Address::generate(&env);
+    let replacement = Address::generate(&env);
+
+    // A no-op target from a non-releaser still reports the caller problem.
+    assert_eq!(
+        client.try_rotate_releaser(&id, &stranger, &releaser),
+        Err(Ok(Error::Unauthorized))
+    );
+    // As does a valid target from a non-releaser.
+    assert_eq!(
+        client.try_rotate_releaser(&id, &stranger, &replacement),
+        Err(Ok(Error::Unauthorized))
+    );
+
+    let data = client.get_escrow(&id);
+    assert_eq!(data.status, EscrowStatus::Funded);
+    assert_eq!(data.releasers.get(0), Some(releaser));
+}
+
+#[test]
+fn pooled_escrow_rotation_requires_the_creator_and_replaces_the_releaser() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, token, asset, creator, payee, releaser, id) = pooled_escrow(&env);
+    let contributor = Address::generate(&env);
+    asset.mint(&contributor, &300);
+    client.contribute(&id, &contributor, &300);
+
+    let replacement = Address::generate(&env);
+    let invoke = MockAuthInvoke {
+        contract: &client.address,
+        fn_name: "rotate_releaser",
+        args: (id, releaser.clone(), replacement.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+
+    // The creator is stored as the pooled escrow's payer and must co-sign.
+    env.mock_auths(&[MockAuth {
+        address: &releaser,
+        invoke: &invoke,
+    }]);
+    assert!(client
+        .try_rotate_releaser(&id, &releaser, &replacement)
+        .is_err());
+    let unchanged = client.get_escrow(&id);
+    assert_eq!(unchanged.status, EscrowStatus::Funded);
+    assert_eq!(unchanged.releasers.get(0), Some(releaser.clone()));
+
+    env.mock_auths(&[
+        MockAuth {
+            address: &releaser,
+            invoke: &invoke,
+        },
+        MockAuth {
+            address: &creator,
+            invoke: &invoke,
+        },
+    ]);
+    client.rotate_releaser(&id, &releaser, &replacement);
+
+    let data = client.get_escrow(&id);
+    assert_eq!(data.payer, creator);
+    assert_eq!(data.status, EscrowStatus::Funded);
+    assert_eq!(data.amount, 300);
+    assert_eq!(data.releasers.get(0), Some(replacement.clone()));
+
+    env.mock_all_auths();
+    assert_eq!(
+        client.try_release(&id, &releaser),
+        Err(Ok(Error::Unauthorized))
+    );
+    client.release(&id, &replacement);
+    assert_eq!(token.balance(&payee), 300);
+    assert_eq!(client.get_status(&id), EscrowStatus::Released);
+}
+
+#[test]
+fn rotation_is_still_allowed_after_the_refund_deadline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, token, payer, payee, releaser, id) = escrow_with_refund_after(&env);
+    let replacement = Address::generate(&env);
+
+    env.ledger().set_timestamp(DEADLINE + 1);
+    client.rotate_releaser(&id, &releaser, &replacement);
+
+    let data = client.get_escrow(&id);
+    assert_eq!(data.status, EscrowStatus::Funded);
+    assert_eq!(data.refund_after, Some(DEADLINE));
+    assert_eq!(data.releasers.get(0), Some(replacement.clone()));
+    assert_eq!(
+        client.try_release(&id, &releaser),
+        Err(Ok(Error::Unauthorized))
+    );
+
+    client.release(&id, &replacement);
+    assert_eq!(token.balance(&payee), 300);
+    assert_eq!(token.balance(&payer), 700);
+    assert_eq!(client.get_status(&id), EscrowStatus::Released);
+}
+
+#[test]
+fn rotated_out_releaser_cannot_settle_many() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, token, payer, payee, old_releaser, id) = funded_escrow(&env);
+    let replacement = Address::generate(&env);
+    client.rotate_releaser(&id, &old_releaser, &replacement);
+
+    let results = client.settle_many(&old_releaser, &vec![&env, (id, SettleAction::Release)]);
+    assert_eq!(results, soroban_sdk::vec![&env, Err(Error::Unauthorized)]);
+    assert_eq!(client.get_status(&id), EscrowStatus::Funded);
+    assert_eq!(token.balance(&payer), 700);
+    assert_eq!(token.balance(&client.address), 300);
+    assert_eq!(token.balance(&payee), 0);
+
+    // The replacement can settle the same escrow through the batch path.
+    let results = client.settle_many(&replacement, &vec![&env, (id, SettleAction::Release)]);
+    assert_eq!(results, soroban_sdk::vec![&env, Ok::<(), Error>(())]);
+    assert_eq!(client.get_status(&id), EscrowStatus::Released);
+    assert_eq!(token.balance(&payee), 300);
+}
+
+#[test]
+fn rotation_emits_the_exact_rotate_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, _payer, _payee, previous_releaser, id) = funded_escrow(&env);
+    let replacement = Address::generate(&env);
+
+    client.rotate_releaser(&id, &previous_releaser, &replacement);
+
+    assert_eq!(
+        env.events().all().filter_by_contract(&client.address),
+        vec![
+            &env,
+            (
+                client.address.clone(),
+                (symbol_short!("rotate"), id).into_val(&env),
+                (previous_releaser.clone(), replacement.clone()).into_val(&env),
+            ),
+        ]
+    );
+    let data = client.get_escrow(&id);
+    assert_eq!(data.status, EscrowStatus::Funded);
+    assert_eq!(data.threshold, 1);
+    assert_eq!(data.releasers.get(0), Some(replacement));
+}
+
+fn approvers_of(env: &Env, set: &Vec<Address>, indexes: &[u32]) -> Vec<Address> {
+    let mut out = Vec::new(env);
+    for index in indexes {
+        out.push_back(set.get(*index).unwrap());
+    }
+    out
+}
+
+#[test]
+fn quorum_rotation_replaces_one_member_and_keeps_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _payer, _payee, releasers, id) = quorum_escrow(&env);
+    let old = releasers.get(1).unwrap();
+    let replacement = Address::generate(&env);
+    let approvers = approvers_of(&env, &releasers, &[0, 2]);
+
+    client.rotate_releaser_with_approvals(&id, &approvers, &old, &replacement);
+
+    let data = client.get_escrow(&id);
+    assert_eq!(data.status, EscrowStatus::Funded);
+    assert_eq!(data.threshold, 2);
+    assert_eq!(data.releasers.len(), 3);
+    assert_eq!(data.releasers.get(0), Some(releasers.get(0).unwrap()));
+    assert_eq!(data.releasers.get(1), Some(replacement.clone()));
+    assert_eq!(data.releasers.get(2), Some(releasers.get(2).unwrap()));
+
+    // The outgoing member can no longer settle.
+    assert_eq!(client.try_release(&id, &old), Err(Ok(Error::Unauthorized)));
+    // The replacement settles with one other member.
+    let mut new_approvers = Vec::new(&env);
+    new_approvers.push_back(replacement);
+    new_approvers.push_back(releasers.get(0).unwrap());
+    client.release_with_approvals(&id, &new_approvers);
+}
+
+#[test]
+fn quorum_rotation_counts_the_outgoing_members_approval() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _payer, _payee, releasers, id) = quorum_escrow(&env);
+    let old = releasers.get(0).unwrap();
+    let replacement = Address::generate(&env);
+    // The outgoing member is one of the two approvers.
+    let approvers = approvers_of(&env, &releasers, &[0, 1]);
+
+    client.rotate_releaser_with_approvals(&id, &approvers, &old, &replacement);
+
+    assert_eq!(client.get_escrow(&id).releasers.get(0), Some(replacement));
+}
+
+#[test]
+fn quorum_rotation_rejects_bad_approvals_and_members() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _payer, payee, releasers, id) = quorum_escrow(&env);
+    let old = releasers.get(0).unwrap();
+    let replacement = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let contract_address = client.address.clone();
+
+    // Fewer approvers than the threshold.
+    let one = approvers_of(&env, &releasers, &[1]);
+    assert_eq!(
+        client.try_rotate_releaser_with_approvals(&id, &one, &old, &replacement),
+        Err(Ok(Error::ThresholdNotMet))
+    );
+    // An approver who is not a member.
+    let mut with_stranger = approvers_of(&env, &releasers, &[1]);
+    with_stranger.push_back(stranger.clone());
+    assert_eq!(
+        client.try_rotate_releaser_with_approvals(&id, &with_stranger, &old, &replacement),
+        Err(Ok(Error::Unauthorized))
+    );
+    // The same approver twice.
+    let mut duplicate = approvers_of(&env, &releasers, &[1]);
+    duplicate.push_back(releasers.get(1).unwrap());
+    assert_eq!(
+        client.try_rotate_releaser_with_approvals(&id, &duplicate, &old, &replacement),
+        Err(Ok(Error::DuplicateApprover))
+    );
+
+    let approvers = approvers_of(&env, &releasers, &[1, 2]);
+    // The replacement is already a member.
+    assert_eq!(
+        client.try_rotate_releaser_with_approvals(
+            &id,
+            &approvers,
+            &old,
+            &releasers.get(1).unwrap()
+        ),
+        Err(Ok(Error::InvalidReleaser))
+    );
+    // The replacement is the payee or the contract.
+    assert_eq!(
+        client.try_rotate_releaser_with_approvals(&id, &approvers, &old, &payee),
+        Err(Ok(Error::InvalidReleaser))
+    );
+    assert_eq!(
+        client.try_rotate_releaser_with_approvals(&id, &approvers, &old, &contract_address),
+        Err(Ok(Error::InvalidReleaser))
+    );
+    // The outgoing address is not a member.
+    assert_eq!(
+        client.try_rotate_releaser_with_approvals(&id, &approvers, &stranger, &replacement),
+        Err(Ok(Error::InvalidReleaser))
+    );
+}
+
+#[test]
+fn quorum_rotation_rejects_settled_escrows() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _payer, _payee, releasers, id) = quorum_escrow(&env);
+    let approvers = approvers_of(&env, &releasers, &[0, 1]);
+    client.release_with_approvals(&id, &approvers);
+    let replacement = Address::generate(&env);
+
+    assert_eq!(
+        client.try_rotate_releaser_with_approvals(
+            &id,
+            &approvers,
+            &releasers.get(0).unwrap(),
+            &replacement
+        ),
+        Err(Ok(Error::NotFunded))
+    );
+}
+
+#[test]
+fn quorum_rotation_requires_payer_consent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, payer, _payee, releasers, id) = quorum_escrow(&env);
+    let old = releasers.get(0).unwrap();
+    let replacement = Address::generate(&env);
+    let approvers = approvers_of(&env, &releasers, &[1, 2]);
+
+    let invoke = MockAuthInvoke {
+        contract: &client.address,
+        fn_name: "rotate_releaser_with_approvals",
+        args: (id, approvers.clone(), old.clone(), replacement.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+
+    // Approvers alone cannot rotate.
+    env.mock_auths(&[
+        MockAuth {
+            address: &releasers.get(1).unwrap(),
+            invoke: &invoke,
+        },
+        MockAuth {
+            address: &releasers.get(2).unwrap(),
+            invoke: &invoke,
+        },
+    ]);
+    assert!(client
+        .try_rotate_releaser_with_approvals(&id, &approvers, &old, &replacement)
+        .is_err());
+
+    // Approvers plus the payer can.
+    env.mock_auths(&[
+        MockAuth {
+            address: &releasers.get(1).unwrap(),
+            invoke: &invoke,
+        },
+        MockAuth {
+            address: &releasers.get(2).unwrap(),
+            invoke: &invoke,
+        },
+        MockAuth {
+            address: &payer,
+            invoke: &invoke,
+        },
+    ]);
+    client.rotate_releaser_with_approvals(&id, &approvers, &old, &replacement);
+    assert_eq!(client.get_escrow(&id).releasers.get(0), Some(replacement));
 }

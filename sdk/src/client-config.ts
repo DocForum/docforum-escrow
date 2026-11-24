@@ -3,6 +3,7 @@ import { type InstrumentationOptions } from "./instrumentation.js";
 import { type ArchivedEntryBehavior } from "./archived-entries.js";
 import { type NetworkPreset } from "./networks.js";
 import { type TransactionLifecycleOptions } from "./lifecycle.js";
+import { type RpcProviderConfig } from "./rpc-providers.js";
 
 /** Connection settings for an {@link EscrowClient}: which contract, and (optionally) which network. */
 export interface EscrowClientConfig {
@@ -10,6 +11,8 @@ export interface EscrowClientConfig {
   contractId: string;
   /** Default: Soroban testnet RPC. */
   rpcUrl?: string;
+  /** Prioritized Soroban RPC endpoints. `rpcUrl` remains the single-endpoint shorthand. */
+  rpcProviders?: readonly RpcProviderConfig[];
   /** Default: Stellar testnet passphrase. */
   networkPassphrase?: string;
   /**

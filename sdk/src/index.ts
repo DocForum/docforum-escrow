@@ -27,6 +27,7 @@ import {
   type EscrowStatus as GeneratedEscrowStatus,
   type PooledData as GeneratedPooledData,
   type Contribution as GeneratedContribution,
+  type VestingInfo as GeneratedVestingInfo,
 } from "./generated/contract-client.js";
 import { decodeEscrowDataFromScVal } from "./escrow-data.js";
 import {
@@ -37,8 +38,8 @@ import {
   type InstrumentationOptions,
 } from "./instrumentation.js";
 import type { FactoryClient as FactoryClientType } from "./factory.js";
-import { signerAddress, type EscrowSigner } from "./signers/types.js";
-import { NetworkMismatchError, toEscrowError } from "./errors.js";
+import { contractSigner, signerAddress, type EscrowSigner } from "./signers/types.js";
+import { ContractError, NetworkMismatchError, NotFundedError, toEscrowError } from "./errors.js";
 import { getTokenInfo as readTokenInfo, rpcTokenInfoSource, type TokenInfo } from "./amounts.js";
 import {
   PreparedTransactionExpiredError,
@@ -77,7 +78,16 @@ export {
   type TokenInfoSource,
   type TokenInfoSourceOptions,
 } from "./amounts.js";
-export { signerAddress, type EscrowSigner } from "./signers/types.js";
+export {
+  KeypairSigner,
+  RemoteSigner,
+  SignerError,
+  signerAddress,
+  type EscrowSigner,
+  type RemoteSignerOptions,
+  type Signer,
+  type SignerOptions,
+} from "./signers/types.js";
 export {
   BalanceMismatchError,
   ContractError,
@@ -153,19 +163,25 @@ export type {
 // Public types, constants and errors live in topical modules (one per
 // feature); index.ts re-exports them all and keeps the EscrowClient class.
 export * from "./archived-entries.js";
+export * from "./attestation.js";
 export * from "./batch.js";
 
 export * from "./contract-version.js";
 export * from "./escrow-types.js";
 export * from "./events.js";
 export * from "./fees.js";
+export * from "./ledger-time.js";
 export * from "./lifecycle.js";
 export type { EscrowClientConfig } from "./client-config.js";
 export * from "./milestones.js";
 export * from "./networks.js";
 export * from "./pooled.js";
+export * from "./preflight.js";
 export * from "./prepare-submit.js";
 export * from "./relayed-auth.js";
+export * from "./rpc-providers.js";
+export * from "./solvency.js";
+export * from "./vesting.js";
 
 import { type ArchivedEntryBehavior } from "./archived-entries.js";
 import { type BatchCreateItem, type BatchItemResult, type BatchOptions, BatchPartialFailureError, type BatchSettleOperation, MAX_BATCH_SIZE } from "./batch.js";
@@ -175,12 +191,24 @@ import { type CancelParams, type CreateEscrowParams, type CreateQuorumEscrowPara
 import { type EscrowEvent, type EscrowEventType, EventCursorExpiredError, type GetEventsParams, type GetEventsResult, type SubscribeOptions } from "./events.js";
 import { type EstimateCallParams, type FeeBumpOptions, type FeeBumpResult, type FeeEstimate, type GuardResult, MaxFeeExceededError, SponsorshipGuardError, computeFeeEstimate } from "./fees.js";
 import { EMPTY_SPAN_ATTRIBUTES, MISSING_FUNCTION_ERROR, TESTNET_NETWORK_PASSPHRASE, TESTNET_RPC_URL, assertLedgerWindow, assertPositiveAmount, batchErrorMessage, contractAddressOf, isRetentionError, lifecycleCallSigner, safeScValToNative, sendErrorName, trancheOf } from "./internal.js";
-import { type AcceptParams, type EscrowPreconditionCode, EscrowPreconditionError, type LifecycleCall, type LifecycleMethod, PREPARED_AUTH_TTL_LEDGERS, type PrepareLifecycleParams, type PreparedLifecycleCall, type TopUpParams } from "./lifecycle.js";
+import { LedgerClock, type LedgerTime, type LedgerTimeOptions, type LatestLedger } from "./ledger-time.js";
+import { type AcceptParams, type EscrowPreconditionCode, EscrowPreconditionError, type LifecycleCall, type LifecycleMethod, PREPARED_AUTH_TTL_LEDGERS, type PrepareLifecycleParams, type PreparedLifecycleCall, type TopUpParams, type TransferPayeeParams } from "./lifecycle.js";
+import { type CreateStreamedEscrowParams, type VestingInfo, type WithdrawParams, validateVestingSchedule } from "./vesting.js";
 import { type CreateMilestoneEscrowParams, type Milestone, type MilestoneEscrow, MilestoneEscrowPartialError, type RefundMilestoneParams, type ReleaseMilestoneParams, milestoneConditionRef, validateMilestoneSchedule } from "./milestones.js";
 import { MAINNET_NETWORK_PASSPHRASE, MainnetNotAllowedError } from "./networks.js";
 import { type ClaimRefundParams, type ContributeParams, type ContributionRecord, type CreatePooledEscrowParams, type PooledEscrow, type SolvencyReport } from "./pooled.js";
+import { canRefund as evaluateRefund, canRelease as evaluateRelease, type SettlementCheck, type SettlementCheckParams } from "./preflight.js";
 import { DEFAULT_SUBMIT_MAX_FEE, OFFLINE_PREPARED_TX_TTL_LEDGERS, PREPARED_TX_TTL_LEDGERS, type PrepareCreateEscrowParams, type PrepareSettlementParams, type SubmitSignedOptions, type SubmitSignedResult } from "./prepare-submit.js";
 import { RELAYED_AUTH_TTL_LEDGERS, type RelayedAuthorization, type RelayedAuthorizationParams } from "./relayed-auth.js";
+import { RpcProviderPool } from "./rpc-providers.js";
+
+/** Contract `Error::NotPooled` code (`contracts/escrow/src/errors.rs`). */
+const NOT_POOLED_CODE = 26;
+
+/** A settlement caller can be a signer or an already-known address. */
+function settlementAddress(caller: EscrowSigner | string): string {
+  return typeof caller === "string" ? caller : signerAddress(caller);
+}
 
 /**
  * Thin client for the docforum-escrow Soroban contract. Wraps
@@ -190,9 +218,10 @@ import { RELAYED_AUTH_TTL_LEDGERS, type RelayedAuthorization, type RelayedAuthor
 export class EscrowClient {
   /** Contract id of the escrow instance this client talks to. */
   readonly contractId: string;
-  private readonly rpcUrl: string;
+  private rpcUrl: string;
   private readonly networkPassphrase: string;
-  private readonly rpc: RpcServer;
+  private rpc: RpcServer;
+  private readonly rpcPool?: RpcProviderPool;
   private readonly instrumentation?: InstrumentationOptions;
   private readonly archivalBehavior: ArchivedEntryBehavior;
   private readonly restoreSigner?: Keypair;
@@ -207,10 +236,12 @@ export class EscrowClient {
   /** Cached `version()` result; `null` means the deployment has no `version()`. */
   private contractVersion?: Promise<string | null>;
   private contractVersionChecked = false;
+  /** Cached ledger-clock reads behind `getLedgerTime` (issue #335). */
+  private readonly ledgerClock: LedgerClock;
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
-    this.rpcUrl = config.rpcUrl ?? config.network?.rpcUrl ?? TESTNET_RPC_URL;
+    this.rpcUrl = config.rpcUrl ?? config.rpcProviders?.[0]?.url ?? config.network?.rpcUrl ?? TESTNET_RPC_URL;
     this.networkPassphrase =
       config.networkPassphrase ?? config.network?.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
     this.allowMainnet = config.allowMainnet === true;
@@ -235,7 +266,12 @@ export class EscrowClient {
             ? "auto"
             : "off";
     this.allowHttp = config.allowHttp ?? config.network?.allowHttp ?? false;
+    const providerConfigs = config.rpcProviders ?? [{ url: this.rpcUrl }];
+    this.rpcPool = config.rpcProviders
+      ? new RpcProviderPool(providerConfigs, { networkPassphrase: this.networkPassphrase, allowHttp: this.allowHttp })
+      : undefined;
     this.rpc = new RpcServer(this.rpcUrl, { allowHttp: this.allowHttp });
+    this.ledgerClock = new LedgerClock(() => this.latestLedger());
     this.instrumentation = config.onEvent
       ? { ...config.instrumentation, onEvent: config.onEvent }
       : config.instrumentation;
@@ -311,6 +347,11 @@ export class EscrowClient {
   }
 
   private async ensureNetworkPassphrase(): Promise<void> {
+    if (this.rpcPool) {
+      const selected = await this.rpcPool.select();
+      this.rpc = selected.rpc;
+      this.rpcUrl = selected.url;
+    }
     if (this.networkVerification === "off") return;
     await this.runNetworkVerification(this.networkVerification === "required");
   }
@@ -378,7 +419,10 @@ export class EscrowClient {
       networkPassphrase: this.networkPassphrase,
       allowHttp: this.allowHttp,
       ...(effectiveSigner
-        ? { publicKey: signerAddress(effectiveSigner), signTransaction: effectiveSigner }
+        ? {
+            publicKey: signerAddress(effectiveSigner),
+            signTransaction: contractSigner(effectiveSigner, this.networkPassphrase),
+          }
         : {}),
     });
   }
@@ -475,6 +519,9 @@ export class EscrowClient {
 
   /** Locks `amount` of `token` from `payer`, held for `payee`. Returns the new escrow's id and the funding transaction's hash. */
   async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
+    if (params.amount <= 0n) {
+      throw new Error(`InvalidAmount (error 2): amount must be a positive raw amount, got ${params.amount}`);
+    }
     if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
       throw new Error(
         `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
@@ -485,6 +532,28 @@ export class EscrowClient {
     }
     if (params.feeBps !== undefined && (!Number.isInteger(params.feeBps) || params.feeBps < 0 || params.feeBps > MAX_FEE_BPS)) {
       throw new RangeError(`feeBps must be an integer between 0 and ${MAX_FEE_BPS} (10 %)`);
+    }
+    if (params.feeRecipient === this.contractId) {
+      throw new Error(
+        "InvalidFee (error 35): feeRecipient must not be the escrow contract's own address."
+      );
+    }
+    if (params.refundTo === this.contractId) {
+      throw new Error(
+        "InvalidRefundTo (error 21): refundTo must not be the escrow contract's own address."
+      );
+    }
+    if (
+      params.releaseNotBefore !== undefined &&
+      params.refundAfter !== undefined &&
+      params.releaseNotBefore > params.refundAfter
+    ) {
+      throw new Error(
+        "InvalidReleaseNotBefore (error 22): releaseNotBefore must not be later than refundAfter."
+      );
+    }
+    if (params.requiresAcceptance && (params.feeRecipient !== undefined || params.feeBps !== undefined)) {
+      throw new TypeError("requiresAcceptance cannot be combined with feeRecipient or feeBps.");
     }
     const client = this.contractClient(params.payer);
     const createParams = {
@@ -529,6 +598,80 @@ export class EscrowClient {
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
   }
 
+  /** Creates a fixed-total linear vesting stream with an optional cliff. */
+  async createStreamedEscrow(
+    params: CreateStreamedEscrowParams,
+  ): Promise<{ escrowId: bigint; txHash: string }> {
+    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+      throw new Error(
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`,
+      );
+    }
+    if (params.amount <= 0n) throw new RangeError(`amount must be positive, got ${params.amount}`);
+    validateVestingSchedule(params.schedule);
+    const client = this.contractClient(params.payer);
+    const sent = await this.invoke(
+      "create_streamed_escrow",
+      undefined,
+      () => client.create_streamed_escrow({
+        payer: signerAddress(params.payer),
+        payee: params.payee,
+        token: params.token,
+        amount: params.amount,
+        condition_ref: params.conditionRef,
+        releaser: params.releaser,
+        refund_after: params.refundAfter,
+        schedule: {
+          start: params.schedule.start,
+          end: params.schedule.end,
+          cliff: params.schedule.cliff,
+        },
+      }),
+      { address: signerAddress(params.payer) },
+    );
+    return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /** Reads the current schedule, vested amount, withdrawn amount, and claimable amount. */
+  async getVesting(escrowId: bigint): Promise<VestingInfo> {
+    await this.ensureNetworkVerified();
+    const client = this.contractClient();
+    try {
+      const tx = await tracePhase(
+        this.instrumentation,
+        "simulate",
+        this.spanAttributesIfEnabled("get_vesting", escrowId),
+        () => client.get_vesting({ escrow_id: escrowId }),
+      );
+      const data: GeneratedVestingInfo = tx.result.unwrap();
+      return {
+        schedule: {
+          start: data.schedule.start,
+          end: data.schedule.end,
+          cliff: data.schedule.cliff ?? undefined,
+        },
+        totalAmount: data.total_amount,
+        vestedAmount: data.vested_amount,
+        withdrawnAmount: data.withdrawn_amount,
+        claimableAmount: data.claimable_amount,
+      };
+    } catch (error) {
+      throw toEscrowError(error);
+    }
+  }
+
+  /** Withdraws the currently claimable vested amount to the stream payee. */
+  async withdraw(params: WithdrawParams): Promise<{ amount: bigint; txHash: string }> {
+    const client = this.contractClient(params.payee);
+    const sent = await this.invoke(
+      "withdraw",
+      params.escrowId,
+      () => client.withdraw({ escrow_id: params.escrowId, payee: signerAddress(params.payee) }),
+      { address: signerAddress(params.payee) },
+    );
+    return { amount: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
   /**
    * Read-only: `decimals`, `symbol` and `name` for `token`, read from the
    * SEP-41 contract over this client's RPC and cached per contract address.
@@ -541,6 +684,27 @@ export class EscrowClient {
       token,
       rpcTokenInfoSource({ rpcUrl: this.rpcUrl, networkPassphrase: this.networkPassphrase }),
     );
+  }
+
+  /**
+   * Reads the immutable deploy-time token allowlist (issue #299). An
+   * **empty** array means any token is accepted, preserving the legacy
+   * behavior. The list can never change after deployment, so verify it
+   * once instead of trusting deployment notes.
+   */
+  async getAllowedTokens(): Promise<string[]> {
+    try {
+      const client = this.contractClient();
+      const tx = await tracePhase(
+        this.instrumentation,
+        "simulate",
+        this.spanAttributesIfEnabled("get_allowed_tokens"),
+        () => client.get_allowed_tokens(),
+      );
+      return tx.result;
+    } catch (error) {
+      throw toEscrowError(error);
+    }
   }
 
   /** Read-only status query. Throws if `escrowId` doesn't exist. */
@@ -591,6 +755,14 @@ export class EscrowClient {
     ) {
       throw new Error(
         `threshold must be an integer between 1 and ${params.releasers.length}, got ${params.threshold}`
+      );
+    }
+    if (params.amount <= 0n) {
+      throw new Error(`InvalidAmount (error 2): amount must be a positive raw amount, got ${params.amount}`);
+    }
+    if (params.refundTo === this.contractId) {
+      throw new Error(
+        "InvalidRefundTo (error 21): refundTo must not be the escrow contract's own address."
       );
     }
     const client = this.contractClient(params.payer);
@@ -772,14 +944,125 @@ export class EscrowClient {
     );
   }
 
-  /** Moves the escrow's funds to its payee. Throws if `caller` isn't the escrow's `releaser`, or the escrow isn't `Funded`. Returns the transaction's hash. */
+  /**
+   * Read-only: the chain's clock — the latest ledger's close time — which is
+   * what every deadline in the contract is compared against (issue #335).
+   * Cached for {@link DEFAULT_LEDGER_TIME_CACHE_MS}; pass `{ maxAgeMs: 0 }` to
+   * force a fresh read. Ledger close time lags real time by a few seconds, and
+   * the contract decides whether a deadline has passed.
+   */
+  async getLedgerTime(options: LedgerTimeOptions = {}): Promise<LedgerTime> {
+    await this.ensureNetworkVerified();
+    return this.ledgerClock.get(options);
+  }
+
+  /**
+   * Ledger time minus local time, in milliseconds, from the same cached read
+   * as {@link getLedgerTime}. Feed it to
+   * `useEscrowTimeline(escrow, { ledgerTimeOffsetMs: offset })` so a countdown
+   * runs on the contract's clock. Advisory only: the contract decides.
+   */
+  async ledgerClockOffset(options: LedgerTimeOptions = {}): Promise<number> {
+    return (await this.getLedgerTime(options)).offsetMs;
+  }
+
+  /**
+   * Explains whether `release` would succeed right now, without building or
+   * signing anything (issue #332): reads the escrow (and its pooled funding
+   * config, when pooled) plus the ledger clock, then applies the contract's
+   * `release_checks`, release-time and acceptance gates in order. `reasons[0]`
+   * is the error the contract would return. Costs read-only simulations and
+   * spends nothing.
+   *
+   * The contract stays the authority: a passing check can still fail on-chain,
+   * for example if another transaction settles the escrow first.
+   */
+  async canRelease(params: SettlementCheckParams): Promise<SettlementCheck> {
+    const inputs = await this.settlementInputs(params);
+    if (inputs.settled) return { ok: false, reasons: ["NotFunded"], reason: "NotFunded" };
+    return evaluateRelease(inputs.escrow, {
+      caller: settlementAddress(params.caller),
+      ledgerTime: inputs.ledgerTime,
+      pooled: inputs.pooled,
+    });
+  }
+
+  /**
+   * Would `refund` succeed? The refund-side mirror of {@link canRelease}: the
+   * stored payee may refund voluntarily at any time while the escrow is
+   * funded, a single releaser may refund, and after `refundAfter` anyone may —
+   * always to the stored `refundTo` (issue #332).
+   */
+  async canRefund(params: SettlementCheckParams): Promise<SettlementCheck> {
+    const inputs = await this.settlementInputs(params);
+    if (inputs.settled) return { ok: false, reasons: ["NotFunded"], reason: "NotFunded" };
+    return evaluateRefund(inputs.escrow, {
+      caller: settlementAddress(params.caller),
+      ledgerTime: inputs.ledgerTime,
+      pooled: inputs.pooled,
+    });
+  }
+
+  /** Loads the escrow (or reports it settled) plus the inputs both preflights need. */
+  private async settlementInputs(params: SettlementCheckParams): Promise<
+    | { settled: true }
+    | { settled: false; escrow: Escrow; pooled: PooledEscrow | undefined; ledgerTime: bigint }
+  > {
+    let escrow: Escrow;
+    try {
+      escrow = await this.getEscrow(params.escrowId);
+    } catch (error) {
+      // A settled escrow's record is reclaimed (docs/adr/0013); the contract
+      // itself answers NotFunded for any settlement attempt.
+      if (error instanceof NotFundedError) return { settled: true };
+      throw error;
+    }
+    const pooled =
+      params.pooled === undefined ? await this.pooledOrUndefined(params.escrowId) : (params.pooled ?? undefined);
+    const ledgerTime = params.ledgerTime ?? (await this.getLedgerTime()).closeTime;
+    return { settled: false, escrow, pooled, ledgerTime };
+  }
+
+  /** `getPooled`, mapping the contract's `NotPooled` (26) to `undefined`. */
+  private async pooledOrUndefined(escrowId: bigint): Promise<PooledEscrow | undefined> {
+    try {
+      return await this.getPooled(escrowId);
+    } catch (error) {
+      const normalized = toEscrowError(error);
+      if (normalized instanceof ContractError && normalized.code === NOT_POOLED_CODE) return undefined;
+      throw normalized;
+    }
+  }
+
+  private async latestLedger(): Promise<LatestLedger> {
+    const latest = await this.rpc.getLatestLedger();
+    return { sequence: latest.sequence, closeTime: latest.closeTime };
+  }
+
+  /**
+   * Moves the escrow's funds to its payee. Throws if `caller` isn't the escrow's
+   * `releaser`, or the escrow isn't `Funded`. Returns the transaction's hash.
+   * Pass `checkPreconditions: true` to refuse a call the contract would reject
+   * before simulating it (issue #332).
+   */
   async release(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
+    const caller = signerAddress(params.caller);
+    if (params.checkPreconditions === true) {
+      const check = await this.canRelease({ escrowId: params.escrowId, caller });
+      if (!check.ok) {
+        throw new EscrowPreconditionError(
+          "release",
+          check.reasons[0],
+          `the contract would reject this release with ${check.reasons[0]}.`,
+        );
+      }
+    }
     const client = this.contractClient(params.caller);
     const sent = await this.invoke(
       "release",
       params.escrowId,
-      () => client.release({ escrow_id: params.escrowId, caller: signerAddress(params.caller) }),
-      { address: signerAddress(params.caller) },
+      () => client.release({ escrow_id: params.escrowId, caller }),
+      { address: caller },
     );
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
@@ -852,6 +1135,40 @@ export class EscrowClient {
   }
 
   /**
+   * Reassigns future payout rights to `newPayee` (contract `transfer_payee`,
+   * issue #45). Only the escrow's current payee may call it, only while
+   * `Funded`; `newPayee` must not be the payer or the contract id
+   * (`InvalidNewPayee`). If the escrow had `notifyPayee` set, it is reset
+   * to `false` upon transfer so the new payee receives standard push payouts
+   * without needing to implement the callback hook (issue #286).
+   * Returns the transaction's hash.
+   */
+  async transferPayee(params: TransferPayeeParams): Promise<{ txHash: string }> {
+    const currentPayee = signerAddress(params.currentPayee);
+    const call: LifecycleCall = {
+      method: "transfer_payee",
+      escrowId: params.escrowId,
+      currentPayee,
+      newPayee: params.newPayee,
+    };
+    if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
+    const client = this.contractClient(params.currentPayee);
+    const sent = await this.invoke(
+      "transfer_payee",
+      params.escrowId,
+      () =>
+        client.transfer_payee({
+          escrow_id: params.escrowId,
+          current_payee: currentPayee,
+          new_payee: params.newPayee,
+        }),
+      { address: currentPayee },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
    * Step 1 of the multi-party flow: simulates `call` with `source` as the
    * transaction source and returns it as portable JSON, listing every other
    * party whose contract authorization is still needed. Pass the result to
@@ -895,7 +1212,10 @@ export class EscrowClient {
     }
     const client = this.contractClientForAddress(prepared.source);
     const tx = client.txFromJSON<Result<void>>(prepared.transaction);
-    await tx.signAuthEntries({ signAuthEntry: signer, expiration: prepared.expiresAtLedger });
+    await tx.signAuthEntries({
+      signAuthEntry: contractSigner(signer, this.networkPassphrase),
+      expiration: prepared.expiresAtLedger,
+    });
     return {
       ...prepared,
       transaction: tx.toJSON(),
@@ -962,6 +1282,12 @@ export class EscrowClient {
         return client.accept({ escrow_id: call.escrowId, payee: call.payee });
       case "cancel":
         return client.cancel({ escrow_id: call.escrowId, payer: call.payer });
+      case "transfer_payee":
+        return client.transfer_payee({
+          escrow_id: call.escrowId,
+          current_payee: call.currentPayee,
+          new_payee: call.newPayee,
+        });
     }
   }
 
@@ -976,9 +1302,10 @@ export class EscrowClient {
       throw new EscrowPreconditionError(call.method, code, message);
     };
     // Same order as the contract, so the error matches what it would return.
-    const [party, expected] = call.method === "accept"
-      ? ["payee", escrow.payee] as const
-      : ["payer", escrow.payer] as const;
+    const [party, expected] =
+      call.method === "accept" || call.method === "transfer_payee"
+        ? ["payee", escrow.payee] as const
+        : ["payer", escrow.payer] as const;
     if (lifecycleCallSigner(call) !== expected) {
       fail("Unauthorized", `only the escrow's ${party} can call ${call.method}.`);
     }
@@ -986,6 +1313,15 @@ export class EscrowClient {
       fail("NotFunded", `escrow ${call.escrowId} is ${escrow.status}, not Funded.`);
     }
     if (call.method === "top_up") return;
+    if (call.method === "transfer_payee") {
+      if (call.newPayee === escrow.payer || call.newPayee === this.contractId) {
+        fail(
+          "InvalidNewPayee",
+          "newPayee must not be the payer or the contract id.",
+        );
+      }
+      return;
+    }
     if (!escrow.requiresAcceptance) {
       fail("AcceptanceNotConfigured", "the escrow was created without the acceptance gate.");
     }
@@ -1009,11 +1345,13 @@ export class EscrowClient {
       );
     }
     if (params.fundingTarget <= 0n) {
-      throw new Error(`fundingTarget must be a positive raw amount, got ${params.fundingTarget}`);
+      throw new Error(
+        `InvalidAmount (error 2): fundingTarget must be a positive raw amount, got ${params.fundingTarget}`
+      );
     }
     if (params.fundingDeadline <= 0n) {
       throw new Error(
-        `fundingDeadline must be a positive unix timestamp in seconds, got ${params.fundingDeadline}`
+        `InvalidFundingDeadline (error 34): fundingDeadline must be a positive unix timestamp in seconds, got ${params.fundingDeadline}`
       );
     }
     const client = this.contractClient(params.creator);
@@ -1161,12 +1499,23 @@ export class EscrowClient {
    * transaction's hash.
    */
   async refund(params: ReleaseOrRefundParams): Promise<{ txHash: string }> {
+    const caller = signerAddress(params.caller);
+    if (params.checkPreconditions === true) {
+      const check = await this.canRefund({ escrowId: params.escrowId, caller });
+      if (!check.ok) {
+        throw new EscrowPreconditionError(
+          "refund",
+          check.reasons[0],
+          `the contract would reject this refund with ${check.reasons[0]}.`,
+        );
+      }
+    }
     const client = this.contractClient(params.caller);
     const sent = await this.invoke(
       "refund",
       params.escrowId,
-      () => client.refund({ escrow_id: params.escrowId, caller: signerAddress(params.caller) }),
-      { address: signerAddress(params.caller) },
+      () => client.refund({ escrow_id: params.escrowId, caller }),
+      { address: caller },
     );
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
@@ -1641,7 +1990,7 @@ export class EscrowClient {
     // its own auth; only the releaser's separate auth entry needs signing here.
     if (tx.needsNonInvokerSigningBy().includes(params.releaser.publicKey())) {
       await tx.signAuthEntries({
-        signAuthEntry: params.releaser,
+        signAuthEntry: contractSigner(params.releaser, this.networkPassphrase),
         expiration: expiresAtLedger,
       });
     }
@@ -1875,7 +2224,7 @@ export class EscrowClient {
           // Every non-invoker approver signs the contract auth entry. This is
           // part of the "sign" phase, so one span covers all signatures.
           for (const signer of additionalSigners) {
-            await tx.signAuthEntries({ signAuthEntry: signer });
+            await tx.signAuthEntries({ signAuthEntry: contractSigner(signer, this.networkPassphrase) });
           }
         },
       },
@@ -1950,7 +2299,9 @@ export class EscrowClient {
             throw new Error(`extend_refund_after needs authorization from ${unknown.join(", ")}, which is neither the payer nor the releaser.`);
           }
           if (pending.includes(releaser)) {
-            await tx.signAuthEntries({ signAuthEntry: params.releaser });
+            await tx.signAuthEntries({
+              signAuthEntry: contractSigner(params.releaser, this.networkPassphrase),
+            });
           }
         },
       },

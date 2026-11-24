@@ -61,7 +61,7 @@ pub enum Error {
     /// Release was attempted before the configured time.
     ReleaseTooEarly = 23,
     /// A batch call was passed more than `MAX_BATCH_SIZE` items — see
-    /// docs/adr/0005. Callers must chunk. Appended at the end so existing
+    /// docs/adr/0012. Callers must chunk. Appended at the end so existing
     /// discriminants keep their on-chain values.
     BatchTooLarge = 25,
     /// `contribute`/`claim_refund`/`get_contribution` on a non-pooled
@@ -133,4 +133,24 @@ pub enum Error {
     /// `unpause` on a running contract. The transition did not happen, so
     /// no event is emitted.
     NotPaused = 40,
+    /// `release_with_attestation` was called on an escrow with no
+    /// `attester` configured (Phase E5, issue #42).
+    AttesterNotConfigured = 54,
+    /// `fund_next` before the next period is due (issue #115).
+    ScheduleTooEarly = 55,
+    /// `fund_next` after every period was funded (issue #115).
+    ScheduleComplete = 56,
+    /// `fund_next` or a second `cancel_schedule` on a cancelled schedule
+    /// (issue #115).
+    ScheduleCancelled = 57,
+    /// The payer's allowance for this contract is below one period's
+    /// amount — or has expired, which reads as zero (issue #115).
+    AllowanceExhausted = 58,
+    /// A schedule with a zero period or zero total periods (issue #115).
+    InvalidSchedule = 59,
+    /// A uniqueness-enabled creation used an already-indexed pair. Use
+    /// `get_unique_escrow` to recover the original escrow id.
+    DuplicateConditionRef = 4700,
+    /// The release deadline was not strictly after the funding deadline at creation (issue #288).
+    InvalidReleaseDeadline = 28800,
 }

@@ -12,8 +12,8 @@ export interface UseEscrowTimelineOptions {
    *
    * `refundAfter` is a **ledger timestamp** in unix seconds (the contract
    * compares it to the ledger close time, not your machine's clock). A local
-   * countdown is therefore advisory: derive this offset from
-   * `getLatestLedger().closeTime * 1000 - Date.now()` so client clock drift
+   * countdown is therefore advisory: pass the result of
+   * `client.ledgerClockOffset()` so client clock drift
    * does not show a deadline as passed when the contract still rejects the
    * timeout refund, or vice versa.
    */
@@ -31,7 +31,7 @@ export interface EscrowTimeline {
   expired: boolean;
   /** The escrow's stored status, if known. */
   status?: EscrowStatus;
-  /** `Released`/`Refunded` — the countdown no longer matters. */
+  /** `Released`/`Refunded`/`Cancelled` — the countdown no longer matters. */
   isTerminal: boolean;
   /** Whether the escrow has a deadline at all. */
   hasDeadline: boolean;
@@ -41,7 +41,7 @@ export interface EscrowTimeline {
  * Countdown to an escrow's `refundAfter` deadline, derived from a fetched
  * escrow. It renders nothing and fetches nothing: pass the result of
  * `useEscrow(id)` and the hook re-renders once per tick until the deadline or
- * a terminal status is reached.
+ * a terminal status (`Released`, `Refunded`, `Cancelled`) is reached.
  *
  * ```tsx
  * const { data } = useEscrow(id);

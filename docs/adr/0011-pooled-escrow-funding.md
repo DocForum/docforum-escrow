@@ -95,10 +95,10 @@ chosen**, with these concrete rules:
    every existing entry point, and every existing error keep their exact
    meaning. A pooled escrow is recognizable by its `DataKey::Pooled`
    record, and `get_pooled` / `get_contribution` expose the funding
-   state read-only (`get_status` keeps returning `Funded` for an
-   underfunded pooled escrow — its four-value vocabulary describes
-   *settlement*, and a failed funding round never settles; `get_pooled`
-   is where integrators read "target missed").
+   state read-only (`get_status` remains `Funded` until a failed round is
+   fully claimed or closed; its four-value vocabulary describes settlement).
+   `get_pooled` is where integrators read "target missed" while claims remain
+   open.
 
 ### Option B — fixed contributor list, evaluated and rejected
 
@@ -177,11 +177,12 @@ truth shared with `settle()` — and the invariant
 | `funded < target`, `now >= deadline` | `FundingDeadlinePassed` | `FundingIncomplete` | open to each contributor, once each, order-independent |
 | after `Released` | `NotFunded` | `NotFunded` | `NotFunded` (released funds can never be claimed) |
 
-A failed funding round leaves `get_status` at `Funded` (no settlement
-happened); integrators read `get_pooled` and the ledger timestamp to
-classify a round as open, successful, or failed. The escrow is never
-permanently locked: the failed round's funds are always recoverable by
-their contributors, and a successful round has exactly the same
+A failed funding round remains `Funded` while claims remain open. The final
+claim transitions it to `Refunded`; a zero-contribution failed round can be
+closed permissionlessly after its deadline. Integrators read `get_pooled` and
+the ledger timestamp to classify a round as open, successful, or failed. The
+escrow is never permanently locked: the failed round's funds are always
+recoverable by their contributors, and a successful round has exactly the same
 release-or-stuck properties as a single-payer escrow without a timeout
 (recommendation: releasers should be backed up; see threat model T2).
 
@@ -217,11 +218,11 @@ release-or-stuck properties as a single-payer escrow without a timeout
   contribution via `transfer_in_exact`.
 - **Deployment required.** The live testnet deployment predates this
   change; testnet-only rule (hard rule 4) unchanged.
-- **A failed round keeps `Funded` status.** Accepted trade-off: the
-  four-value status vocabulary stays settlement-oriented and the SDK's
-  `EscrowStatus` union stays source-compatible; `get_pooled` +
-  ledger time are the funding-state API. Consumers that poll
-  `get_status` must additionally read `get_pooled` for pooled escrows.
+- **A failed round remains `Funded` only while claims are open.** The final
+  claim or permissionless `close_failed_round` changes it to `Refunded` and
+  emits the terminal snapshot. The four-value status vocabulary stays
+  settlement-oriented and the SDK's `EscrowStatus` union stays compatible;
+  `get_pooled` + ledger time remain the funding-state API before closure.
 - **A fully funded pooled escrow with a lost releaser key is locked**
   exactly like a single-payer escrow created without `refund_after`
   (threat model T2). Pooled escrows deliberately have no push timeout,
@@ -265,3 +266,21 @@ single-payer suites run unchanged (compatibility, scenario M).
 - Threat model I1, I2, I3, I4, T3, T4, T5, T8, T13 (`docs/threat-model.md`).
 - Soroban storage: enum `DataKey` variants serialize by name, so the two
   appended variants do not disturb existing entries.
+
+## Addendum (Issue #288): Release deadline for pooled escrows
+
+To prevent a lost releaser key from permanently locking funds in a fully funded pool,
+a pooled escrow may be created with an optional `release_deadline`
+(via `create_pooled_release_deadline`).
+
+- **Ordering & Validation:** `release_deadline` must be strictly greater than
+  `funding_deadline` (`InvalidReleaseDeadline`). A deadline equal to or earlier than
+  `funding_deadline` is rejected at creation so funding cannot time out prematurely.
+- **Trigger:** Once the release deadline passes (`ledger.timestamp >= release_deadline`)
+  on a pool that has not yet been released, `claim_refund` opens to each recorded
+  contributor to recover their contribution.
+- **Boundary & Race Resolution:** At the deadline boundary (`ledger.timestamp == release_deadline`),
+  settlement follows first-to-land ledger ordering:
+  - If `release` lands first, the full target is paid to the payee, setting status to `Released`; subsequent `claim_refund` calls fail with `NotFunded`.
+  - If a contributor's `claim_refund` lands first after the deadline, `data.amount` decreases below `funding_target`, which permanently blocks any subsequent `release` (`FundingIncomplete`).
+- **Accounting & Solvency:** Each post-deadline claim decrements `data.amount` and outstanding liabilities in the same transaction, maintaining exact token solvency (`balance >= liabilities`). Existing pooled escrows without a release deadline retain their current behavior (`release_deadline: None`).
