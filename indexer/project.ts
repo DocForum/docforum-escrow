@@ -3,6 +3,9 @@ import {
   StellarHandlerKind,
   type StellarProject,
 } from "@subql/types-stellar";
+// Extensionless: project.ts is loaded through ts-node (CommonJS), not compiled
+// with src/, so a `.js` specifier would not resolve at project load time.
+import { resolveNetworkConfig } from "./src/network";
 
 const contractId = process.env.DOCFORUM_ESCROW_CONTRACT_ID;
 const startBlock = Number(process.env.DOCFORUM_START_LEDGER);
@@ -11,6 +14,7 @@ if (!Number.isSafeInteger(startBlock) || startBlock < 1) {
   throw new Error("Set DOCFORUM_START_LEDGER to the contract deployment ledger");
 }
 
+const network = resolveNetworkConfig();
 // Exact versions: keep in step with the devDependencies in package.json. The
 // runner must not float to whatever upstream released last.
 const NODE_STELLAR_VERSION = "6.2.1";
@@ -35,12 +39,12 @@ const project: StellarProject = {
     node: { name: "@subql/node-stellar", version: NODE_STELLAR_VERSION },
     query: { name: "@subql/query", version: QUERY_VERSION },
   },
-  description: "Testnet-only indexer for DocForum escrow lifecycle events",
+  description: "Configurable-network indexer for DocForum escrow lifecycle events (testnet default)",
   schema: { file: "./schema.graphql" },
   network: {
-    chainId: "Test SDF Network ; September 2015",
-    endpoint: [process.env.DOCFORUM_HORIZON_URL ?? "https://horizon-testnet.stellar.org"],
-    sorobanEndpoint: process.env.DOCFORUM_RPC_URL ?? "https://soroban-testnet.stellar.org",
+    chainId: network.chainId,
+    endpoint: [network.horizonUrl],
+    sorobanEndpoint: network.rpcUrl,
   },
   dataSources: [
     {

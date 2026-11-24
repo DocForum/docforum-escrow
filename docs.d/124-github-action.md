@@ -1,5 +1,5 @@
 ---
-file: README.md
+file: ARCHITECTURE_ESSENTIALS.md
 section: TypeScript SDK surface (`sdk/`)
 ---
 

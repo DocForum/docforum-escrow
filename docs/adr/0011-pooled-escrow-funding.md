@@ -266,3 +266,21 @@ single-payer suites run unchanged (compatibility, scenario M).
 - Threat model I1, I2, I3, I4, T3, T4, T5, T8, T13 (`docs/threat-model.md`).
 - Soroban storage: enum `DataKey` variants serialize by name, so the two
   appended variants do not disturb existing entries.
+
+## Addendum (Issue #288): Release deadline for pooled escrows
+
+To prevent a lost releaser key from permanently locking funds in a fully funded pool,
+a pooled escrow may be created with an optional `release_deadline`
+(via `create_pooled_release_deadline`).
+
+- **Ordering & Validation:** `release_deadline` must be strictly greater than
+  `funding_deadline` (`InvalidReleaseDeadline`). A deadline equal to or earlier than
+  `funding_deadline` is rejected at creation so funding cannot time out prematurely.
+- **Trigger:** Once the release deadline passes (`ledger.timestamp >= release_deadline`)
+  on a pool that has not yet been released, `claim_refund` opens to each recorded
+  contributor to recover their contribution.
+- **Boundary & Race Resolution:** At the deadline boundary (`ledger.timestamp == release_deadline`),
+  settlement follows first-to-land ledger ordering:
+  - If `release` lands first, the full target is paid to the payee, setting status to `Released`; subsequent `claim_refund` calls fail with `NotFunded`.
+  - If a contributor's `claim_refund` lands first after the deadline, `data.amount` decreases below `funding_target`, which permanently blocks any subsequent `release` (`FundingIncomplete`).
+- **Accounting & Solvency:** Each post-deadline claim decrements `data.amount` and outstanding liabilities in the same transaction, maintaining exact token solvency (`balance >= liabilities`). Existing pooled escrows without a release deadline retain their current behavior (`release_deadline: None`).

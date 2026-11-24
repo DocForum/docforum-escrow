@@ -130,6 +130,10 @@ pub struct PooledData {
     /// frozen forever and every contributor may pull their exact recorded
     /// amount back with `claim_refund` — the escrow can never be released.
     pub funding_deadline: u64,
+    /// Optional unix seconds after which contributors can pull their
+    /// contributions back with `claim_refund` even if the pool reached its
+    /// target, preventing a lost releaser key from locking funds forever (issue #288).
+    pub release_deadline: Option<u64>,
 }
 
 /// One payer's record on a pooled escrow (issue #113, docs/adr/0011).
