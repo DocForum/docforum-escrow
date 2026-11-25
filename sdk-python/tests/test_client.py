@@ -24,6 +24,7 @@ RUST_TO_SCV = {
     "u32": xdr.SCValType.SCV_U32,
     "bool": xdr.SCValType.SCV_BOOL,
     "String": xdr.SCValType.SCV_STRING,
+    "Vec<Address>": xdr.SCValType.SCV_VEC,
 }
 
 
@@ -577,11 +578,223 @@ def test_every_wrapped_write_is_in_the_spec() -> None:
     for function in (
         "create_escrow",
         "create_escrow_with_acceptance",
+        "create_escrow_with_releasers",
         "accept",
         "cancel",
         "top_up",
         "transfer_payee",
         "release",
         "refund",
+        "release_with_approvals",
+        "refund_with_approvals",
     ):
         assert function in SPEC, function
+
+
+# ── M-of-N quorum escrows (issue #472) ──
+#
+# Quorum creation mirrors check_releaser_set (internal.rs), and settlement
+# signs one auth entry per supplied approver. Everything that can be checked
+# client-side is checked before a request is sent; an auth entry for an
+# address with no supplied key is refused before the envelope is signed.
+
+RELEASERS = [Keypair.random() for _ in range(3)]
+
+
+def escrow_record(payer: Keypair, releasers: list[Keypair], threshold: int) -> xdr.SCVal:
+    return scval.to_map(
+        {
+            scval.to_symbol("payer"): scval.to_address(payer.public_key),
+            scval.to_symbol("payee"): scval.to_address(RELEASERS[0].public_key),
+            scval.to_symbol("token"): scval.to_address(TOKEN_ID),
+            scval.to_symbol("amount"): scval.to_int128(300),
+            scval.to_symbol("condition_ref"): scval.to_string("quorum"),
+            scval.to_symbol("status"): scval.to_vec([scval.to_symbol("Funded")]),
+            scval.to_symbol("releasers"): scval.to_vec(
+                [scval.to_address(keypair.public_key) for keypair in releasers]
+            ),
+            scval.to_symbol("threshold"): scval.to_uint32(threshold),
+        }
+    )
+
+
+def test_create_escrow_with_releasers_sends_the_spec_arguments(keypair: Keypair) -> None:
+    server = FakeServer(return_value=scval.to_uint64(9))
+    result = client(server, keypair).create_escrow_with_releasers(
+        payee=RELEASERS[0].public_key,
+        token=TOKEN_ID,
+        amount=300,
+        condition_ref="quorum",
+        releasers=[keypair.public_key, *(k.public_key for k in RELEASERS[1:])],
+        threshold=2,
+        refund_after=1_900_000_000,
+        notify_payee=False,
+        refund_to=RELEASERS[0].public_key,
+    )
+    assert result == escrow.CreateEscrowResult(escrow_id=9, tx_hash="ab" * 32, ledger=123)
+    function, args = invoked(server)
+    assert function == "create_escrow_with_releasers"
+    assert_matches_spec(function, args)
+    native = scval.to_native(args[5])
+    assert [address.address for address in native] == [
+        keypair.public_key,
+        *(k.public_key for k in RELEASERS[1:]),
+    ]
+    assert scval.from_uint32(args[6]) == 2
+    assert scval.from_uint64(args[7]) == 1_900_000_000
+    assert scval.from_bool(args[8]) is False
+    assert scval.from_address(args[9]).address == RELEASERS[0].public_key
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"releasers": []},
+        {"releasers": [Keypair.random().public_key] * 2},
+        {"releasers": [Keypair.random().public_key for _ in range(11)]},
+        {"releasers": ["not-an-address"]},
+        {"threshold": 0},
+        {"threshold": 4},
+        {"threshold": True},
+        {"threshold": 1.5},
+    ],
+)
+def test_create_escrow_with_releasers_validates_releaser_set(
+    keypair: Keypair, overrides: dict[str, Any]
+) -> None:
+    server = FakeServer()
+    kwargs: dict[str, Any] = {
+        "payee": RELEASERS[0].public_key,
+        "token": TOKEN_ID,
+        "amount": 300,
+        "condition_ref": "quorum",
+        "releasers": [keypair.public_key, RELEASERS[1].public_key],
+        "threshold": 2,
+        **overrides,
+    }
+    with pytest.raises(escrow.InvalidArgumentError):
+        client(server, keypair).create_escrow_with_releasers(**kwargs)
+    assert server.calls == []
+
+
+def test_create_escrow_with_releasers_rejects_the_contract_as_a_releaser(
+    keypair: Keypair,
+) -> None:
+    server = FakeServer()
+    with pytest.raises(escrow.InvalidArgumentError, match="contract"):
+        client(server, keypair).create_escrow_with_releasers(
+            payee=RELEASERS[0].public_key,
+            token=TOKEN_ID,
+            amount=300,
+            condition_ref="quorum",
+            releasers=[keypair.public_key, CONTRACT_ID],
+            threshold=2,
+        )
+    assert server.calls == []
+
+
+@pytest.mark.parametrize("function", ["release_with_approvals", "refund_with_approvals"])
+def test_approval_settlement_signs_one_entry_per_approver(keypair: Keypair, function: str) -> None:
+    approvers = [RELEASERS[0], RELEASERS[2]]
+    server = FakeServer(
+        read_result=escrow_record(keypair, RELEASERS, 2),
+        add_auth=[foreign_auth_entry(k.public_key, function) for k in approvers],
+    )
+    signer_client = EscrowClient(
+        CONTRACT_ID,
+        signer=keypair,
+        server=server,
+        approval_expiration_ledgers=50,
+    )
+    result = getattr(signer_client, function)(7, approvers)
+    assert result == escrow.TxResult(tx_hash="ab" * 32, ledger=123)
+
+    name, args = invoked(server)
+    assert name == function
+    assert_matches_spec(function, args)
+    assert scval.from_uint64(args[0]) == 7
+    assert [address.address for address in scval.to_native(args[1])] == [
+        keypair_.public_key for keypair_ in approvers
+    ]
+
+    sent = next(tx for kind, tx in server.calls if kind == "send")
+    assert len(sent.signatures) == 1  # one envelope signature, not one per approver
+    entries = sent.transaction.operations[0].auth
+    assert len(entries) == 2
+    for entry in entries:
+        assert entry.credentials.type == xdr.SorobanCredentialsType.SOROBAN_CREDENTIALS_ADDRESS
+        assert entry.credentials.address.signature.type != xdr.SCValType.SCV_VOID
+        # Bounded lifetime: latest ledger (500) + the configured 50.
+        assert entry.credentials.address.signature_expiration_ledger.uint32 == 550
+    signed = {Address.from_xdr_sc_address(e.credentials.address.address).address for e in entries}
+    assert signed == {keypair_.public_key for keypair_ in approvers}
+
+
+@pytest.mark.parametrize("function", ["release_with_approvals", "refund_with_approvals"])
+def test_approvals_refuse_an_unknown_address_before_signing(
+    keypair: Keypair, function: str
+) -> None:
+    stranger = Keypair.random().public_key
+    server = FakeServer(
+        read_result=escrow_record(keypair, RELEASERS, 2),
+        add_auth=[
+            foreign_auth_entry(RELEASERS[0].public_key, function),
+            foreign_auth_entry(stranger, function),
+        ],
+    )
+    with pytest.raises(escrow.UnsupportedAuthorizationError, match=stranger):
+        getattr(client(server, keypair), function)(7, [RELEASERS[0], RELEASERS[1]])
+    assert "latest_ledger" not in [kind for kind, _ in server.calls]
+    assert "send" not in [kind for kind, _ in server.calls]
+
+
+@pytest.mark.parametrize("function", ["release_with_approvals", "refund_with_approvals"])
+def test_an_approver_who_is_the_envelope_signer_signs_once(keypair: Keypair, function: str) -> None:
+    approvers = [keypair, RELEASERS[1]]
+    server = FakeServer(
+        read_result=escrow_record(keypair, [keypair, RELEASERS[1]], 2),
+        add_auth=[foreign_auth_entry(k.public_key, function) for k in approvers],
+    )
+    getattr(client(server, keypair), function)(7, approvers)
+
+    sent = next(tx for kind, tx in server.calls if kind == "send")
+    assert len(sent.signatures) == 1
+    entries = sent.transaction.operations[0].auth
+    types = {entry.credentials.type for entry in entries}
+    assert types == {
+        xdr.SorobanCredentialsType.SOROBAN_CREDENTIALS_SOURCE_ACCOUNT,
+        xdr.SorobanCredentialsType.SOROBAN_CREDENTIALS_ADDRESS,
+    }
+
+
+@pytest.mark.parametrize("function", ["release_with_approvals", "refund_with_approvals"])
+def test_fewer_than_threshold_approvers_fail_client_side(keypair: Keypair, function: str) -> None:
+    server = FakeServer(read_result=escrow_record(keypair, RELEASERS, 2))
+    with pytest.raises(escrow.ThresholdNotMetError) as info:
+        getattr(client(server, keypair), function)(7, [RELEASERS[0]])
+    assert info.value.contract_error == "ThresholdNotMet"
+    assert "send" not in [kind for kind, _ in server.calls]
+
+
+@pytest.mark.parametrize("function", ["release_with_approvals", "refund_with_approvals"])
+def test_approval_lists_reject_empty_duplicate_and_non_member_approvers(
+    keypair: Keypair, function: str
+) -> None:
+    server = FakeServer(read_result=escrow_record(keypair, RELEASERS, 2))
+    signer_client = client(server, keypair)
+    with pytest.raises(escrow.InvalidArgumentError, match="empty"):
+        getattr(signer_client, function)(7, [])
+    with pytest.raises(escrow.InvalidArgumentError, match="duplicate"):
+        getattr(signer_client, function)(7, [RELEASERS[0], RELEASERS[0]])
+    with pytest.raises(escrow.InvalidArgumentError, match="not a releaser"):
+        getattr(signer_client, function)(7, [RELEASERS[0], Keypair.random()])
+    assert "send" not in [kind for kind, _ in server.calls]
+
+
+def test_timeout_refund_on_a_quorum_escrow_needs_no_approvers(keypair: Keypair) -> None:
+    server = FakeServer()
+    client(server, keypair).refund(7)
+    name, args = invoked(server)
+    assert name == "refund"
+    assert_matches_spec("refund", args)
+    assert [kind for kind, _ in server.calls] == ["load_account", "prepare", "send", "poll"]
