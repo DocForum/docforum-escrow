@@ -169,20 +169,32 @@ export interface CreateEscrowParams {
    */
   requiresAcceptance?: boolean;
   /**
-   * Make creation idempotent per `(payer, conditionRef)` (issue #469, contract
-   * #47). When `true`, calls `create_escrow_with_uniqueness` with the same
-   * arguments plus `unique_ref: true`; a retry with the same pair returns the
-   * existing escrow (`existing: true`) instead of locking funds twice. See
-   * {@link UniqueCreateEscrowResult}.
-   *
-   * That entry point is single-releaser with no acceptance or release time,
-   * so `unique` cannot be combined with `requiresAcceptance` or
-   * `releaseNotBefore` (a `TypeError` before anything is sent). The index is
-   * scoped to the payer: the same `conditionRef` from another payer is not a
-   * duplicate. Omitted or `false`: exactly the same call as before.
+   * `false` (or omitted) is a normal, non-idempotent creation. To make
+   * creation idempotent, pass `unique: true` with
+   * {@link UniqueCreateEscrowParams}. It is a separate type so that a
+   * variable typed `CreateEscrowParams` always gets the plain
+   * {@link CreatedEscrow} result.
    */
-  unique?: boolean;
+  unique?: false;
 }
+
+/**
+ * Parameters for retry-safe creation, `createEscrow({ ..., unique: true })`
+ * (issue #469, contract #47). Calls `create_escrow_with_uniqueness` with the
+ * same arguments `create_escrow` would get, plus `unique_ref: true`. A retry
+ * with the same `(payer, conditionRef)` returns the existing escrow
+ * (`existing: true`) instead of locking funds twice. See
+ * {@link UniqueCreateEscrowResult}.
+ *
+ * That entry point is single-releaser with no acceptance or release time, so
+ * `requiresAcceptance` and `releaseNotBefore` are rejected with a `TypeError`
+ * before anything is sent. The index is scoped to the payer: the same
+ * `conditionRef` from another payer is not a duplicate.
+ */
+export type UniqueCreateEscrowParams = Omit<CreateEscrowParams, "unique"> & {
+  /** Opt in to idempotent creation per `(payer, conditionRef)`. */
+  unique: true;
+};
 
 /** What `createEscrow` returns for a non-unique creation. */
 export interface CreatedEscrow {

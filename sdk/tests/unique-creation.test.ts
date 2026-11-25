@@ -3,15 +3,19 @@
 // a DuplicateConditionRef via get_unique_escrow, the terms check, the settled
 // case, rejected option combinations, and that the non-unique path is
 // byte-for-byte unchanged.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { Keypair, xdr } from "@stellar/stellar-sdk";
 import {
   DuplicateConditionRefError,
   NotFoundError,
   NotFundedError,
   UniqueEscrowMismatchError,
+  type CreatedEscrow,
   type CreateEscrowParams,
   type Escrow,
+  type EscrowClient,
+  type UniqueCreateEscrowResult,
+  type UniqueCreateEscrowParams,
 } from "../src/index.js";
 import {
   encodeArgs,
@@ -38,6 +42,10 @@ function params(overrides: Partial<CreateEscrowParams> = {}): CreateEscrowParams
     refundAfter: 1_900_000_000n,
     ...overrides,
   };
+}
+
+function uniqueParams(overrides: Partial<UniqueCreateEscrowParams> | Record<string, unknown> = {}): UniqueCreateEscrowParams {
+  return { ...params(), ...overrides, unique: true } as UniqueCreateEscrowParams;
 }
 
 function storedEscrow(overrides: Partial<Escrow> = {}): Escrow {
@@ -81,6 +89,13 @@ function harness(contract: Record<string, unknown>, reads: Record<string, unknow
 }
 
 describe("createEscrow without unique", () => {
+  it("keeps the plain return type for callers typed with CreateEscrowParams (no breaking change)", () => {
+    const plain = (client: EscrowClient, p: CreateEscrowParams) => client.createEscrow(p);
+    const unique = (client: EscrowClient, p: UniqueCreateEscrowParams) => client.createEscrow(p);
+    expectTypeOf(plain).returns.resolves.toEqualTypeOf<CreatedEscrow>();
+    expectTypeOf(unique).returns.resolves.toEqualTypeOf<UniqueCreateEscrowResult>();
+  });
+
   it("sends exactly the same create_escrow call for unique: false and for no unique at all", async () => {
     const omitted = harness({});
     const explicitFalse = harness({});
@@ -109,7 +124,7 @@ describe("createEscrow({ unique: true })", () => {
 
     await plain.client.createEscrow(params({ feeRecipient: Keypair.random().publicKey(), feeBps: 50, notifyPayee: true }));
     const feeRecipient = plain.fakes.create_escrow.mock.calls[0][0].fee_recipient as string;
-    const result = await unique.client.createEscrow(params({ unique: true, feeRecipient, feeBps: 50, notifyPayee: true }));
+    const result = await unique.client.createEscrow(uniqueParams({ feeRecipient, feeBps: 50, notifyPayee: true }));
 
     expect(result).toEqual({ escrowId: 9n, txHash: "unique-hash", existing: false });
     const plainArgs = plain.fakes.create_escrow.mock.calls[0][0];
@@ -126,7 +141,7 @@ describe("createEscrow({ unique: true })", () => {
   it("resolves a duplicate at simulation to the existing escrow after checking its terms", async () => {
     const h = harness({ create_escrow_with_uniqueness: vi.fn(DUPLICATE_AT_SIMULATION) });
 
-    const result = await h.client.createEscrow(params({ unique: true }));
+    const result = await h.client.createEscrow(uniqueParams());
 
     expect(result).toEqual({ escrowId: 3n, txHash: undefined, existing: true, status: "Funded" });
     expect(h.getUniqueEscrow).toHaveBeenCalledWith(payer.publicKey(), "order-42");
@@ -138,7 +153,7 @@ describe("createEscrow({ unique: true })", () => {
     const tx = failingSendTx(new Error("transaction failed: Error(Contract, #4700)"));
     const h = harness({ create_escrow_with_uniqueness: vi.fn(async () => tx) });
 
-    const result = await h.client.createEscrow(params({ unique: true }));
+    const result = await h.client.createEscrow(uniqueParams());
 
     expect(result).toMatchObject({ escrowId: 3n, existing: true, txHash: undefined });
     expect(tx.send).toHaveBeenCalledTimes(1);
@@ -156,7 +171,7 @@ describe("createEscrow({ unique: true })", () => {
     } as never);
     const h = harness({ create_escrow_with_uniqueness: vi.fn(async () => tx) });
 
-    expect(await h.client.createEscrow(params({ unique: true }))).toMatchObject({ escrowId: 3n, existing: true });
+    expect(await h.client.createEscrow(uniqueParams())).toMatchObject({ escrowId: 3n, existing: true });
   });
 
   it("throws UniqueEscrowMismatchError, never success, when the stored terms differ", async () => {
@@ -166,7 +181,7 @@ describe("createEscrow({ unique: true })", () => {
       { getEscrow: vi.fn(async () => storedEscrow({ payee: otherPayee, amount: 4_000n })) },
     );
 
-    const error = await rejectionOf(h.client.createEscrow(params({ unique: true })));
+    const error = await rejectionOf(h.client.createEscrow(uniqueParams()));
 
     expect(error).toBeInstanceOf(UniqueEscrowMismatchError);
     const mismatch = error as UniqueEscrowMismatchError;
@@ -182,7 +197,7 @@ describe("createEscrow({ unique: true })", () => {
       { create_escrow_with_uniqueness: vi.fn(DUPLICATE_AT_SIMULATION) },
       { getEscrow: vi.fn(async () => storedEscrow({ token: Keypair.random().publicKey() })) },
     );
-    const error = await rejectionOf(h.client.createEscrow(params({ unique: true })));
+    const error = await rejectionOf(h.client.createEscrow(uniqueParams()));
     expect((error as UniqueEscrowMismatchError).mismatched).toEqual(["token"]);
   });
 
@@ -197,7 +212,7 @@ describe("createEscrow({ unique: true })", () => {
     );
 
     // Different terms would mismatch, but a settled record can't be read: no check.
-    const result = await h.client.createEscrow(params({ unique: true, amount: 1n }));
+    const result = await h.client.createEscrow(uniqueParams({ amount: 1n }));
 
     expect(result).toEqual({ escrowId: 3n, txHash: undefined, existing: true, status: "Released" });
     expect(h.getStatus).toHaveBeenCalledWith(3n);
@@ -208,7 +223,7 @@ describe("createEscrow({ unique: true })", () => {
       { create_escrow_with_uniqueness: vi.fn(DUPLICATE_AT_SIMULATION) },
       { getUniqueEscrow: vi.fn(async () => undefined) },
     );
-    expect(await rejectionOf(h.client.createEscrow(params({ unique: true })))).toBeInstanceOf(DuplicateConditionRefError);
+    expect(await rejectionOf(h.client.createEscrow(uniqueParams()))).toBeInstanceOf(DuplicateConditionRefError);
   });
 
   it("does not treat other contract errors as duplicates", async () => {
@@ -217,17 +232,17 @@ describe("createEscrow({ unique: true })", () => {
         throw new Error("HostError: Error(Contract, #8)");
       }),
     });
-    await expect(h.client.createEscrow(params({ unique: true }))).rejects.toThrow(/#8/);
+    await expect(h.client.createEscrow(uniqueParams())).rejects.toThrow(/#8/);
     expect(h.getUniqueEscrow).not.toHaveBeenCalled();
   });
 
   it.each([
     [{ requiresAcceptance: true }, /requiresAcceptance/],
     [{ releaseNotBefore: 1_800_000_000n }, /releaseNotBefore/],
-    [{ releasers: [releaser], threshold: 1 } as Partial<CreateEscrowParams>, /releasers, threshold/],
+    [{ releasers: [releaser], threshold: 1 }, /releasers, threshold/],
   ])("rejects unique with %o before anything is sent", async (overrides, message) => {
     const h = harness({});
-    const error = await rejectionOf(h.client.createEscrow(params({ unique: true, ...overrides })));
+    const error = await rejectionOf(h.client.createEscrow(uniqueParams(overrides)));
     expect(error).toBeInstanceOf(TypeError);
     expect((error as Error).message).toMatch(message);
     for (const fake of Object.values(h.fakes)) expect(fake).not.toHaveBeenCalled();
@@ -235,7 +250,7 @@ describe("createEscrow({ unique: true })", () => {
 
   it("still runs createEscrow's offline checks", async () => {
     const h = harness({});
-    await expect(h.client.createEscrow(params({ unique: true, amount: 0n }))).rejects.toThrow(/InvalidAmount/);
+    await expect(h.client.createEscrow(uniqueParams({ amount: 0n }))).rejects.toThrow(/InvalidAmount/);
     expect(h.fakes.create_escrow_with_uniqueness).not.toHaveBeenCalled();
   });
 });

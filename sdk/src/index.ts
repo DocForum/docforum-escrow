@@ -199,7 +199,7 @@ import { type ArchivedEntryBehavior } from "./archived-entries.js";
 import { type BatchCreateItem, type BatchItemResult, type BatchOptions, BatchPartialFailureError, type BatchSettleOperation, MAX_BATCH_SIZE } from "./batch.js";
 import { type EscrowClientConfig } from "./client-config.js";
 import { UnsupportedContractVersionError, isSupportedContractVersion } from "./contract-version.js";
-import { type CancelParams, type CreatedEscrow, type CreateEscrowParams, type CreateQuorumEscrowParams, type Escrow, type EscrowStatus, type ExtendRefundAfterParams, MAX_CONDITION_REF_LENGTH, MAX_FEE_BPS, MAX_RELEASERS, type ReleaseOrRefundParams, type SettlementApprovalsParams, TERMINAL_ESCROW_STATUSES, type UniqueCreateEscrowResult } from "./escrow-types.js";
+import { type CancelParams, type CreatedEscrow, type CreateEscrowParams, type CreateQuorumEscrowParams, type Escrow, type EscrowStatus, type ExtendRefundAfterParams, MAX_CONDITION_REF_LENGTH, MAX_FEE_BPS, MAX_RELEASERS, type ReleaseOrRefundParams, type SettlementApprovalsParams, TERMINAL_ESCROW_STATUSES, type UniqueCreateEscrowParams, type UniqueCreateEscrowResult } from "./escrow-types.js";
 import { type EscrowEvent, type EscrowEventType, EventCursorExpiredError, type GetEventsParams, type GetEventsResult, type SubscribeOptions } from "./events.js";
 import { type EstimateCallParams, type FeeBumpOptions, type FeeBumpResult, type FeeEstimate, type GuardResult, MaxFeeExceededError, SponsorshipGuardError, computeFeeEstimate } from "./fees.js";
 import { EMPTY_SPAN_ATTRIBUTES, MISSING_FUNCTION_ERROR, TESTNET_NETWORK_PASSPHRASE, TESTNET_RPC_URL, U32_MAX, U64_MAX, abortReason, assertLedgerWindow, assertPositiveAmount, batchErrorMessage, contractAddressOf, isContractError, isRetentionError, lifecycleCallSigner, safeScValToNative, sendErrorName, trancheOf, utf8ByteLength } from "./internal.js";
@@ -228,7 +228,7 @@ function settlementAddress(caller: EscrowSigner | string): string {
  * acceptance gate, release time or releaser set (contracts/escrow/src/create.rs),
  * so `unique` can't express those options. Throws before anything is sent.
  */
-function assertUniqueCreatable(params: CreateEscrowParams): void {
+function assertUniqueCreatable(params: UniqueCreateEscrowParams): void {
   const unsupported: string[] = [];
   if (params.requiresAcceptance) unsupported.push("requiresAcceptance");
   if (params.releaseNotBefore !== undefined) unsupported.push("releaseNotBefore");
@@ -560,10 +560,11 @@ export class EscrowClient {
    * conditionRef)`: a retry returns the existing escrow with `existing: true`
    * and no transaction. See {@link UniqueCreateEscrowResult}.
    */
-  createEscrow(params: CreateEscrowParams & { unique: true }): Promise<UniqueCreateEscrowResult>;
-  createEscrow(params: CreateEscrowParams & { unique?: false }): Promise<CreatedEscrow>;
-  createEscrow(params: CreateEscrowParams): Promise<CreatedEscrow | UniqueCreateEscrowResult>;
-  async createEscrow(params: CreateEscrowParams): Promise<CreatedEscrow | UniqueCreateEscrowResult> {
+  createEscrow(params: UniqueCreateEscrowParams): Promise<UniqueCreateEscrowResult>;
+  createEscrow(params: CreateEscrowParams): Promise<CreatedEscrow>;
+  async createEscrow(
+    params: CreateEscrowParams | UniqueCreateEscrowParams,
+  ): Promise<CreatedEscrow | UniqueCreateEscrowResult> {
     if (params.unique === true) assertUniqueCreatable(params);
     if (params.amount <= 0n) {
       throw new Error(`InvalidAmount (error 2): amount must be a positive raw amount, got ${params.amount}`);
@@ -653,7 +654,7 @@ export class EscrowClient {
    * escrow instead of an error.
    */
   private async createUniqueEscrow(
-    params: CreateEscrowParams,
+    params: UniqueCreateEscrowParams,
     client: EscrowContractClient,
     createParams: Parameters<EscrowContractClient["create_escrow"]>[0],
   ): Promise<UniqueCreateEscrowResult> {
@@ -673,7 +674,7 @@ export class EscrowClient {
 
   /** Resolves a `DuplicateConditionRef` to the existing escrow, checking its terms while readable. */
   private async recoverUniqueEscrow(
-    params: CreateEscrowParams,
+    params: UniqueCreateEscrowParams,
     payer: string,
     cause: unknown,
   ): Promise<UniqueCreateEscrowResult> {
