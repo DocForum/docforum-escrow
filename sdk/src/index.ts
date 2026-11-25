@@ -206,7 +206,7 @@ import { EMPTY_SPAN_ATTRIBUTES, MISSING_FUNCTION_ERROR, TESTNET_NETWORK_PASSPHRA
 import { LedgerClock, type LedgerTime, type LedgerTimeOptions, type LatestLedger } from "./ledger-time.js";
 import { type AcceptParams, DEFAULT_WAIT_POLL_INTERVAL_MS, type EscrowPreconditionCode, EscrowPreconditionError, type LifecycleCall, type LifecycleMethod, PREPARED_AUTH_TTL_LEDGERS, type PrepareLifecycleParams, type PreparedLifecycleCall, type TopUpParams, type TransferPayeeParams, type WaitForStatusOptions, type WaitForStatusResult } from "./lifecycle.js";
 import { type CreateStreamedEscrowParams, type VestingInfo, type WithdrawParams, validateVestingSchedule } from "./vesting.js";
-import { type CreateMilestoneEscrowParams, type Milestone, type MilestoneEscrow, MilestoneEscrowPartialError, type RefundMilestoneParams, type ReleaseMilestoneParams, milestoneConditionRef, validateMilestoneSchedule } from "./milestones.js";
+import { type CreateMilestoneEscrowParams, type Milestone, type MilestoneEscrow, MilestoneEscrowPartialError, type MilestoneStatus, type RefundMilestoneParams, type ReleaseMilestoneParams, milestoneConditionRef, validateMilestoneSchedule } from "./milestones.js";
 import { MAINNET_NETWORK_PASSPHRASE, MainnetNotAllowedError } from "./networks.js";
 import { type ClaimRefundParams, type CloseFailedRoundOptions, type ContributeParams, type ContributionRecord, type CreatePooledEscrowParams, type PooledEscrow, type SolvencyReport } from "./pooled.js";
 import { canRefund as evaluateRefund, canRelease as evaluateRelease, type SettlementCheck, type SettlementCheckParams } from "./preflight.js";
@@ -1158,18 +1158,37 @@ export class EscrowClient {
 
   /**
    * Read-only: re-reads every tranche's escrow and reports it as
-   * `"unreleased"` (`Funded`), `"released"` (`Released`) or `"refunded"`
-   * (anything terminal otherwise). One `get_escrow` per tranche.
+   * `"unreleased"` (`Funded`), `"released"` (`Released`), `"refunded"`
+   * (`Refunded`), or `"cancelled"` (`Cancelled`). One `get_escrow` per tranche.
    */
   async getMilestones(escrow: MilestoneEscrow): Promise<Milestone[]> {
     return Promise.all(
       escrow.milestones.map(async ({ index, amount, escrowId }) => {
         const status = (await this.getEscrow(escrowId)).status;
+        let milestoneStatus: MilestoneStatus;
+        switch (status) {
+          case "Funded":
+            milestoneStatus = "unreleased";
+            break;
+          case "Released":
+            milestoneStatus = "released";
+            break;
+          case "Refunded":
+            milestoneStatus = "refunded";
+            break;
+          case "Cancelled":
+            milestoneStatus = "cancelled";
+            break;
+          default: {
+            const _exhaustive: never = status;
+            throw new Error(`Unhandled escrow status: ${String(_exhaustive)}`);
+          }
+        }
         return {
           index,
           amount,
           escrowId,
-          status: status === "Released" ? "released" : status === "Funded" ? "unreleased" : "refunded",
+          status: milestoneStatus,
         } satisfies Milestone;
       }),
     );
