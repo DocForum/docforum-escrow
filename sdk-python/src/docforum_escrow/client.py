@@ -1,8 +1,10 @@
 """A thin, synchronous Python client for the ``docforum-escrow`` contract.
 
 It mirrors the TypeScript SDK's core surface (``createEscrow``,
-``getStatus``, ``getEscrow``, ``release``, ``refund``) on top of the Stellar
-Python SDK's Soroban RPC client. Every state-changing call runs the full
+``getStatus``, ``getEscrow``, ``release``, ``refund``) plus the single-party
+amendments (``createEscrowWithAcceptance``, ``accept``, ``cancel``,
+``topUp``, ``transferPayee``) on top of the Stellar Python SDK's Soroban RPC
+client. Every state-changing call runs the full
 Soroban flow explicitly:
 
 1. load the signer's account for its sequence number;
@@ -190,6 +192,110 @@ class EscrowClient:
             ledger=response.ledger,
         )
 
+    def create_escrow_with_acceptance(
+        self,
+        *,
+        payee: str,
+        token: str,
+        amount: int,
+        condition_ref: str,
+        releaser: str | None = None,
+        payer: str | None = None,
+        refund_after: int | None = None,
+        requires_acceptance: bool = True,
+        refund_to: str | None = None,
+    ) -> CreateEscrowResult:
+        """Lock funds in an escrow that waits for the payee's ``accept``.
+
+        Wraps ``create_escrow_with_acceptance`` (docs/adr/0010). Until the payee
+        accepts, the payer may :meth:`cancel`, and release is blocked
+        (``AcceptanceRequired``). The entry point has no ``notify_payee``, fee or
+        release-time arguments. ``payer`` and ``releaser`` default to the
+        signer, and ``payer``, if given, must be the signer.
+        """
+        payer = self._actor("payer", payer)
+        releaser = self._require_signer().public_key if releaser is None else releaser
+        args = [
+            sv.address("payer", payer),
+            sv.address("payee", payee),
+            sv.address("token", token),
+            sv.positive_i128("amount", amount),
+            sv.condition_ref(condition_ref),
+            sv.address("releaser", releaser),
+            sv.option(refund_after, lambda v: sv.u64("refund_after", v)),
+            sv.boolean("requires_acceptance", requires_acceptance),
+            sv.option(refund_to, lambda v: sv.address("refund_to", v)),
+        ]
+        response, value = self._invoke("create_escrow_with_acceptance", args)
+        return CreateEscrowResult(
+            escrow_id=sv.decode_u64(value),
+            tx_hash=response.transaction_hash or "",
+            ledger=response.ledger,
+        )
+
+    def accept(self, escrow_id: int, *, payee: str | None = None) -> TxResult:
+        """Record the payee's acceptance. The signer must be the escrow's payee.
+
+        One-time, only while ``Funded`` and only on an escrow created with the
+        acceptance gate (``AcceptanceNotConfigured``, ``AlreadyAccepted``).
+        """
+        payee = self._actor("payee", payee)
+        return self._transact(
+            "accept", [sv.u64("escrow_id", escrow_id), sv.address("payee", payee)]
+        )
+
+    def cancel(self, escrow_id: int, *, payer: str | None = None) -> TxResult:
+        """Withdraw before the payee accepts. The signer must be the escrow's payer.
+
+        Only valid while the escrow is ``Funded``, was created with the
+        acceptance gate, and has not been accepted (docs/adr/0010). The funds go
+        to ``refund_to`` and the escrow becomes ``Cancelled``.
+        """
+        payer = self._actor("payer", payer)
+        return self._transact(
+            "cancel", [sv.u64("escrow_id", escrow_id), sv.address("payer", payer)]
+        )
+
+    def top_up(self, escrow_id: int, amount: int, *, payer: str | None = None) -> TxResult:
+        """Add ``amount`` to a ``Funded`` escrow. The signer must be the escrow's payer.
+
+        ``amount`` is a positive ``int`` (an ``i128``). Pooled escrows grow through
+        contributions instead (``NotSupportedForPooled``), streamed escrows
+        can't be topped up (``StreamTopUpUnsupported``), and the call is blocked
+        while the contract is paused (``Paused``).
+        """
+        payer = self._actor("payer", payer)
+        return self._transact(
+            "top_up",
+            [
+                sv.u64("escrow_id", escrow_id),
+                sv.address("payer", payer),
+                sv.positive_i128("amount", amount),
+            ],
+        )
+
+    def transfer_payee(
+        self, escrow_id: int, new_payee: str, *, current_payee: str | None = None
+    ) -> TxResult:
+        """Reassign future payout rights to ``new_payee``.
+
+        The signer must be the escrow's current payee, and the escrow must be
+        ``Funded``. ``new_payee`` may not be this contract (rejected here, and
+        by the contract as ``InvalidNewPayee``) or the payer (the contract
+        decides that one).
+        """
+        current_payee = self._actor("current_payee", current_payee)
+        if new_payee == self.contract_id:
+            raise InvalidArgumentError("new_payee must not be the escrow contract's own address")
+        return self._transact(
+            "transfer_payee",
+            [
+                sv.u64("escrow_id", escrow_id),
+                sv.address("current_payee", current_payee),
+                sv.address("new_payee", new_payee),
+            ],
+        )
+
     def release(self, escrow_id: int, *, caller: str | None = None) -> TxResult:
         """Pay the escrow out to its payee. The signer must be a releaser."""
         return self._settle("release", escrow_id, caller)
@@ -218,14 +324,28 @@ class EscrowClient:
             raise SignerRequiredError("this call signs a transaction; pass signer= to EscrowClient")
         return self.signer
 
-    def _settle(self, function: str, escrow_id: int, caller: str | None) -> TxResult:
+    def _actor(self, name: str, value: str | None) -> str:
+        """The acting party's address: the signer, or an explicit match for it.
+
+        This client signs as exactly one party, so naming anyone else raises
+        before any request is made.
+        """
         signer = self._require_signer()
-        caller = signer.public_key if caller is None else caller
-        if caller != signer.public_key:
-            raise InvalidArgumentError("caller must be the signer's address")
-        args = [sv.u64("escrow_id", escrow_id), sv.address("caller", caller)]
+        if value is None:
+            return signer.public_key
+        if value != signer.public_key:
+            raise InvalidArgumentError(f"{name} must be the signer's address")
+        return value
+
+    def _transact(self, function: str, args: Sequence[xdr.SCVal]) -> TxResult:
         response, _ = self._invoke(function, args)
         return TxResult(tx_hash=response.transaction_hash or "", ledger=response.ledger)
+
+    def _settle(self, function: str, escrow_id: int, caller: str | None) -> TxResult:
+        caller = self._actor("caller", caller)
+        return self._transact(
+            function, [sv.u64("escrow_id", escrow_id), sv.address("caller", caller)]
+        )
 
     def _build(
         self, source: Account, function: str, args: Sequence[xdr.SCVal]

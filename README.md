@@ -324,7 +324,7 @@ Rules worth knowing before integrating:
   `refund_after` either — a *failed* round is the only refund window.
 - **Read funding state with `getPooled`:** `getStatus` still returns
   `"Funded"` for a failed round (status describes settlement), so poll
-  `getPooled()` (`fundingTarget`, `fundingDeadline`) plus the escrow's
+  `getPooled()` (`fundingTarget`, `fundingDeadline`, `releaseDeadline`) plus the escrow's
   `amount` to tell open / succeeded / failed apart.
 - The live testnet deployment predates these entry points; pooled
   functions work locally until the next redeploy
@@ -623,8 +623,8 @@ consumer migration example.
 
 ### Python client
 
-[`sdk-python/`](sdk-python) mirrors the TypeScript surface (`create_escrow`,
-`get_status`, `get_escrow`, `release`, `refund`) on the Stellar Python SDK,
+[`sdk-python/`](sdk-python) mirrors the TypeScript surface (creation, reads,
+settlement and the single-party amendments) on the Stellar Python SDK,
 with typed contract errors and plain `int` i128 amounts. Testnet only, not
 on PyPI yet. See [`sdk-python/README.md`](sdk-python/README.md).
 

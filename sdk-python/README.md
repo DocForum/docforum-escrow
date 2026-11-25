@@ -79,7 +79,30 @@ client.get_status(escrow_id) -> EscrowStatus
 client.get_escrow(escrow_id) -> Escrow
 client.release(escrow_id, *, caller=None) -> TxResult(tx_hash, ledger)
 client.refund(escrow_id, *, caller=None) -> TxResult(tx_hash, ledger)
+
+# Single-party amendments: the signer is the acting party.
+client.create_escrow_with_acceptance(*, payee, token, amount, condition_ref,
+                                     releaser=None, payer=None, refund_after=None,
+                                     requires_acceptance=True, refund_to=None)
+    -> CreateEscrowResult(escrow_id, tx_hash, ledger)
+client.accept(escrow_id, *, payee=None) -> TxResult             # signer = payee
+client.cancel(escrow_id, *, payer=None) -> TxResult             # signer = payer
+client.top_up(escrow_id, amount, *, payer=None) -> TxResult     # signer = payer
+client.transfer_payee(escrow_id, new_payee, *, current_payee=None)
+    -> TxResult                                                 # signer = current payee
 ```
+
+Each write is authorized by exactly one party, the signer. The actor
+arguments (`payer=`, `payee=`, `current_payee=`, `caller=`) default to the
+signer; naming anyone else raises `InvalidArgumentError` before any request.
+`cancel` only works while the escrow is `Funded`, was created with the
+acceptance gate and hasn't been accepted (docs/adr/0010). `top_up` is rejected
+on pooled and streamed escrows (`NotSupportedForPooledError`,
+`StreamTopUpUnsupportedError`) and while the contract is paused
+(`PausedError`). `transfer_payee` refuses the contract's own address as
+`new_payee` client-side (`InvalidNewPayee` on-chain). `extend_refund_after`
+and `rotate_releaser` need two signatures, which this client can't produce,
+so they aren't wrapped.
 
 Argument order and types follow `contract-spec.json`; an offline test fails if
 the client and the spec disagree.
