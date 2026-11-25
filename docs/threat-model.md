@@ -191,8 +191,8 @@ pause custodian.
      time lock, acceptance, pooled rules); handle it on its own path.
   4. Escrows with an opted-in payee callback (`notify_payee`): a failing
      callback aborts the **whole** batch (the transfer already happened,
-     so it can't be reported per-op). Put those in their own batch, or
-     release them singly.
+     so it can't be reported per-op) and the payee controls it. Release
+     those one per transaction; refunds never call the payee (see T11).
   - A batch never widens the key's reach: each op is checked against that
     escrow's own stored releaser set, exactly like `release`/`refund`, and
     funds still only go to the stored `payee`/`refund_to` (I1).
@@ -822,7 +822,7 @@ escrow.
 
 | Threat | Test coverage | Status |
 |---|---|---|
-| T1 — `releaser` key leaked or stolen | `cancel.rs::only_the_stored_payer_may_cancel`, `cancel.rs::cancel_requires_the_payers_signature`, `releaser_rotation.rs::rotation_rejects_wrong_releaser_and_non_funded_escrows`; batch response: `settle_many.rs::another_releasers_escrow_is_never_settled`, `::same_escrow_twice_second_op_fails_not_funded`, `::max_batch_fits_mainnet_limits` | Covered |
+| T1 — `releaser` key leaked or stolen | `cancel.rs::only_the_stored_payer_may_cancel`, `cancel.rs::cancel_requires_the_payers_signature`, `releaser_rotation.rs::rotation_rejects_wrong_releaser_and_non_funded_escrows`; batch response: `settle_many.rs::another_releasers_escrow_is_never_settled`, `::same_escrow_twice_second_op_fails_not_funded`, `::max_batch_fits_mainnet_limits`, `::hostile_callback_payee_reverts_a_batch_of_valid_releases`, `::isolating_the_callback_escrow_lets_the_valid_releases_settle` | Covered |
 | T2 — `releaser` key lost | `timeout_refund.rs`, `cancel.rs::cancel_still_works_after_refund_after_has_passed_if_still_funded`, `cancel.rs::cancel_after_timeout_refund_is_rejected` | Covered |
 | T3 — Double‑spend / double payout | `tests/release_refund.rs` (double‑release, release‑after‑refund, refund‑after‑release) | Covered |
 | T4 — Reentrancy | `tests/malicious_token.rs` (failed payout leaves escrow funded), `tests/release_callback.rs` | Covered |
