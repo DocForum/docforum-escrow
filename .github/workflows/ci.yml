@@ -288,6 +288,9 @@ jobs:
       - name: Confirm custom account wasm exists
         run: test -f ../releaser-account/target/wasm32v1-none/release/docforum_releaser_account.wasm
 
+      - name: Test example payee callback contract
+        run: cargo test --manifest-path ../../examples/payee-callback/Cargo.toml
+
   reproducible-wasm:
     name: Reproducible WASM across checkout paths
     runs-on: ubuntu-latest

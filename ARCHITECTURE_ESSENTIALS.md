@@ -91,7 +91,7 @@ rotate a releaser or upgrade anything, and it never gates an outbound path.
 **Emergency pause (Phase E5, `docs/adr/0011`):** one address fixed at
 deployment by `__constructor` may set a flag that makes every deposit path
 (`create_escrow` and its variants, plus `top_up`) fail with `Paused`
-(error 26). That is its *only* power. `release`, `refund` (both the
+(error 38). That is its *only* power. `release`, `refund` (both the
 releaser and timeout paths), `get_status` and `get_escrow` do not read the
 flag, so a pause can never lock funds that are already escrowed — the
 contract-side tests state that explicitly
@@ -100,7 +100,7 @@ custodian's signature, are not idempotent (`AlreadyPaused`/`NotPaused`),
 and emit `Paused`/`Unpaused` events. There is no timelock on either
 direction and no unpause backdoor. Any future deposit path **must** apply
 the same check in the same PR.
-escrow data chosen by the payer at creation and immutable afterwards.There is still no admin, no owner, no pause and no upgrade path — OpenZeppelin's
+escrow data chosen by the payer at creation and immutable afterwards. There is still no admin, no owner and no upgrade path — OpenZeppelin's
 pausable/upgradeable/access modules were evaluated and rejected in
 `docs/adr/0006` precisely because they would add one.
 
@@ -225,11 +225,10 @@ const client2 = new EscrowClient({ contractId, network: networks.testnet }); // 
 // (verifyNetwork: false turns the check off). Plain-HTTP RPC needs allowHttp (networks.local sets it).
 const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter, notifyPayee: true, refundTo, feeRecipient, feeBps });
 await client.createQuorumEscrow({ payer, payee, token, amount, conditionRef, releasers, threshold, refundAfter, notifyPayee: true, refundTo }); // M-of-N, ADR 0007
-await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
+await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded" | "Cancelled"
 await client.getEscrow(escrowId);            // full stored record — incl. releasers + threshold + refundAfter, refundTo, so a payee can check the deal (docs/adr/0004/0007/0009, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair or SEP-43 Signer, must be a releaser and threshold must be 1
 await client.releaseWithApprovals({ escrowId, approvers }); // { txHash } — one Keypair/Signer per approver (>= threshold, distinct)
-await client.refund({ escrowId, caller });   // { txHash } — releaser when threshold is 1; anyone after refundAfter has passed
 await client.isPaused();                     // boolean — are new deposits blocked? release/refund are unaffected
 await client.getPauseAdmin();                // custodian address set at deploy (docs/adr/0011)
 await client.pause(caller);                  // { txHash } — caller: Keypair/Signer, must be the pause custodian
