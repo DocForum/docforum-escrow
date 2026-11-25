@@ -30,6 +30,22 @@ export interface CreatePooledEscrowParams {
    * `InvalidFundingDeadline`, 34).
    */
   fundingDeadline: bigint;
+  /**
+   * Optional unix-seconds release deadline (issue #288). Once it passes on a
+   * pool that hasn't been released, contributors can `claimRefund` even if
+   * the pool reached its target, so a lost releaser key can't lock the pool
+   * forever. Must be strictly after `fundingDeadline` (contract error
+   * `InvalidReleaseDeadline`). When set, creation calls
+   * `create_pooled_release_deadline`; when omitted it calls
+   * `create_pooled_escrow` exactly as before.
+   */
+  releaseDeadline?: bigint;
+}
+
+/** Options for {@link EscrowClient.closeFailedRound}. */
+export interface CloseFailedRoundOptions {
+  /** Pays the fee. The call is permissionless: anyone may close an empty failed round. */
+  source: EscrowSigner;
 }
 
 /** Parameters for {@link EscrowClient.contribute} — one payer funds part of a pooled escrow. */
@@ -52,6 +68,12 @@ export interface ClaimRefundParams {
 export interface PooledEscrow {
   fundingTarget: bigint;
   fundingDeadline: bigint;
+  /**
+   * Unix seconds after which contributors may `claimRefund` even from a fully
+   * funded, unreleased pool (issue #288). `undefined` when the pool has no
+   * release deadline, or the deployment predates the field.
+   */
+  releaseDeadline?: bigint;
 }
 
 /**

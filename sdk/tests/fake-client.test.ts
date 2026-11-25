@@ -111,3 +111,44 @@ describe("FakeEscrowClient contract behavior", () => {
     await expect(fake.getStatus(first.escrowId)).resolves.toBe("Refunded");
   });
 });
+
+describe("FakeEscrowClient unique creation (issue #469)", () => {
+  const request = {
+    payer,
+    payee: "GPAYEE",
+    token: "CTOKEN",
+    amount: 500n,
+    conditionRef: "fake-unique",
+    releaser: releaser.publicKey(),
+    unique: true as const,
+  };
+
+  it("returns the existing escrow for a repeated (payer, conditionRef), even after settlement", async () => {
+    const fake = client();
+    const first = await fake.createEscrow(request);
+    expect(first).toEqual({ escrowId: first.escrowId, txHash: "fake-tx-1", existing: false });
+
+    expect(await fake.createEscrow(request)).toEqual({
+      escrowId: first.escrowId,
+      txHash: undefined,
+      existing: true,
+      status: "Funded",
+    });
+
+    await fake.release({ escrowId: first.escrowId, caller: releaser });
+    expect(await fake.createEscrow(request)).toMatchObject({ escrowId: first.escrowId, existing: true, status: "Released" });
+  });
+
+  it("scopes the index to the payer and ignores non-unique creations", async () => {
+    const fake = client();
+    const mine = await fake.createEscrow(request);
+    const theirs = await fake.createEscrow({ ...request, payer: stranger });
+    expect(theirs.existing).toBe(false);
+    expect(theirs.escrowId).not.toBe(mine.escrowId);
+
+    const { unique: _unique, ...plain } = request;
+    const second = await fake.createEscrow(plain);
+    expect(second.escrowId).not.toBe(mine.escrowId);
+    expect("existing" in second).toBe(false);
+  });
+});

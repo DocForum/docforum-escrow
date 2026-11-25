@@ -1,4 +1,5 @@
 import { CONTRACT_ERROR_NAMES } from "./contract-errors.generated.js";
+import type { EscrowStatus } from "./escrow-types.js";
 
 /** Base class for every error the SDK throws from a contract call. */
 export class EscrowError extends Error {
@@ -65,6 +66,39 @@ export const BalanceMismatchError = contractErrorClass("BalanceMismatch", codeFo
 /** Instance type of {@link BalanceMismatchError}. */
 export type BalanceMismatchError = InstanceType<typeof BalanceMismatchError>;
 
+/** The contract is paused: creation and funding paths are blocked (contract code 38). Not transient: don't retry until it is unpaused. */
+export const PausedError = contractErrorClass("Paused", codeFor("Paused"));
+/** Instance type of {@link PausedError}. */
+export type PausedError = InstanceType<typeof PausedError>;
+/** `fund_next` ran before the schedule's `next_due` (contract code 55). */
+export const ScheduleTooEarlyError = contractErrorClass("ScheduleTooEarly", codeFor("ScheduleTooEarly"));
+/** Instance type of {@link ScheduleTooEarlyError}. */
+export type ScheduleTooEarlyError = InstanceType<typeof ScheduleTooEarlyError>;
+/** `fund_next` ran after every period was funded (contract code 56). */
+export const ScheduleCompleteError = contractErrorClass("ScheduleComplete", codeFor("ScheduleComplete"));
+/** Instance type of {@link ScheduleCompleteError}. */
+export type ScheduleCompleteError = InstanceType<typeof ScheduleCompleteError>;
+/** The schedule was cancelled: `fund_next` or a second `cancel_schedule` (contract code 57). */
+export const ScheduleCancelledError = contractErrorClass("ScheduleCancelled", codeFor("ScheduleCancelled"));
+/** Instance type of {@link ScheduleCancelledError}. */
+export type ScheduleCancelledError = InstanceType<typeof ScheduleCancelledError>;
+/** The payer's SEP-41 allowance to the escrow contract is too small or expired (contract code 58). */
+export const AllowanceExhaustedError = contractErrorClass("AllowanceExhausted", codeFor("AllowanceExhausted"));
+/** Instance type of {@link AllowanceExhaustedError}. */
+export type AllowanceExhaustedError = InstanceType<typeof AllowanceExhaustedError>;
+/** `create_schedule` got `period_seconds == 0` or `total_periods == 0` (contract code 59). */
+export const InvalidScheduleError = contractErrorClass("InvalidSchedule", codeFor("InvalidSchedule"));
+/** Instance type of {@link InvalidScheduleError}. */
+export type InvalidScheduleError = InstanceType<typeof InvalidScheduleError>;
+/** A unique creation reused a `(payer, condition_ref)` pair (issue #47, provisional code 4700). */
+export const DuplicateConditionRefError = contractErrorClass("DuplicateConditionRef", codeFor("DuplicateConditionRef"));
+/** Instance type of {@link DuplicateConditionRefError}. */
+export type DuplicateConditionRefError = InstanceType<typeof DuplicateConditionRefError>;
+/** A pooled `release_deadline` was not after `funding_deadline` (issue #288, provisional code 28800). */
+export const InvalidReleaseDeadlineError = contractErrorClass("InvalidReleaseDeadline", codeFor("InvalidReleaseDeadline"));
+/** Instance type of {@link InvalidReleaseDeadlineError}. */
+export type InvalidReleaseDeadlineError = InstanceType<typeof InvalidReleaseDeadlineError>;
+
 /** Simulating the transaction failed for a reason other than a contract error. */
 export class SimulationFailure extends EscrowError {}
 /** Submitting the signed transaction failed. */
@@ -89,6 +123,14 @@ const knownContractErrors: Record<number, (message: string, options?: ErrorOptio
   [codeFor("NotFunded")]: (message, options) => new NotFundedError(message, options),
   [codeFor("InvalidRefundAfter")]: (message, options) => new InvalidRefundAfterError(message, options),
   [codeFor("BalanceMismatch")]: (message, options) => new BalanceMismatchError(message, options),
+  [codeFor("Paused")]: (message, options) => new PausedError(message, options),
+  [codeFor("ScheduleTooEarly")]: (message, options) => new ScheduleTooEarlyError(message, options),
+  [codeFor("ScheduleComplete")]: (message, options) => new ScheduleCompleteError(message, options),
+  [codeFor("ScheduleCancelled")]: (message, options) => new ScheduleCancelledError(message, options),
+  [codeFor("AllowanceExhausted")]: (message, options) => new AllowanceExhaustedError(message, options),
+  [codeFor("InvalidSchedule")]: (message, options) => new InvalidScheduleError(message, options),
+  [codeFor("DuplicateConditionRef")]: (message, options) => new DuplicateConditionRefError(message, options),
+  [codeFor("InvalidReleaseDeadline")]: (message, options) => new InvalidReleaseDeadlineError(message, options),
 };
 
 const codePattern = /(?:Error\s*\(\s*Contract\s*,\s*#\s*(\d+)\s*\)|contract(?:\s+error)?[^\n]*?#\s*(\d+)|error\s+code\s*[:=]?\s*(\d+))/i;
@@ -125,7 +167,66 @@ export function toEscrowError(error: unknown, stage: "simulation" | "submission"
   return stage === "submission" ? new SubmissionFailure(message, cause) : new SimulationFailure(message, cause);
 }
 
+/**
+ * Thrown by `waitForStatus` when the wait ends without reaching a target
+ * status: either `timeoutMs` elapsed, or the escrow settled on a terminal
+ * status outside the target set (e.g. waiting for `Released` but it was
+ * `Refunded`). `lastStatus` is the last status observed, or `undefined` if
+ * no read completed before the timeout.
+ */
+export class WaitTimeoutError extends EscrowError {
+  /** The last status observed, or `undefined` if none was read before the timeout. */
+  readonly lastStatus: EscrowStatus | undefined;
+  /** The target statuses the caller was waiting for. */
+  readonly targetStatuses: ReadonlyArray<EscrowStatus>;
+  constructor(message: string, lastStatus: EscrowStatus | undefined, targetStatuses: ReadonlyArray<EscrowStatus>, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "WaitTimeoutError";
+    this.lastStatus = lastStatus;
+    this.targetStatuses = targetStatuses;
+  }
+}
+
 /** The contract's name for an error `code`, e.g. `NotFound` for 1, or `undefined`. */
 export function contractErrorName(code: number): ContractErrorName | undefined {
   return (CONTRACT_ERROR_NAMES as Record<number, ContractErrorName | undefined>)[code];
+}
+
+/**
+ * `createEscrow({ unique: true })` found an existing escrow for the same
+ * `(payer, conditionRef)` whose stored terms differ from the request (issue
+ * #469). Reusing a `conditionRef` with different terms is a caller bug, so
+ * the SDK refuses to report it as success. `mismatched` names the differing
+ * fields; `expected` and `actual` carry both sides.
+ *
+ * An escrow amended after creation (`topUp` grows `amount`, `transferPayee`
+ * changes `payee`) also lands here on a retry: inspect `actual` to decide.
+ */
+export class UniqueEscrowMismatchError extends EscrowError {
+  /** The existing escrow's id, recovered with `get_unique_escrow`. */
+  readonly escrowId: bigint;
+  /** Fields whose stored value differs from the request. */
+  readonly mismatched: ReadonlyArray<"payee" | "token" | "amount">;
+  /** The terms this call asked for. */
+  readonly expected: Readonly<{ payee: string; token: string; amount: bigint }>;
+  /** The terms stored on the existing escrow. */
+  readonly actual: Readonly<{ payee: string; token: string; amount: bigint }>;
+
+  constructor(
+    escrowId: bigint,
+    expected: { payee: string; token: string; amount: bigint },
+    actual: { payee: string; token: string; amount: bigint },
+    options?: ErrorOptions,
+  ) {
+    const mismatched = (["payee", "token", "amount"] as const).filter((field) => expected[field] !== actual[field]);
+    super(
+      `Escrow ${escrowId} already exists for this payer and conditionRef with different terms`
+        + ` (${mismatched.join(", ")}); reusing a conditionRef for different terms is not idempotent.`,
+      options,
+    );
+    this.escrowId = escrowId;
+    this.mismatched = mismatched;
+    this.expected = expected;
+    this.actual = actual;
+  }
 }

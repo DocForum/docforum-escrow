@@ -8,12 +8,15 @@ on:
     # Nightly run of the property-based state-machine tests (larger case count).
     - cron: '0 3 * * *'
 
+permissions:
+  contents: read
+
 jobs:
   contract-interface:
     name: Contract interface snapshot
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify interface and append-only error codes
         run: ./scripts/check-contract-interface.sh
       - name: SDK deployments module matches deployments.json
@@ -23,21 +26,46 @@ jobs:
             echo "::error::sdk/src/deployments.generated.ts is out of date. Run: node scripts/deploy-record.mjs --sync"
             exit 1
           }
+      - name: SDK constants mirror the contract
+        run: node scripts/check-sdk-constants.mjs
+
+  config-guards:
+    name: Verifier configuration guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install workflow checker dependency
+        run: python -m pip install --disable-pip-version-check -r scripts/requirements.txt
+      - name: Test GitHub Actions pin checker
+        run: python3 -m unittest discover -s scripts -p 'test_check_github_action_pins.py'
+      - name: Require immutable GitHub Actions pins
+        run: python3 scripts/check_github_action_pins.py
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # No install step: the verifier test uses a stubbed Stellar CLI and this
+      # script's own copy of build-wasm.sh. The indexer's network tests run in
+      # the `indexer` job through vitest.
+      - run: node --test scripts/verify-deployment.test.mjs
 
   contract-fuzz:
     name: Contract cargo-fuzz (${{ github.event_name == 'schedule' && 'nightly' || 'PR' }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install nightly Rust
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: nightly
           components: rust-src, llvm-tools-preview
 
       - name: Cache fuzz build and corpus
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -78,7 +106,7 @@ jobs:
 
       - name: Upload crash artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: contract-fuzz-artifacts-${{ github.run_id }}
           path: contracts/escrow/fuzz/artifacts
@@ -90,10 +118,12 @@ jobs:
     name: TLA+ escrow model (TLC)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # The model-change probe uses the pull requests API to read changed files.
     permissions:
       contents: read
+      pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -140,13 +170,15 @@ jobs:
     name: Resource cost baseline
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.96.0
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.96.0
 
       - name: Cache cargo registry + target
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -174,7 +206,7 @@ jobs:
       run:
         working-directory: contracts/escrow
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -192,12 +224,13 @@ jobs:
         run: node scripts/check-no-backup-files.mjs
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.96.0
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: 1.96.0
           targets: wasm32v1-none
 
       - name: Cache cargo registry + target
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -260,7 +293,7 @@ jobs:
     runs-on: ubuntu-latest
     container: rust:1.96.0-bookworm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install WASM target
         run: rustup target add wasm32v1-none
@@ -273,15 +306,16 @@ jobs:
     name: SDK bindings match contract WASM
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.96.0
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: 1.96.0
           targets: wasm32v1-none
 
       - name: Cache cargo registry + target
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -316,9 +350,9 @@ jobs:
       run:
         working-directory: sdk
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -357,8 +391,8 @@ jobs:
       run:
         working-directory: sdk
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -374,13 +408,13 @@ jobs:
     name: TypeScript SDK (Bun)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: sdk/package-lock.json
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - run: npm ci
         working-directory: sdk
       - run: npm run build
@@ -392,13 +426,13 @@ jobs:
     name: TypeScript SDK (Deno)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: sdk/package-lock.json
-      - uses: denoland/setup-deno@v2
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
         with:
           deno-version: v2.x
       - run: npm ci
@@ -412,8 +446,8 @@ jobs:
     name: TypeScript SDK (Chromium)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -433,8 +467,8 @@ jobs:
     name: React hooks package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -455,3 +489,75 @@ jobs:
         working-directory: packages/escrow-react
       - run: npm run build
         working-directory: packages/escrow-react
+
+  # Issue #347: the indexer has its own pinned dependencies and tests. The job
+  # only does work when indexer/** changed (or on the nightly schedule), so an
+  # unrelated PR does not pay for codegen + build + tests.
+  indexer:
+    name: Indexer (codegen + build + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check whether the indexer changed
+        id: indexer-changes
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const isIndexerFile = (path) => path.startsWith('indexer/');
+            let files = [];
+            if (context.eventName === 'schedule') {
+              core.setOutput('changed', 'true');
+              return;
+            }
+            if (context.eventName === 'pull_request') {
+              files = await github.paginate(github.rest.pulls.listFiles, {
+                ...context.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              });
+            } else if (context.eventName === 'push') {
+              const comparison = await github.rest.repos.compareCommits({
+                ...context.repo,
+                base: context.payload.before,
+                head: context.sha,
+              });
+              files = comparison.data.files || [];
+            }
+            core.setOutput('changed', String(files.some((file) => isIndexerFile(file.filename))));
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.indexer-changes.outputs.changed == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: indexer/package-lock.json
+
+      - name: Install indexer dependencies
+        if: steps.indexer-changes.outputs.changed == 'true'
+        working-directory: indexer
+        run: npm ci
+
+      # src/types and project.yaml are generated (not committed); see
+      # indexer/README.md. project.ts needs a contract id and start ledger, so
+      # the build-time values are placeholders for codegen/build only.
+      - name: Codegen
+        if: steps.indexer-changes.outputs.changed == 'true'
+        working-directory: indexer
+        env:
+          DOCFORUM_ESCROW_CONTRACT_ID: CDX2JEMA5SO7GZVXDNGDDB35GPV43J7BUTYYH77ALAT72S65GOW5KNEO
+          DOCFORUM_START_LEDGER: '1'
+        run: npm run codegen
+
+      - name: Build
+        if: steps.indexer-changes.outputs.changed == 'true'
+        working-directory: indexer
+        env:
+          DOCFORUM_ESCROW_CONTRACT_ID: CDX2JEMA5SO7GZVXDNGDDB35GPV43J7BUTYYH77ALAT72S65GOW5KNEO
+          DOCFORUM_START_LEDGER: '1'
+        run: npm run build
+
+      - name: Test
+        if: steps.indexer-changes.outputs.changed == 'true'
+        working-directory: indexer
+        run: npm test

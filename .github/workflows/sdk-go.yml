@@ -23,9 +23,9 @@ jobs:
       run:
         working-directory: sdk-go
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: sdk-go/go.mod
           cache: true
@@ -73,21 +73,22 @@ jobs:
       run:
         working-directory: sdk-go
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: sdk-go/go.mod
           cache: true
           cache-dependency-path: sdk-go/go.sum
 
       - name: Install Rust toolchain (wasm target)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: stable
           targets: wasm32v1-none
 
       - name: Cache cargo registry + target
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -155,6 +156,25 @@ jobs:
           done
           stellar keys public-key deployer
 
+      - name: Generate and fund contributor identity
+        run: |
+          set -euo pipefail
+          # The two-party integration cases (payee acceptance by a signer that
+          # is not Config.Signer, and a pooled failed round with two claims)
+          # need a second funded account of their own.
+          stellar keys generate contributor --network escrow-local --overwrite
+          for attempt in $(seq 1 60); do
+            if stellar keys fund contributor --network escrow-local; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "::error::friendbot did not fund contributor"
+              exit 1
+            fi
+            sleep 2
+          done
+          stellar keys public-key contributor
+
       - name: Deploy native asset SAC and escrow contract
         id: deploy
         run: |
@@ -187,6 +207,7 @@ jobs:
             echo "STELLAR_RPC_URL=http://localhost:8000/rpc"
             echo "STELLAR_NETWORK_PASSPHRASE=Standalone Network ; February 2017"
             echo "STELLAR_SECRET_KEY=$(stellar keys secret deployer)"
+            echo "STELLAR_CONTRIBUTOR_SECRET_KEY=$(stellar keys secret contributor)"
             echo "ESCROW_CONTRACT_ID=$contract_id"
             echo "ESCROW_TOKEN_ID=$token_id"
             echo "ESCROW_INTEGRATION=1"

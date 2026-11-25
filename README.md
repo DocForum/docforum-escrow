@@ -52,7 +52,7 @@ the top at release and never on a refund — see
 topped up by the original payer, and `get_status`/`get_escrow` are
 read-only (`get_escrow` is for funded escrows; a settled escrow's record is
 reclaimed, so use `get_status` and the state event:
-[ADR 0013](docs/adr/0013-reclaim-storage-for-settled-escrows.md)). `settle_many` releases or refunds up to 20 escrows in one
+[ADR 0013](docs/adr/0013-reclaim-storage-for-settled-escrows.md)). `settle_many` releases or refunds up to 12 escrows in one
 transaction with per-op results (the fast response to a leaked releaser
 key, see [ADR 0012](docs/adr/0012-batch-settlement-best-effort.md)). A token
 allowlist and an optional emergency-pause custodian are fixed at deploy
@@ -324,7 +324,7 @@ Rules worth knowing before integrating:
   `refund_after` either — a *failed* round is the only refund window.
 - **Read funding state with `getPooled`:** `getStatus` still returns
   `"Funded"` for a failed round (status describes settlement), so poll
-  `getPooled()` (`fundingTarget`, `fundingDeadline`) plus the escrow's
+  `getPooled()` (`fundingTarget`, `fundingDeadline`, `releaseDeadline`) plus the escrow's
   `amount` to tell open / succeeded / failed apart.
 - The live testnet deployment predates these entry points; pooled
   functions work locally until the next redeploy
@@ -352,7 +352,7 @@ On other systems, install Stellar CLI 28.1.0 using its official
 instructions and check `stellar --version` before continuing.
 
 From the repository root, run the verifier with the contract ID. It builds
-the current source and fetches deployed WASM from testnet:
+the current source and cross-checks the deployed WASM against its record:
 
 ```bash
 bash scripts/verify-deployment CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H
@@ -623,8 +623,8 @@ consumer migration example.
 
 ### Python client
 
-[`sdk-python/`](sdk-python) mirrors the TypeScript surface (`create_escrow`,
-`get_status`, `get_escrow`, `release`, `refund`) on the Stellar Python SDK,
+[`sdk-python/`](sdk-python) mirrors the TypeScript surface (creation, reads,
+settlement and the single-party amendments) on the Stellar Python SDK,
 with typed contract errors and plain `int` i128 amounts. Testnet only, not
 on PyPI yet. See [`sdk-python/README.md`](sdk-python/README.md).
 

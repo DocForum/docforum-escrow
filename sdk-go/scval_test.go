@@ -1,6 +1,7 @@
 package escrow
 
 import (
+	"errors"
 	"math/big"
 	"reflect"
 	"strings"
@@ -265,6 +266,139 @@ func TestDecodeEscrowDataRejectsMissingField(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "missing field") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecodePooledData(t *testing.T) {
+	target := new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 90), big.NewInt(7))
+	encoded := scvMap([]xdr.ScMapEntry{
+		{Key: scvSymbol("funding_target"), Val: mustI128(t, target)},
+		{Key: scvSymbol("funding_deadline"), Val: scvU64(1_912_000_000)},
+	})
+	got, err := decodePooledData(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FundingTarget.Cmp(target) != 0 {
+		t.Fatalf("funding target = %s, want %s", got.FundingTarget, target)
+	}
+	if got.FundingDeadline != 1_912_000_000 {
+		t.Fatalf("funding deadline = %d", got.FundingDeadline)
+	}
+
+	if _, err := decodePooledData(scvMap([]xdr.ScMapEntry{
+		{Key: scvSymbol("funding_target"), Val: mustI128(t, big.NewInt(1))},
+	})); err == nil {
+		t.Fatal("decodePooledData accepted a record without funding_deadline")
+	}
+}
+
+func TestDecodePooledDataReleaseDeadline(t *testing.T) {
+	base := []xdr.ScMapEntry{
+		{Key: scvSymbol("funding_target"), Val: mustI128(t, big.NewInt(1_000))},
+		{Key: scvSymbol("funding_deadline"), Val: scvU64(1_912_000_000)},
+	}
+
+	// A deployment that predates issue #288 has no release_deadline field.
+	legacy, err := decodePooledData(scvMap(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.ReleaseDeadline != nil {
+		t.Fatalf("legacy release deadline = %d, want nil", *legacy.ReleaseDeadline)
+	}
+
+	// Current deployments always send the field: None is void.
+	none, err := decodePooledData(scvMap(append(append([]xdr.ScMapEntry{}, base...),
+		xdr.ScMapEntry{Key: scvSymbol("release_deadline"), Val: scvVoid()})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if none.ReleaseDeadline != nil {
+		t.Fatalf("None release deadline = %d, want nil", *none.ReleaseDeadline)
+	}
+
+	some, err := decodePooledData(scvMap(append(append([]xdr.ScMapEntry{}, base...),
+		xdr.ScMapEntry{Key: scvSymbol("release_deadline"), Val: scvU64(1_913_000_000)})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if some.ReleaseDeadline == nil || *some.ReleaseDeadline != 1_913_000_000 {
+		t.Fatalf("release deadline = %v, want 1913000000", some.ReleaseDeadline)
+	}
+
+	if _, err := decodePooledData(scvMap(append(append([]xdr.ScMapEntry{}, base...),
+		xdr.ScMapEntry{Key: scvSymbol("release_deadline"), Val: scvString("soon")}))); err == nil {
+		t.Fatal("decodePooledData accepted a non-u64 release_deadline")
+	}
+}
+
+func TestDecodeContributionAndOption(t *testing.T) {
+	encoded := scvMap([]xdr.ScMapEntry{
+		{Key: scvSymbol("amount"), Val: mustI128(t, big.NewInt(650_000))},
+		{Key: scvSymbol("refunded"), Val: scvBool(true)},
+	})
+	got, err := decodeContribution(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Amount.Cmp(big.NewInt(650_000)) != 0 || !got.Refunded {
+		t.Fatalf("contribution = %#v", got)
+	}
+
+	// get_contribution returns Option<Contribution>: None is ScvVoid.
+	none, err := decodeOptionContribution(scvVoid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if none != nil {
+		t.Fatalf("None decoded as %#v", none)
+	}
+	some, err := decodeOptionContribution(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if some == nil || some.Amount.Cmp(big.NewInt(650_000)) != 0 || !some.Refunded {
+		t.Fatalf("Some decoded as %#v", some)
+	}
+}
+
+func TestDecodeSettleResults(t *testing.T) {
+	unauthorized, err := scvContractError(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notFunded, err := scvContractError(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// settle_many returns Vec<Result<(), Error>>: Ok(()) is ScvVoid and Err
+	// is an SCV_ERROR with the contract's code, so order is preserved and
+	// every rejection is a typed *ContractError.
+	results, err := decodeSettleResults(scvVec([]xdr.ScVal{
+		scvVoid(),
+		unauthorized,
+		scvVoid(),
+		notFunded,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 4 {
+		t.Fatalf("results = %d, want 4", len(results))
+	}
+	if results[0] != nil || results[2] != nil {
+		t.Fatalf("Ok(()) decoded as %v", results[0])
+	}
+	if !errors.Is(results[1], ErrUnauthorized) {
+		t.Fatalf("result 1 = %v, want ErrUnauthorized", results[1])
+	}
+	if !errors.Is(results[3], ErrNotFunded) {
+		t.Fatalf("result 3 = %v, want ErrNotFunded", results[3])
+	}
+
+	if _, err := decodeSettleResults(scvVec([]xdr.ScVal{scvU64(1)})); err == nil {
+		t.Fatal("decodeSettleResults accepted a non-Void, non-error element")
 	}
 }
 

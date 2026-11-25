@@ -44,6 +44,9 @@ that the contract cannot safely perform.
    it keeps the contract's no-admin model and makes the limits of state
    continuity explicit to integrators.
 
+For the operational cutover checklist and dual-client integrator procedures,
+see [`docs/runbooks/redeploy-cutover.md`](../runbooks/redeploy-cutover.md).
+
 ## Redeployment and migration procedure
 
 1. Make and review the code change on a feature branch. Contract logic
