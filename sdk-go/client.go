@@ -62,6 +62,7 @@ const (
 // rpcClient is the subset of *rpcclient.Client the SDK calls. Tests substitute
 // a fake so read paths can be exercised offline.
 type rpcClient interface {
+	GetEvents(ctx context.Context, request protocol.GetEventsRequest) (protocol.GetEventsResponse, error)
 	Close() error
 	GetNetwork(ctx context.Context) (protocol.GetNetworkResponse, error)
 	GetLatestLedger(ctx context.Context) (protocol.GetLatestLedgerResponse, error)
