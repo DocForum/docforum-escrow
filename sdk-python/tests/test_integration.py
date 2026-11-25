@@ -190,6 +190,32 @@ def test_acceptance_cancel(client: EscrowClient, payee: Keypair) -> None:
     assert client.get_status(escrow_id) is EscrowStatus.CANCELLED
 
 
+def test_quorum_create_and_release_with_two_approvals(
+    client: EscrowClient, payer: Keypair, payee: Keypair
+) -> None:
+    co_releaser = funded_keypair()
+    releasers = [payer.public_key, payee.public_key, co_releaser.public_key]
+    escrow_id = client.create_escrow_with_releasers(
+        payee=payee.public_key,
+        token=os.environ.get("ESCROW_TOKEN_ID", NATIVE_XLM_SAC),
+        amount=AMOUNT,
+        condition_ref="sdk-python-it-quorum",
+        releasers=releasers,
+        threshold=2,
+    ).escrow_id
+
+    stored = client.get_escrow(escrow_id)
+    assert stored.releasers == tuple(releasers)
+    assert stored.threshold == 2
+
+    with pytest.raises(escrow.ThresholdNotMetError):
+        client.release_with_approvals(escrow_id, [payer])
+
+    # The payer is both the envelope signer and one of the approvers.
+    client.release_with_approvals(escrow_id, [payer, co_releaser])
+    assert client.get_status(escrow_id) is EscrowStatus.RELEASED
+
+
 def test_transfer_payee_then_release(client: EscrowClient, payer: Keypair, payee: Keypair) -> None:
     escrow_id = create(client, payee)
     # The new payee must exist on-chain to receive the release.
