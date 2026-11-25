@@ -37,6 +37,7 @@ from stellar_sdk import (
     TransactionEnvelope,
     xdr,
 )
+from stellar_sdk.auth import authorize_entry
 from stellar_sdk.exceptions import (
     BaseRequestError,
     PrepareTransactionException,
@@ -57,6 +58,7 @@ from .errors import (
     SignerRequiredError,
     SimulationFailure,
     SubmissionFailure,
+    ThresholdNotMetError,
     UnsupportedAuthorizationError,
     contract_error,
     to_escrow_error,
@@ -71,6 +73,10 @@ _PUBLIC_PASSPHRASE = Network.PUBLIC_NETWORK_PASSPHRASE
 # Simulation needs a source account but never checks it exists, so reads
 # without a signer use this all-zero account (the same trick the TS SDK uses).
 _READ_SOURCE = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+#: ``MAX_RELEASERS`` in ``contracts/escrow/src/constants.rs``.
+MAX_RELEASERS = 10
+#: Upper bound on the configurable auth-entry lifetime, in ledgers (~17 hours).
+MAX_APPROVAL_EXPIRATION_LEDGERS = 1_000
 
 
 class EscrowClient:
@@ -89,6 +95,8 @@ class EscrowClient:
     :param tx_timeout: seconds a built transaction stays valid.
     :param poll_attempts: how many times to poll ``getTransaction`` (about
         one second apart) before raising ``RequestTimeoutError``.
+    :param approval_expiration_ledgers: how many ledgers past the latest one a
+        signed approver auth entry stays valid (1–1000).
     """
 
     def __init__(
@@ -102,6 +110,7 @@ class EscrowClient:
         base_fee: int = 100,
         tx_timeout: int = 300,
         poll_attempts: int = 60,
+        approval_expiration_ledgers: int = 100,
     ) -> None:
         if not isinstance(contract_id, str) or not StrKey.is_valid_contract(contract_id):
             raise InvalidArgumentError(
@@ -116,6 +125,11 @@ class EscrowClient:
             )
         if signer is not None and signer.signing_key is None:
             raise InvalidArgumentError("signer must be a Keypair with a secret key")
+        if not 1 <= approval_expiration_ledgers <= MAX_APPROVAL_EXPIRATION_LEDGERS:
+            raise InvalidArgumentError(
+                "approval_expiration_ledgers must be between 1 and "
+                f"{MAX_APPROVAL_EXPIRATION_LEDGERS}"
+            )
         self.contract_id = contract_id
         self.network_passphrase = network_passphrase
         self.signer = signer
@@ -123,6 +137,7 @@ class EscrowClient:
         self.base_fee = base_fee
         self.tx_timeout = tx_timeout
         self.poll_attempts = poll_attempts
+        self.approval_expiration_ledgers = approval_expiration_ledgers
 
     # ── network ──
 
@@ -233,6 +248,49 @@ class EscrowClient:
             ledger=response.ledger,
         )
 
+    def create_escrow_with_releasers(
+        self,
+        *,
+        payee: str,
+        token: str,
+        amount: int,
+        condition_ref: str,
+        releasers: Sequence[str],
+        threshold: int,
+        refund_after: int | None = None,
+        notify_payee: bool = False,
+        refund_to: str | None = None,
+        payer: str | None = None,
+    ) -> CreateEscrowResult:
+        """Lock funds in an M-of-N releaser quorum escrow (ADR 0007).
+
+        ``releasers`` is 1–10 distinct addresses and ``threshold`` is between 1
+        and its length, mirroring ``check_releaser_set`` in the contract; the
+        escrow contract's own address is rejected. Settle it with
+        :meth:`release_with_approvals` / :meth:`refund_with_approvals`, or let a
+        timeout :meth:`refund` run once ``refund_after`` passes.
+        """
+        payer = self._actor("payer", payer)
+        checked, threshold = self._releaser_set(releasers, threshold)
+        args = [
+            sv.address("payer", payer),
+            sv.address("payee", payee),
+            sv.address("token", token),
+            sv.positive_i128("amount", amount),
+            sv.condition_ref(condition_ref),
+            sv.address_vec("releasers", checked),
+            sv.u32("threshold", threshold),
+            sv.option(refund_after, lambda v: sv.u64("refund_after", v)),
+            sv.boolean("notify_payee", notify_payee),
+            sv.option(refund_to, lambda v: sv.address("refund_to", v)),
+        ]
+        response, value = self._invoke("create_escrow_with_releasers", args)
+        return CreateEscrowResult(
+            escrow_id=sv.decode_u64(value),
+            tx_hash=response.transaction_hash or "",
+            ledger=response.ledger,
+        )
+
     def accept(self, escrow_id: int, *, payee: str | None = None) -> TxResult:
         """Record the payee's acceptance. The signer must be the escrow's payee.
 
@@ -304,8 +362,27 @@ class EscrowClient:
         """Return the escrow to its ``refund_to`` address.
 
         The signer must be a releaser, or anyone once ``refund_after`` passed.
+        A timeout refund works on a quorum escrow without approvals.
         """
         return self._settle("refund", escrow_id, caller)
+
+    def release_with_approvals(self, escrow_id: int, approvers: Sequence[Keypair]) -> TxResult:
+        """Release a quorum escrow with exactly ``threshold`` distinct approvals.
+
+        ``approvers`` must all be members of the escrow's ``releasers``. Each
+        keypair signs its own Soroban auth entry; the configured signer pays the
+        fee and signs the envelope. Duplicate, empty, under-threshold and
+        non-member lists are rejected before anything is simulated or sent.
+        """
+        return self._settle_with_approvals("release_with_approvals", escrow_id, approvers)
+
+    def refund_with_approvals(self, escrow_id: int, approvers: Sequence[Keypair]) -> TxResult:
+        """Refund a quorum escrow with exactly ``threshold`` distinct approvals.
+
+        Same approver rules as :meth:`release_with_approvals`. Refund never pays
+        the protocol fee, and the timeout :meth:`refund` path stays available.
+        """
+        return self._settle_with_approvals("refund_with_approvals", escrow_id, approvers)
 
     # ── reads ──
 
@@ -337,8 +414,13 @@ class EscrowClient:
             raise InvalidArgumentError(f"{name} must be the signer's address")
         return value
 
-    def _transact(self, function: str, args: Sequence[xdr.SCVal]) -> TxResult:
-        response, _ = self._invoke(function, args)
+    def _transact(
+        self,
+        function: str,
+        args: Sequence[xdr.SCVal],
+        extra_signers: Sequence[Keypair] = (),
+    ) -> TxResult:
+        response, _ = self._invoke(function, args, extra_signers)
         return TxResult(tx_hash=response.transaction_hash or "", ledger=response.ledger)
 
     def _settle(self, function: str, escrow_id: int, caller: str | None) -> TxResult:
@@ -346,6 +428,71 @@ class EscrowClient:
         return self._transact(
             function, [sv.u64("escrow_id", escrow_id), sv.address("caller", caller)]
         )
+
+    def _settle_with_approvals(
+        self, function: str, escrow_id: int, approvers: Sequence[Keypair]
+    ) -> TxResult:
+        self._require_signer()
+        keys = self._approver_keypairs(approvers)
+        escrow = self.get_escrow(escrow_id)
+        if len(keys) < escrow.threshold:
+            raise ThresholdNotMetError(
+                f"{function}: {len(keys)} approvers supplied, but escrow {escrow_id} "
+                f"needs {escrow.threshold} (ThresholdNotMet)"
+            )
+        for keypair in keys:
+            if keypair.public_key not in escrow.releasers:
+                raise InvalidArgumentError(
+                    f"{keypair.public_key} is not a releaser of escrow {escrow_id}"
+                )
+        return self._transact(
+            function,
+            [
+                sv.u64("escrow_id", escrow_id),
+                sv.address_vec("approvers", [keypair.public_key for keypair in keys]),
+            ],
+            extra_signers=keys,
+        )
+
+    def _approver_keypairs(self, approvers: Sequence[Keypair]) -> list[Keypair]:
+        if isinstance(approvers, (str, bytes)) or not isinstance(approvers, Sequence):
+            raise InvalidArgumentError("approvers must be a sequence of Keypair objects")
+        if not approvers:
+            raise InvalidArgumentError("approvers must not be empty")
+        keys: list[Keypair] = []
+        seen: set[str] = set()
+        for keypair in approvers:
+            if not isinstance(keypair, Keypair) or keypair.signing_key is None:
+                raise InvalidArgumentError("approvers must be Keypair objects with a secret key")
+            if keypair.public_key in seen:
+                raise InvalidArgumentError(f"duplicate approver: {keypair.public_key}")
+            seen.add(keypair.public_key)
+            keys.append(keypair)
+        return keys
+
+    def _releaser_set(self, releasers: Sequence[str], threshold: int) -> tuple[list[str], int]:
+        """The client-side half of the contract's ``check_releaser_set``."""
+        if isinstance(releasers, (str, bytes)) or not isinstance(releasers, Sequence):
+            raise InvalidArgumentError("releasers must be a sequence of strkeys")
+        if not 1 <= len(releasers) <= MAX_RELEASERS:
+            raise InvalidArgumentError(
+                f"releasers must contain between 1 and {MAX_RELEASERS} addresses"
+            )
+        checked: list[str] = []
+        for index, value in enumerate(releasers):
+            sv.address(f"releasers[{index}]", value)
+            if value == self.contract_id:
+                raise InvalidArgumentError(
+                    "releasers must not include the escrow contract's own address"
+                )
+            if value in checked:
+                raise InvalidArgumentError(f"releasers contains a duplicate: {value}")
+            checked.append(value)
+        if isinstance(threshold, bool) or not isinstance(threshold, int):
+            raise InvalidArgumentError("threshold must be an int")
+        if not 1 <= threshold <= len(checked):
+            raise InvalidArgumentError("threshold must be between 1 and the number of releasers")
+        return checked, threshold
 
     def _build(
         self, source: Account, function: str, args: Sequence[xdr.SCVal]
@@ -371,7 +518,10 @@ class EscrowClient:
         return xdr.SCVal.from_xdr(sim.results[0].xdr)
 
     def _invoke(
-        self, function: str, args: Sequence[xdr.SCVal]
+        self,
+        function: str,
+        args: Sequence[xdr.SCVal],
+        extra_signers: Sequence[Keypair] = (),
     ) -> tuple[GetTransactionResponse, xdr.SCVal]:
         signer = self._require_signer()
         try:
@@ -385,13 +535,7 @@ class EscrowClient:
         except (BaseRequestError, SdkError) as exc:
             raise to_escrow_error(exc, "simulation") from exc
 
-        needs = sorted(set(_address_auth(prepared)))
-        if needs:
-            raise UnsupportedAuthorizationError(
-                f"{function} needs a separate authorization from {', '.join(needs)}, "
-                "which this client does not sign (for create_escrow, notify_payee=True "
-                "requires the payee's signature)"
-            )
+        self._sign_auth_entries(function, prepared, signer, extra_signers)
 
         prepared.sign(signer)
         try:
@@ -422,29 +566,75 @@ class EscrowClient:
             raise SubmissionFailure(f"{function}: transaction {sent.hash} failed")
         return final, _return_value(final)
 
+    def _sign_auth_entries(
+        self,
+        function: str,
+        envelope: TransactionEnvelope,
+        signer: Keypair,
+        extra_signers: Sequence[Keypair],
+    ) -> None:
+        """Sign each address-credential auth entry, or refuse before sending.
 
-def _address_auth(envelope: TransactionEnvelope) -> list[str]:
-    """Addresses of auth entries the envelope signature alone does not cover.
+        The envelope signer's own entry is rewritten to source-account
+        credentials (the envelope signature satisfies it), so no key signs
+        twice. Every other entry must belong to one of ``extra_signers``; an
+        entry for an address this client has no key for fails closed before the
+        envelope is signed or sent. As in the Go SDK, entries are signed after
+        the one simulation that set the footprint and resource fee; signing an
+        entry does not change either.
+        """
+        keypairs = {keypair.public_key: keypair for keypair in (signer, *extra_signers)}
+        pending: list[tuple[xdr.SorobanAuthorizationEntry, Keypair]] = []
+        for op in envelope.transaction.operations:
+            entries = getattr(op, "auth", None) or []
+            for index, entry in enumerate(entries):
+                creds = entry.credentials
+                if creds.type == xdr.SorobanCredentialsType.SOROBAN_CREDENTIALS_SOURCE_ACCOUNT:
+                    continue
+                address = _credential_address(creds)
+                if address is None:
+                    raise UnsupportedAuthorizationError(
+                        f"{function}: unsupported authorization credentials {creds.type}"
+                    )
+                if address == signer.public_key:
+                    entries[index] = xdr.SorobanAuthorizationEntry(
+                        credentials=xdr.SorobanCredentials(
+                            xdr.SorobanCredentialsType.SOROBAN_CREDENTIALS_SOURCE_ACCOUNT
+                        ),
+                        root_invocation=entry.root_invocation,
+                    )
+                    continue
+                keypair = keypairs.get(address)
+                if keypair is None:
+                    raise UnsupportedAuthorizationError(
+                        f"{function} needs a separate authorization from {address}, "
+                        "which this client has no key for"
+                    )
+                pending.append((entry, keypair))
 
-    The signer's own authorization comes back from simulation as
-    source-account credentials, which the envelope signature satisfies; any
-    address-credential entry belongs to someone else.
-    """
-    addresses: list[str] = []
-    for op in envelope.transaction.operations:
-        for entry in getattr(op, "auth", None) or []:
-            creds = entry.credentials
-            for attr in ("address", "address_v2", "address_with_delegates"):
-                inner = getattr(creds, attr, None)
-                if inner is not None:
-                    target = getattr(inner, "address", None) or getattr(
-                        getattr(inner, "address_credentials", None), "address", None
-                    )
-                    addresses.append(
-                        Address.from_xdr_sc_address(target).address if target is not None else "?"
-                    )
-                    break
-    return addresses
+        if not pending:
+            return
+        try:
+            latest = self.server.get_latest_ledger().sequence
+        except (BaseRequestError, SdkError) as exc:
+            raise to_escrow_error(exc) from exc
+        expiration = latest + self.approval_expiration_ledgers
+        for entry, keypair in pending:
+            entry.credentials = authorize_entry(
+                entry, keypair, expiration, self.network_passphrase
+            ).credentials
+
+
+def _credential_address(creds: xdr.SorobanCredentials) -> str | None:
+    """The address of an address-credential auth entry, if it has one."""
+    for attr in ("address", "address_v2", "address_with_delegates"):
+        inner = getattr(creds, attr, None)
+        if inner is not None:
+            target = getattr(inner, "address", None) or getattr(
+                getattr(inner, "address_credentials", None), "address", None
+            )
+            return Address.from_xdr_sc_address(target).address if target is not None else None
+    return None
 
 
 def _return_value(response: GetTransactionResponse) -> xdr.SCVal:
