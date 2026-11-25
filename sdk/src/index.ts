@@ -1073,6 +1073,12 @@ export class EscrowClient {
     return result;
   }
 
+  /**
+   * Read-only: returns the escrow's current state (see `ARCHITECTURE_ESSENTIALS.md`
+   * T8). Throws if `escrowId` doesn't exist, **and also once the escrow has
+   * settled**: its record is reclaimed (docs/adr/0013). Use `getStatus` for a
+   * settled id and the `ESCROW` state event for its history.
+   */
   async getEscrow(escrowId: bigint): Promise<Escrow> {
     await this.ensureNetworkVerified();
     const client = this.contractClient();
