@@ -22,7 +22,16 @@ export const MAX_SETTLE_OPS = 12;
 /** One escrow to create in a batched `createEscrows` call. */
 export interface BatchCreateItem extends CreateEscrowParams {}
 
-/** One operation in a batched `settleMany` call. */
+/**
+ * One operation in a batched `settleMany` call.
+ *
+ * `settleMany` sends each operation as its own `release`/`refund`
+ * transaction, never as one contract `settle_many` call. That is deliberate:
+ * a release callback (`notifyPayee`) runs after the payout, so a payee
+ * contract that fails it reverts the whole invocation. Per-op transactions
+ * keep such a failure contained — it can only revert its own escrow (issue
+ * #367, docs/adr/0012). Refund ops never invoke the callback.
+ */
 export interface BatchSettleOperation {
   escrowId: bigint;
   /** `release` pays the escrow's payee; `refund` returns the funds to `refundTo`. */
