@@ -1,10 +1,13 @@
 use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
     symbol_short,
-    testutils::{Address as _, Events as _, Ledger as _},
+    testutils::{Address as _, Events as _, Ledger as _, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
     vec, Address, Env, IntoVal, String, Vec,
 };
+
+#[path = "common/auth.rs"]
+mod auth;
 
 struct Fixture<'a> {
     client: EscrowContractClient<'a>,
@@ -220,4 +223,102 @@ fn top_up_rejects_invalid_payer_amount_overflow_and_settled_state() {
     assert!(f.client.try_top_up(&f.id, &f.payer, &i128::MAX).is_err());
     f.client.release(&f.id, &f.releaser);
     assert!(f.client.try_top_up(&f.id, &f.payer, &1).is_err());
+}
+
+// --- exact authorization tree (issue #474) -------------------------------
+
+#[test]
+fn top_up_records_the_payers_exact_tree_with_nested_token_transfer() {
+    let env = Env::default();
+    let f = setup(&env); // fixture mint and creation stay under the blanket mock
+
+    let transfer = MockAuthInvoke {
+        contract: &f.token.address,
+        fn_name: "transfer",
+        args: (f.payer.clone(), f.contract_id.clone(), 200i128).into_val(&env),
+        sub_invokes: &[],
+    };
+    let sub_invokes = [transfer];
+    let top_up = MockAuthInvoke {
+        contract: &f.contract_id,
+        fn_name: "top_up",
+        args: (f.id, f.payer.clone(), 200i128).into_val(&env),
+        sub_invokes: &sub_invokes,
+    };
+    env.mock_auths(&[MockAuth {
+        address: &f.payer,
+        invoke: &top_up,
+    }]);
+
+    f.client.top_up(&f.id, &f.payer, &200);
+
+    auth::assert_auth_tree(&env, &f.payer, &top_up);
+    assert_eq!(f.token.balance(&f.contract_id), 500);
+}
+
+#[test]
+fn top_up_rejects_a_stranger_signing_as_the_payer() {
+    let env = Env::default();
+    let f = setup(&env);
+    let stranger = Address::generate(&env);
+
+    let top_up = MockAuthInvoke {
+        contract: &f.contract_id,
+        fn_name: "top_up",
+        args: (f.id, stranger.clone(), 200i128).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth {
+        address: &stranger,
+        invoke: &top_up,
+    }]);
+
+    assert_eq!(
+        f.client.try_top_up(&f.id, &stranger, &200),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(f.token.balance(&f.contract_id), 300);
+}
+
+#[test]
+fn top_up_rejects_the_payee_signing_the_payers_exact_tree() {
+    let env = Env::default();
+    let f = setup(&env);
+
+    let transfer = MockAuthInvoke {
+        contract: &f.token.address,
+        fn_name: "transfer",
+        args: (f.payer.clone(), f.contract_id.clone(), 200i128).into_val(&env),
+        sub_invokes: &[],
+    };
+    let sub_invokes = [transfer];
+    let top_up = MockAuthInvoke {
+        contract: &f.contract_id,
+        fn_name: "top_up",
+        args: (f.id, f.payer.clone(), 200i128).into_val(&env),
+        sub_invokes: &sub_invokes,
+    };
+    env.mock_auths(&[MockAuth {
+        address: &f.payee,
+        invoke: &top_up,
+    }]);
+
+    assert!(matches!(
+        f.client.try_top_up(&f.id, &f.payer, &200),
+        Err(Err(soroban_sdk::InvokeError::Abort))
+    ));
+    assert_eq!(f.token.balance(&f.contract_id), 300);
+}
+
+#[test]
+fn top_up_fails_without_the_payers_signature() {
+    let env = Env::default();
+    let f = setup(&env);
+
+    env.mock_auths(&[]);
+    assert!(matches!(
+        f.client.try_top_up(&f.id, &f.payer, &200),
+        Err(Err(soroban_sdk::InvokeError::Abort))
+    ));
+    assert_eq!(f.token.balance(&f.contract_id), 300);
 }

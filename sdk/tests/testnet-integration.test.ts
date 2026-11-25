@@ -35,12 +35,18 @@ import {
   EscrowPreconditionError,
   FactoryClient,
   PreparedTransactionExpiredError,
+  ScheduleCancelledError,
+  ScheduleTooEarlyError,
   SignedTransactionMismatchError,
   StaleSequenceError,
+  UniqueEscrowMismatchError,
   UnsupportedContractVersionError,
   isSupportedContractVersion,
   knownContractId,
   predictInstanceAddress,
+  scheduleAllowanceExpirationLedger,
+  scheduleAllowanceNeeded,
+  scheduleState,
 } from "../src/index.js";
 import { Server as RpcServer } from "@stellar/stellar-sdk/rpc";
 
@@ -848,4 +854,110 @@ describe("Phase E7 soak: pooled, fee, batch, pause and payee coverage", () => {
     await client.release({ escrowId, caller: releaser });
     expect(await client.getStatus(escrowId)).toBe("Released");
   });
+});
+
+// Phase E6 SDK surfaces for contract features newer than the recorded testnet
+// deployment (issues #468, #469, #470). The newest deployment in
+// deployments.json (2026-11-18, git 2bbc6b1c) predates recurring schedules
+// (#115), unique creation (#47) and the pooled release deadline (#288), so
+// these cases skip by default. Opt in by pointing TESTNET_CONTRACT_ID at a
+// deployment built from main at or after those features and setting
+// TESTNET_E6_FEATURES=1.
+const describeE6 = process.env.TESTNET_E6_FEATURES === "1" ? describe : describe.skip;
+
+describeE6("Phase E6 SDK: recurring, unique creation and pooled deadlines (opt-in)", () => {
+  it("creates a schedule, approves the allowance, funds a period and cancels (#468)", async () => {
+    const { payer, payee, releaser, contributor: keeper } = await soak();
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const latest = await client.getLedgerTime({ maxAgeMs: 0 });
+
+    const { scheduleId } = await client.createSchedule({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 100_000n,
+      conditionRef: `sdk-integration-schedule-${Date.now()}`,
+      releaser: releaser.publicKey(),
+      refundAfterSeconds: 3_600n,
+      periodSeconds: 3_600n,
+      totalPeriods: 3,
+      firstDue: latest.closeTime, // due immediately
+    });
+    const schedule = await client.getSchedule(scheduleId);
+    expect(schedule).toMatchObject({ periodsFunded: 0, totalPeriods: 3, cancelled: false });
+    expect(scheduleState(schedule, latest.closeTime)).toBe("due");
+
+    await client.approveScheduleAllowance({
+      payer,
+      token: NATIVE_XLM_SAC,
+      amount: scheduleAllowanceNeeded(schedule),
+      expirationLedger: scheduleAllowanceExpirationLedger(schedule, latest),
+    });
+
+    // The keeper funds without the payer's signature.
+    const { escrowId } = await client.fundNext(scheduleId, { source: keeper });
+    expect(await client.getStatus(escrowId)).toBe("Funded");
+    const funded = await client.getSchedule(scheduleId);
+    expect(funded.periodsFunded).toBe(1);
+    expect(funded.nextDue).toBe(schedule.nextDue + schedule.periodSeconds);
+    expect(scheduleState(funded, (await client.getLedgerTime({ maxAgeMs: 0 })).closeTime)).toBe("waiting");
+    await expect(client.fundNext(scheduleId, { source: keeper })).rejects.toBeInstanceOf(ScheduleTooEarlyError);
+
+    await client.cancelSchedule({ scheduleId, payer });
+    expect(scheduleState(await client.getSchedule(scheduleId), funded.nextDue)).toBe("cancelled");
+    await expect(client.fundNext(scheduleId, { source: keeper })).rejects.toBeInstanceOf(ScheduleCancelledError);
+    // The period escrow already funded is unaffected by the cancel.
+    expect(await client.getStatus(escrowId)).toBe("Funded");
+  }, 120_000);
+
+  it("returns the same escrow when the same unique creation runs twice (#469)", async () => {
+    const { payer, payee, releaser } = await soak();
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const request = {
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: `sdk-integration-unique-${Date.now()}`,
+      releaser: releaser.publicKey(),
+      unique: true as const,
+    };
+
+    const first = await client.createEscrow(request);
+    expect(first.existing).toBe(false);
+    expect(first.txHash).toBeTruthy();
+    const second = await client.createEscrow(request);
+    expect(second).toEqual({ escrowId: first.escrowId, txHash: undefined, existing: true, status: "Funded" });
+    expect(await client.getUniqueEscrow(payer, request.conditionRef)).toBe(first.escrowId);
+
+    await expect(client.createEscrow({ ...request, amount: 2_000_000n })).rejects.toBeInstanceOf(
+      UniqueEscrowMismatchError,
+    );
+  });
+
+  it("creates a pool with a release deadline, reads it, and closes an empty failed round (#470)", async () => {
+    const { payer, payee, releaser, contributor } = await soak();
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const fundingDeadline = BigInt(Math.floor(Date.now() / 1000) + 40);
+    const releaseDeadline = fundingDeadline + 3_600n;
+    const { escrowId } = await client.createPooledEscrow({
+      creator: payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      fundingTarget: 1_000_000n,
+      conditionRef: "sdk-integration-test-pooled-release-deadline",
+      releaser: releaser.publicKey(),
+      fundingDeadline,
+      releaseDeadline,
+    });
+    expect((await client.getPooled(escrowId)).releaseDeadline).toBe(releaseDeadline);
+
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if ((await client.getLedgerTime({ maxAgeMs: 0 })).closeTime >= fundingDeadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+    // Nobody contributed: anyone may give the failed round its terminal status.
+    await client.closeFailedRound(escrowId, { source: contributor });
+    expect(await client.getStatus(escrowId)).toBe("Refunded");
+  }, 120_000);
 });

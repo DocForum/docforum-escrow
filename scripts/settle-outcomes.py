@@ -26,6 +26,14 @@ again: someone else already settled it (the attacker, the timeout path, or
 another operator). Without one, a submission that fails with `NotFunded`
 (error #4) is still recorded as settled elsewhere, with the status unknown.
 
+Every escrow is submitted in its own transaction, which is what keeps an
+opted-in payee callback (`notify_payee`, a `release` only) from taking other
+escrows down with it: the callback runs after the payout, so a failing one
+reverts its whole invocation (issue #367, docs/adr/0012, threat model T11).
+Keep it that way if you change the submit path — do not combine release ops
+into one `settle_many` batch. Refund ops never invoke the callback, so only
+release needs isolating.
+
 Progress is kept in a state file of JSON lines, one per settled escrow:
 
     {"id": 12, "action": "release", "tx": "<hash>"}

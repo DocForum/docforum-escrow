@@ -255,7 +255,7 @@ _, err = client.Release(ctx, created.EscrowID)
 
 // Or the deadline passes below the target: every contributor pulls their own
 // record back, once, in any order.
-pooled, err := client.GetPooled(ctx, created.EscrowID) // { FundingTarget, FundingDeadline }
+pooled, err := client.GetPooled(ctx, created.EscrowID) // { FundingTarget, FundingDeadline, ReleaseDeadline (nil if unset) }
 _, err = client.ClaimRefund(ctx, created.EscrowID, aliceSigner)
 _, err = client.ClaimRefund(ctx, created.EscrowID, bobSigner)
 ```
