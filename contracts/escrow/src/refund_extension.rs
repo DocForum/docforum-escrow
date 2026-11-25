@@ -20,9 +20,7 @@ impl EscrowContract {
         let releaser = data.releasers.get(0).ok_or(Error::InvalidReleaser)?;
         releaser.require_auth();
         data.refund_after = Some(new_deadline);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &data);
+        Self::write_escrow(&env, escrow_id, &data);
         // A later deadline needs the entries to live at least that long.
         Self::extend_escrow_ttl(&env, escrow_id, data.refund_after);
         RefundDeadlineExtended {

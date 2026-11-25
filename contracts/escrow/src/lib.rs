@@ -95,6 +95,7 @@ mod admin;
 mod attestation;
 mod create;
 mod internal;
+mod layout;
 mod pause;
 mod payee_transfer;
 mod pooled;
@@ -107,3 +108,5 @@ mod settle;
 mod storage;
 mod top_up;
 mod vesting;
+
+pub use layout::{StoredEscrow, ESCROW_LAYOUT_VERSION};

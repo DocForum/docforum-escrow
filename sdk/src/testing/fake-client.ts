@@ -1,8 +1,11 @@
 import type {
+  CreatedEscrow,
   CreateEscrowParams,
   Escrow,
   EscrowStatus,
   ReleaseOrRefundParams,
+  UniqueCreateEscrowParams,
+  UniqueCreateEscrowResult,
 } from "../index.js";
 import { signerAddress } from "../signers/types.js";
 
@@ -75,6 +78,8 @@ interface FakeEscrowRecord extends Escrow {
  */
 export class FakeEscrowClient {
   private readonly escrows = new Map<bigint, FakeEscrowRecord>();
+  /** `(payer, conditionRef)` → id for `unique: true` creations; survives settlement like the contract's index. */
+  private readonly uniqueRefs = new Map<string, bigint>();
   private readonly failures: Array<{ operation: FakeOperation; failure: FakeFailure }> = [];
   private nextId = 0n;
   private nextTx = 0;
@@ -93,15 +98,30 @@ export class FakeEscrowClient {
     this.failures.push({ operation, failure });
   }
 
-  /** Record a new `Funded` escrow, validating amount and `refundAfter` like the contract. */
-  async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
+  /**
+   * Record a new `Funded` escrow, validating amount and `refundAfter` like the
+   * contract. With `unique: true`, a repeated `(payer, conditionRef)` returns
+   * the existing escrow (`existing: true`, no transaction), as the real client
+   * does. Unlike the real client, it doesn't check the existing escrow's terms.
+   */
+  createEscrow(params: UniqueCreateEscrowParams): Promise<UniqueCreateEscrowResult>;
+  createEscrow(params: CreateEscrowParams): Promise<CreatedEscrow>;
+  async createEscrow(
+    params: CreateEscrowParams | UniqueCreateEscrowParams,
+  ): Promise<CreatedEscrow | UniqueCreateEscrowResult> {
     this.maybeFail("createEscrow");
+    const uniqueKey = params.unique === true ? `${signerAddress(params.payer)}|${params.conditionRef}` : undefined;
+    const existingId = uniqueKey === undefined ? undefined : this.uniqueRefs.get(uniqueKey);
+    if (existingId !== undefined) {
+      return { escrowId: existingId, txHash: undefined, existing: true, status: this.getRecord(existingId).status };
+    }
     if (params.amount <= 0n) throw new FakeEscrowError("InvalidAmount");
     if (params.refundAfter !== undefined && params.refundAfter <= this.clock()) {
       throw new FakeEscrowError("InvalidRefundAfter");
     }
 
     const escrowId = this.nextId++;
+    if (uniqueKey !== undefined) this.uniqueRefs.set(uniqueKey, escrowId);
     this.escrows.set(escrowId, {
       id: escrowId,
       payer: signerAddress(params.payer),
@@ -120,7 +140,8 @@ export class FakeEscrowClient {
       requiresAcceptance: params.requiresAcceptance ?? false,
       status: "Funded",
     });
-    return { escrowId, txHash: `fake-tx-${++this.nextTx}` };
+    const txHash = `fake-tx-${++this.nextTx}`;
+    return uniqueKey === undefined ? { escrowId, txHash } : { escrowId, txHash, existing: false };
   }
 
   /** Status of an escrow; throws `NotFound` for an unknown id. */

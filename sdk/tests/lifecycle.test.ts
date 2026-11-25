@@ -1,13 +1,17 @@
 // Offline tests for the lifecycle amendment methods (issue #84): topUp,
-// accept, cancel, their client-side precondition checks, and the
-// prepare → sign → submit flow for parties on different machines.
-import { describe, expect, it, vi } from "vitest";
+// accept, cancel, their client-side precondition checks, the
+// prepare → sign → submit flow for parties on different machines, and the
+// waitForStatus settlement-confirmation helper (issue #368).
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Keypair } from "@stellar/stellar-sdk";
 import {
   EscrowClient,
   EscrowPreconditionError,
+  NotFoundError,
   PREPARED_AUTH_TTL_LEDGERS,
+  WaitTimeoutError,
   type Escrow,
+  type EscrowStatus,
   type PreparedLifecycleCall,
 } from "../src/index.js";
 // Re-export check: the lifecycle option types must resolve from the package root.
@@ -531,5 +535,177 @@ describe("createEscrow with requiresAcceptance", () => {
         feeBps: 100,
       }),
     ).rejects.toThrow(/cannot be combined/);
+  });
+});
+
+describe("waitForStatus", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A client whose `getStatus` returns `statuses` in order, then repeats the last one. */
+  function statusSequence(...statuses: EscrowStatus[]) {
+    const getStatus = vi.fn();
+    for (const status of statuses) getStatus.mockResolvedValueOnce(status);
+    getStatus.mockResolvedValue(statuses[statuses.length - 1]);
+    return { client: makeClient({ getStatus }), getStatus };
+  }
+
+  it("resolves once a target status is observed", async () => {
+    const { client, getStatus } = statusSequence("Funded", "Funded", "Released");
+    const asserted = expect(
+      client.waitForStatus(7n, ["Released"], { timeoutMs: 10_000, pollIntervalMs: 1_000 }),
+    ).resolves.toEqual({ escrowId: 7n, status: "Released" });
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await asserted;
+    expect(getStatus).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("resolves immediately when the escrow is already at a target status", async () => {
+    const { client, getStatus } = statusSequence("Refunded");
+    await expect(client.waitForStatus(1n, ["Refunded"], { timeoutMs: 5_000 })).resolves.toEqual({
+      escrowId: 1n,
+      status: "Refunded",
+    });
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps polling while the status is non-terminal", async () => {
+    const { client, getStatus } = statusSequence("Funded", "Funded", "Funded");
+    const wait = client.waitForStatus(2n, ["Released"], { timeoutMs: 2_500, pollIntervalMs: 1_000 });
+    const error = wait.catch((e: unknown) => e);
+
+    await vi.advanceTimersByTimeAsync(2_500);
+    const rejected = await error;
+    expect(rejected).toBeInstanceOf(WaitTimeoutError);
+    expect(getStatus).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects with WaitTimeoutError carrying the last status when the deadline passes", async () => {
+    const { client } = statusSequence("Funded");
+    const wait = client.waitForStatus(5n, ["Released"], { timeoutMs: 2_500, pollIntervalMs: 1_000 });
+    const error = wait.catch((e: unknown) => e);
+
+    await vi.advanceTimersByTimeAsync(2_500);
+    const rejected = await error;
+    expect(rejected).toBeInstanceOf(WaitTimeoutError);
+    expect((rejected as WaitTimeoutError).lastStatus).toBe("Funded");
+    expect((rejected as WaitTimeoutError).targetStatuses).toEqual(["Released"]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("times out even while a status read is still in flight", async () => {
+    const getStatus = vi
+      .fn()
+      .mockResolvedValueOnce("Funded")
+      .mockImplementationOnce(() => new Promise<EscrowStatus>(() => {}));
+    const client = makeClient({ getStatus });
+    const wait = client.waitForStatus(3n, ["Released"], { timeoutMs: 2_000, pollIntervalMs: 100 });
+    const error = wait.catch((e: unknown) => e);
+
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const rejected = await error;
+    expect(rejected).toBeInstanceOf(WaitTimeoutError);
+    expect((rejected as WaitTimeoutError).lastStatus).toBe("Funded");
+    expect(getStatus).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["Released", "Refunded", "Cancelled"] as const)(
+    "short-circuits when the escrow settles as %s outside the target set",
+    async (status) => {
+      const { client, getStatus } = statusSequence(status);
+      const wait = client.waitForStatus(4n, ["Funded"], { timeoutMs: 30_000, pollIntervalMs: 1_000 });
+      const error = wait.catch((e: unknown) => e);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const rejected = await error;
+      expect(rejected).toBeInstanceOf(WaitTimeoutError);
+      expect((rejected as WaitTimeoutError).lastStatus).toBe(status);
+      expect(getStatus).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("rejects immediately for an unknown escrow id with getStatus's error", async () => {
+    const notFound = new NotFoundError("no such escrow");
+    const client = makeClient({
+      getStatus: vi.fn(async () => {
+        throw notFound;
+      }),
+    });
+
+    await expect(client.waitForStatus(99n, ["Released"], { timeoutMs: 5_000 })).rejects.toBe(notFound);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rejects an already-aborted signal without reading the escrow", async () => {
+    const { client, getStatus } = statusSequence("Funded");
+    const controller = new AbortController();
+    controller.abort();
+
+    const rejected = await client.waitForStatus(1n, ["Released"], {
+      timeoutMs: 5_000,
+      signal: controller.signal,
+    }).catch((e: unknown) => e);
+
+    expect(rejected).toBeInstanceOf(DOMException);
+    expect((rejected as DOMException).name).toBe("AbortError");
+    expect(getStatus).not.toHaveBeenCalled();
+  });
+
+  it("rejects with the signal's reason when aborted mid-wait and clears its timers", async () => {
+    const { client, getStatus } = statusSequence("Funded");
+    const controller = new AbortController();
+    const wait = client.waitForStatus(1n, ["Released"], {
+      timeoutMs: 10_000,
+      pollIntervalMs: 1_000,
+      signal: controller.signal,
+    });
+    const error = wait.catch((e: unknown) => e);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    controller.abort();
+
+    const rejected = await error;
+    expect(rejected).toBeInstanceOf(DOMException);
+    expect((rejected as DOMException).name).toBe("AbortError");
+    expect(vi.getTimerCount()).toBe(0);
+
+    // No further reads after the abort.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(getStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start another poll when the deadline and a read race", async () => {
+    const getStatus = vi.fn().mockImplementation(
+      () => new Promise<EscrowStatus>((resolve) => setTimeout(() => resolve("Funded"), 500)),
+    );
+    const client = makeClient({ getStatus });
+    const wait = client.waitForStatus(1n, ["Released"], { timeoutMs: 700, pollIntervalMs: 100 });
+    const error = wait.catch((e: unknown) => e);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(error).resolves.toBeInstanceOf(WaitTimeoutError);
+    // The second read was in flight when the deadline fired; let it finish too.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(getStatus).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("validates its arguments before any network call", async () => {
+    const { client, getStatus } = statusSequence("Funded");
+    await expect(client.waitForStatus(1n, [], { timeoutMs: 1_000 })).rejects.toThrow(RangeError);
+    await expect(client.waitForStatus(1n, ["Released"], { timeoutMs: 0 })).rejects.toThrow(RangeError);
+    await expect(
+      client.waitForStatus(1n, ["Released"], { timeoutMs: 1_000, pollIntervalMs: 0 }),
+    ).rejects.toThrow(RangeError);
+    expect(getStatus).not.toHaveBeenCalled();
   });
 });
