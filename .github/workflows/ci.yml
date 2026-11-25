@@ -28,6 +28,10 @@ jobs:
           }
       - name: SDK constants mirror the contract
         run: node scripts/check-sdk-constants.mjs
+      - name: Contract surface docs cover every public function
+        run: |
+          node --test scripts/check-surface-docs.test.mjs
+          node scripts/check-surface-docs.mjs
 
   config-guards:
     name: Verifier configuration guards
