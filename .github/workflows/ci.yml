@@ -490,6 +490,94 @@ jobs:
       - run: npm run build
         working-directory: packages/escrow-react
 
+  # Issue #356: build the browser demo against the freshly built workspace SDK
+  # and React hooks package, only when one of their source trees changes.
+  web-demo:
+    name: Web demo (local SDK + hooks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check whether web demo dependencies changed
+        id: web-demo-changes
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const prefixes = ['sdk/', 'packages/', 'examples/web-demo/'];
+            let files = [];
+            if (context.eventName === 'schedule') {
+              core.setOutput('changed', 'true');
+              return;
+            }
+            if (context.eventName === 'pull_request') {
+              files = await github.paginate(github.rest.pulls.listFiles, {
+                ...context.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              });
+            } else if (context.eventName === 'push') {
+              const comparison = await github.rest.repos.compareCommits({
+                ...context.repo,
+                base: context.payload.before,
+                head: context.sha,
+              });
+              files = comparison.data.files || [];
+            }
+            core.setOutput('changed', String(files.some((file) => prefixes.some((prefix) => file.filename.startsWith(prefix)))));
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            sdk/package-lock.json
+            packages/escrow-react/package-lock.json
+            examples/web-demo/package-lock.json
+
+      - name: Install SDK dependencies
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        working-directory: sdk
+        run: npm ci
+
+      - name: Build SDK from this checkout
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        working-directory: sdk
+        run: npm run build
+
+      - name: Install React hooks dependencies
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        working-directory: packages/escrow-react
+        run: npm ci
+
+      - name: Build React hooks from this checkout
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        working-directory: packages/escrow-react
+        run: npm run build
+
+      - name: Install web demo dependencies
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        working-directory: examples/web-demo
+        run: npm ci
+
+      - name: Verify TypeScript and Vite resolve the local workspace builds
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        working-directory: examples/web-demo
+        run: node scripts/verify-local-workspace-packages.mjs
+
+      - name: Type-check web demo
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        working-directory: examples/web-demo
+        run: npx tsc --noEmit
+
+      - name: Build web demo for production
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        working-directory: examples/web-demo
+        run: npx vite build
+
   # Issue #347: the indexer has its own pinned dependencies and tests. The job
   # only does work when indexer/** changed (or on the nightly schedule), so an
   # unrelated PR does not pay for codegen + build + tests.
