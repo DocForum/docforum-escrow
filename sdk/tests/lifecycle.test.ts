@@ -1,13 +1,17 @@
 // Offline tests for the lifecycle amendment methods (issue #84): topUp,
-// accept, cancel, their client-side precondition checks, and the
-// prepare → sign → submit flow for parties on different machines.
-import { describe, expect, it, vi } from "vitest";
+// accept, cancel, their client-side precondition checks, the
+// prepare → sign → submit flow for parties on different machines, and the
+// waitForStatus settlement-confirmation helper (issue #368).
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Keypair } from "@stellar/stellar-sdk";
 import {
   EscrowClient,
   EscrowPreconditionError,
+  NotFoundError,
   PREPARED_AUTH_TTL_LEDGERS,
+  WaitTimeoutError,
   type Escrow,
+  type EscrowStatus,
   type PreparedLifecycleCall,
 } from "../src/index.js";
 
@@ -134,6 +138,122 @@ describe("accept", () => {
   it("checks the caller before the status, like the contract", async () => {
     const client = makeClient({ getEscrow: async () => escrow({ status: "Released" }) });
     await expectPrecondition(client.accept({ escrowId: 1n, payee: payer }), "Unauthorized");
+  });
+});
+
+describe("transferPayee", () => {
+  const newPayee = Keypair.random();
+
+  it("calls transfer_payee as the current payee", async () => {
+    const transfer_payee = vi.fn(async () => sendableTx("transfer-hash"));
+    const client = makeClient({ getEscrow: async () => escrow(), contractClient: () => ({ transfer_payee }) });
+
+    const result = await client.transferPayee({
+      escrowId: 7n,
+      currentPayee: payee,
+      newPayee: newPayee.publicKey(),
+    });
+
+    expect(result.txHash).toBe("transfer-hash");
+    expect(transfer_payee).toHaveBeenCalledWith({
+      escrow_id: 7n,
+      current_payee: payee.publicKey(),
+      new_payee: newPayee.publicKey(),
+    });
+  });
+
+  it("accepts a SEP-43 signer for the current payee", async () => {
+    const transfer_payee = vi.fn(async () => sendableTx());
+    const signer = { address: payee.publicKey() };
+    const client = makeClient({ getEscrow: async () => escrow(), contractClient: () => ({ transfer_payee }) });
+
+    await client.transferPayee({ escrowId: 1n, currentPayee: signer as never, newPayee: newPayee.publicKey() });
+
+    expect(transfer_payee).toHaveBeenCalledWith({
+      escrow_id: 1n,
+      current_payee: payee.publicKey(),
+      new_payee: newPayee.publicKey(),
+    });
+  });
+
+  it("rejects a caller who is not the current payee", async () => {
+    const client = makeClient({ getEscrow: async () => escrow() });
+    await expectPrecondition(
+      client.transferPayee({ escrowId: 1n, currentPayee: payer, newPayee: newPayee.publicKey() }),
+      "Unauthorized",
+    );
+  });
+
+  it.each(["Released", "Refunded", "Cancelled"] as const)("rejects a %s escrow", async (status) => {
+    const client = makeClient({ getEscrow: async () => escrow({ status }) });
+    await expectPrecondition(
+      client.transferPayee({ escrowId: 1n, currentPayee: payee, newPayee: newPayee.publicKey() }),
+      "NotFunded",
+    );
+  });
+
+  it("rejects the payer as the new payee, like the contract", async () => {
+    const client = makeClient({ getEscrow: async () => escrow() });
+    await expectPrecondition(
+      client.transferPayee({ escrowId: 1n, currentPayee: payee, newPayee: payer.publicKey() }),
+      "InvalidNewPayee",
+    );
+  });
+
+  it("rejects the contract id as the new payee, like the contract", async () => {
+    const client = makeClient({ getEscrow: async () => escrow() });
+    await expectPrecondition(
+      client.transferPayee({ escrowId: 1n, currentPayee: payee, newPayee: client.contractId }),
+      "InvalidNewPayee",
+    );
+  });
+
+  it("checks caller, then status, then new payee, like the contract", async () => {
+    const wrongCaller = makeClient({ getEscrow: async () => escrow({ status: "Released" }) });
+    await expectPrecondition(
+      wrongCaller.transferPayee({ escrowId: 1n, currentPayee: payer, newPayee: payer.publicKey() }),
+      "Unauthorized",
+    );
+    const wrongStatus = makeClient({ getEscrow: async () => escrow({ status: "Refunded" }) });
+    await expectPrecondition(
+      wrongStatus.transferPayee({ escrowId: 1n, currentPayee: payee, newPayee: payer.publicKey() }),
+      "NotFunded",
+    );
+  });
+
+  it("works on escrows without the acceptance gate or after acceptance", async () => {
+    const transfer_payee = vi.fn(async () => sendableTx());
+    const noGate = makeClient({
+      getEscrow: async () => escrow({ requiresAcceptance: false }),
+      contractClient: () => ({ transfer_payee }),
+    });
+    await noGate.transferPayee({ escrowId: 1n, currentPayee: payee, newPayee: newPayee.publicKey() });
+
+    const accepted = makeClient({
+      getEscrow: async () => escrow({ acceptedAt: 1_700_000_000n }),
+      contractClient: () => ({ transfer_payee }),
+    });
+    await accepted.transferPayee({ escrowId: 1n, currentPayee: payee, newPayee: newPayee.publicKey() });
+    expect(transfer_payee).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips the read when checkPreconditions is false", async () => {
+    const getEscrow = vi.fn();
+    const client = makeClient({ getEscrow, contractClient: () => ({ transfer_payee: async () => sendableTx() }) });
+    await client.transferPayee({
+      escrowId: 1n,
+      currentPayee: payee,
+      newPayee: payer.publicKey(),
+      checkPreconditions: false,
+    });
+    expect(getEscrow).not.toHaveBeenCalled();
+  });
+
+  it("names the method in the error", async () => {
+    const client = makeClient({ getEscrow: async () => escrow({ status: "Cancelled" }) });
+    await expect(
+      client.transferPayee({ escrowId: 1n, currentPayee: payee, newPayee: newPayee.publicKey() }),
+    ).rejects.toThrow(/^transfer_payee: /);
   });
 });
 
@@ -318,6 +438,41 @@ describe("prepare → sign → submit", () => {
     expect(prepared.source).toBe(payee.publicKey());
     expect(prepared.pendingSigners).toEqual([]);
   });
+
+  it("prepares a transfer_payee call for the current payee to sign elsewhere", async () => {
+    const newPayee = Keypair.random();
+    const relayer = Keypair.random();
+    const client = makeClient({
+      getEscrow: async () => escrow(),
+      rpc: { getLatestLedger: async () => ({ sequence: 1000 }) },
+      contractClientForAddress: () => ({
+        transfer_payee: async () => fakeAssembled("transfer_payee", [payee.publicKey()]),
+      }),
+    });
+    const prepared = await client.prepareLifecycleCall({
+      call: { method: "transfer_payee", escrowId: 3n, currentPayee: payee.publicKey(), newPayee: newPayee.publicKey() },
+      source: relayer.publicKey(),
+    });
+    expect(prepared.method).toBe("transfer_payee");
+    expect(prepared.source).toBe(relayer.publicKey());
+    expect(prepared.pendingSigners).toEqual([payee.publicKey()]);
+    expect(JSON.parse(JSON.stringify(prepared))).toEqual(prepared);
+  });
+
+  it("rejects a prepared transfer_payee that would fail preconditions", async () => {
+    const client = makeClient({ getEscrow: async () => escrow({ status: "Released" }) });
+    await expectPrecondition(
+      client.prepareLifecycleCall({
+        call: {
+          method: "transfer_payee",
+          escrowId: 3n,
+          currentPayee: payee.publicKey(),
+          newPayee: payer.publicKey(),
+        },
+      }),
+      "NotFunded",
+    );
+  });
 });
 
 describe("createEscrow with requiresAcceptance", () => {
@@ -355,5 +510,189 @@ describe("createEscrow with requiresAcceptance", () => {
     await expect(
       client.createEscrow({ ...base, requiresAcceptance: true, releaseNotBefore: 5n }),
     ).rejects.toThrow(/cannot be combined/);
+  });
+
+  it("rejects fees before calling the acceptance-only entry point", async () => {
+    const client = makeClient({ contractClient: () => ({}) });
+    await expect(
+      client.createEscrow({
+        ...base,
+        requiresAcceptance: true,
+        feeRecipient: Keypair.random().publicKey(),
+        feeBps: 100,
+      }),
+    ).rejects.toThrow(/cannot be combined/);
+  });
+});
+
+describe("waitForStatus", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A client whose `getStatus` returns `statuses` in order, then repeats the last one. */
+  function statusSequence(...statuses: EscrowStatus[]) {
+    const getStatus = vi.fn();
+    for (const status of statuses) getStatus.mockResolvedValueOnce(status);
+    getStatus.mockResolvedValue(statuses[statuses.length - 1]);
+    return { client: makeClient({ getStatus }), getStatus };
+  }
+
+  it("resolves once a target status is observed", async () => {
+    const { client, getStatus } = statusSequence("Funded", "Funded", "Released");
+    const asserted = expect(
+      client.waitForStatus(7n, ["Released"], { timeoutMs: 10_000, pollIntervalMs: 1_000 }),
+    ).resolves.toEqual({ escrowId: 7n, status: "Released" });
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await asserted;
+    expect(getStatus).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("resolves immediately when the escrow is already at a target status", async () => {
+    const { client, getStatus } = statusSequence("Refunded");
+    await expect(client.waitForStatus(1n, ["Refunded"], { timeoutMs: 5_000 })).resolves.toEqual({
+      escrowId: 1n,
+      status: "Refunded",
+    });
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps polling while the status is non-terminal", async () => {
+    const { client, getStatus } = statusSequence("Funded", "Funded", "Funded");
+    const wait = client.waitForStatus(2n, ["Released"], { timeoutMs: 2_500, pollIntervalMs: 1_000 });
+    const error = wait.catch((e: unknown) => e);
+
+    await vi.advanceTimersByTimeAsync(2_500);
+    const rejected = await error;
+    expect(rejected).toBeInstanceOf(WaitTimeoutError);
+    expect(getStatus).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects with WaitTimeoutError carrying the last status when the deadline passes", async () => {
+    const { client } = statusSequence("Funded");
+    const wait = client.waitForStatus(5n, ["Released"], { timeoutMs: 2_500, pollIntervalMs: 1_000 });
+    const error = wait.catch((e: unknown) => e);
+
+    await vi.advanceTimersByTimeAsync(2_500);
+    const rejected = await error;
+    expect(rejected).toBeInstanceOf(WaitTimeoutError);
+    expect((rejected as WaitTimeoutError).lastStatus).toBe("Funded");
+    expect((rejected as WaitTimeoutError).targetStatuses).toEqual(["Released"]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("times out even while a status read is still in flight", async () => {
+    const getStatus = vi
+      .fn()
+      .mockResolvedValueOnce("Funded")
+      .mockImplementationOnce(() => new Promise<EscrowStatus>(() => {}));
+    const client = makeClient({ getStatus });
+    const wait = client.waitForStatus(3n, ["Released"], { timeoutMs: 2_000, pollIntervalMs: 100 });
+    const error = wait.catch((e: unknown) => e);
+
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const rejected = await error;
+    expect(rejected).toBeInstanceOf(WaitTimeoutError);
+    expect((rejected as WaitTimeoutError).lastStatus).toBe("Funded");
+    expect(getStatus).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["Released", "Refunded", "Cancelled"] as const)(
+    "short-circuits when the escrow settles as %s outside the target set",
+    async (status) => {
+      const { client, getStatus } = statusSequence(status);
+      const wait = client.waitForStatus(4n, ["Funded"], { timeoutMs: 30_000, pollIntervalMs: 1_000 });
+      const error = wait.catch((e: unknown) => e);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const rejected = await error;
+      expect(rejected).toBeInstanceOf(WaitTimeoutError);
+      expect((rejected as WaitTimeoutError).lastStatus).toBe(status);
+      expect(getStatus).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("rejects immediately for an unknown escrow id with getStatus's error", async () => {
+    const notFound = new NotFoundError("no such escrow");
+    const client = makeClient({
+      getStatus: vi.fn(async () => {
+        throw notFound;
+      }),
+    });
+
+    await expect(client.waitForStatus(99n, ["Released"], { timeoutMs: 5_000 })).rejects.toBe(notFound);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rejects an already-aborted signal without reading the escrow", async () => {
+    const { client, getStatus } = statusSequence("Funded");
+    const controller = new AbortController();
+    controller.abort();
+
+    const rejected = await client.waitForStatus(1n, ["Released"], {
+      timeoutMs: 5_000,
+      signal: controller.signal,
+    }).catch((e: unknown) => e);
+
+    expect(rejected).toBeInstanceOf(DOMException);
+    expect((rejected as DOMException).name).toBe("AbortError");
+    expect(getStatus).not.toHaveBeenCalled();
+  });
+
+  it("rejects with the signal's reason when aborted mid-wait and clears its timers", async () => {
+    const { client, getStatus } = statusSequence("Funded");
+    const controller = new AbortController();
+    const wait = client.waitForStatus(1n, ["Released"], {
+      timeoutMs: 10_000,
+      pollIntervalMs: 1_000,
+      signal: controller.signal,
+    });
+    const error = wait.catch((e: unknown) => e);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    controller.abort();
+
+    const rejected = await error;
+    expect(rejected).toBeInstanceOf(DOMException);
+    expect((rejected as DOMException).name).toBe("AbortError");
+    expect(vi.getTimerCount()).toBe(0);
+
+    // No further reads after the abort.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(getStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start another poll when the deadline and a read race", async () => {
+    const getStatus = vi.fn().mockImplementation(
+      () => new Promise<EscrowStatus>((resolve) => setTimeout(() => resolve("Funded"), 500)),
+    );
+    const client = makeClient({ getStatus });
+    const wait = client.waitForStatus(1n, ["Released"], { timeoutMs: 700, pollIntervalMs: 100 });
+    const error = wait.catch((e: unknown) => e);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(error).resolves.toBeInstanceOf(WaitTimeoutError);
+    // The second read was in flight when the deadline fired; let it finish too.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(getStatus).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("validates its arguments before any network call", async () => {
+    const { client, getStatus } = statusSequence("Funded");
+    await expect(client.waitForStatus(1n, [], { timeoutMs: 1_000 })).rejects.toThrow(RangeError);
+    await expect(client.waitForStatus(1n, ["Released"], { timeoutMs: 0 })).rejects.toThrow(RangeError);
+    await expect(
+      client.waitForStatus(1n, ["Released"], { timeoutMs: 1_000, pollIntervalMs: 0 }),
+    ).rejects.toThrow(RangeError);
+    expect(getStatus).not.toHaveBeenCalled();
   });
 });

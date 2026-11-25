@@ -30,6 +30,34 @@ impl EscrowContract {
         Self::add_liability(env, token, amount)
     }
 
+    /// Pulls `amount` of `token` from `payer` under the allowance the
+    /// payer granted this contract (issue #115): the allowance is the
+    /// payer's authorization, so no signature is needed at pull time —
+    /// that is what lets any keeper trigger `fund_next`. The token
+    /// contract enforces both the allowance cap and its expiration
+    /// ledger; an expired allowance reads as zero. Like
+    /// `transfer_in_exact`, the balance delta is verified (threat model
+    /// T5) and the liability grows by the same amount.
+    pub(crate) fn transfer_from_exact(
+        env: &Env,
+        token: &Address,
+        payer: &Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        let token_client = token::Client::new(env, token);
+        let contract_address = env.current_contract_address();
+        if token_client.allowance(payer, &contract_address) < amount {
+            return Err(Error::AllowanceExhausted);
+        }
+        let balance_before = token_client.balance(&contract_address);
+        token_client.transfer_from(&contract_address, payer, &contract_address, &amount);
+        let balance_after = token_client.balance(&contract_address);
+        if balance_after.checked_sub(balance_before) != Some(amount) {
+            return Err(Error::BalanceMismatch);
+        }
+        Self::add_liability(env, token, amount)
+    }
+
     /// Current outstanding liability for `token`; `0` when never used.
     pub(crate) fn liability(env: &Env, token: &Address) -> i128 {
         env.storage()
@@ -113,5 +141,26 @@ impl EscrowContract {
         let storage = env.storage().persistent();
         storage.extend_ttl(&DataKey::Escrow(escrow_id), threshold, extend_to);
         storage.extend_ttl(&DataKey::Status(escrow_id), threshold, extend_to);
+    }
+
+    pub(crate) fn extend_unique_ref_ttl(env: &Env, key: &DataKey, refund_after: Option<u64>) {
+        let deadline_target = refund_after.and_then(|deadline| {
+            deadline
+                .checked_sub(env.ledger().timestamp())
+                .map(|seconds| {
+                    u32::try_from(seconds / 5)
+                        .unwrap_or(u32::MAX)
+                        .saturating_add(ESCROW_GRACE_PERIOD_LEDGERS)
+                })
+        });
+        let extend_to = deadline_target
+            .unwrap_or(ESCROW_EXTEND_TO)
+            .max(ESCROW_EXTEND_TO)
+            .min(MAX_NETWORK_TTL_LEDGERS)
+            .min(env.storage().max_ttl());
+        let threshold = ESCROW_TTL_THRESHOLD.min(extend_to);
+        env.storage()
+            .persistent()
+            .extend_ttl(key, threshold, extend_to);
     }
 }

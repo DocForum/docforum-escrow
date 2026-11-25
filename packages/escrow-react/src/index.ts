@@ -19,16 +19,44 @@ export {
   type EscrowTimeline,
   type UseEscrowTimelineOptions,
 } from "./useEscrowTimeline.js";
+export {
+  usePooledEscrow,
+  useContribution,
+  pooledEscrowPhase,
+  type PooledEscrowSnapshot,
+  type UsePooledEscrowOptions,
+  type UsePooledEscrowResult,
+  type UseContributionOptions,
+} from "./pooled.js";
+export {
+  useEscrowEvents,
+  DEFAULT_MAX_EVENTS,
+  type EscrowEventsState,
+  type UseEscrowEventsOptions,
+} from "./useEscrowEvents.js";
 export { escrowKeys } from "./queryKeys.js";
-export { isTerminalStatus, isUserRejection } from "./errors.js";
+export {
+  asError,
+  isEscrowPreconditionError,
+  isEventCursorExpiredError,
+  isTerminalStatus,
+  isUserRejection,
+} from "./errors.js";
 export type {
+  ContributionRecord,
   CreateEscrowParams,
   CreateQuorumEscrowParams,
   CreateResult,
   Escrow,
   EscrowClientLike,
+  EscrowEvent,
+  EscrowEventType,
+  EscrowPreconditionCode,
+  EscrowPreconditionErrorInfo,
   EscrowSigner,
   EscrowStatus,
+  PooledEscrow,
+  PooledEscrowPhase,
   ReleaseOrRefundParams,
   SettlementApprovalsParams,
   TxResult,

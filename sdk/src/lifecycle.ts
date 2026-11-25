@@ -1,4 +1,25 @@
+import { type EscrowStatus } from "./escrow-types.js";
+import { type SettlementReason } from "./preflight.js";
 import { type EscrowSigner } from "./signers/types.js";
+
+/** Options for {@link EscrowClient.waitForStatus}. */
+export interface WaitForStatusOptions {
+  /** Overall deadline in milliseconds, measured from the call. Must be positive. */
+  timeoutMs: number;
+  /** Delay between status reads in milliseconds. Default {@link DEFAULT_WAIT_POLL_INTERVAL_MS}. */
+  pollIntervalMs?: number;
+  /** Cancels the wait; it rejects with the signal's `reason`, or an `AbortError`. */
+  signal?: AbortSignal;
+}
+
+/** What {@link EscrowClient.waitForStatus} resolves with once a target status is observed. */
+export interface WaitForStatusResult {
+  escrowId: bigint;
+  status: EscrowStatus;
+}
+
+/** Default delay between `waitForStatus` status reads, in milliseconds. */
+export const DEFAULT_WAIT_POLL_INTERVAL_MS = 1_000;
 
 /** Options shared by the lifecycle amendment methods. */
 export interface LifecycleCallOptions {
@@ -26,6 +47,14 @@ export interface AcceptParams extends LifecycleCallOptions {
   payee: EscrowSigner;
 }
 
+export interface TransferPayeeParams extends LifecycleCallOptions {
+  escrowId: bigint;
+  /** The escrow's current payee; signs the transfer and pays the fee. */
+  currentPayee: EscrowSigner;
+  /** The address future payouts go to. Must not be the payer or the contract id. */
+  newPayee: string;
+}
+
 /**
  * Why a lifecycle call was refused before submission. Each maps to the
  * contract error the transaction would otherwise fail with.
@@ -34,15 +63,23 @@ export type EscrowPreconditionCode =
   | "InvalidAmount"
   | "NotFunded"
   | "Unauthorized"
+  | "InvalidNewPayee"
   | "AcceptanceNotConfigured"
-  | "AlreadyAccepted";
+  | "AlreadyAccepted"
+  | SettlementReason;
+
+/**
+ * A call a client-side precondition check can refuse: a lifecycle amendment,
+ * or a settlement (`release`/`refund`, issue #332).
+ */
+export type PreconditionMethod = LifecycleMethod | "release" | "refund";
 
 /** Thrown before any transaction is built when a client-side check fails. */
 export class EscrowPreconditionError extends Error {
   readonly name = "EscrowPreconditionError";
   readonly code: EscrowPreconditionCode;
-  readonly method: LifecycleMethod;
-  constructor(method: LifecycleMethod, code: EscrowPreconditionCode, message: string) {
+  readonly method: PreconditionMethod;
+  constructor(method: PreconditionMethod, code: EscrowPreconditionCode, message: string) {
     super(`${method}: ${message}`);
     this.method = method;
     this.code = code;
@@ -50,13 +87,14 @@ export class EscrowPreconditionError extends Error {
 }
 
 /** Contract functions the prepare/submit flow can carry. */
-export type LifecycleMethod = "top_up" | "accept" | "cancel";
+export type LifecycleMethod = "top_up" | "accept" | "cancel" | "transfer_payee";
 
 /** One lifecycle call, described without any signer. */
 export type LifecycleCall =
   | { method: "top_up"; escrowId: bigint; payer: string; amount: bigint }
   | { method: "accept"; escrowId: bigint; payee: string }
-  | { method: "cancel"; escrowId: bigint; payer: string };
+  | { method: "cancel"; escrowId: bigint; payer: string }
+  | { method: "transfer_payee"; escrowId: bigint; currentPayee: string; newPayee: string };
 
 /**
  * A simulated lifecycle transaction in transit between signers. Plain JSON

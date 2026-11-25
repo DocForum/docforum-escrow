@@ -12,32 +12,60 @@ jobs:
   mutations:
     name: Soroban contract mutants
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # Issue #314: `examine_globs` now covers every module under src/, not just
+    # src/lib.rs, so the run mutates real contract logic and takes longer.
+    timeout-minutes: 300
     defaults:
       run:
         working-directory: contracts/escrow
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
 
       - name: Cache Cargo build products
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: contracts/escrow -> target
 
       - name: Install cargo-mutants
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
         with:
           tool: cargo-mutants@27.1.0
 
+      # Issue #314: fail fast on a malformed baseline (a missing reason, a
+      # duplicate entry) instead of after the mutation run.
+      - name: Validate the accepted-survivor baseline
+        working-directory: .
+        run: node scripts/mutation-baseline.mjs validate
+
+      # cargo-mutants exits 4 when mutants are missed, which is expected: the
+      # baseline step below decides whether those survivors are accepted, and
+      # reports them either way. Any other non-zero status is a real failure.
       - name: Run mutation tests
-        run: cargo mutants --in-place --output mutants.out
+        run: |
+          set +e
+          cargo mutants --in-place --output mutants.out
+          status=$?
+          if [ "$status" -ne 0 ] && [ "$status" -ne 4 ]; then
+            echo "::error::cargo mutants failed with exit status $status"
+            exit "$status"
+          fi
+
+      # Issue #314: a survivor that is not in
+      # contracts/escrow/.cargo/mutants-baseline.txt fails the run, and every
+      # survivor is listed in the job summary with the baseline line to add.
+      - name: Fail on survivors outside the baseline
+        if: ${{ !cancelled() }}
+        working-directory: .
+        run: node scripts/mutation-baseline.mjs check
 
       - name: Upload mutation report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cargo-mutants-report
           path: contracts/escrow/mutants.out

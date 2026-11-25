@@ -33,11 +33,7 @@ impl EscrowContract {
         Self::extend_instance_ttl(&env);
         current_payee.require_auth();
 
-        let mut data: EscrowData = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)?;
+        let mut data: EscrowData = Self::read_escrow(&env, escrow_id).ok_or(Error::NotFound)?;
 
         if current_payee != data.payee {
             return Err(Error::Unauthorized);
@@ -51,9 +47,11 @@ impl EscrowContract {
 
         let old_payee = data.payee.clone();
         data.payee = new_payee.clone();
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &data);
+        // Reset notify_payee on transfer so transferring to an account or a contract
+        // without the callback hook cannot leave release permanently failing with
+        // CallbackFailed (issue #286).
+        data.notify_payee = false;
+        Self::write_escrow(&env, escrow_id, &data);
 
         env.events().publish(
             (symbol_short!("pay_xfer"), escrow_id),

@@ -110,18 +110,14 @@ impl EscrowContract {
 
     /// Returns the escrowed `amount` to the escrow's `refund_to` (the
     /// `payer` unless a different destination was fixed at creation —
-    /// docs/adr/0006). Same state rule as
+    /// docs/adr/0009). Same state rule as
     /// `release` (only while `Funded`), but two callers are authorised:
     ///
     /// - the escrow's releaser (docs/adr/0002), always; or
     /// - **anyone**, once `refund_after` has been reached — the timeout
-        /// refund path for a lost/unsignable releaser key (docs/adr/0004).
-    ///
-    /// Refunds are never blocked by a `depends_on` dependency (Phase E5).
-    /// A dependency that settles as `Refunded` rather than `Released` makes
-    /// the dependent permanently unreleasable; the dependent can still be
-    /// refunded through this path. Cross-contract dependencies are out of
-    /// scope.
+    ///   refund path for a lost/unsignable releaser key (docs/adr/0004); or
+    /// - the stored payee, at any time while the escrow is `Funded`, as a
+    ///   voluntary refund that emits `PayeeRefunded` (ADR 0010).
     ///
     /// The destination never changes: timeout or not, funds only ever go
     /// to the stored `refund_to`, which no caller can influence. With no
@@ -134,9 +130,6 @@ impl EscrowContract {
     /// pausing new deposits must never trap funds already escrowed.
     /// A protocol fee (docs/adr/0010) is never taken on the refund path:
     /// the stored `refund_to` receives the full stored `amount`.
-    /// path stays open to anyone). The stored payee may also voluntarily
-    /// refund a funded escrow; that path emits `payee_refunded` (ADR 0010).
-    /// A protocol fee is never taken on the refund path.
     ///
     /// Refunds are never blocked by a `depends_on` dependency. Note that a
     /// dependency which settles as `Refunded` (rather than `Released`) makes
@@ -146,17 +139,7 @@ impl EscrowContract {
         Self::extend_instance_ttl(&env);
         caller.require_auth();
 
-        let loaded = Self::load(&env, escrow_id)?;
-        let payee_initiated = caller == loaded.payee;
-        let mut data = if payee_initiated {
-            // Keep pooled refunds pull-based and require a funded escrow for
-            // the payee-authorized path, which bypasses the releaser check.
-            Self::reject_pooled(&env, escrow_id)?;
-            Self::check_funded(&loaded)?;
-            loaded
-        } else {
-            Self::refund_checks(&env, escrow_id, &caller)?
-        };
+        let (mut data, payee_initiated) = Self::refund_checks_for_caller(&env, escrow_id, &caller)?;
         Self::settle_full(&env, escrow_id, &mut data, EscrowStatus::Refunded)?;
         if payee_initiated {
             PayeeRefunded {

@@ -2,6 +2,19 @@
 
 use crate::*;
 
+/// How an escrow's funds arrive (issue #115): a normal creation pulls
+/// them with `transfer` under the payer's signature; a recurring period
+/// pulls them with `transfer_from` under the payer's pre-granted
+/// allowance, so the keeper triggering it needs no signature.
+pub(crate) enum Funding {
+    /// Pull with `token.transfer`, payer authorizes this invocation.
+    Transfer,
+    /// Pull with `token.transfer_from` under an existing allowance.
+    /// The payer does not authorize this invocation; the allowance is
+    /// the authorization.
+    Allowance,
+}
+
 impl EscrowContract {
     pub(crate) fn create_escrow_inner(
         env: &Env,
@@ -19,6 +32,7 @@ impl EscrowContract {
         release_not_before: Option<u64>,
         fee_recipient: Option<Address>,
         fee_bps: Option<u32>,
+        attester: Option<BytesN<32>>,
         payer_already_authorized: bool,
     ) -> Result<u64, Error> {
         Self::create_escrow_with_payees_inner(
@@ -37,8 +51,11 @@ impl EscrowContract {
             release_not_before,
             fee_recipient,
             fee_bps,
+            attester,
             payer_already_authorized,
             None,
+            false,
+            Funding::Transfer,
         )
     }
 
@@ -58,8 +75,11 @@ impl EscrowContract {
         release_not_before: Option<u64>,
         fee_recipient: Option<Address>,
         fee_bps: Option<u32>,
+        attester: Option<BytesN<32>>,
         payer_already_authorized: bool,
         payee_shares: Option<Vec<PayeeShare>>,
+        unique_ref: bool,
+        funding: Funding,
     ) -> Result<u64, Error> {
         // Every creation entry point funnels through here, so this one
         // check covers all deposit paths: while paused, no new escrow can
@@ -117,6 +137,12 @@ impl EscrowContract {
             });
             shares
         };
+        if payees
+            .iter()
+            .any(|share| share.payee == env.current_contract_address())
+        {
+            return Err(Error::InvalidPayeeList);
+        }
         if let Some(deadline) = refund_after {
             if deadline <= env.ledger().timestamp() {
                 return Err(Error::InvalidRefundAfter);
@@ -134,6 +160,10 @@ impl EscrowContract {
         // for a UUID or short label while capping spam risk.
         if condition_ref.len() > MAX_CONDITION_REF_LEN {
             return Err(Error::ConditionRefTooLong);
+        }
+        let unique_key = DataKey::UniqueRef(payer.clone(), condition_ref.clone());
+        if unique_ref && env.storage().persistent().has(&unique_key) {
+            return Err(Error::DuplicateConditionRef);
         }
         Self::check_releaser_set(env, &releasers, threshold)?;
         let refund_to = refund_to.unwrap_or_else(|| payer.clone());
@@ -169,7 +199,10 @@ impl EscrowContract {
             payee.require_auth();
         }
 
-        Self::transfer_in_exact(env, &token, &payer, amount)?;
+        match funding {
+            Funding::Transfer => Self::transfer_in_exact(env, &token, &payer, amount)?,
+            Funding::Allowance => Self::transfer_from_exact(env, &token, &payer, amount)?,
+        }
 
         let id = Self::next_id(env);
         let data = EscrowData {
@@ -190,12 +223,17 @@ impl EscrowContract {
             release_not_before,
             fee_recipient,
             fee_bps,
+            attester,
         };
-        env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        Self::write_escrow(env, id, &data);
         env.storage()
             .persistent()
             .set(&DataKey::Status(id), &data.status);
         Self::extend_escrow_ttl(env, id, refund_after);
+        if unique_ref {
+            env.storage().persistent().set(&unique_key, &id);
+            Self::extend_unique_ref_ttl(env, &unique_key, refund_after);
+        }
         Self::publish_state(env, symbol_short!("created"), id, &data);
         Ok(id)
     }
@@ -216,6 +254,9 @@ impl EscrowContract {
         }
         let mut seen: Vec<Address> = Vec::new(env);
         for releaser in releasers.iter() {
+            if releaser == env.current_contract_address() {
+                return Err(Error::InvalidReleaser);
+            }
             if Self::contains(&seen, &releaser) {
                 return Err(Error::DuplicateReleaser);
             }
@@ -267,7 +308,7 @@ impl EscrowContract {
 
     /// Writes the settled state, then transfers the funds out.
     ///
-    /// Checks-effects-interactions (docs/adr/0006): the status write comes
+    /// Checks-effects-interactions (docs/adr/0013): the status write comes
     /// before the token call, so safety doesn't rest on the host's re-entry
     /// rule alone (threat model T4). A failing transfer panics inside the
     /// token contract, which aborts and rolls back this whole invocation —
@@ -358,9 +399,7 @@ impl EscrowContract {
             // Pooled escrows keep their full record: contributions, pull-based
             // refunds and `get_pooled` all read it after settlement, so
             // reclaiming it would change those reads (docs/adr/0013).
-            env.storage()
-                .persistent()
-                .set(&DataKey::Escrow(escrow_id), data);
+            Self::write_escrow(env, escrow_id, data);
             env.storage().persistent().extend_ttl(
                 &DataKey::Escrow(escrow_id),
                 SETTLED_ESCROW_TTL_THRESHOLD,
@@ -370,7 +409,7 @@ impl EscrowContract {
             // Reclaim storage (docs/adr/0013): the full record is published by
             // `publish_state` below and then removed; the `Status` entry
             // written above is all that remains. Written before the transfer
-            // (docs/adr/0006); a failed payout or callback rolls the whole
+            // (docs/adr/0013); a failed payout or callback rolls the whole
             // invocation back, including this.
             env.storage()
                 .persistent()
@@ -381,6 +420,14 @@ impl EscrowContract {
             SETTLED_ESCROW_TTL_THRESHOLD,
             SETTLED_ESCROW_EXTEND_TO,
         );
+        let unique_key = DataKey::UniqueRef(data.payer.clone(), data.condition_ref.clone());
+        if env.storage().persistent().get::<_, u64>(&unique_key) == Some(escrow_id) {
+            env.storage().persistent().extend_ttl(
+                &unique_key,
+                SETTLED_ESCROW_TTL_THRESHOLD,
+                SETTLED_ESCROW_EXTEND_TO,
+            );
+        }
 
         let token_client = token::Client::new(env, &data.token);
         if settled == EscrowStatus::Released {
@@ -557,6 +604,25 @@ impl EscrowContract {
         Ok(data)
     }
 
+    /// Resolves the same caller-dependent refund path as `refund` without
+    /// requiring auth a second time. The batch entry point authenticates its
+    /// caller once, then uses this helper so a payee-initiated refund has the
+    /// same authorization and event semantics as the single-entry point.
+    pub(crate) fn refund_checks_for_caller(
+        env: &Env,
+        escrow_id: u64,
+        caller: &Address,
+    ) -> Result<(EscrowData, bool), Error> {
+        let loaded = Self::load(env, escrow_id)?;
+        if caller == &loaded.payee {
+            Self::reject_pooled(env, escrow_id)?;
+            Self::check_funded(&loaded)?;
+            Ok((loaded, true))
+        } else {
+            Ok((Self::refund_checks(env, escrow_id, caller)?, false))
+        }
+    }
+
     /// One `settle_many` op. Every rejection is returned before any state
     /// changes: the action's own checks, then `settle()`'s pre-write
     /// release checks (`release_not_before`, payee acceptance), run here
@@ -570,7 +636,7 @@ impl EscrowContract {
         caller: &Address,
         action: SettleAction,
     ) -> Result<(), Error> {
-        let (mut data, settled) = match action {
+        let (mut data, settled, payee_initiated) = match action {
             SettleAction::Release => {
                 let data = Self::release_checks(env, escrow_id, caller)?;
                 if data
@@ -582,15 +648,25 @@ impl EscrowContract {
                 if data.requires_acceptance && data.accepted_at.is_none() {
                     return Err(Error::AcceptanceRequired);
                 }
-                (data, EscrowStatus::Released)
+                (data, EscrowStatus::Released, false)
             }
-            SettleAction::Refund => (
-                Self::refund_checks(env, escrow_id, caller)?,
-                EscrowStatus::Refunded,
-            ),
+            SettleAction::Refund => {
+                let (data, payee_initiated) =
+                    Self::refund_checks_for_caller(env, escrow_id, caller)?;
+                (data, EscrowStatus::Refunded, payee_initiated)
+            }
         };
         if let Err(error) = Self::settle_full(env, escrow_id, &mut data, settled) {
             panic_with_error!(env, error);
+        }
+        if payee_initiated {
+            PayeeRefunded {
+                escrow_id,
+                payer: data.payer,
+                payee: data.payee,
+                amount: data.amount,
+            }
+            .publish(env);
         }
         Ok(())
     }
@@ -613,7 +689,7 @@ impl EscrowContract {
     /// `NotFunded` — what it returned before the record was reclaimed
     /// (docs/adr/0013) — and only a never-created id is `NotFound`.
     pub(crate) fn load(env: &Env, escrow_id: u64) -> Result<EscrowData, Error> {
-        if let Some(data) = env.storage().persistent().get(&DataKey::Escrow(escrow_id)) {
+        if let Some(data) = Self::read_escrow(env, escrow_id) {
             return Ok(data);
         }
         if env.storage().persistent().has(&DataKey::Status(escrow_id)) {
