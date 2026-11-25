@@ -100,6 +100,7 @@ export {
   RequestTimeoutError,
   SimulationFailure,
   SubmissionFailure,
+  TransactionPendingError,
   UnauthorizedError,
   contractErrorName,
   toEscrowError,
