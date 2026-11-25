@@ -48,11 +48,22 @@ export interface BatchItemResult<T> {
   skipped?: boolean;
 }
 
+/** Execution mode for `createEscrows` and `settleMany` (issue #328). */
+export type BatchMode = "sequential" | "onchain";
+
 /** Options for the chunked batch helpers (`createEscrows`, `settleMany`). */
 export interface BatchOptions<T> {
   /**
-   * Operations attempted per chunk. Defaults to `MAX_BATCH_SIZE` and is
-   * clamped to it, because the contract rejects anything larger.
+   * Execution mode:
+   * - `"sequential"` (default): sends one transaction per item.
+   * - `"onchain"`: submits chunks through the contract's `create_escrows` /
+   *   `settle_many` entry points (one transaction per chunk).
+   */
+  mode?: BatchMode;
+  /**
+   * Operations attempted per chunk. Defaults to `MAX_BATCH_SIZE` (`16`) for
+   * `createEscrows` or `MAX_SETTLE_OPS` (`12`) for `settleMany` in `"onchain"`
+   * mode, and is clamped to the contract's limit.
    */
   chunkSize?: number;
   /**

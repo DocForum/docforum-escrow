@@ -196,7 +196,7 @@ export * from "./solvency.js";
 export * from "./vesting.js";
 
 import { type ArchivedEntryBehavior } from "./archived-entries.js";
-import { type BatchCreateItem, type BatchItemResult, type BatchOptions, BatchPartialFailureError, type BatchSettleOperation, MAX_BATCH_SIZE } from "./batch.js";
+import { type BatchCreateItem, type BatchItemResult, type BatchOptions, BatchPartialFailureError, type BatchSettleOperation, MAX_BATCH_SIZE, MAX_SETTLE_OPS } from "./batch.js";
 import { type EscrowClientConfig } from "./client-config.js";
 import { UnsupportedContractVersionError, isSupportedContractVersion } from "./contract-version.js";
 import { type CancelParams, type CreatedEscrow, type CreateEscrowParams, type CreateQuorumEscrowParams, type Escrow, type EscrowStatus, type ExtendRefundAfterParams, MAX_CONDITION_REF_LENGTH, MAX_FEE_BPS, MAX_RELEASERS, type ReleaseOrRefundParams, type SettlementApprovalsParams, TERMINAL_ESCROW_STATUSES, type UniqueCreateEscrowParams, type UniqueCreateEscrowResult } from "./escrow-types.js";
@@ -2114,6 +2114,101 @@ export class EscrowClient {
     const results = this.batchResults(items, options.resumeFrom);
     const chunkSize = this.resolveChunkSize(options.chunkSize);
 
+    if (options.mode === "onchain") {
+      await this.ensureNetworkVerified();
+      const byPayer = new Map<string, { signer: BatchCreateItem["payer"]; indices: number[] }>();
+      const fallbackIndices: number[] = [];
+
+      for (let index = 0; index < items.length; index++) {
+        if (results[index].ok) continue;
+        const item = items[index];
+        const payerAddr = signerAddress(item.payer);
+        const canUseCreateEscrows =
+          item.releaser !== undefined &&
+          item.feeBps === undefined &&
+          item.feeRecipient === undefined &&
+          (item.refundTo === undefined || item.refundTo === payerAddr) &&
+          item.notifyPayee !== true;
+
+        if (!canUseCreateEscrows) {
+          fallbackIndices.push(index);
+          continue;
+        }
+        let group = byPayer.get(payerAddr);
+        if (!group) {
+          group = { signer: item.payer, indices: [] };
+          byPayer.set(payerAddr, group);
+        }
+        group.indices.push(index);
+      }
+
+      for (const index of fallbackIndices) {
+        try {
+          const created = await this.createEscrow(items[index]);
+          results[index] = { index, item: items[index], ok: true, skipped: false, ...created };
+        } catch (error) {
+          results[index] = {
+            index,
+            item: items[index],
+            ok: false,
+            skipped: false,
+            error: batchErrorMessage(error),
+          };
+        }
+      }
+
+      for (const [payerAddr, { signer, indices }] of byPayer) {
+        const client = this.contractClient(signer);
+        for (let start = 0; start < indices.length; start += chunkSize) {
+          const chunkIndices = indices.slice(start, start + chunkSize);
+          const chunkItems = chunkIndices.map((idx) => {
+            const item = items[idx];
+            return {
+              payee: item.payee,
+              token: item.token,
+              amount: item.amount,
+              condition_ref: item.conditionRef,
+              releaser: item.releaser!,
+              refund_after: item.refundAfter,
+              release_not_before: item.releaseNotBefore,
+              requires_acceptance: item.requiresAcceptance ?? false,
+            };
+          });
+          try {
+            const tx = await client.create_escrows({ payer: payerAddr, items: chunkItems });
+            const sent = await tx.signAndSend();
+            const ids = tx.result.unwrap();
+            const txHash = sent.sendTransactionResponse?.hash ?? "";
+            for (let i = 0; i < chunkIndices.length; i++) {
+              const idx = chunkIndices[i];
+              results[idx] = {
+                index: idx,
+                item: items[idx],
+                ok: true,
+                skipped: false,
+                escrowId: ids[i],
+                txHash,
+              };
+            }
+          } catch (error) {
+            const message = batchErrorMessage(error);
+            for (const idx of chunkIndices) {
+              results[idx] = {
+                index: idx,
+                item: items[idx],
+                ok: false,
+                skipped: false,
+                error: message,
+              };
+            }
+          }
+        }
+      }
+
+      this.throwOnBatchFailure(results);
+      return results;
+    }
+
     for (let start = 0; start < items.length; start += chunkSize) {
       const end = Math.min(start + chunkSize, items.length);
       for (let index = start; index < end; index++) {
@@ -2153,6 +2248,81 @@ export class EscrowClient {
     options: BatchOptions<BatchSettleOperation> = {},
   ): Promise<BatchItemResult<BatchSettleOperation>[]> {
     const results = this.batchResults(ops, options.resumeFrom);
+
+    if (options.mode === "onchain") {
+      await this.ensureNetworkVerified();
+      const chunkSize = Math.min(this.resolveChunkSize(options.chunkSize), MAX_SETTLE_OPS);
+      const byCaller = new Map<string, { signer: BatchSettleOperation["caller"]; indices: number[] }>();
+
+      for (let index = 0; index < ops.length; index++) {
+        if (results[index].ok) continue;
+        const op = ops[index];
+        const callerAddr = signerAddress(op.caller);
+        let group = byCaller.get(callerAddr);
+        if (!group) {
+          group = { signer: op.caller, indices: [] };
+          byCaller.set(callerAddr, group);
+        }
+        group.indices.push(index);
+      }
+
+      for (const [callerAddr, { signer, indices }] of byCaller) {
+        const client = this.contractClient(signer);
+        for (let start = 0; start < indices.length; start += chunkSize) {
+          const chunkIndices = indices.slice(start, start + chunkSize);
+          const chunkOps = chunkIndices.map((idx) => {
+            const op = ops[idx];
+            return [
+              op.escrowId,
+              { tag: op.kind === "release" ? "Release" : "Refund", values: undefined },
+            ] as const;
+          });
+          try {
+            const tx = await client.settle_many({ caller: callerAddr, ops: chunkOps });
+            const sent = await tx.signAndSend();
+            const outcomes = tx.result.unwrap();
+            const txHash = sent.sendTransactionResponse?.hash ?? "";
+            for (let i = 0; i < chunkIndices.length; i++) {
+              const idx = chunkIndices[i];
+              const outcome = outcomes[i];
+              if (outcome && outcome.isOk()) {
+                results[idx] = {
+                  index: idx,
+                  item: ops[idx],
+                  ok: true,
+                  skipped: false,
+                  txHash,
+                };
+              } else {
+                const err = outcome ? outcome.unwrapErr() : new Error("missing settle_many outcome");
+                results[idx] = {
+                  index: idx,
+                  item: ops[idx],
+                  ok: false,
+                  skipped: false,
+                  error: batchErrorMessage(err),
+                };
+              }
+            }
+          } catch (error) {
+            const message = batchErrorMessage(error);
+            for (const idx of chunkIndices) {
+              results[idx] = {
+                index: idx,
+                item: ops[idx],
+                ok: false,
+                skipped: false,
+                error: message,
+              };
+            }
+          }
+        }
+      }
+
+      this.throwOnBatchFailure(results);
+      return results;
+    }
+
     const chunkSize = this.resolveChunkSize(options.chunkSize);
 
     for (let start = 0; start < ops.length; start += chunkSize) {
