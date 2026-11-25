@@ -293,6 +293,46 @@ func TestDecodePooledData(t *testing.T) {
 	}
 }
 
+func TestDecodePooledDataReleaseDeadline(t *testing.T) {
+	base := []xdr.ScMapEntry{
+		{Key: scvSymbol("funding_target"), Val: mustI128(t, big.NewInt(1_000))},
+		{Key: scvSymbol("funding_deadline"), Val: scvU64(1_912_000_000)},
+	}
+
+	// A deployment that predates issue #288 has no release_deadline field.
+	legacy, err := decodePooledData(scvMap(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.ReleaseDeadline != nil {
+		t.Fatalf("legacy release deadline = %d, want nil", *legacy.ReleaseDeadline)
+	}
+
+	// Current deployments always send the field: None is void.
+	none, err := decodePooledData(scvMap(append(append([]xdr.ScMapEntry{}, base...),
+		xdr.ScMapEntry{Key: scvSymbol("release_deadline"), Val: scvVoid()})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if none.ReleaseDeadline != nil {
+		t.Fatalf("None release deadline = %d, want nil", *none.ReleaseDeadline)
+	}
+
+	some, err := decodePooledData(scvMap(append(append([]xdr.ScMapEntry{}, base...),
+		xdr.ScMapEntry{Key: scvSymbol("release_deadline"), Val: scvU64(1_913_000_000)})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if some.ReleaseDeadline == nil || *some.ReleaseDeadline != 1_913_000_000 {
+		t.Fatalf("release deadline = %v, want 1913000000", some.ReleaseDeadline)
+	}
+
+	if _, err := decodePooledData(scvMap(append(append([]xdr.ScMapEntry{}, base...),
+		xdr.ScMapEntry{Key: scvSymbol("release_deadline"), Val: scvString("soon")}))); err == nil {
+		t.Fatal("decodePooledData accepted a non-u64 release_deadline")
+	}
+}
+
 func TestDecodeContributionAndOption(t *testing.T) {
 	encoded := scvMap([]xdr.ScMapEntry{
 		{Key: scvSymbol("amount"), Val: mustI128(t, big.NewInt(650_000))},

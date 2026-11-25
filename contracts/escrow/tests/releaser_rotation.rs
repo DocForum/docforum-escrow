@@ -6,6 +6,9 @@ use soroban_sdk::{
     vec, Address, Env, IntoVal, String, Vec,
 };
 
+#[path = "common/auth.rs"]
+mod auth;
+
 /// Ledger close time at escrow creation.
 const CREATED_AT: u64 = 1_000;
 /// A `refund_after` deadline strictly after `CREATED_AT`.
@@ -617,4 +620,217 @@ fn quorum_rotation_requires_payer_consent() {
     ]);
     client.rotate_releaser_with_approvals(&id, &approvers, &old, &replacement);
     assert_eq!(client.get_escrow(&id).releasers.get(0), Some(replacement));
+}
+
+// --- exact authorization trees (issue #474) -------------------------------
+
+#[test]
+fn rotation_records_the_releasers_and_payers_exact_trees() {
+    let env = Env::default();
+    env.mock_all_auths(); // fixture funding only
+    let (client, _token, payer, _payee, old_releaser, id) = funded_escrow(&env);
+    let replacement = Address::generate(&env);
+
+    let invoke = MockAuthInvoke {
+        contract: &client.address,
+        fn_name: "rotate_releaser",
+        args: (id, old_releaser.clone(), replacement.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[
+        MockAuth {
+            address: &old_releaser,
+            invoke: &invoke,
+        },
+        MockAuth {
+            address: &payer,
+            invoke: &invoke,
+        },
+    ]);
+
+    client.rotate_releaser(&id, &old_releaser, &replacement);
+
+    auth::assert_auth_trees(&env, &[(&old_releaser, &invoke), (&payer, &invoke)]);
+    assert_eq!(client.get_escrow(&id).releasers.get(0), Some(replacement));
+}
+
+#[test]
+fn rotation_fails_without_each_required_partys_signature() {
+    let env = Env::default();
+    env.mock_all_auths(); // fixture funding only
+    let (client, _token, payer, _payee, old_releaser, id) = funded_escrow(&env);
+    let replacement = Address::generate(&env);
+
+    let invoke = MockAuthInvoke {
+        contract: &client.address,
+        fn_name: "rotate_releaser",
+        args: (id, old_releaser.clone(), replacement.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+
+    // The current releaser alone cannot rotate.
+    env.mock_auths(&[MockAuth {
+        address: &old_releaser,
+        invoke: &invoke,
+    }]);
+    assert!(matches!(
+        client.try_rotate_releaser(&id, &old_releaser, &replacement),
+        Err(Err(soroban_sdk::InvokeError::Abort))
+    ));
+
+    // The payer alone cannot rotate.
+    env.mock_auths(&[MockAuth {
+        address: &payer,
+        invoke: &invoke,
+    }]);
+    assert!(matches!(
+        client.try_rotate_releaser(&id, &old_releaser, &replacement),
+        Err(Err(soroban_sdk::InvokeError::Abort))
+    ));
+    assert_eq!(client.get_escrow(&id).releasers.get(0), Some(old_releaser));
+}
+
+#[test]
+fn rotation_rejects_a_stranger_signing_either_exact_tree() {
+    let env = Env::default();
+    env.mock_all_auths(); // fixture funding only
+    let (client, _token, _payer, _payee, old_releaser, id) = funded_escrow(&env);
+    let stranger = Address::generate(&env);
+    let replacement = Address::generate(&env);
+
+    // A stranger naming itself as the caller is authorized but not a releaser.
+    let own = MockAuthInvoke {
+        contract: &client.address,
+        fn_name: "rotate_releaser",
+        args: (id, stranger.clone(), replacement.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth {
+        address: &stranger,
+        invoke: &own,
+    }]);
+    assert_eq!(
+        client.try_rotate_releaser(&id, &stranger, &replacement),
+        Err(Ok(Error::Unauthorized))
+    );
+
+    // A stranger signing the correct tree fails the signer check.
+    let correct = MockAuthInvoke {
+        contract: &client.address,
+        fn_name: "rotate_releaser",
+        args: (id, old_releaser.clone(), replacement.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth {
+        address: &stranger,
+        invoke: &correct,
+    }]);
+    assert!(matches!(
+        client.try_rotate_releaser(&id, &old_releaser, &replacement),
+        Err(Err(soroban_sdk::InvokeError::Abort))
+    ));
+    assert_eq!(client.get_escrow(&id).releasers.get(0), Some(old_releaser));
+}
+
+#[test]
+fn quorum_rotation_records_the_approvers_and_payers_exact_trees() {
+    let env = Env::default();
+    env.mock_all_auths(); // fixture funding only
+    let (client, payer, _payee, releasers, id) = quorum_escrow(&env);
+    let old = releasers.get(0).unwrap();
+    let replacement = Address::generate(&env);
+    let approvers = approvers_of(&env, &releasers, &[1, 2]);
+
+    let invoke = MockAuthInvoke {
+        contract: &client.address,
+        fn_name: "rotate_releaser_with_approvals",
+        args: (id, approvers.clone(), old.clone(), replacement.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[
+        MockAuth {
+            address: &releasers.get(1).unwrap(),
+            invoke: &invoke,
+        },
+        MockAuth {
+            address: &releasers.get(2).unwrap(),
+            invoke: &invoke,
+        },
+        MockAuth {
+            address: &payer,
+            invoke: &invoke,
+        },
+    ]);
+
+    client.rotate_releaser_with_approvals(&id, &approvers, &old, &replacement);
+
+    auth::assert_auth_trees(
+        &env,
+        &[
+            (&releasers.get(1).unwrap(), &invoke),
+            (&releasers.get(2).unwrap(), &invoke),
+            (&payer, &invoke),
+        ],
+    );
+    assert_eq!(client.get_escrow(&id).releasers.get(0), Some(replacement));
+}
+
+#[test]
+fn quorum_rotation_pins_the_one_approver_short_and_missing_payer_cases() {
+    let env = Env::default();
+    env.mock_all_auths(); // fixture funding only
+    let (client, payer, _payee, releasers, id) = quorum_escrow(&env);
+    let old = releasers.get(0).unwrap();
+    let replacement = Address::generate(&env);
+    let approvers = approvers_of(&env, &releasers, &[1, 2]);
+    let one = approvers_of(&env, &releasers, &[1]);
+
+    // One approver short fails on the threshold, before any auth is checked.
+    let one_invoke = MockAuthInvoke {
+        contract: &client.address,
+        fn_name: "rotate_releaser_with_approvals",
+        args: (id, one.clone(), old.clone(), replacement.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth {
+        address: &releasers.get(1).unwrap(),
+        invoke: &one_invoke,
+    }]);
+    assert_eq!(
+        client.try_rotate_releaser_with_approvals(&id, &one, &old, &replacement),
+        Err(Ok(Error::ThresholdNotMet))
+    );
+
+    // Full approvals without the payer's signature fail the payer check.
+    let invoke = MockAuthInvoke {
+        contract: &client.address,
+        fn_name: "rotate_releaser_with_approvals",
+        args: (id, approvers.clone(), old.clone(), replacement.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[
+        MockAuth {
+            address: &releasers.get(1).unwrap(),
+            invoke: &invoke,
+        },
+        MockAuth {
+            address: &releasers.get(2).unwrap(),
+            invoke: &invoke,
+        },
+    ]);
+    assert!(matches!(
+        client.try_rotate_releaser_with_approvals(&id, &approvers, &old, &replacement),
+        Err(Err(soroban_sdk::InvokeError::Abort))
+    ));
+    assert_eq!(client.get_escrow(&id).releasers.get(0), Some(old.clone()));
+
+    // The payer cannot substitute for a missing approver.
+    env.mock_auths(&[MockAuth {
+        address: &payer,
+        invoke: &invoke,
+    }]);
+    assert!(matches!(
+        client.try_rotate_releaser_with_approvals(&id, &approvers, &old, &replacement),
+        Err(Err(soroban_sdk::InvokeError::Abort))
+    ));
 }

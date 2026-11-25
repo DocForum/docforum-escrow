@@ -142,3 +142,85 @@ def test_reads_without_a_signer(client: EscrowClient, payee: Keypair) -> None:
 def test_unknown_id_is_not_found(client: EscrowClient) -> None:
     with pytest.raises(escrow.NotFoundError):
         client.get_status(2**63)
+
+
+# ── single-party amendments (issue #471) ──
+
+
+def payee_client(client: EscrowClient, payee: Keypair) -> EscrowClient:
+    """The same contract and RPC, signing as the payee."""
+    return EscrowClient(
+        client.contract_id,
+        network_passphrase=client.network_passphrase,
+        server=client.server,
+        signer=payee,
+    )
+
+
+def create_with_acceptance(client: EscrowClient, payee: Keypair) -> int:
+    return client.create_escrow_with_acceptance(
+        payee=payee.public_key,
+        token=os.environ.get("ESCROW_TOKEN_ID", NATIVE_XLM_SAC),
+        amount=AMOUNT,
+        condition_ref="sdk-python-it-accept",
+    ).escrow_id
+
+
+def test_acceptance_accept_release(client: EscrowClient, payer: Keypair, payee: Keypair) -> None:
+    escrow_id = create_with_acceptance(client, payee)
+    assert client.get_escrow(escrow_id).requires_acceptance is True
+    # Release waits for the payee.
+    with pytest.raises(escrow.AcceptanceRequiredError):
+        client.release(escrow_id)
+
+    payee_client(client, payee).accept(escrow_id)
+    assert client.get_escrow(escrow_id).accepted_at is not None
+    with pytest.raises(escrow.AlreadyAcceptedError):
+        client.cancel(escrow_id)
+
+    client.top_up(escrow_id, AMOUNT)
+    assert client.get_escrow(escrow_id).amount == 2 * AMOUNT
+    client.release(escrow_id)
+    assert client.get_status(escrow_id) is EscrowStatus.RELEASED
+
+
+def test_acceptance_cancel(client: EscrowClient, payee: Keypair) -> None:
+    escrow_id = create_with_acceptance(client, payee)
+    client.cancel(escrow_id)
+    assert client.get_status(escrow_id) is EscrowStatus.CANCELLED
+
+
+def test_quorum_create_and_release_with_two_approvals(
+    client: EscrowClient, payer: Keypair, payee: Keypair
+) -> None:
+    co_releaser = funded_keypair()
+    releasers = [payer.public_key, payee.public_key, co_releaser.public_key]
+    escrow_id = client.create_escrow_with_releasers(
+        payee=payee.public_key,
+        token=os.environ.get("ESCROW_TOKEN_ID", NATIVE_XLM_SAC),
+        amount=AMOUNT,
+        condition_ref="sdk-python-it-quorum",
+        releasers=releasers,
+        threshold=2,
+    ).escrow_id
+
+    stored = client.get_escrow(escrow_id)
+    assert stored.releasers == tuple(releasers)
+    assert stored.threshold == 2
+
+    with pytest.raises(escrow.ThresholdNotMetError):
+        client.release_with_approvals(escrow_id, [payer])
+
+    # The payer is both the envelope signer and one of the approvers.
+    client.release_with_approvals(escrow_id, [payer, co_releaser])
+    assert client.get_status(escrow_id) is EscrowStatus.RELEASED
+
+
+def test_transfer_payee_then_release(client: EscrowClient, payer: Keypair, payee: Keypair) -> None:
+    escrow_id = create(client, payee)
+    # The new payee must exist on-chain to receive the release.
+    new_payee = funded_keypair()
+    payee_client(client, payee).transfer_payee(escrow_id, new_payee.public_key)
+    assert client.get_escrow(escrow_id).payee == new_payee.public_key
+    client.release(escrow_id)
+    assert client.get_status(escrow_id) is EscrowStatus.RELEASED

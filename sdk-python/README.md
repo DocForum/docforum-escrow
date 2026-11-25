@@ -68,7 +68,8 @@ Reads (`get_status`, `get_escrow`) work without a signer; they only simulate.
 ```python
 EscrowClient(contract_id, *, rpc_url=TESTNET_RPC_URL,
              network_passphrase=TESTNET_PASSPHRASE, signer=None, server=None,
-             base_fee=100, tx_timeout=300, poll_attempts=60)
+             base_fee=100, tx_timeout=300, poll_attempts=60,
+             approval_expiration_ledgers=100)
 
 client.check_network() -> None
 client.create_escrow(*, payee, token, amount, condition_ref, releaser=None,
@@ -79,7 +80,65 @@ client.get_status(escrow_id) -> EscrowStatus
 client.get_escrow(escrow_id) -> Escrow
 client.release(escrow_id, *, caller=None) -> TxResult(tx_hash, ledger)
 client.refund(escrow_id, *, caller=None) -> TxResult(tx_hash, ledger)
+
+# Single-party amendments: the signer is the acting party.
+client.create_escrow_with_acceptance(*, payee, token, amount, condition_ref,
+                                     releaser=None, payer=None, refund_after=None,
+                                     requires_acceptance=True, refund_to=None)
+    -> CreateEscrowResult(escrow_id, tx_hash, ledger)
+client.accept(escrow_id, *, payee=None) -> TxResult             # signer = payee
+client.cancel(escrow_id, *, payer=None) -> TxResult             # signer = payer
+client.top_up(escrow_id, amount, *, payer=None) -> TxResult     # signer = payer
+client.transfer_payee(escrow_id, new_payee, *, current_payee=None)
+    -> TxResult                                                 # signer = current payee
+
+# M-of-N quorum escrows (ADR 0007): the signer pays the fee, each approver
+# Keypair signs its own Soroban auth entry.
+client.create_escrow_with_releasers(*, payee, token, amount, condition_ref,
+                                    releasers, threshold, refund_after=None,
+                                    notify_payee=False, refund_to=None,
+                                    payer=None)
+    -> CreateEscrowResult(escrow_id, tx_hash, ledger)
+client.release_with_approvals(escrow_id, approvers) -> TxResult
+client.refund_with_approvals(escrow_id, approvers) -> TxResult
 ```
+
+Each single-party write is authorized by exactly one party, the signer. The actor
+arguments (`payer=`, `payee=`, `current_payee=`, `caller=`) default to the
+signer; naming anyone else raises `InvalidArgumentError` before any request.
+`cancel` only works while the escrow is `Funded`, was created with the
+acceptance gate and hasn't been accepted (docs/adr/0010). `top_up` is rejected
+on pooled and streamed escrows (`NotSupportedForPooledError`,
+`StreamTopUpUnsupportedError`) and while the contract is paused
+(`PausedError`). `transfer_payee` refuses the contract's own address as
+`new_payee` client-side (`InvalidNewPayee` on-chain). `extend_refund_after`
+and `rotate_releaser` need two signatures, which this client can't produce,
+so they aren't wrapped.
+
+### Quorum escrows (M-of-N releasers)
+
+`create_escrow_with_releasers` takes 1–10 distinct addresses and a threshold
+between 1 and the set size, checked client-side exactly like the contract's
+`check_releaser_set` (the escrow contract's own address is rejected). Settle
+with `release_with_approvals` / `refund_with_approvals`, passing `Keypair`
+objects (never secret strings): at least `threshold` of them, all members of
+the escrow's `releasers`, with no duplicates. Fewer than `threshold` raises
+`ThresholdNotMetError` before a transaction is sent; a duplicate, empty or
+non-member list raises `InvalidArgumentError`.
+
+```python
+releasers = [Keypair.random() for _ in range(3)]
+created = client.create_escrow_with_releasers(
+    payee="G...", token="C...", amount=10_000_000, condition_ref="order-43",
+    releasers=[k.public_key for k in releasers], threshold=2,
+)
+client.release_with_approvals(created.escrow_id, [releasers[0], releasers[2]])
+```
+
+A timeout `refund` (after `refund_after`) still works on a quorum escrow with
+no approvals. An approver that is also the configured signer signs only the
+envelope; its auth entry is rewritten to source-account credentials, so one
+key never signs twice.
 
 Argument order and types follow `contract-spec.json`; an offline test fails if
 the client and the spec disagree.
@@ -146,8 +205,12 @@ The signer pays the fee and is the `payer` for `create_escrow` and the
 `caller` for `release` / `refund`. Its own authorization comes back from
 simulation as source-account credentials, which the envelope signature
 covers. Passing a `payer` or `caller` other than the signer raises
-`InvalidArgumentError`, and any simulation that needs another address's
-signature raises `UnsupportedAuthorizationError` before anything is signed.
+`InvalidArgumentError`. Any other address-credential auth entry needs a
+supplied approver key: `release_with_approvals` / `refund_with_approvals`
+sign each supplied approver's entry with a bounded expiration
+(`approval_expiration_ledgers` past the latest ledger), and any entry for an
+address the client has no key for raises `UnsupportedAuthorizationError`
+before the envelope is signed or sent.
 
 ## Transaction flow
 
@@ -203,7 +266,8 @@ payee keypairs on every run, so no secret key is needed or committed.
 They cover create → `get_status` → `get_escrow` (every core field checked)
 → `release`, then a refund that must fail with `NotFundedError`; create →
 `refund`, then a release that must fail; reads from a client with no signer;
-and an unknown id → `NotFoundError`.
+an unknown id → `NotFoundError`; and a 2-of-3 quorum create →
+`release_with_approvals` with exactly two approver keys.
 
 ## Publishing
 
