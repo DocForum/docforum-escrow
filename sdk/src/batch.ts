@@ -12,9 +12,9 @@ export const MAX_BATCH_SIZE = 16;
 /**
  * Maximum number of operations in one on-chain `settle_many` call — must
  * match the contract's `MAX_SETTLE_OPS` (currently 12, see docs/adr/0012).
- * `settleMany` in this SDK sends one `release`/`refund` per operation instead,
- * so it chunks by {@link MAX_BATCH_SIZE}; this constant is for callers that
- * build the contract's `settle_many` invocation themselves. Keep in sync with
+ * `settleMany` sends one `release`/`refund` per operation by default, chunked
+ * by {@link MAX_BATCH_SIZE}; with `{ mode: "onchain" }` it uses `settle_many`
+ * chunks of at most this size. Keep in sync with
  * the contract: `scripts/check-sdk-constants.mjs` fails CI on a mismatch.
  */
 export const MAX_SETTLE_OPS = 12;
@@ -25,12 +25,14 @@ export interface BatchCreateItem extends CreateEscrowParams {}
 /**
  * One operation in a batched `settleMany` call.
  *
- * `settleMany` sends each operation as its own `release`/`refund`
+ * By default `settleMany` sends each operation as its own `release`/`refund`
  * transaction, never as one contract `settle_many` call. That is deliberate:
  * a release callback (`notifyPayee`) runs after the payout, so a payee
  * contract that fails it reverts the whole invocation. Per-op transactions
  * keep such a failure contained — it can only revert its own escrow (issue
- * #367, docs/adr/0012). Refund ops never invoke the callback.
+ * #367, docs/adr/0012). Refund ops never invoke the callback. The opt-in
+ * `{ mode: "onchain" }` keeps that containment by retrying a reverted
+ * `settle_many` chunk one op at a time.
  */
 export interface BatchSettleOperation {
   escrowId: bigint;
@@ -57,11 +59,26 @@ export interface BatchItemResult<T> {
   skipped?: boolean;
 }
 
+/** Execution mode for `createEscrows` and `settleMany` (issue #328). */
+export type BatchMode = "sequential" | "onchain";
+
 /** Options for the chunked batch helpers (`createEscrows`, `settleMany`). */
 export interface BatchOptions<T> {
   /**
-   * Operations attempted per chunk. Defaults to `MAX_BATCH_SIZE` and is
-   * clamped to it, because the contract rejects anything larger.
+   * Execution mode:
+   * - `"sequential"` (default): sends one transaction per item.
+   * - `"onchain"`: submits chunks through the contract's `create_escrows` /
+   *   `settle_many` entry points (one transaction per chunk). A failing
+   *   opted-in payee callback (`notifyPayee`) reverts a whole `settle_many`
+   *   call, so `settleMany` retries a reverted chunk one transaction per op
+   *   (issue #367, docs/adr/0012). Items `create_escrows` cannot express
+   *   (fees, `refundTo`, `notifyPayee`, quorum) are created one by one.
+   */
+  mode?: BatchMode;
+  /**
+   * Operations attempted per chunk. Defaults to `MAX_BATCH_SIZE` (`16`) for
+   * `createEscrows` or `MAX_SETTLE_OPS` (`12`) for `settleMany` in `"onchain"`
+   * mode, and is clamped to the contract's limit.
    */
   chunkSize?: number;
   /**
