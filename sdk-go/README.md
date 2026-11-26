@@ -255,7 +255,7 @@ _, err = client.Release(ctx, created.EscrowID)
 
 // Or the deadline passes below the target: every contributor pulls their own
 // record back, once, in any order.
-pooled, err := client.GetPooled(ctx, created.EscrowID) // { FundingTarget, FundingDeadline }
+pooled, err := client.GetPooled(ctx, created.EscrowID) // { FundingTarget, FundingDeadline, ReleaseDeadline (nil if unset) }
 _, err = client.ClaimRefund(ctx, created.EscrowID, aliceSigner)
 _, err = client.ClaimRefund(ctx, created.EscrowID, bobSigner)
 ```
@@ -353,7 +353,8 @@ the lifecycle, pooled and batch paths can return:
 | 26 | `NotPooled` | 53 | `SettlementNotSupported` |
 | 27 | `FundingDeadlinePassed` | 54 | `AttesterNotConfigured` |
 | 28 | `FundingTargetReached` | 55–59 | `ScheduleTooEarly`…`InvalidSchedule` |
-| 29 | `FundingIncomplete` | 4700 | `DuplicateConditionRef` |
+| 29 | `FundingIncomplete` | 60 | `DuplicateConditionRef` |
+| | | 61 | `InvalidReleaseDeadline` |
 
 Codes 10 and 11 are not defined by the contract. Unknown/newer codes are kept
 as `ContractError{Code: n, Name: "UnknownContractError"}`. Contract error

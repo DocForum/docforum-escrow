@@ -44,6 +44,7 @@ const DEPOSIT_ENTRYPOINTS: &[&str] = &[
     "create_escrows",
     "create_streamed_escrow",
     "create_pooled_escrow",
+    "create_pooled_quorum_escrow",
     "create_pooled_release_deadline",
     "fund_next",
     "contribute",

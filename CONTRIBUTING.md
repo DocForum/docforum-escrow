@@ -87,6 +87,20 @@ verification/release-engineering tracks.
 
 ## 3. Before you open a PR
 
+### Checklist for new contract entry points
+
+Adding a new contract function touches multiple places. Verify this checklist for contract PRs:
+
+- [ ] **Contract module & implementation:** Put the new entry point in an area module under `contracts/escrow/src/` (e.g. `create.rs`, `release_refund.rs`), never in `lib.rs` (see [`AGENTS.md`](AGENTS.md)).
+- [ ] **Pause gating:** If this is a deposit/funding path, verify `is_paused` and return `Error::Paused` (`docs/adr/0011`); update `DEPOSIT_ENTRYPOINTS` in `contracts/escrow/tests/pause.rs`. Outbound settlement paths must NOT be gated.
+- [ ] **Solvency & liabilities:** If the entry point accepts or moves token funds, update contract liability tracking (`internal.rs`) and test against `solvency()` (`docs/threat-model.md`).
+- [ ] **Events & snapshots:** Emit appropriate contract events (`events.rs`); update test snapshots (`contracts/escrow/test_snapshots/`) via `cargo test`.
+- [ ] **Contract changes fragment:** Add a `contract-changes.d/<issue>-<slug>.md` fragment; provisional error codes use `<issue> * 100 + n` (see [`contract-changes.d/README.md`](contract-changes.d/README.md)).
+- [ ] **Generated SDK bindings:** Run `./scripts/check-generated-bindings.sh` and regenerate `sdk/src/generated/contract-client.ts` if the public interface changed.
+- [ ] **SDK wrapper & types:** Expose typed wrapper methods in `EscrowClient` (`sdk/src/index.ts`) and data types in topical modules (`sdk/src/escrow-types.ts`, etc.).
+- [ ] **Contract surface documentation:** Add the new entry point signature to `ARCHITECTURE_ESSENTIALS.md` via a `docs.d/` fragment (see [`docs.d/README.md`](docs.d/README.md)).
+- [ ] **Threat model:** Add or update threat rows in `docs/threat-model.md` via a `docs.d/` fragment if trust assumptions or attack surfaces change.
+
 - Tests are required in the same PR as the logic, not a follow-up — see
   `AGENTS.md` hard rule 2. `release`/`refund` in particular need tests
   covering unauthorized-caller and double-release/refund attempts, not
@@ -225,6 +239,50 @@ Before the first automated release, a maintainer must do the following once:
 The release process itself is documented in `docs/adr/0005` (npm publishing),
 which supersedes ADR 0003 (tarball-only releases). Note: that ADR file is
 referenced by `ROADMAP.md` Phase E6 but is not present in this tree.
+
+## Releasing the React hooks package
+
+`@docforum/escrow-react` (in `packages/escrow-react/`) is released by pushing
+a `react-v*` tag (e.g. `react-v0.1.0`), mirroring the SDK's workflow.
+`.github/workflows/release-react.yml` then
+
+1. refuses to publish if the tag does not match
+   `packages/escrow-react/package.json`'s `version`,
+2. typechecks and tests the hooks against the lowest and highest **published**
+   `@docforum/escrow-sdk` version that satisfies the package's
+   `peerDependencies` range, so a peer range that promises more than the code
+   delivers fails the release. The range comes from `package.json`, so
+   narrowing it narrows the check. While no SDK version is published yet, the
+   job falls back to the SDK in the checkout and warns instead of failing,
+3. typechecks, builds and tests once more with the SDK built from this
+   checkout, runs `npm publish --dry-run`, then publishes to npm with
+   `provenance` via trusted publishing (OIDC — no long-lived token in
+   secrets), and
+4. attaches the `npm pack` tarball to the GitHub Release.
+
+Bump the package version by hand in
+`packages/escrow-react/package.json` (changesets cover the SDK only), in the
+same PR as the change:
+
+```bash
+cd packages/escrow-react
+npm version 0.2.0 --no-git-tag-version   # pick the semver bump
+# commit and merge, then tag the merge commit on main
+git tag react-v0.2.0 && git push origin react-v0.2.0
+```
+
+### One-time human setup (react trusted publisher)
+
+Before the first automated release, a maintainer must configure npm trusted
+publishing for `@docforum/escrow-react`, pointing at this repository and
+`.github/workflows/release-react.yml`. This is the same one-time npm org step
+as for the SDK; the workflow needs no `NPM_TOKEN`. Until it is done,
+`react-v0.1.0` is not published to npm.
+
+To check the workflow before a tag exists, run it manually
+(`Actions → Release React hooks → Run workflow`): `workflow_dispatch` runs the
+same typecheck, build, test and `npm publish --dry-run` steps and never
+publishes.
 
 ## Security reports and the audit package
 

@@ -11,10 +11,13 @@
 
 use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus, SettleAction};
 use soroban_sdk::{
-    testutils::Address as _,
+    testutils::{Address as _, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String, Vec,
+    Address, Env, IntoVal, String, Vec,
 };
+
+#[path = "common/auth.rs"]
+mod auth;
 
 struct Fixture<'a> {
     client: EscrowContractClient<'a>,
@@ -336,4 +339,94 @@ fn transfer_payee_clears_notify_payee_and_allows_settle_many_release() {
     assert!(results.get(0).unwrap().is_ok());
     assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Released);
     assert_eq!(f.token.balance(&new_payee), 500);
+}
+
+// --- exact authorization tree (issue #474) -------------------------------
+
+#[test]
+fn transfer_payee_records_only_the_current_payees_exact_tree() {
+    let env = Env::default();
+    let f = setup(&env); // fixture mint and creation stay under the blanket mock
+    let new_payee = Address::generate(&env);
+
+    let transfer = MockAuthInvoke {
+        contract: &f.contract_id,
+        fn_name: "transfer_payee",
+        args: (f.escrow_id, f.payee.clone(), new_payee.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth {
+        address: &f.payee,
+        invoke: &transfer,
+    }]);
+
+    f.client.transfer_payee(&f.escrow_id, &f.payee, &new_payee);
+
+    auth::assert_auth_tree(&env, &f.payee, &transfer);
+    assert_eq!(f.client.get_escrow(&f.escrow_id).payee, new_payee);
+}
+
+#[test]
+fn transfer_payee_rejects_the_payer_signing_as_current_payee() {
+    let env = Env::default();
+    let f = setup(&env);
+    let new_payee = Address::generate(&env);
+
+    let transfer = MockAuthInvoke {
+        contract: &f.contract_id,
+        fn_name: "transfer_payee",
+        args: (f.escrow_id, f.payer.clone(), new_payee.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth {
+        address: &f.payer,
+        invoke: &transfer,
+    }]);
+
+    let result = f
+        .client
+        .try_transfer_payee(&f.escrow_id, &f.payer, &new_payee);
+    assert_eq!(result, Err(Ok(docforum_escrow::Error::Unauthorized)));
+    assert_eq!(f.client.get_escrow(&f.escrow_id).payee, f.payee);
+}
+
+#[test]
+fn transfer_payee_rejects_a_stranger_signing_the_payees_exact_tree() {
+    let env = Env::default();
+    let f = setup(&env);
+    let new_payee = Address::generate(&env);
+    let stranger = Address::generate(&env);
+
+    let transfer = MockAuthInvoke {
+        contract: &f.contract_id,
+        fn_name: "transfer_payee",
+        args: (f.escrow_id, f.payee.clone(), new_payee.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth {
+        address: &stranger,
+        invoke: &transfer,
+    }]);
+
+    assert!(matches!(
+        f.client
+            .try_transfer_payee(&f.escrow_id, &f.payee, &new_payee),
+        Err(Err(soroban_sdk::InvokeError::Abort))
+    ));
+    assert_eq!(f.client.get_escrow(&f.escrow_id).payee, f.payee);
+}
+
+#[test]
+fn transfer_payee_fails_without_the_current_payees_signature() {
+    let env = Env::default();
+    let f = setup(&env);
+    let new_payee = Address::generate(&env);
+
+    env.mock_auths(&[]);
+    assert!(matches!(
+        f.client
+            .try_transfer_payee(&f.escrow_id, &f.payee, &new_payee),
+        Err(Err(soroban_sdk::InvokeError::Abort))
+    ));
+    assert_eq!(f.client.get_escrow(&f.escrow_id).payee, f.payee);
 }
