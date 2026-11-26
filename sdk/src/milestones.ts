@@ -6,7 +6,7 @@ import { utf8ByteLength } from "./internal.js";
  * One tranche of a milestone schedule. A milestone escrow is a *group* of
  * single-tranche escrows — see `createMilestoneEscrow`.
  */
-export type MilestoneStatus = "unreleased" | "released" | "refunded";
+export type MilestoneStatus = "unreleased" | "released" | "refunded" | "cancelled";
 
 /** A single tranche of a milestone escrow. */
 export interface Milestone {

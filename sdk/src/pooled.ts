@@ -96,3 +96,46 @@ export interface ContributionRecord {
   /** True once `claimRefund` has paid this record; a second claim fails. */
   refunded: boolean;
 }
+
+/** Phase of a pooled escrow round (`pooledPhase`, `getPooledPhase`, issue #331). */
+export type PooledPhase = "open" | "funded" | "failed" | "released";
+
+/** Combined phase, remaining target, and deadline for a pooled escrow. */
+export interface PooledPhaseInfo {
+  /** Current phase of the round. */
+  phase: PooledPhase;
+  /** Remaining amount needed to reach `fundingTarget` (`0n` once funded). */
+  remaining: bigint;
+  /** Funding deadline in unix seconds (`fundingDeadline`). */
+  deadline: bigint;
+}
+
+/**
+ * Pure helper: computes a pooled escrow's phase from its `escrow` state,
+ * `pooled` config, and `ledgerTime` (latest ledger close time in unix seconds,
+ * not the local wall clock). Matches the contract's `>=` deadline boundary
+ * in `contribute` and `claim_refund`.
+ */
+export function pooledPhase(
+  escrow: { status: "Funded" | "Released" | "Refunded" | "Cancelled"; amount: bigint },
+  pooled: Pick<PooledEscrow, "fundingTarget" | "fundingDeadline">,
+  ledgerTime: bigint,
+): PooledPhaseInfo {
+  const remaining = pooled.fundingTarget > escrow.amount ? pooled.fundingTarget - escrow.amount : 0n;
+  const deadline = pooled.fundingDeadline;
+
+  let phase: PooledPhase;
+  if (escrow.status === "Released") {
+    phase = "released";
+  } else if (escrow.status === "Refunded" || escrow.status === "Cancelled") {
+    phase = "failed";
+  } else if (escrow.amount >= pooled.fundingTarget) {
+    phase = "funded";
+  } else if (ledgerTime >= pooled.fundingDeadline) {
+    phase = "failed";
+  } else {
+    phase = "open";
+  }
+
+  return { phase, remaining, deadline };
+}
