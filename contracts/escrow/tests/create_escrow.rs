@@ -653,9 +653,9 @@ fn create_escrows_creates_every_item_in_input_order() {
     asset.mint(&payer, &100);
     let mut items = batch_of(&env, &token, 3);
     for (index, amount) in [10i128, 20, 30].into_iter().enumerate() {
-        let mut item = items.get_unchecked(index as u32);
+        let mut item = items.get_unchecked(u32::try_from(index).expect("index fits u32"));
         item.amount = amount;
-        items.set(index as u32, item);
+        items.set(u32::try_from(index).expect("index fits u32"), item);
     }
 
     let ids = client.create_escrows(&payer, &items);

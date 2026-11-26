@@ -347,7 +347,7 @@ fn parse_options(mut args: impl Iterator<Item = StdString>) -> Result<Options, S
     while let Some(arg) = args.next() {
         match arg.as_str() {
             // cargo passes `--bench` to a `harness = false` binary.
-            "--bench" => continue,
+            "--bench" => {}
             "--out" => {
                 options.out = Some(
                     args.next()
