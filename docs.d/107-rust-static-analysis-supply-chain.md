@@ -1,5 +1,5 @@
 ---
-file: ARCHITECTURE_ESSENTIALS.md
+file: ROADMAP.md
 section: Phase E3 — TypeScript SDK
 ---
 
