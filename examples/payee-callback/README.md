@@ -17,6 +17,20 @@ synchronously when an escrow pays it.
   `Rejected`, which reverts the release atomically — useful for testing
   failure handling.
 
+## Access control
+
+The contract is deployed with `(admin, token)`:
+
+- `register_escrow` and `set_reject` require the admin's authorization, so
+  nobody else can register escrows or arm reject mode (which would block
+  every payout to this payee).
+- `on_escrow_released` is a public entry point: anyone can call it directly,
+  with any arguments. The hook therefore never trusts `amount` by itself. It
+  records a payout only when this contract's balance of `token` has grown by
+  at least `amount` since the last recorded payout, and fails with
+  `UnbackedPayout` otherwise. If you add a withdrawal entry point, update the
+  stored `LastBalance` there as well.
+
 ## How an escrow triggers it
 
 Create the escrow with `notify_payee: true` and the payee set to this
@@ -48,8 +62,9 @@ cargo test
 ```
 
 Covers: the happy-path callback, the net-of-fee amount, a failing hook
-reverting the release (while refund still works), and rejection of unknown
-escrows.
+reverting the release (while refund still works), rejection of unknown
+escrows, admin-only configuration, and direct hook calls that are not backed
+by a transfer.
 
 ## See also
 

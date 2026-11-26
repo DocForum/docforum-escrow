@@ -1,9 +1,9 @@
 use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus};
-use docforum_payee_callback::PayeeCallbackClient;
+use docforum_payee_callback::{Error as PayeeError, PayeeCallbackClient};
 use soroban_sdk::{
-    testutils::Address as _,
+    testutils::{Address as _, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String, Vec,
+    Address, Env, IntoVal, String, Vec,
 };
 
 struct Fixture<'a> {
@@ -26,7 +26,10 @@ fn fixture(env: &Env) -> Fixture<'_> {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let payee_address = env.register(docforum_payee_callback::PayeeCallback, ());
+    let payee_address = env.register(
+        docforum_payee_callback::PayeeCallback,
+        (Address::generate(&env), token_id.address()),
+    );
     let payee = PayeeCallbackClient::new(&env, &payee_address);
     let escrow_id = env.register(
         EscrowContract,
@@ -84,7 +87,10 @@ fn release_with_fee_pays_net_amount_to_callback() {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let payee_address = env.register(docforum_payee_callback::PayeeCallback, ());
+    let payee_address = env.register(
+        docforum_payee_callback::PayeeCallback,
+        (Address::generate(&env), token_id.address()),
+    );
     let payee = PayeeCallbackClient::new(&env, &payee_address);
     let escrow_id = env.register(
         EscrowContract,
@@ -146,7 +152,10 @@ fn unknown_escrow_is_rejected() {
     let releaser = Address::generate(&env);
     asset.mint(&payer, &1_000);
 
-    let payee_address = env.register(docforum_payee_callback::PayeeCallback, ());
+    let payee_address = env.register(
+        docforum_payee_callback::PayeeCallback,
+        (Address::generate(&env), token_id.address()),
+    );
     let payee = PayeeCallbackClient::new(&env, &payee_address);
     // NOTE: this payee registers NO escrows, so every callback is unknown.
     let escrow_id = env.register(
@@ -176,4 +185,77 @@ fn unknown_escrow_is_rejected() {
     assert_eq!(payee.total_received(), 0);
     let _ = token;
     let _ = asset;
+}
+
+#[test]
+fn configuration_requires_the_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let token_admin = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract_v2(token_admin);
+    let admin = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let payee_address = env.register(
+        docforum_payee_callback::PayeeCallback,
+        (admin.clone(), token_id.address()),
+    );
+    let payee = PayeeCallbackClient::new(&env, &payee_address);
+
+    // A stranger's authorization is not enough for either setter.
+    let stranger_auth = |fn_name: &'static str, args: soroban_sdk::Vec<soroban_sdk::Val>| {
+        env.mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &payee_address,
+                fn_name,
+                args,
+                sub_invokes: &[],
+            },
+        }]);
+    };
+    stranger_auth("set_reject", (true,).into_val(&env));
+    assert!(payee.try_set_reject(&true).is_err());
+    stranger_auth("register_escrow", (7u64,).into_val(&env));
+    assert!(payee.try_register_escrow(&7).is_err());
+    assert!(!payee.is_known(&7));
+
+    // The admin's authorization is.
+    env.mock_auths(&[MockAuth {
+        address: &admin,
+        invoke: &MockAuthInvoke {
+            contract: &payee_address,
+            fn_name: "register_escrow",
+            args: (7u64,).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    payee.register_escrow(&7);
+    assert!(payee.is_known(&7));
+}
+
+#[test]
+fn direct_hook_call_without_a_transfer_records_nothing() {
+    let env = Env::default();
+    let f = fixture(&env);
+    // Nothing has been paid yet: a direct call with any amount is refused.
+    assert_eq!(
+        f.payee.try_on_escrow_released(&f.id, &1_000_000),
+        Err(Ok(PayeeError::UnbackedPayout))
+    );
+    assert_eq!(
+        f.payee.try_on_escrow_released(&f.id, &-5),
+        Err(Ok(PayeeError::UnbackedPayout))
+    );
+    assert_eq!(f.payee.total_received(), 0);
+
+    // After a real release, replaying the same payout is refused too: the
+    // transfer that backed it has already been counted.
+    f.escrow.release(&f.id, &f.releaser);
+    assert_eq!(f.payee.total_received(), 300);
+    assert_eq!(
+        f.payee.try_on_escrow_released(&f.id, &300),
+        Err(Ok(PayeeError::UnbackedPayout))
+    );
+    assert_eq!(f.payee.total_received(), 300);
+    assert_eq!(f.payee.last_payout(), (f.id, 300));
 }
