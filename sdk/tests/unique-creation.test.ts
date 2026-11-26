@@ -67,7 +67,7 @@ function storedEscrow(overrides: Partial<Escrow> = {}): Escrow {
 }
 
 const DUPLICATE_AT_SIMULATION = () => {
-  throw new Error("HostError: Error(Contract, #4700)\n\nEvent log (newest first): ...");
+  throw new Error("HostError: Error(Contract, #60)\n\nEvent log (newest first): ...");
 };
 
 /** Contract-client fakes plus spies for the reads the recovery path makes. */
@@ -150,7 +150,7 @@ describe("createEscrow({ unique: true })", () => {
   });
 
   it("resolves a duplicate at submission (e.g. a resubmitted transaction) the same way", async () => {
-    const tx = failingSendTx(new Error("transaction failed: Error(Contract, #4700)"));
+    const tx = failingSendTx(new Error("transaction failed: Error(Contract, #60)"));
     const h = harness({ create_escrow_with_uniqueness: vi.fn(async () => tx) });
 
     const result = await h.client.createEscrow(uniqueParams());
