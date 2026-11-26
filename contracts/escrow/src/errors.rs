@@ -150,7 +150,7 @@ pub enum Error {
     InvalidSchedule = 59,
     /// A uniqueness-enabled creation used an already-indexed pair. Use
     /// `get_unique_escrow` to recover the original escrow id.
-    DuplicateConditionRef = 4700,
+    DuplicateConditionRef = 60,
     /// The release deadline was not strictly after the funding deadline at creation (issue #288).
-    InvalidReleaseDeadline = 28800,
+    InvalidReleaseDeadline = 61,
 }

@@ -140,6 +140,18 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 - [ ] Related, not in the checklist: [#13](https://github.com/DocForum/docforum-escrow/issues/13) `get_escrow`
   full-record read (Medium), [#14](https://github.com/DocForum/docforum-escrow/issues/14) offline SDK unit tests in CI
   (Medium).
+- [x] Emergency pause operational runbook (issue #361): operational guide
+  covering multisig triggers, CLI/SDK signing, verification, and integrator
+  communication in `docs/runbooks/emergency-pause.md`.
+- [x] Runbook for contract redeployment and cutover (issue #362): checklist
+  for deploying new IDs, dual-client operation, `solvency()` drain monitoring,
+  indexer data source updates, and rollback in `docs/runbooks/redeploy-cutover.md`.
+- [x] A hostile payee callback can block `settle_many` batches (issue #367).
+  The whole-batch revert on a failing `notify_payee` callback is documented
+  in ADR 0012 and threat model T11, pinned by
+  `contracts/escrow/tests/settle_many.rs`; the mitigation — settle
+  `notify_payee` releases one per transaction, refunds unaffected — is in
+  the releaser-compromise runbook and the settlement tooling.
 
 ## Phase E5 — Releaser custom account
 - [x] Optional M-of-N Soroban custom releaser account (issue #50):
@@ -153,6 +165,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   `rotate_releaser` for its configured escrow when the payer also authorizes;
   rotation consumes one per-window operation slot and is covered by unit and
   end-to-end tests. See ADR 0005.
+- [x] Custom releaser account as one member of an in-contract quorum (issue #304): approval-based release/refund contexts are accepted only when the configured account appears in the escrow's `approvers` list; the account's own signer threshold and rate limit remain independent.
 
 ## Phase E5 — Bound condition_ref length and validate it at creation
 - [x] Pick a maximum length (64 bytes) based on observed integrator usage
@@ -357,6 +370,13 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 - [x] List escrows by payer or payee (issue #33, ADR 0015): decided **off-chain**, so the contract is unchanged. The `ESCROW` event (issue #9) already carries `payer`/`payee`, and the issue #87 indexer already stores them, so the query is an index filter; `EscrowIndexerClient.listEscrows` gained optional `payer`/`payee` filters. No redeploy; SDK minor, additive.
 - [x] Attestation-based release (issue #42): optional `attester` (ed25519 public key) at creation and `release_with_attestation(escrow_id, signature)`, verified over a domain-separated message (contract id, network id, escrow id, action). Tests: `contracts/escrow/tests/attestation.rs`. **Not yet on testnet.**
 - [x] Recurring escrows funded through token allowances (issue #115, ADR 0015): `create_schedule` records a payer/payee/token/amount/period/count schedule; any keeper may call `fund_next` when a period is due, pulling exactly one period's amount via `transfer_from` under the payer's SEP-41 allowance and creating a normal escrow for it; the payer may cancel at any time. Tests: `contracts/escrow/tests/recurring.rs`. **Not yet on testnet.**
+- [x] **Versioned storage layout and a migration strategy for `EscrowData`
+  (issue #37)** — escrow records are stored as `StoredEscrow::V<n>` with an
+  explicit version tag; readers accept every known layout (including the
+  pre-#37 untagged map) and upgrade in memory, and the next state change
+  writes the latest version. Tests store old-layout entries directly and
+  settle them by release and refund. The rule for adding fields is in
+  `ARCHITECTURE_ESSENTIALS.md`; ADR 0005 (immutable, redeploy) is unchanged.
 
 ## Phase E6 — SDK & integrator tooling
 - [x] Typed SDK errors mapped from the contract error enum (issue #61):
@@ -484,6 +504,135 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   latest-ledger freshness and configured network passphrase, and retries
   idempotent reads across healthy providers. Writes remain single-provider and
   must verify a submitted transaction hash before any caller-controlled retry.
+- [x] GitHub Action for escrow lifecycle operations (issue #124): source-built
+  `action/` supports create, release, refund, and status on testnet with fork
+  pull-request secret protection and a manual example workflow. Consumers build
+  `action/dist/` from source before using the local action.
+- [x] Settlement preflight (issue #332): `canRelease`/`canRefund` return
+  `{ ok, reasons }` from the escrow, pooled config, caller and ledger clock
+  without signing, in the contract's check order so `reasons[0]` is the error it
+  would return; `release`/`refund` can refuse a doomed call before simulating
+  (`checkPreconditions: true`). Additive SDK surface, no contract change.
+- [x] Creation preflight (issue #334): `createEscrow`, `createQuorumEscrow`,
+  `createPooledEscrow` and `createEscrows` items reject a non-positive amount,
+  a `refundTo` or `feeRecipient` equal to the contract id, and a
+  `releaseNotBefore` later than `refundAfter` before simulation, naming the
+  matching contract error.
+- [x] Ledger-time helper (issue #335): `client.getLedgerTime()` reads the
+  latest ledger's close time (cached for a few seconds, always fresh with
+  `{ maxAgeMs: 0 }`) and `client.ledgerClockOffset()` returns ledger time minus
+  local time in milliseconds, ready for `useEscrowTimeline`'s
+  `ledgerTimeOffsetMs`. Additive SDK surface, no contract change.
+- [x] `escrow-react` terminal statuses (issue #336): `Cancelled` (ADR 0010) is
+  final everywhere. `isTerminalStatus` is an exhaustive switch over
+  `EscrowStatus`, so `useEscrow` stops polling a cancelled escrow and
+  `useEscrowTimeline` stops its countdown; React Testing Library tests cover
+  both paths.
+- [x] `escrow-react` lifecycle actions (issue #337): `useEscrowActions` gained
+  `accept`, `cancel` and `topUp(escrowId, amount)`, each invalidating
+  `escrowKeys.detail`, resolving wallet rejection as
+  `{ status: "rejected" }`, and surfacing `EscrowPreconditionError` as a typed
+  `{ status: "precondition", error }` result.
+- [x] `escrow-react` pooled hooks (issue #338): `usePooledEscrow(id)` reads
+  `getEscrow` + `getPooled` and derives an `open` / `funded` / `failed` /
+  `released` phase from the contract's boundary rules, polling until the phase
+  is settled (a failed round stays `Funded` on-chain). `useContribution(id,
+  address)` reads one contributor's record, and `contribute` / `claimRefund`
+  were added to `useEscrowActions` with invalidation of both queries.
+- [x] `escrow-react` live events (issue #339): `useEscrowEvents({ escrowId?,
+  types?, cursor? })` wraps `client.subscribe` with lifecycle management
+  (including StrictMode), keeps a bounded event list, exposes the latest
+  cursor, invalidates matching escrow queries, and reports an expired cursor
+  as state instead of throwing.
+- [x] Go SDK lifecycle entry points (issue #340): `CreateEscrowWithAcceptance`,
+  `Accept`, `Cancel` and `TransferPayee` wrap `create_escrow_with_acceptance`,
+  `accept`, `cancel` and `transfer_payee`. The acting party's `Signer` is
+  passed per call (the payee for accept/transfer, the payer for cancel); when
+  it differs from `Config.Signer` the configured account stays the transaction
+  source and pays the fee while the actor signs its own auth entry. Contract
+  codes 18–20 and 37 have named sentinels and the `Cancelled` status decodes;
+  offline argument-XDR tests plus opt-in accept → release and cancel flows.
+- [x] Go SDK pooled escrows (issue #341): `CreatePooledEscrow`, `Contribute`,
+  `ClaimRefund`, `GetPooled` and `GetContribution` with `PooledData` /
+  `Contribution` decoders, contract codes 26–34 named, and
+  `Option<Contribution>` modelled as `*Contribution` so “never contributed”
+  stays distinct from `NotFound` / `NotPooled`. Offline decoder tests, and an
+  opt-in failed round with two contributors and two claims.
+- [x] Go SDK contract-state reads and version guard (issue #342): `Version`,
+  `IsPaused`, `GetPauseAdmin` and `Solvency` reads, plus the optional
+  `Config.ContractVersionCheck` (off by default) that checks `version()` once
+  before the first write against the same `>=2.0.0 <4.0.0` range as the
+  TypeScript SDK's `SUPPORTED_CONTRACT_VERSIONS`. A deployment without
+  `version()` is a typed `*VersionUnavailableError`, not a generic simulation
+  failure. Offline fake-RPC tests; documented in `sdk-go/README.md`.
+- [x] Go SDK batch create and settle (issue #344): `CreateEscrows`
+  (`create_escrows`) and `SettleMany` (`settle_many`), chunked at the contract's
+  measured limits — the exported `MaxBatchSize` (16) and `MaxSettleOps` (12)
+  name `contracts/escrow/src/constants.rs` — with per-op results decoded in
+  input order and a reverting chunk surfaced as the error alongside the chunks
+  that already committed.
+- [x] Go SDK relayed release/refund authorization (issue #345):
+  `AuthorizeRelease` / `AuthorizeRefund` return a portable
+  `RelayedAuthorization` whose `transaction` JSON is the TypeScript SDK's
+  `RelayedAuthorization.transaction` format, so either SDK can produce an
+  authorization and the other submit it. `SubmitRelayed` rejects expired
+  authorizations, a settlement that does not match the envelope, anything other
+  than exactly one `invokeContract` call to this contract, and a submitter that
+  is not the envelope's relayer. Cross-SDK fixture and separate-relayer tests.
+- [x] Indexer applies non-lifecycle events (issue #346): handlers and project
+  filters for `pay_xfer`, `rotate`, `top_up`, `accepted`, `contrib` and
+  `claimed`, each updating only the field it carries and recorded in
+  `EscrowEvent`. A ledger-based ordering guard stops an older event from
+  overwriting a newer snapshot, events for escrows created before the start
+  ledger are skipped, and mapping unit tests cover every handler and both
+  snapshot layouts.
+- [x] Configurable indexer network (issue #348): `DOCFORUM_NETWORK_PASSPHRASE`
+  (testnet default) plus the existing Horizon/RPC env vars select the network
+  without a source edit; the public passphrase needs an exact
+  `DOCFORUM_ALLOW_MAINNET=true` opt-in. Local quickstart usage documented in
+  `indexer/README.md`.
+- [x] Creation entry point compatibility matrix (issue #363): guide and
+  feature matrix mapping contract creation methods to supported options
+  and SDK calls in `docs/guides/creation-matrix.md`.
+- [x] Browser demo payee acceptance and payer cancel (issue #366):
+  `examples/web-demo/` gains a creation form with a `requiresAcceptance`
+  toggle, a payee review panel listing every `getEscrow` field T8 says to
+  check (releasers/threshold, `refundAfter`, `refundTo`) plus the fee, and
+  Accept/Cancel actions enabled only while the contract would allow them.
+- [x] `waitForStatus` settlement-confirmation helper (issue #368): polls
+  `get_status` until an escrow reaches one of the target statuses, bounded by
+  a deadline and poll interval and cancellable with an `AbortSignal`. Rejects
+  with a typed `WaitTimeoutError` carrying the last status seen, and
+  short-circuits when the escrow settles on a terminal status outside the
+  target set. SDK only; no contract change.
+- [x] SDK recurring schedules (issue #468): `createSchedule`, `getSchedule`,
+  `fundNext`, `cancelSchedule`, `approveScheduleAllowance`, and the pure
+  `scheduleState` / `scheduleAllowanceNeeded` helpers in `sdk/src/recurring.ts`,
+  with offline validation mirroring `create_schedule` and the first
+  `fund_next`'s creation rules. Typed errors for codes 38 and 55–59. SDK only.
+- [x] SDK retry-safe creation (issue #469): `createEscrow({ unique: true })`
+  through `create_escrow_with_uniqueness`, recovering a `DuplicateConditionRef`
+  as `{ existing: true }` after a payee/token/amount check
+  (`UniqueEscrowMismatchError` on a mismatch), and `getUniqueEscrow`. The
+  non-unique path is unchanged. SDK only.
+- [x] SDK pooled release deadline and `closeFailedRound` (issue #470):
+  `createPooledEscrow({ releaseDeadline })`, `getPooled().releaseDeadline` and
+  `closeFailedRound` in the TypeScript SDK, and `PooledData.ReleaseDeadline` in
+  the Go SDK. Omitting `releaseDeadline` sends the same `create_pooled_escrow`
+  call as before.
+- [x] Python SDK single-party amendments (issue #471): `create_escrow_with_acceptance`,
+  `accept`, `cancel`, `top_up` and `transfer_payee` in `sdk-python` 0.2.0. The
+  signer is the acting party, and a mismatched actor is rejected before any
+  request. Arguments are checked against `contract-spec.json`.
+- [x] Python SDK quorum support (issue #472): `create_escrow_with_releasers`,
+  `release_with_approvals` and `refund_with_approvals`, with client-side
+  `check_releaser_set` validation and fail-closed Soroban auth-entry signing
+  for the supplied approver keypairs. Package 0.3.0; no contract change.
+- [x] Rust interface crate for cross-contract calls (issue #69):
+  `crates/escrow-interface` exposes the shared lifecycle types, contract
+  errors and generated `EscrowClient`; `contracts/examples/escrow-interface`
+  demonstrates nested create/release calls and the caller/releaser auth rule.
+- [x] **SDK time-based helpers (issue #85)** — add typed stream creation, withdrawal and vesting reads, plus deterministic `vestedAt` and `timelineOf` helpers that mirror the contract's integer vesting math.
 
 ## Phase E7 — Verification, testing & release engineering
 - [ ] Assert exact auth trees throughout contract tests (issue #105). `create_escrow`, `release`, `refund`, and the lifecycle amendments `cancel`, `top_up`, `transfer_payee`, `extend_refund_after`, `rotate_releaser` and `rotate_releaser_with_approvals` now compare complete trees and cover wrong-signer and missing-party regressions; remaining contract-test modules still need conversion.
@@ -561,6 +710,56 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   outside the baseline fails the job and is named in the job summary with the
   baseline line to add; entries that no longer survive are reported for pruning.
   `mutants.toml` now examines every module under `src/`, not just `src/lib.rs`.
+- [x] **TLC CI check for the escrow state-machine model** (issue #315) — CI
+  downloads a pinned, checksum-verified TLC jar and runs the committed model
+  configuration when `spec/**` changes and nightly.
+- [x] **Measured resource regression check (issue #319)** — CI profiles every
+  function in the resource baseline with `cargo bench --bench resource_profile`,
+  which emits JSON and fails when two runs of the same measurement disagree, and
+  `scripts/check-resource-baseline.py` fails on measured `cpu_instructions` or
+  `memory_bytes` regressions past `threshold_percent`. The old source-size
+  heuristic is gone. The baseline moves only through
+  `scripts/update-resource-baseline.py --note "<why>"`, reviewed in the PR.
+  No contract or SDK surface change.
+- [x] **Offline SDK tests run through Vitest projects (issue #321)** — offline and live test files are classified by configuration, and CI runs the complete offline project without hand-maintained file lists.
+- [x] SDK/contract constant check (issue #333):
+  `scripts/check-sdk-constants.mjs` parses the contract's `pub const` limits and
+  the SDK's exported mirrors (including `1_000`-style literals) and fails CI on
+  a missing, unmapped or mismatched value; added the previously unmirrored
+  `MAX_SETTLE_OPS` (12) to the SDK.
+- [x] Indexer dependency pinning, tests and CI (issue #347): `indexer` pins
+  exact `@subql/*` versions (including the runner versions in `project.ts`) and
+  commits `package-lock.json`; `subql codegen` output is generated, not
+  committed; vitest covers the mapping; and a CI `indexer` job runs codegen +
+  build + tests only when `indexer/**` changes.
+- [x] Deployment-record cross-checks in `scripts/verify-deployment` (issue
+  #349): compares the recorded `wasmHash` with the local build and on-chain
+  WASM, warns on a different checkout `gitSha` or an unrecorded id, and accepts
+  `--network testnet|futurenet|local` with mainnet refused.
+- [x] **Pin GitHub Actions and add Dependabot (issue #350)** — every external
+  workflow action uses a verified commit SHA; Dependabot keeps the pins
+  current (one grouped PR a week); CI rejects floating or uncommented action
+  references and prints how to look up the right SHA. The CI, release and
+  nightly soak workflow permissions were narrowed to the scopes each job
+  needs.
+- [x] **Release workflow for `@docforum/escrow-react`** (issue #352) —
+  `.github/workflows/release-react.yml` releases the hooks package from a
+  `react-v*` tag: tag/version guard, typecheck, build, test,
+  `npm publish --provenance` via trusted publishing, and the tarball attached
+  to the GitHub Release. A peer matrix typechecks and tests against the lowest
+  and highest published `@docforum/escrow-sdk` version matching the declared
+  range before publishing, and falls back to the checkout's SDK with a warning
+  until the SDK is on npm. Documentation in `CONTRIBUTING.md`.
+- [x] Build, release and reproducibility-check the releaser-account WASM (issue #355): both WASM artifacts are built with the pinned toolchain, compared across checkout paths, published with checksums and artifact-specific provenance, and documented for deployment verification.
+- [x] Build the web demo in CI against the local workspace SDK and React hooks outputs (issue #356), running path-filtered TypeScript and production Vite checks with explicit local-resolution verification.
+- [x] Contributor checklist for contract entry points (issue #364): comprehensive
+  checklist added to `CONTRIBUTING.md` and condensed in `.github/PULL_REQUEST_TEMPLATE.md`
+  linking authoritative requirements.
+- [x] **Manual testnet deployment workflow (issue #90)** —
+  `.github/workflows/testnet-deploy.yml` deploys a selected ref through
+  `scripts/deploy` using the `TESTNET_DEPLOY_SOURCE_SECRET` secret in the
+  protected `testnet-deployer` environment, prevents concurrent deployments,
+  and opens a PR containing the generated deployment records. Testnet only.
 
 ## Explicitly out of scope for this repo
 - Any healthcare-specific logic (see README).
@@ -1452,3 +1651,410 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 - 2026-11-22 — Contract 3.3.0 (was 3.2.0), folded from 1 change(s):
   - Issue #115: recurring escrows funded through token allowances (ADR 0015). New `create_schedule`/`fund_next`/`cancel_schedule`/`get_schedule` entry points, `RecurringSchedule` storage, and `ScheduleTooEarly`, `ScheduleComplete`, `ScheduleCancelled`, `AllowanceExhausted`, `InvalidSchedule` errors; period escrows are created through the existing creation path, so no existing entry point changes.
   Final error codes: Error::ScheduleTooEarly 11500 -> 55, Error::ScheduleComplete 11501 -> 56, Error::ScheduleCancelled 11502 -> 57, Error::AllowanceExhausted 11503 -> 58, Error::InvalidSchedule 11504 -> 59.
+- 2026-11-22 — Issue #124 (Phase E6): added a bundled GitHub Action for create, release, refund,
+  and status operations against Stellar testnet, with input validation, fork
+  pull-request secret protection, and a manual testnet workflow example.
+- 2026-11-22 — Issue #125 (Phase E6): added the `LedgerSigner` SDK adapter for the Ledger
+  Stellar app. It supports transaction-envelope and Soroban authorization
+  signing through an injected WebHID/Node HID-backed app, reports disabled hash
+  signing explicitly, and has no software-signing fallback.
+- 2026-11-22 — Issue #295 (Phase E4): documented and regression-tested the existing
+  fee-first release behavior when the fee recipient cannot receive. The release
+  fails atomically with `Undeliverable`, leaves the escrow funded, and can be
+  retried after the recipient is reachable; the payee is never partially paid.
+- 2026-11-22 — Issue #304 (Phase E5): a policy-limited custom releaser account can now be one
+  member of an in-contract quorum. It accepts only the configured escrow's
+  approval-based release/refund calls when its own address is listed in the
+  approvers, and still consumes one rate-limit slot per call.
+- 2026-11-22 — Issue #315 (Phase E7): CI now downloads a checksum-verified, pinned TLC jar
+  and model-checks the committed escrow specification when `spec/**` changes and
+  on the nightly schedule. The local run command is documented in `spec/README.md`.
+- 2026-11-22 — Issue #319 (Phase E7): `scripts/check-resource-baseline.py` compares measured
+  Soroban costs instead of function source size, so a change that doubles a
+  function's CPU or memory cost fails even when its source shrinks.
+  `cargo bench --bench resource_profile` now emits a JSON snapshot (stdout, or
+  `--out <path>`), profiles every function in a fresh environment twice and fails
+  when the runs disagree; CI runs that bench before the check.
+  `benchmarks/baseline.json` is format 3, one `cpu_instructions` /
+  `memory_bytes` pair per function, and is raised only through
+  `scripts/update-resource-baseline.py --note "<why>"` with the reason in the PR.
+  The source-size heuristic is gone. No contract or SDK surface change, so
+  bindings and `contract-spec.json` are untouched.
+- 2026-11-22 — Issue #321 (Phase E7): classified SDK tests into offline and live Vitest
+  projects, so CI runs every offline test automatically while testnet and
+  futurenet integration suites remain opt-in. No contract or public SDK surface
+  changed.
+- 2026-11-22 — Issue #322: contract-change fragments are format-validated and the checker
+  and maintainer fold now have fixture-repository tests.
+- 2026-11-22 — Issue #90 (Phase E7): added a protected, manually dispatched testnet deployment
+  workflow with serialized runs and an automated pull request for deployment records.
+- 2026-11-23 — Issue #288 (Phase E5): added `create_pooled_release_deadline` to create pooled escrows with an optional `release_deadline`. If a fully funded pool's releaser key is lost or fails to release by the deadline, contributors may recover their funds via `claim_refund`, ensuring pools cannot be permanently locked.
+- 2026-11-23 — Issue #297 (Phase E5): `rotate_releaser` now rejects a no-op rotation
+  (`new_releaser == current releaser`) with `InvalidReleaser` instead of
+  rewriting the same state and emitting a misleading `rotate` event. The
+  check runs after the caller check, so a wrong caller still gets
+  `Unauthorized`. Added rotation tests for pooled escrows (creator
+  co-signs), rotation after `refund_after`, the exact `rotate` event payload,
+  and `settle_many` from the rotated-out releaser.
+- 2026-11-23 — Issue #332 (Phase E6): added `canRelease` and `canRefund` to the SDK. Both
+  return `{ ok, reasons }` from the escrow, an optional pooled funding config,
+  the caller and the ledger clock, mirroring `release_checks`, `refund_checks`
+  and the payee-voluntary refund path in the contract's order, so `reasons[0]` is
+  the error the contract would return. `release`/`refund` accept
+  `{ checkPreconditions: true }` to throw `EscrowPreconditionError` before
+  simulating; the default stays off, because the contract is the authority and a
+  passing check can still fail on-chain. Additive SDK surface; no contract
+  change, so the generated bindings are unchanged.
+- 2026-11-23 — Issue #333 (Phase E7): the SDK's hand-mirrored contract limits are now checked
+  in CI. `scripts/check-sdk-constants.mjs` parses `pub const NAME: type = value;`
+  from `contracts/escrow/src/` and `export const NAME = value;` from
+  `sdk/src/`, compares every entry in its contract → SDK mapping table, and
+  fails on a mismatch, a constant missing from either side, or an SDK constant
+  that shadows a contract limit without being mapped. Underscored literals
+  (`1_000`, `518_400`) parse. The check runs in the `Contract interface
+  snapshot` CI job. Exported `MAX_SETTLE_OPS` (12) from the SDK — it was not
+  mirrored at all — and corrected `README.md`/`ARCHITECTURE_ESSENTIALS.md`, which
+  said 20. No contract change.
+- 2026-11-23 — Issue #334 (Phase E6): the remaining creation rejections are now caught
+  offline, with the contract error name in the message. `createEscrow` and
+  `createQuorumEscrow` reject a non-positive `amount` (`InvalidAmount`, 2) and a
+  `refundTo` equal to the contract id (`InvalidRefundTo`, 21); `createEscrow`
+  also rejects `feeRecipient` equal to the contract id (`InvalidFee`, 35) and a
+  `releaseNotBefore` later than `refundAfter` (`InvalidReleaseNotBefore`, 22).
+  `createPooledEscrow`'s existing target/deadline checks now name `InvalidAmount`
+  and `InvalidFundingDeadline`. `createEscrows` inherits the checks because each
+  item goes through `createEscrow`. Clock-dependent orderings (a
+  `releaseNotBefore` already in the past) are deliberately not checked: only the
+  ledger knows that, and the contract decides. No contract change.
+- 2026-11-23 — Issue #335 (Phase E6): added `client.getLedgerTime()` and
+  `client.ledgerClockOffset()` to the SDK. Every contract deadline
+  (`refund_after`, `release_not_before`, `funding_deadline`) is compared against
+  the ledger close time, so the helper reads the latest ledger through RPC,
+  derives `closeTime × 1000 − local time`, and caches the reading for
+  `DEFAULT_LEDGER_TIME_CACHE_MS` (5 s) with concurrent reads coalesced; a fresh
+  read is one `{ maxAgeMs: 0 }` away, and the cache never serves a value older
+  than the documented window. `useEscrowTimeline` can now be fed
+  `ledgerClockOffset()` instead of a hand-computed offset. The offset is advisory
+  and ledger close time lags real time; the contract stays the authority. No
+  contract change, so the generated bindings are unchanged.
+- 2026-11-23 — Issue #336: `Cancelled` (payer withdrawal before payee acceptance, ADR 0010)
+  is now terminal in `@docforum/escrow-react`. `isTerminalStatus` is an
+  exhaustive switch over every `EscrowStatus`, so a future status fails the
+  build until it is classified. `useEscrow` stops polling a cancelled escrow and
+  `useEscrowTimeline` stops its countdown for one. React Testing Library tests
+  cover the polling and countdown paths.
+- 2026-11-23 — Issue #337: `useEscrowActions` gained `accept`, `cancel` and
+  `topUp(escrowId, amount)`. All three sign with the hook's signer (payee for
+  accept, payer for cancel/top-up), invalidate the escrow's `escrowKeys.detail`
+  query on success, and resolve a wallet rejection as `{ status: "rejected" }`.
+  A client-side `EscrowPreconditionError` now resolves as a typed
+  `{ status: "precondition", error }` result instead of rejecting, so callers can
+  branch on its `code`. `EscrowClientLike` was widened for the new methods.
+- 2026-11-23 — Issue #338: added pooled-escrow hooks to `@docforum/escrow-react`.
+  `usePooledEscrow(id)` reads `getEscrow` and `getPooled` together and derives
+  an `open` / `funded` / `failed` / `released` phase from the contract's
+  boundary rules; because a failed round stays `Funded` on-chain, polling stops
+  on the phase (`failed` or `released`), not the status. `useContribution(id,
+  address)` reads one contributor's record. `useEscrowActions` gained
+  `contribute(escrowId, amount)` and `claimRefund(escrowId)`, which invalidate
+  both queries. New stable keys: `escrowKeys.pooled`, `escrowKeys.contribution`,
+  `escrowKeys.contributions`.
+- 2026-11-23 — Issue #339: added `useEscrowEvents({ escrowId?, types?, cursor? })` to
+  `@docforum/escrow-react`. The hook wraps `client.subscribe` in an effect with
+  cleanup on unmount and on parameter change (StrictMode leaves exactly one live
+  subscription), keeps a bounded oldest-first event list (`maxEvents`, default
+  100), exposes the latest cursor for persistence, invalidates the matching
+  escrow queries for escrows named in events, and surfaces
+  `EventCursorExpiredError` as `error` / `cursorExpired` state rather than
+  throwing. `EscrowClientLike.subscribe` is optional, so existing partial
+  clients keep working.
+- 2026-11-23 — Issue #340 (Phase E6): the Go client now covers the payee-acceptance lifecycle.
+  `CreateEscrowWithAcceptance` wraps `create_escrow_with_acceptance`, and
+  `Accept`, `Cancel` and `TransferPayee` wrap `accept`, `cancel` and
+  `transfer_payee`. Each takes the acting party's `Signer` per call — the payee
+  for accept and transfer, the payer for cancel — because those parties differ
+  from the client's default signer; `nil` falls back to `Config.Signer`, and when
+  the party differs from it the configured account stays the transaction source
+  (it pays the fee) while the party signs its own Soroban auth entry. Contract
+  codes 18 `AcceptanceRequired`, 19 `AcceptanceNotConfigured`, 20
+  `AlreadyAccepted` and 37 `InvalidNewPayee` now have named sentinels, the full
+  contract error table is mapped, and the contract's `Cancelled` escrow status
+  decodes (`EscrowStatusCancelled`). Argument XDR is pinned by offline tests;
+  the opt-in
+  accept → release and cancel flows run against a real deployment. No contract
+  change.
+- 2026-11-23 — Issue #341 (Phase E6): the Go client now wraps pooled escrows.
+  `CreatePooledEscrow` (`create_pooled_escrow`), `Contribute` (`contribute`),
+  `ClaimRefund` (`claim_refund`), `GetPooled` (`get_pooled`) and
+  `GetContribution` (`get_contribution`) are implemented with `PooledData` and
+  `Contribution` decoders built from the contract's own field names.
+  `GetContribution` models the contract's `Option<Contribution>` as
+  `*Contribution` (`nil` = never contributed) while `ErrNotFound` and
+  `ErrNotPooled` stay distinguishable, and contract codes 26–34 have named
+  sentinels. `Contribute` and `ClaimRefund` accept the contributor's signer per
+  call. Decoder and argument-XDR tests are offline; the opt-in integration suite
+  runs a failed round with two contributors and two claims. No contract change.
+- 2026-11-23 — Issue #342 (Phase E6): the Go SDK gained `Version`, `IsPaused`,
+  `GetPauseAdmin` and `Solvency` reads and an optional
+  `Config.ContractVersionCheck` (off by default, `Auto` or `Required`) that
+  verifies `version()` against the same `>=2.0.0 <4.0.0` range as the TypeScript
+  SDK before the first write. A deployment without `version()` reports
+  `*VersionUnavailableError`; an out-of-range one reports
+  `*UnsupportedContractVersionError`. New offline tests drive the client through
+  a fake RPC. No contract change; additive Go API.
+- 2026-11-23 — Issue #344 (Phase E6): the Go client now exposes the contract's batch entry
+  points. `CreateEscrows` wraps `create_escrows` and `SettleMany` wraps
+  `settle_many`, both chunking at the contract's measured limits — exported as
+  `MaxBatchSize` = 16 and `MaxSettleOps` = 12, with comments pointing at
+  `contracts/escrow/src/constants.rs` (see ADR 0012). `settle_many`'s
+  `Vec<Result<(), Error>>` decodes into `[]SettleOpResult` in input order: a nil
+  `Err` means the op settled, and a rejection is the contract's typed
+  `*ContractError` with the escrow untouched. A chunk-level failure (a failing
+  payee callback reverting the transaction) is returned as the error while the
+  result keeps the earlier chunks that committed; `CreateEscrows` validates every
+  item before the first transaction. Encoding/decoding tests are offline and the
+  opt-in integration suite covers a two-item create plus a three-op settle with a
+  duplicate that reports `NotFunded`. No contract change.
+- 2026-11-23 — Issue #345 (Phase E6): the Go SDK can now relay settlements.
+  `AuthorizeRelease` / `AuthorizeRefund` sign only the releaser's short-lived auth
+  entry and return a `RelayedAuthorization` in the TypeScript SDK's
+  `RelayedAuthorization.transaction` JSON format, and `SubmitRelayed` has a
+  separate relayer sign the envelope and submit. Expired authorizations
+  (`ErrAuthorizationExpired`), a mismatched settlement, an envelope that is not
+  exactly one `invokeContract` call to this contract, and a submitter that is not
+  the envelope's relayer are all rejected client-side. Tests cover a Go-produced
+  authorization submitted by a second keypair and a TypeScript-shaped fixture. No
+  contract change; additive Go API.
+- 2026-11-23 — Issue #346 (Phase E6): the indexer now applies `pay_xfer`, `rotate`, `top_up`,
+  `accepted`, `contrib` and `claimed`, so an indexed escrow's `payee`,
+  `releasers`, `amount` and `acceptedAt` no longer go stale between lifecycle
+  snapshots. Each handler updates only its own field and appends an `EscrowEvent`;
+  a ledger comparison stops an older event from overwriting a newer snapshot, and
+  events for escrows created before the start ledger are skipped. The indexer
+  also reads the event ledger from SubQuery's resolved block (`ledger.sequence`),
+  which the previous `BigInt(event.ledger)` could not. Mapping unit tests use
+  in-memory entity fakes.
+- 2026-11-23 — Issue #347 (Phase E7): the indexer's `@subql/*` packages and the runner versions
+  in `project.ts` are pinned to exact versions, `package-lock.json` is committed,
+  and `subql codegen` output (`src/types/`, `project.yaml`) is generated in CI
+  rather than committed. Added vitest mapping tests and an `indexer` CI job
+  (codegen + build + tests) that runs only when `indexer/**` changes.
+- 2026-11-23 — Issue #348 (Phase E6): the indexer now reads its network passphrase from
+  `DOCFORUM_NETWORK_PASSPHRASE` (testnet default) and keeps the existing
+  `DOCFORUM_HORIZON_URL` / `DOCFORUM_RPC_URL` overrides. The public passphrase
+  and public-network endpoints (`horizon.stellar.org`, `soroban.stellar.org`,
+  or a host labelled `mainnet`/`pubnet`) are refused unless
+  `DOCFORUM_ALLOW_MAINNET` is exactly `true`, mirroring the SDK's `allowMainnet`
+  guard; surrounding whitespace is trimmed so a padded passphrase cannot slip
+  past the check, and typos in either variable name fall back to testnet.
+  Documented local quickstart configuration in `indexer/README.md`. The network
+  tests run under the indexer's vitest suite. No contract or SDK surface change.
+- 2026-11-23 — Issue #349 (Phase E7): `scripts/verify-deployment` now looks up the contract in
+  `deployments.json` and cross-checks the recorded `wasmHash` against both a
+  fresh source build and the fetched on-chain WASM, reporting all three hashes
+  and failing on any mismatch. It warns when the checkout is not the recorded
+  `gitSha` (even when the record has no hash), accepts
+  `--network testnet|futurenet|local` or `--network=NAME` (testnet default),
+  refuses mainnet, treats a missing `deployments.json` as an unrecorded id, and
+  still verifies an unrecorded id against the build with a warning. README
+  verification instructions are supplied via a `docs.d/` fragment.
+- 2026-11-23 — Issue #47 (Phase E5): added opt-in on-chain idempotency for `(payer,
+  condition_ref)` through `create_escrow_with_uniqueness`. Duplicate retries
+  return `DuplicateConditionRef`; callers recover the original id with
+  `get_unique_escrow`. Existing creation behavior is unchanged when disabled.
+- 2026-11-23 — Issue #60 (Phase E6): added the SDK-owned `Signer` interface with
+  `KeypairSigner` and a small `RemoteSigner` HTTP adapter. Existing `Keypair`
+  and SEP-43 signer call sites remain supported, and the configured network
+  passphrase is forwarded to pluggable signing calls. No contract change.
+- 2026-11-23 — Issue #69 (Phase E6): added the `docforum-escrow-interface` Rust crate with
+  shared escrow lifecycle types, errors and a generated Soroban client, plus a
+  small cross-contract example and focused test. The escrow contract now uses
+  the shared types directly.
+- 2026-11-23 — SDK 0.8.0 -> 0.9.0: add typed linear-vesting stream creation, payee withdrawal, vesting reads, and deterministic `vestedAt`/`timelineOf` helpers (issue #85). No contract or generated-binding change.
+- 2026-11-24 — Issue #350 (Phase E7): pinned third-party GitHub Actions to upstream release
+  commit SHAs with version comments, added Dependabot updates for the pinned
+  actions (one grouped PR a week) and the checker's PyYAML pin (monthly), and
+  added CI enforcement with regression tests. When the check fails it prints
+  how to look up a tag's commit SHA. Workflow permissions were narrowed to the
+  scopes required for checks, releases, attestations and nightly issue
+  reporting.
+- 2026-11-24 — Issue #351 (Phase E7): `contract-v*` and `sdf-v*` releases now carry
+  Sigstore-backed GitHub build-provenance attestations for the WASM (and its
+  SHA-256 file's subject) and for the packed SDK tarball, so
+  `gh attestation verify <file> -R DocForum/docforum-escrow` ties the published
+  bytes to the workflow run that built them. Both release workflows add the
+  attestation step with the pinned `actions/attest-build-provenance` action, and
+  their permissions stay scoped to the single job that needs
+  `id-token: write`/`attestations: write`. The README's verification section is
+  extended by a `docs.d/` fragment.
+- 2026-11-24 — Issue #353 (Phase E7): the nightly testnet soak now covers the whole deployed
+  surface instead of an opt-in part of it. Quorum and cancel no longer need
+  `TESTNET_QUORUM_SUPPORTED`/`TESTNET_HAS_CANCEL`, and new live cases cover a
+  successful and a failed pooled round, a protocol-fee release, a two-op
+  `settleMany`, `isPaused`/`getPauseAdmin` and `transferPayee`. The new cases
+  reuse one funded identity set per run, so Friendbot use stays bounded. Test and
+  CI only: no contract or SDK API change, and the failure classifier still
+  separates a testnet reset from an SDK failure.
+- 2026-11-24 — Issue #354 (Phase E7): `scripts/settle-outcomes.py` now finishes cleanly when
+  part of the approved outcome was already settled by someone else. New optional
+  `--status-cmd` reads each escrow's status before submitting and skips escrows
+  that are no longer `Funded`; `NotFunded` (`Error(Contract, #4)`) submissions are
+  recorded as settled elsewhere rather than retried. The final report separates
+  escrows settled as approved, settled the other way (listed as an `INCIDENT:`
+  signal) and still failed, and a run with only external settlements exits 0. The
+  runbook documents the status command, the new state records and the report. The
+  tool still never chooses an outcome itself.
+- 2026-11-24 — Issue #361 (Phase E4): added `docs/runbooks/emergency-pause.md` covering
+  operational triggers, multisig signing procedures, verification via CLI/SDK,
+  integrator communication, and unpause criteria for the emergency pause.
+  Linked from README, threat model T12, and ROADMAP.md.
+- 2026-11-24 — Issue #362 (Phase E4): added `docs/runbooks/redeploy-cutover.md` covering
+  contract redeployment, verifying new IDs, dual-client integrator patterns,
+  `solvency()` drain monitoring, indexer updates, and rollback procedures per ADR 0005.
+  Linked from README, ADR 0005, and ROADMAP.md.
+- 2026-11-24 — Issue #363 (Phase E6): added `docs/guides/creation-matrix.md` detailing
+  which contract creation entry points support which options (fees, refund_to,
+  notify_payee, acceptance, release_not_before, quorum, uniqueness, batching),
+  with SDK method mappings and workarounds for unsupported combinations.
+  Linked from README and ROADMAP.md.
+- 2026-11-24 — Issue #364 (Phase E7): added contributor checklist for new contract entry
+  points in `CONTRIBUTING.md` and condensed in `.github/PULL_REQUEST_TEMPLATE.md`,
+  linking to authoritative sources for pause checks, liabilities, snapshots,
+  `contract-changes.d`, generated bindings, SDK types, and docs.
+- 2026-11-24 — Issue #366 (Phase E6): the browser demo can now create an escrow with the
+  payee-acceptance gate, show the payee a full review of `getEscrow` before
+  accepting, and call `accept`/`cancel` with the contract's own enablement rules
+  (Accept only for the payee, Cancel only for the payer, both only while
+  `Funded`, acceptance-configured and not yet accepted). The review panel shows
+  the releasers and threshold, `refundAfter`, `refundTo`, the fee and the rest of
+  the escrow record, with T8 notices for a payer-releaser overlap or a refund
+  destination other than the payer. The demo's Vite/TypeScript aliases were
+  updated to the SDK's current `dist/esm` layout, which they had not tracked, so
+  the demo build works again. No contract or SDK surface change.
+- 2026-11-24 — Issue #368 (Phase E6): added `waitForStatus` to `EscrowClient`, which polls
+  `getStatus` until an escrow reaches one of the target statuses. It resolves
+  with `{ escrowId, status }` (a settled escrow's record is reclaimed, so
+  returning the full escrow would fail), rejects with a typed `WaitTimeoutError`
+  carrying the last status seen on timeout or when the escrow settles outside
+  the target set, and accepts an `AbortSignal`. Deadlines are enforced by their
+  own timer, so a large poll interval or a status read still in flight cannot
+  stall the wait, and no timer survives resolution, rejection or abort. New
+  public types `WaitForStatusOptions` and `WaitForStatusResult`, the constant
+  `TERMINAL_ESCROW_STATUSES`, and a README example. No contract change; SDK only.
+- 2026-11-24 — Issue #37 (Phase E5): `EscrowData` now has a versioned storage layout. Every
+  `DataKey::Escrow(id)` entry is written as `StoredEscrow::V<n>` (an explicit
+  version tag, `ESCROW_LAYOUT_VERSION` = 1); readers accept every known layout,
+  including the untagged map that builds before this change wrote (with or
+  without the `attester` field added by issue #42; a map without it reads as
+  `attester: None`), upgrade it in memory, and write the latest version back on the next state change.
+  Read-only calls never rewrite an entry. `StoredEscrow` is storage-only
+  (`#[contracttype(export = false)]`), so the contract spec, the generated SDK
+  bindings and the SDK are unchanged. New tests in
+  `contracts/escrow/tests/storage_layout.rs` store old-layout entries directly
+  and settle them by release and refund. The rule for adding a field is in
+  `ARCHITECTURE_ESSENTIALS.md` (via `docs.d/37-versioned-storage-layout.md`).
+  ADR 0005 is unchanged: the contract is still immutable and a behaviour change
+  still ships as a new contract id.
+- 2026-11-24 — Issue #90 (Phase E7): fixed `testnet-deploy.yml`, which GitHub could not parse
+  (every push to main showed a failed run). The deployment record PR body is now
+  written to a file instead of a multi-line `--body` string, the record branch
+  push authenticates with the job token (checkout keeps
+  `persist-credentials: false`), and the record names the deployed commit rather
+  than the workflow's own ref.
+- 2026-11-25 — Issue #352 (Phase E7): added `.github/workflows/release-react.yml`, a
+  `react-v*`-tagged release workflow for `@docforum/escrow-react` that mirrors
+  the SDK's: it refuses to publish when the tag does not match
+  `packages/escrow-react/package.json`, typechecks, builds and tests the hooks,
+  packs and publishes with npm provenance through trusted publishing, and
+  attaches the tarball to the GitHub Release. Before publishing, a matrix job
+  typechecks and tests against the lowest and highest *published*
+  `@docforum/escrow-sdk` version matching the declared peer range; until the SDK
+  is on npm it falls back to the SDK in the checkout and warns. No contract or
+  SDK surface changed.
+- 2026-11-25 — Issue #355 (Phase E7): generalized reproducible WASM builds for the escrow and
+  releaser-account crates, and publish both binaries, SHA-256 files, and
+  artifact-specific build provenance in `contract-v*` releases. Added README
+  instructions for checking a deployed releaser account. Contract logic and
+  public contract surfaces are unchanged.
+- 2026-11-25 — Issue #356 (Phase E7): added a path-filtered `web-demo` CI job that builds the
+  SDK and React hooks package from this checkout, verifies TypeScript and Vite
+  resolve those local build outputs, then type-checks and production-builds the
+  demo. No public SDK or contract API changed.
+- 2026-11-25 — Issue #367 (Phase E4): documented the `settle_many` denial of service a
+  hostile `notify_payee` payee contract can trigger, with
+  `tests/settle_many.rs::hostile_callback_payee_reverts_a_batch_of_valid_releases`
+  plus tests for the mitigation and for refund ops staying batchable. The rule
+  is to settle `notify_payee` **release** ops one per transaction; refunds never
+  invoke the callback. No contract or SDK surface change, so no
+  `contract-changes.d/` fragment and the generated bindings are unchanged.
+- 2026-11-25 — Issue #468 (Phase E6): the TypeScript SDK now wraps recurring schedules
+  (contract #115, ADR 0015): `createSchedule`, `getSchedule`, `fundNext`,
+  `cancelSchedule` and `approveScheduleAllowance`, plus the pure helpers
+  `scheduleState` (`due | waiting | complete | cancelled`, matching `fund_next`'s
+  check order and `<` comparison against ledger time), `scheduleAllowanceNeeded`,
+  `scheduleAllowanceExpirationLedger` and `remainingPeriods`, in the new
+  `sdk/src/recurring.ts`. `createSchedule` validates offline what
+  `create_schedule` rejects (amount, `InvalidSchedule`, `conditionRef` counted in
+  UTF-8 bytes, the allowlist once read). It also checks the creation rules the
+  contract only applies when `fund_next` creates the first period escrow (payee,
+  releaser and payer not the contract, a positive `refundAfterSeconds`, no
+  `next_due` overflow), so a misconfigured schedule fails before it is recorded.
+  New typed errors for codes 38 and 55–59. No contract change. The opt-in
+  testnet case is skipped by default because the recorded testnet deployment
+  predates #115.
+- 2026-11-25 — Issue #469 (Phase E6): `createEscrow({ unique: true })` makes creation
+  idempotent per `(payer, conditionRef)` through `create_escrow_with_uniqueness`
+  (contract #47). A duplicate at simulation or submission resolves to the
+  existing escrow (`existing: true`, no transaction) after its payee, token and
+  amount are checked against the request, and a mismatch throws
+  `UniqueEscrowMismatchError`. A settled duplicate returns its id and terminal
+  status. New `getUniqueEscrow(payer, conditionRef)`. `unique: false` or an
+  omitted flag sends exactly the same `create_escrow` call as before (the tests
+  compare the encoded arguments). No contract change. The opt-in testnet case is
+  skipped by default because the recorded testnet deployment predates #47.
+- 2026-11-25 — Issue #470 (Phase E6): the TypeScript SDK can create a pooled escrow with a
+  `releaseDeadline` (`create_pooled_release_deadline`, contract #288), and
+  otherwise calls `create_pooled_escrow` exactly as before. `getPooled` decodes
+  `releaseDeadline`, and the new `closeFailedRound(escrowId, { source })` wraps
+  the permissionless `close_failed_round` (#289). The Go SDK's `PooledData` gains
+  `ReleaseDeadline *uint64`, and decoding a deployment without the field still
+  works. No contract change.
+- 2026-11-25 — Issue #471 (Phase E6): the Python SDK (`sdk-python`, 0.2.0) adds
+  `create_escrow_with_acceptance`, `accept`, `cancel`, `top_up` and
+  `transfer_payee`. Each one is authorized by the signer alone, and an explicit
+  actor (`payer=`, `payee=`, `current_payee=`) that isn't the signer raises
+  `InvalidArgumentError` before any request. Arguments follow `contract-spec.json`
+  and contract failures surface as the existing typed `ContractError` subclasses.
+  `transfer_payee` refuses the contract id as the new payee client-side.
+  `extend_refund_after` and `rotate_releaser` need two signatures and stay out of
+  scope. No contract change.
+- 2026-11-25 — Issue #472 (Phase E6): the Python SDK can now create and settle M-of-N
+  releaser quorums. `create_escrow_with_releasers` mirrors the contract's
+  `check_releaser_set` client-side (1–10 distinct releasers, threshold in range,
+  never the contract's own address). `release_with_approvals` /
+  `refund_with_approvals` take `Keypair` approvers, reject empty, duplicate,
+  under-threshold and non-member lists before sending, and sign one bounded
+  Soroban auth entry per approver. The entry-signing loop fails closed: an
+  address-credential entry with no supplied key raises
+  `UnsupportedAuthorizationError` before the envelope is signed. An approver
+  that is also the envelope signer is rewritten to source-account credentials,
+  so no key signs twice. Package minor bump to 0.3.0; no contract change.
+- 2026-11-25 — Issue #474 (Phase E7): pinned the exact authorization trees for the six
+  lifecycle-amendment entry points — `cancel`, `top_up`, `transfer_payee`,
+  `extend_refund_after`, `rotate_releaser` and `rotate_releaser_with_approvals`.
+  Adds `assert_auth_trees` to `tests/common/auth.rs` for multi-signer calls
+  (order-independent) without changing `assert_auth_tree` or its callers. New
+  tests assert each happy-path tree (including `top_up`'s nested token
+  `transfer`), a wrong-signer case, and one missing-signer case per required
+  party; quorum rotation pins a 2-of-3 tree plus the one-approver-short
+  `ThresholdNotMet` case. Tests only: nothing under `contracts/escrow/src/`
+  changed.
+- 2026-11-25 — Issue #475 (Phase E7): documented the ten public entry points missing (plus `get_unique_escrow`, which the new check also found undocumented) from the "Contract surface" block (`create_escrows`, `create_streamed_escrow`, `get_vesting`, `withdraw`, `extend_refund_after`, `rotate_releaser_with_approvals`, `create_pooled_release_deadline`, `close_failed_round`, `next_escrow_id`, `get_escrows`) through `docs.d/475-contract-surface-gaps.md`, and added `scripts/check-surface-docs.mjs`, which fails CI when a function in `contract-spec.json` appears neither in that block nor in a pending `docs.d/` fragment for it. The failure message prints the fragment to add. `__constructor` is exempt (it runs once at deployment and is not a callable entry point; its line is in the block anyway). Docs and tooling only: no contract or SDK change.
+- 2026-11-26 — Contract 3.4.0 (was 3.3.0), folded from 6 change(s):
+  - Issue #288: added `create_pooled_release_deadline` entry point with an optional `release_deadline: Option<u64>` and `InvalidReleaseDeadline` (error 61). Fully funded pooled escrows can be refunded by contributors via `claim_refund` once the release deadline passes without release.
+  - Issue #297: `rotate_releaser` now rejects `new_releaser == current releaser` with `InvalidReleaser` and emits nothing, instead of writing the same data back and publishing a misleading `rotate` event. No interface change: the existing `InvalidReleaser` error is reused and the error precedence is unchanged (a wrong caller still receives `Unauthorized` first).
+  - Issue #37: versioned storage layout for `EscrowData`. `DataKey::Escrow(id)` values are now written as the storage-only enum `StoredEscrow::V1(EscrowData)` (`[Symbol("V1"), map]` on the ledger) instead of a bare `EscrowData` map. Every read goes through one dispatch that accepts each known version and the pre-#37 untagged map (both the field set with `attester` and the older one without it, read as `attester: None`), upgrades in memory, and never writes; every write stores the latest version, so an old entry migrates on its next state change. No entry point, argument, event or error changed, and the contract spec is identical (`StoredEscrow` is `export = false`); the raw ledger encoding of new escrow entries did change, so the committed test snapshots were refreshed.
+  - Issue #47: added `create_escrow_with_uniqueness`, `get_unique_escrow`, and `DuplicateConditionRef` for opt-in `(payer, condition_ref)` idempotency. The existing `create_escrow` entry point remains unchanged; uniqueness indexes are retained through settlement and follow the escrow persistent-storage TTL. The interface snapshot also canonicalizes the existing `get_escrows` argument list by removing a trailing comma; its runtime ABI is unchanged. That normalization is not an interface change, so the release is a minor bump.
+  - Issue #69: the escrow contract now reuses the interface crate's shared `EscrowData`, `EscrowStatus` and `Error` definitions. The exported contract surface and behavior are unchanged.
+  - Issue #8: reject escrow creation when the escrow contract itself is configured as the payee or releaser, preventing funds from being locked without a usable recipient.
+  Final error codes: Error::DuplicateConditionRef 4700 -> 60, Error::InvalidReleaseDeadline 28800 -> 61.
