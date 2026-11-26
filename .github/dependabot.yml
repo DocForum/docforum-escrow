@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # Keeps the SHA-pinned actions current. All action bumps arrive as one
+  # grouped PR per week.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # The pinned PyYAML used by scripts/check_github_action_pins.py.
+  - package-ecosystem: pip
+    directory: /scripts
+    schedule:
+      interval: monthly

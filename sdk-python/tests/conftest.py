@@ -73,11 +73,16 @@ class FakeServer:
     return_value: xdr.SCVal = field(default_factory=scval.to_void)
     failed_events: list[str] = field(default_factory=list)
     add_auth: Any = None
+    latest_ledger: int = 500
     passphrase: str = "Test SDF Network ; September 2015"
     calls: list[tuple[str, Any]] = field(default_factory=list)
 
     def get_network(self) -> Any:
         return SimpleNamespace(passphrase=self.passphrase)
+
+    def get_latest_ledger(self) -> Any:
+        self.calls.append(("latest_ledger", None))
+        return SimpleNamespace(sequence=self.latest_ledger)
 
     def simulate_transaction(self, tx: Any) -> Any:
         self.calls.append(("simulate", tx))
@@ -98,7 +103,8 @@ class FakeServer:
             )
             raise PrepareTransactionException("simulation failed", response)
         if self.add_auth is not None:
-            tx.transaction.operations[0].auth = [self.add_auth]
+            entries = self.add_auth if isinstance(self.add_auth, list) else [self.add_auth]
+            tx.transaction.operations[0].auth = entries
         return tx
 
     def send_transaction(self, tx: Any) -> Any:

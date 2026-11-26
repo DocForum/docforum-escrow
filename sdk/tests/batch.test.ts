@@ -155,6 +155,47 @@ describe("settleMany", () => {
     expect(results[1].txHash).toBe("refund-hash-2");
   });
 
+  it("isolates a failing payee callback to its own release transaction", async () => {
+    // Issue #367: each op is its own transaction, so a payee callback that
+    // fails after the payout cannot revert the other releases.
+    const client = newClient();
+    const calls: bigint[] = [];
+    client.release = vi.fn(async ({ escrowId }: { escrowId: bigint }) => {
+      calls.push(escrowId);
+      if (escrowId === 2n) throw new Error("CallbackFailed");
+      return { txHash: `release-hash-${escrowId}` };
+    }) as never;
+
+    const ops: BatchSettleOperation[] = [1n, 2n, 3n].map((escrowId) => ({
+      escrowId,
+      kind: "release",
+      caller: Keypair.random(),
+    }));
+    let caught: unknown;
+    try {
+      await client.settleMany(ops);
+    } catch (error) {
+      caught = error;
+    }
+
+    // One transaction per op, including the one that hit the callback.
+    expect(calls).toEqual([1n, 2n, 3n]);
+    const failure = caught as BatchPartialFailureError<BatchSettleOperation>;
+    expect(failure).toBeInstanceOf(BatchPartialFailureError);
+    expect(failure.failedIndices).toEqual([1]);
+    expect(failure.results.map((result) => result.ok)).toEqual([true, false, true]);
+    expect(failure.results[1].error).toMatch(/CallbackFailed/);
+
+    // Resuming re-sends only the callback's escrow, never the settled ones.
+    const resumedClient = newClient();
+    resumedClient.release = vi.fn(async ({ escrowId }: { escrowId: bigint }) => ({
+      txHash: `release-hash-${escrowId}`,
+    })) as never;
+    const resumed = await resumedClient.settleMany(ops, { resumeFrom: failure.results });
+    expect(resumedClient.release).toHaveBeenCalledTimes(1);
+    expect(resumed.every((result) => result.ok)).toBe(true);
+  });
+
   it("reports a failing op and resumes without re-settling successes", async () => {
     const client = newClient();
     client.release = vi.fn(async ({ escrowId }: { escrowId: bigint }) => ({
