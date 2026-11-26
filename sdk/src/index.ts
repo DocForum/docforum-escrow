@@ -2154,7 +2154,18 @@ export class EscrowClient {
    * Settles several escrows (`release` or `refund`), chunked to the
    * contract's max batch size and mapped back to the caller's input order.
    * Each operation goes through the existing single-op `release`/`refund`
-   * path, so auth and state rules are unchanged.
+   * path, so auth and state rules are unchanged — and each one is its own
+   * transaction, never one contract `settle_many` invocation.
+   *
+   * That per-op transaction boundary is what keeps a hostile payee callback
+   * (`notifyPayee`) from blocking the rest: a failing `on_escrow_released`
+   * after the payout aborts only that release, which surfaces as one failed
+   * result (`CallbackFailed`) while the other ops settle (issue #367,
+   * docs/adr/0012). Refund ops never invoke the callback.
+   *
+   * Callers that build the contract's `settle_many` call themselves must
+   * isolate `notifyPayee` release ops into single-op batches for the same
+   * reason.
    *
    * A failure never stops later chunks: every operation is attempted, then
    * a `BatchPartialFailureError` carrying all per-op results is thrown if
