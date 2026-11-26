@@ -56,8 +56,13 @@ type Escrow struct {
 	// ReleaseNotBefore is an optional ledger timestamp before which release is
 	// not allowed. nil means no time lock.
 	ReleaseNotBefore *uint64
-	NotifyPayee      bool
-	Status           EscrowStatus
+	// FeeRecipient is the optional protocol-fee recipient, and FeeBps the fee
+	// in basis points (0..1000). Both are set at creation and taken off the
+	// top at release. nil/0 means no fee. Populated from event snapshots.
+	FeeRecipient *string
+	FeeBps       *uint32
+	NotifyPayee  bool
+	Status       EscrowStatus
 	// RequiresAcceptance and AcceptedAt are present in EscrowData in current
 	// contract versions. They are exposed so callers can decode the full
 	// record; older deployments simply leave them zero/nil.
