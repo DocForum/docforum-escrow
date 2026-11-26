@@ -16,16 +16,18 @@ import {
   Networks,
   Transaction,
   TransactionBuilder,
+  nativeToScVal,
   scValToNative,
   xdr,
 } from "@stellar/stellar-sdk";
 import { Api, Server as RpcServer } from "@stellar/stellar-sdk/rpc";
-import type { AssembledTransaction, Result, SentTransaction } from "@stellar/stellar-sdk/contract";
+import { AssembledTransaction, type Result, type SentTransaction } from "@stellar/stellar-sdk/contract";
 import {
   Client as EscrowContractClient,
   type EscrowData as GeneratedEscrowData,
   type EscrowStatus as GeneratedEscrowStatus,
   type PooledData as GeneratedPooledData,
+  type RecurringSchedule as GeneratedRecurringSchedule,
   type Contribution as GeneratedContribution,
   type VestingInfo as GeneratedVestingInfo,
 } from "./generated/contract-client.js";
@@ -39,7 +41,7 @@ import {
 } from "./instrumentation.js";
 import type { FactoryClient as FactoryClientType } from "./factory.js";
 import { contractSigner, signerAddress, type EscrowSigner } from "./signers/types.js";
-import { ContractError, NetworkMismatchError, NotFundedError, toEscrowError } from "./errors.js";
+import { ContractError, NetworkMismatchError, NotFoundError, NotFundedError, UniqueEscrowMismatchError, WaitTimeoutError, toEscrowError } from "./errors.js";
 import { getTokenInfo as readTokenInfo, rpcTokenInfoSource, type TokenInfo } from "./amounts.js";
 import {
   PreparedTransactionExpiredError,
@@ -89,18 +91,28 @@ export {
   type SignerOptions,
 } from "./signers/types.js";
 export {
+  AllowanceExhaustedError,
   BalanceMismatchError,
   ContractError,
+  DuplicateConditionRefError,
   EscrowError,
   InvalidAmountContractError,
   InvalidRefundAfterError,
+  InvalidReleaseDeadlineError,
+  InvalidScheduleError,
   NetworkMismatchError,
   NotFoundError,
   NotFundedError,
+  PausedError,
   RequestTimeoutError,
+  ScheduleCancelledError,
+  ScheduleCompleteError,
+  ScheduleTooEarlyError,
   SimulationFailure,
   SubmissionFailure,
   UnauthorizedError,
+  UniqueEscrowMismatchError,
+  WaitTimeoutError,
   contractErrorName,
   toEscrowError,
 } from "./errors.js";
@@ -178,6 +190,7 @@ export * from "./networks.js";
 export * from "./pooled.js";
 export * from "./preflight.js";
 export * from "./prepare-submit.js";
+export * from "./recurring.js";
 export * from "./relayed-auth.js";
 export * from "./rpc-providers.js";
 export * from "./solvency.js";
@@ -187,19 +200,20 @@ import { type ArchivedEntryBehavior } from "./archived-entries.js";
 import { type BatchCreateItem, type BatchItemResult, type BatchOptions, BatchPartialFailureError, type BatchSettleOperation, MAX_BATCH_SIZE } from "./batch.js";
 import { type EscrowClientConfig } from "./client-config.js";
 import { UnsupportedContractVersionError, isSupportedContractVersion } from "./contract-version.js";
-import { type CancelParams, type CreateEscrowParams, type CreateQuorumEscrowParams, type Escrow, type EscrowStatus, type ExtendRefundAfterParams, MAX_CONDITION_REF_LENGTH, MAX_FEE_BPS, MAX_RELEASERS, type ReleaseOrRefundParams, type SettlementApprovalsParams } from "./escrow-types.js";
+import { type CancelParams, type CreatedEscrow, type CreateEscrowParams, type CreateQuorumEscrowParams, type Escrow, type EscrowStatus, type ExtendRefundAfterParams, MAX_CONDITION_REF_LENGTH, MAX_FEE_BPS, MAX_RELEASERS, type ReleaseOrRefundParams, type SettlementApprovalsParams, TERMINAL_ESCROW_STATUSES, type UniqueCreateEscrowParams, type UniqueCreateEscrowResult } from "./escrow-types.js";
 import { type EscrowEvent, type EscrowEventType, EventCursorExpiredError, type GetEventsParams, type GetEventsResult, type SubscribeOptions } from "./events.js";
 import { type EstimateCallParams, type FeeBumpOptions, type FeeBumpResult, type FeeEstimate, type GuardResult, MaxFeeExceededError, SponsorshipGuardError, computeFeeEstimate } from "./fees.js";
-import { EMPTY_SPAN_ATTRIBUTES, MISSING_FUNCTION_ERROR, TESTNET_NETWORK_PASSPHRASE, TESTNET_RPC_URL, assertLedgerWindow, assertPositiveAmount, batchErrorMessage, contractAddressOf, isRetentionError, lifecycleCallSigner, safeScValToNative, sendErrorName, trancheOf } from "./internal.js";
+import { EMPTY_SPAN_ATTRIBUTES, MISSING_FUNCTION_ERROR, TESTNET_NETWORK_PASSPHRASE, TESTNET_RPC_URL, U32_MAX, U64_MAX, abortReason, assertLedgerWindow, assertPositiveAmount, batchErrorMessage, contractAddressOf, isContractError, isRetentionError, lifecycleCallSigner, safeScValToNative, sendErrorName, trancheOf, utf8ByteLength } from "./internal.js";
 import { LedgerClock, type LedgerTime, type LedgerTimeOptions, type LatestLedger } from "./ledger-time.js";
-import { type AcceptParams, type EscrowPreconditionCode, EscrowPreconditionError, type LifecycleCall, type LifecycleMethod, PREPARED_AUTH_TTL_LEDGERS, type PrepareLifecycleParams, type PreparedLifecycleCall, type TopUpParams, type TransferPayeeParams } from "./lifecycle.js";
+import { type AcceptParams, DEFAULT_WAIT_POLL_INTERVAL_MS, type EscrowPreconditionCode, EscrowPreconditionError, type LifecycleCall, type LifecycleMethod, PREPARED_AUTH_TTL_LEDGERS, type PrepareLifecycleParams, type PreparedLifecycleCall, type TopUpParams, type TransferPayeeParams, type WaitForStatusOptions, type WaitForStatusResult } from "./lifecycle.js";
 import { type CreateStreamedEscrowParams, type VestingInfo, type WithdrawParams, validateVestingSchedule } from "./vesting.js";
 import { type CreateMilestoneEscrowParams, type Milestone, type MilestoneEscrow, MilestoneEscrowPartialError, type RefundMilestoneParams, type ReleaseMilestoneParams, milestoneConditionRef, validateMilestoneSchedule } from "./milestones.js";
 import { MAINNET_NETWORK_PASSPHRASE, MainnetNotAllowedError } from "./networks.js";
-import { type ClaimRefundParams, type ContributeParams, type ContributionRecord, type CreatePooledEscrowParams, type PooledEscrow, type SolvencyReport } from "./pooled.js";
+import { type ClaimRefundParams, type CloseFailedRoundOptions, type ContributeParams, type ContributionRecord, type CreatePooledEscrowParams, type PooledEscrow, type SolvencyReport } from "./pooled.js";
 import { canRefund as evaluateRefund, canRelease as evaluateRelease, type SettlementCheck, type SettlementCheckParams } from "./preflight.js";
 import { DEFAULT_SUBMIT_MAX_FEE, OFFLINE_PREPARED_TX_TTL_LEDGERS, PREPARED_TX_TTL_LEDGERS, type PrepareCreateEscrowParams, type PrepareSettlementParams, type SubmitSignedOptions, type SubmitSignedResult } from "./prepare-submit.js";
 import { RELAYED_AUTH_TTL_LEDGERS, type RelayedAuthorization, type RelayedAuthorizationParams } from "./relayed-auth.js";
+import { type ApproveScheduleAllowanceParams, type CancelScheduleParams, type CreateScheduleParams, type FundNextOptions, type RecurringSchedule, ScheduleParamsError } from "./recurring.js";
 import { RpcProviderPool } from "./rpc-providers.js";
 
 /** Contract `Error::NotPooled` code (`contracts/escrow/src/errors.rs`). */
@@ -208,6 +222,26 @@ const NOT_POOLED_CODE = 26;
 /** A settlement caller can be a signer or an already-known address. */
 function settlementAddress(caller: EscrowSigner | string): string {
   return typeof caller === "string" ? caller : signerAddress(caller);
+}
+
+/**
+ * `create_escrow_with_uniqueness` is a single-releaser entry point with no
+ * acceptance gate, release time or releaser set (contracts/escrow/src/create.rs),
+ * so `unique` can't express those options. Throws before anything is sent.
+ */
+function assertUniqueCreatable(params: UniqueCreateEscrowParams): void {
+  const unsupported: string[] = [];
+  if (params.requiresAcceptance) unsupported.push("requiresAcceptance");
+  if (params.releaseNotBefore !== undefined) unsupported.push("releaseNotBefore");
+  // Quorum options belong to createQuorumEscrow; reject them if smuggled in.
+  const extra = params as unknown as Record<string, unknown>;
+  for (const key of ["releasers", "threshold"]) if (extra[key] !== undefined) unsupported.push(key);
+  if (unsupported.length > 0) {
+    throw new TypeError(
+      `unique cannot be combined with ${unsupported.join(", ")}: create_escrow_with_uniqueness`
+        + " is single-releaser with no acceptance gate or release time.",
+    );
+  }
 }
 
 /**
@@ -238,6 +272,8 @@ export class EscrowClient {
   private contractVersionChecked = false;
   /** Cached ledger-clock reads behind `getLedgerTime` (issue #335). */
   private readonly ledgerClock: LedgerClock;
+  /** The deploy-time token allowlist once read; immutable, so safe to cache. */
+  private knownAllowedTokens?: readonly string[];
 
   constructor(config: EscrowClientConfig) {
     this.contractId = config.contractId;
@@ -517,8 +553,20 @@ export class EscrowClient {
     }
   }
 
-  /** Locks `amount` of `token` from `payer`, held for `payee`. Returns the new escrow's id and the funding transaction's hash. */
-  async createEscrow(params: CreateEscrowParams): Promise<{ escrowId: bigint; txHash: string }> {
+  /**
+   * Locks `amount` of `token` from `payer`, held for `payee`. Returns the new
+   * escrow's id and the funding transaction's hash.
+   *
+   * With `unique: true` (issue #469) creation is idempotent per `(payer,
+   * conditionRef)`: a retry returns the existing escrow with `existing: true`
+   * and no transaction. See {@link UniqueCreateEscrowResult}.
+   */
+  createEscrow(params: UniqueCreateEscrowParams): Promise<UniqueCreateEscrowResult>;
+  createEscrow(params: CreateEscrowParams): Promise<CreatedEscrow>;
+  async createEscrow(
+    params: CreateEscrowParams | UniqueCreateEscrowParams,
+  ): Promise<CreatedEscrow | UniqueCreateEscrowResult> {
+    if (params.unique === true) assertUniqueCreatable(params);
     if (params.amount <= 0n) {
       throw new Error(`InvalidAmount (error 2): amount must be a positive raw amount, got ${params.amount}`);
     }
@@ -572,6 +620,7 @@ export class EscrowClient {
     if (params.requiresAcceptance && (params.notifyPayee || params.releaseNotBefore !== undefined)) {
       throw new Error("requiresAcceptance cannot be combined with notifyPayee or releaseNotBefore.");
     }
+    if (params.unique === true) return this.createUniqueEscrow(params, client, createParams);
     const sent = await this.invoke(
       "create_escrow",
       undefined,
@@ -596,6 +645,85 @@ export class EscrowClient {
       { address: signerAddress(params.payer) },
     );
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * The `unique: true` path of `createEscrow`: `create_escrow_with_uniqueness`
+   * with `create_escrow`'s exact arguments plus `unique_ref: true`. A
+   * `DuplicateConditionRef` at simulation or at submission (for example a
+   * resubmitted transaction that already landed) resolves to the existing
+   * escrow instead of an error.
+   */
+  private async createUniqueEscrow(
+    params: UniqueCreateEscrowParams,
+    client: EscrowContractClient,
+    createParams: Parameters<EscrowContractClient["create_escrow"]>[0],
+  ): Promise<UniqueCreateEscrowResult> {
+    try {
+      const sent = await this.invoke(
+        "create_escrow_with_uniqueness",
+        undefined,
+        () => client.create_escrow_with_uniqueness({ ...createParams, unique_ref: true }),
+        { address: createParams.payer },
+      );
+      return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash, existing: false };
+    } catch (error) {
+      if (!isContractError(error, "DuplicateConditionRef")) throw error;
+      return this.recoverUniqueEscrow(params, createParams.payer, error);
+    }
+  }
+
+  /** Resolves a `DuplicateConditionRef` to the existing escrow, checking its terms while readable. */
+  private async recoverUniqueEscrow(
+    params: UniqueCreateEscrowParams,
+    payer: string,
+    cause: unknown,
+  ): Promise<UniqueCreateEscrowResult> {
+    const escrowId = await this.getUniqueEscrow(payer, params.conditionRef);
+    // The contract reported a duplicate but the index read found none: surface
+    // the contract's own error rather than invent an id.
+    if (escrowId === undefined) throw toEscrowError(cause);
+    let stored: Escrow;
+    try {
+      stored = await this.getEscrow(escrowId);
+    } catch (error) {
+      // Settled: the record is reclaimed (docs/adr/0013) and get_escrow answers
+      // NotFunded, but the uniqueness index survives. Report the id and its
+      // terminal status; the terms can no longer be checked.
+      if (error instanceof NotFundedError || error instanceof NotFoundError) {
+        return { escrowId, txHash: undefined, existing: true, status: await this.getStatus(escrowId) };
+      }
+      throw error;
+    }
+    const expected = { payee: params.payee, token: params.token, amount: params.amount };
+    const actual = { payee: stored.payee, token: stored.token, amount: stored.amount };
+    if (expected.payee !== actual.payee || expected.token !== actual.token || expected.amount !== actual.amount) {
+      throw new UniqueEscrowMismatchError(escrowId, expected, actual, { cause });
+    }
+    return { escrowId, txHash: undefined, existing: true, status: stored.status };
+  }
+
+  /**
+   * Read-only: the escrow id indexed for `(payer, conditionRef)` by a
+   * `unique: true` creation (issue #469, contract `get_unique_escrow`), or
+   * `undefined` if there is none. The index is per payer, and it survives
+   * settlement, so the id may belong to an escrow that has since settled (use
+   * `getStatus`). Escrows created without `unique` are never indexed.
+   */
+  async getUniqueEscrow(payer: EscrowSigner | string, conditionRef: string): Promise<bigint | undefined> {
+    await this.ensureNetworkVerified();
+    const client = this.contractClient();
+    try {
+      const tx = await tracePhase(
+        this.instrumentation,
+        "simulate",
+        this.spanAttributesIfEnabled("get_unique_escrow"),
+        () => client.get_unique_escrow({ payer: settlementAddress(payer), condition_ref: conditionRef }),
+      );
+      return tx.result ?? undefined;
+    } catch (error) {
+      throw toEscrowError(error);
+    }
   }
 
   /** Creates a fixed-total linear vesting stream with an optional cliff. */
@@ -701,6 +829,7 @@ export class EscrowClient {
         this.spanAttributesIfEnabled("get_allowed_tokens"),
         () => client.get_allowed_tokens(),
       );
+      this.knownAllowedTokens = [...tx.result];
       return tx.result;
     } catch (error) {
       throw toEscrowError(error);
@@ -794,6 +923,100 @@ export class EscrowClient {
       { address: signerAddress(params.payer) },
     );
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Waits for `escrowId` to reach one of `targetStatuses`, polling `getStatus`
+   * until it does. Resolves with `{ escrowId, status }` rather than a full
+   * escrow, because a settled escrow's record is reclaimed (docs/adr/0013).
+   *
+   * Rejects with {@link WaitTimeoutError} when `timeoutMs` elapses, and also
+   * when the escrow settles on a terminal status outside the target set (for
+   * example, waiting for `Released` but the escrow was `Refunded`) — in both
+   * cases `lastStatus` is what was last observed. An unknown `escrowId`
+   * rejects with the same `NotFoundError` `getStatus` raises. Aborting via
+   * `signal` rejects with the signal's `reason` (an `AbortError` by default).
+   *
+   * No timer or poll survives resolution, rejection or abort.
+   *
+   * @param escrowId The escrow to watch.
+   * @param targetStatuses The statuses that resolve the wait; must not be empty.
+   * @param options Deadline, poll interval and cancellation signal.
+   */
+  async waitForStatus(
+    escrowId: bigint,
+    targetStatuses: ReadonlyArray<EscrowStatus>,
+    options: WaitForStatusOptions,
+  ): Promise<WaitForStatusResult> {
+    const { timeoutMs, signal } = options;
+    const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_WAIT_POLL_INTERVAL_MS;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      throw new RangeError("timeoutMs must be a positive number of milliseconds.");
+    }
+    if (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 1) {
+      throw new RangeError("pollIntervalMs must be at least 1.");
+    }
+    if (targetStatuses.length === 0) throw new RangeError("targetStatuses must name at least one status.");
+    if (signal?.aborted) throw abortReason(signal);
+
+    const targets = new Set(targetStatuses);
+    return new Promise<WaitForStatusResult>((resolve, reject) => {
+      let lastStatus: EscrowStatus | undefined;
+      let settled = false;
+      let pollTimer: ReturnType<typeof setTimeout> | undefined;
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+
+      // Every settle path runs cleanup, so no timer or abort listener outlives the wait.
+      const settle = (complete: () => void): void => {
+        if (settled) return;
+        settled = true;
+        if (pollTimer !== undefined) clearTimeout(pollTimer);
+        if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+        pollTimer = deadlineTimer = undefined;
+        signal?.removeEventListener("abort", onAbort);
+        complete();
+      };
+      const fail = (error: unknown): void => settle(() => reject(error));
+      const timeoutError = (message: string): WaitTimeoutError =>
+        new WaitTimeoutError(message, lastStatus, [...targetStatuses]);
+      // A read already in flight when this fires must not schedule another poll.
+      function onAbort(): void { if (signal) fail(abortReason(signal)); }
+
+      deadlineTimer = setTimeout(() => {
+        fail(timeoutError(
+          `waitForStatus for escrow ${escrowId} timed out after ${timeoutMs}ms`
+          + ` (last status: ${lastStatus ?? "none observed"}).`,
+        ));
+      }, timeoutMs);
+      signal?.addEventListener("abort", onAbort, { once: true });
+
+      const poll = async (): Promise<void> => {
+        pollTimer = undefined;
+        if (settled) return;
+        let status: EscrowStatus;
+        try {
+          status = await this.getStatus(escrowId);
+        } catch (error) {
+          fail(error);
+          return;
+        }
+        if (settled) return;
+        lastStatus = status;
+        if (targets.has(status)) {
+          settle(() => resolve({ escrowId, status }));
+          return;
+        }
+        if (TERMINAL_ESCROW_STATUSES.has(status)) {
+          fail(timeoutError(
+            `Escrow ${escrowId} settled as ${status}, outside the target set`
+            + ` (${[...targets].join(", ")}).`,
+          ));
+          return;
+        }
+        pollTimer = setTimeout(() => { void poll(); }, pollIntervalMs);
+      };
+      void poll();
+    });
   }
 
   /**
@@ -1338,6 +1561,230 @@ export class EscrowClient {
   }
 
   /**
+   * Records a recurring funding schedule (contract `create_schedule`, issue
+   * #115 / ADR 0015; SDK issue #468). Nothing is funded here: grant the escrow
+   * contract an allowance with {@link approveScheduleAllowance} (or the
+   * token's own `approve`), then a keeper calls {@link fundNext} each period.
+   * Returns the new schedule's id and the transaction's hash.
+   *
+   * Validated before any transaction is built (`ScheduleParamsError`, named
+   * after the contract error), in `create_schedule`'s order: `amount > 0`
+   * (`InvalidAmount`), `periodSeconds > 0` and `totalPeriods > 0`
+   * (`InvalidSchedule`), `conditionRef` ≤ 64 UTF-8 bytes
+   * (`ConditionRefTooLong`), and the token allowlist when this client has
+   * already read it via `getAllowedTokens` (`DisallowedToken`). It also runs
+   * the creation rules the contract only applies when `fund_next` creates the
+   * first period escrow, so a misconfigured schedule fails now rather than
+   * at its first funding: `payee` is not the contract (`InvalidPayeeList`),
+   * `releaser` is not the contract (`InvalidReleaser`), the payer — every
+   * period's refund destination — is not the contract (`InvalidRefundTo`),
+   * `refundAfterSeconds` is positive when given (`InvalidRefundAfter`), and
+   * the last `nextDue` fits in a `u64` (`Overflow`). The pause flag is left to
+   * the contract (`Paused`).
+   */
+  async createSchedule(params: CreateScheduleParams): Promise<{ scheduleId: bigint; txHash: string }> {
+    this.validateSchedule(params);
+    const payer = signerAddress(params.payer);
+    const client = this.contractClient(params.payer);
+    const sent = await this.invoke(
+      "create_schedule",
+      undefined,
+      () =>
+        client.create_schedule({
+          payer,
+          payee: params.payee,
+          token: params.token,
+          amount: params.amount,
+          condition_ref: params.conditionRef,
+          releaser: params.releaser,
+          refund_after_seconds: params.refundAfterSeconds,
+          period_seconds: params.periodSeconds,
+          total_periods: params.totalPeriods,
+          first_due: params.firstDue,
+        }),
+      { address: payer },
+    );
+    return { scheduleId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /** Client-side mirror of `create_schedule` plus the `fund_next`-time creation rules. */
+  private validateSchedule(params: CreateScheduleParams): void {
+    const fail = (contractError: string, message: string): never => {
+      throw new ScheduleParamsError(contractError, message);
+    };
+    const u64 = (name: string, value: bigint): void => {
+      if (value < 0n || value > U64_MAX) fail("InvalidSchedule", `${name} must fit in a u64, got ${value}.`);
+    };
+    // create_schedule, in order (Paused is the contract's call).
+    if (params.amount <= 0n) fail("InvalidAmount", `amount must be a positive raw amount, got ${params.amount}.`);
+    u64("periodSeconds", params.periodSeconds);
+    u64("firstDue", params.firstDue);
+    if (!Number.isInteger(params.totalPeriods) || params.totalPeriods < 0 || params.totalPeriods > U32_MAX) {
+      fail("InvalidSchedule", `totalPeriods must be a whole number that fits in a u32, got ${params.totalPeriods}.`);
+    }
+    if (params.periodSeconds === 0n || params.totalPeriods === 0) {
+      fail("InvalidSchedule", "periodSeconds and totalPeriods must both be positive.");
+    }
+    const conditionRefBytes = utf8ByteLength(params.conditionRef);
+    if (conditionRefBytes > MAX_CONDITION_REF_LENGTH) {
+      fail("ConditionRefTooLong", `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} UTF-8 bytes, got ${conditionRefBytes}.`);
+    }
+    if (this.knownAllowedTokens && this.knownAllowedTokens.length > 0 && !this.knownAllowedTokens.includes(params.token)) {
+      fail("DisallowedToken", `token ${params.token} is not on this deployment's allowlist.`);
+    }
+    // Rules create_escrow_with_payees_inner applies when fund_next creates a
+    // period escrow (single payee, single releaser, refund_to = payer, no fee).
+    if (params.payee === this.contractId) fail("InvalidPayeeList", "payee must not be the escrow contract's own address.");
+    if (params.refundAfterSeconds !== undefined) {
+      u64("refundAfterSeconds", params.refundAfterSeconds);
+      if (params.refundAfterSeconds === 0n) {
+        fail("InvalidRefundAfter", "refundAfterSeconds must be positive: each period's refundAfter is its funding time plus this window, and must be in the future.");
+      }
+    }
+    if (params.releaser === this.contractId) fail("InvalidReleaser", "releaser must not be the escrow contract's own address.");
+    if (signerAddress(params.payer) === this.contractId) {
+      fail("InvalidRefundTo", "payer (every period's refund destination) must not be the escrow contract's own address.");
+    }
+    // fund_next advances next_due by period_seconds after every period,
+    // including the last; an overflow there would abort that funding.
+    if (params.firstDue + params.periodSeconds * BigInt(params.totalPeriods) > U64_MAX) {
+      fail("Overflow", "firstDue + periodSeconds × totalPeriods must fit in a u64.");
+    }
+  }
+
+  /**
+   * Read-only: a recurring schedule's stored record (contract `get_schedule`).
+   * Feed it to {@link scheduleState} with `(await getLedgerTime()).closeTime`
+   * to see whether a period is due, and to {@link scheduleAllowanceNeeded}
+   * for the allowance it still needs. Throws `NotFoundError` for an unknown id.
+   */
+  async getSchedule(scheduleId: bigint): Promise<RecurringSchedule> {
+    await this.ensureNetworkVerified();
+    const client = this.contractClient();
+    let data: GeneratedRecurringSchedule;
+    try {
+      const tx = await tracePhase(
+        this.instrumentation,
+        "simulate",
+        this.spanAttributesIfEnabled("get_schedule"),
+        () => client.get_schedule({ schedule_id: scheduleId }),
+      );
+      data = tx.result.unwrap();
+    } catch (error) {
+      throw toEscrowError(error);
+    }
+    return {
+      payer: data.payer,
+      payee: data.payee,
+      token: data.token,
+      amount: data.amount,
+      conditionRef: data.condition_ref,
+      releaser: data.releaser,
+      refundAfterSeconds: data.refund_after_seconds ?? undefined,
+      periodSeconds: data.period_seconds,
+      totalPeriods: data.total_periods,
+      periodsFunded: data.periods_funded,
+      nextDue: data.next_due,
+      cancelled: data.cancelled,
+    };
+  }
+
+  /**
+   * Funds the next due period of a schedule (contract `fund_next`) and returns
+   * the new period escrow's id. Anyone may call it: `source` only pays the
+   * fee, and the payer's allowance to the escrow contract is the
+   * authorization, so no payer signature is needed.
+   *
+   * Exactly one period is funded per call. A late keeper leaves the next
+   * period due immediately (`nextDue` advances by one `periodSeconds`), so
+   * check {@link scheduleState} again and call once more. The period escrow's
+   * `refundAfter` is the funding ledger time plus `refundAfterSeconds`.
+   *
+   * Typed failures: `ScheduleTooEarlyError`, `ScheduleCompleteError`,
+   * `ScheduleCancelledError`, `AllowanceExhaustedError` (allowance too small
+   * or expired: the payer must re-`approve`), `PausedError` (the contract is
+   * paused; not transient, so don't retry until it is unpaused) and
+   * `NotFoundError`. The SDK never retries any of them.
+   */
+  async fundNext(scheduleId: bigint, options: FundNextOptions): Promise<{ escrowId: bigint; txHash: string }> {
+    const client = this.contractClient(options.source);
+    const sent = await this.invoke(
+      "fund_next",
+      undefined,
+      () => client.fund_next({ schedule_id: scheduleId }),
+      { address: signerAddress(options.source) },
+    );
+    return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Cancels a schedule (contract `cancel_schedule`). Only the schedule's payer,
+   * who signs. Period escrows already funded are independent and unaffected.
+   * The allowance is not touched: shrink or revoke it with
+   * {@link approveScheduleAllowance} if no other schedule needs it.
+   * Fails with `UnauthorizedError`, `ScheduleCancelledError` or
+   * `NotFoundError`. Returns the transaction's hash.
+   */
+  async cancelSchedule(params: CancelScheduleParams): Promise<{ txHash: string }> {
+    const payer = signerAddress(params.payer);
+    const client = this.contractClient(params.payer);
+    const sent = await this.invoke(
+      "cancel_schedule",
+      undefined,
+      () => client.cancel_schedule({ schedule_id: params.scheduleId, payer }),
+      { address: payer },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Grants the escrow contract a SEP-41 allowance over the payer's `token`
+   * by calling the token's `approve(from = payer, spender = this escrow
+   * contract, amount, expiration_ledger)`. `fund_next` pulls each period with
+   * `transfer_from` under this allowance; if it is too small or has expired,
+   * funding fails with `AllowanceExhausted` and the payee's period doesn't
+   * arrive.
+   *
+   * **The allowance is per payer and per contract (and token), not per
+   * schedule**: every schedule this payer has on this escrow contract in this
+   * token draws on it, and `approve` replaces the previous value rather than
+   * adding to it. Size `amount` as the sum of {@link scheduleAllowanceNeeded}
+   * over all of them, and pick `expirationLedger` with
+   * {@link scheduleAllowanceExpirationLedger}. Returns the transaction's hash.
+   */
+  async approveScheduleAllowance(params: ApproveScheduleAllowanceParams): Promise<{ txHash: string }> {
+    if (params.amount < 0n) throw new RangeError(`amount must not be negative, got ${params.amount}.`);
+    if (!Number.isInteger(params.expirationLedger) || params.expirationLedger < 0 || params.expirationLedger > U32_MAX) {
+      throw new RangeError(`expirationLedger must be a ledger sequence (u32), got ${params.expirationLedger}.`);
+    }
+    const payer = signerAddress(params.payer);
+    const sent = await this.invoke(
+      "approve",
+      undefined,
+      () =>
+        AssembledTransaction.build<null>({
+          contractId: params.token,
+          method: "approve",
+          args: [
+            new Address(payer).toScVal(),
+            new Address(this.contractId).toScVal(),
+            nativeToScVal(params.amount, { type: "i128" }),
+            nativeToScVal(params.expirationLedger, { type: "u32" }),
+          ],
+          parseResultXdr: () => null,
+          rpcUrl: this.rpcUrl,
+          networkPassphrase: this.networkPassphrase,
+          allowHttp: this.allowHttp,
+          publicKey: payer,
+          signTransaction: contractSigner(params.payer, this.networkPassphrase),
+        }),
+      { address: payer },
+    );
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
    * Creates a pooled escrow (issue #113, docs/adr/0011): one agreement
    * that many payers fund with `contribute`. Creation moves no tokens —
    * the pool starts at 0 and grows to `fundingTarget`. Release becomes
@@ -1363,21 +1810,30 @@ export class EscrowClient {
         `InvalidFundingDeadline (error 34): fundingDeadline must be a positive unix timestamp in seconds, got ${params.fundingDeadline}`
       );
     }
+    if (params.releaseDeadline !== undefined && params.releaseDeadline <= params.fundingDeadline) {
+      throw new Error(
+        `InvalidReleaseDeadline: releaseDeadline (${params.releaseDeadline}) must be strictly after fundingDeadline (${params.fundingDeadline}).`
+      );
+    }
     const client = this.contractClient(params.creator);
+    const createArgs = {
+      creator: signerAddress(params.creator),
+      payee: params.payee,
+      token: params.token,
+      funding_target: params.fundingTarget,
+      condition_ref: params.conditionRef,
+      releaser: params.releaser,
+      funding_deadline: params.fundingDeadline,
+    };
+    const releaseDeadline = params.releaseDeadline;
     const sent = await this.invoke(
-      "create_pooled_escrow",
+      releaseDeadline === undefined ? "create_pooled_escrow" : "create_pooled_release_deadline",
       undefined,
       () =>
-        client.create_pooled_escrow({
-          creator: signerAddress(params.creator),
-          payee: params.payee,
-          token: params.token,
-          funding_target: params.fundingTarget,
-          condition_ref: params.conditionRef,
-          releaser: params.releaser,
-          funding_deadline: params.fundingDeadline,
-        }),
-      { address: signerAddress(params.creator) },
+        releaseDeadline === undefined
+          ? client.create_pooled_escrow(createArgs)
+          : client.create_pooled_release_deadline({ ...createArgs, release_deadline: releaseDeadline }),
+      { address: createArgs.creator },
     );
     return { escrowId: sent.result.unwrap(), txHash: sent.sendTransactionResponse!.hash };
   }
@@ -1450,11 +1906,49 @@ export class EscrowClient {
       this.spanAttributesIfEnabled("get_pooled", escrowId),
       () => client.get_pooled({ escrow_id: escrowId }),
     );
-    const data: GeneratedPooledData = tx.result.unwrap();
+    let data: GeneratedPooledData;
+    try {
+      data = tx.result.unwrap();
+    } catch (error) {
+      // A deployment that predates `release_deadline` (issue #288) returns a
+      // two-field map the positional decoder can't read; decode it by name.
+      const retval = tx.simulationData?.result?.retval;
+      if (retval?.switch().name !== "scvMap") throw error;
+      const fields = scValToNative(retval) as Record<string, unknown>;
+      return {
+        fundingTarget: BigInt(fields.funding_target as bigint),
+        fundingDeadline: BigInt(fields.funding_deadline as bigint),
+        releaseDeadline: fields.release_deadline == null ? undefined : BigInt(fields.release_deadline as bigint),
+      };
+    }
     return {
       fundingTarget: data.funding_target,
       fundingDeadline: data.funding_deadline,
+      releaseDeadline: data.release_deadline ?? undefined,
     };
+  }
+
+  /**
+   * Gives an empty failed pooled round its terminal `Refunded` status
+   * (contract `close_failed_round`, issue #289). Permissionless: `source`
+   * only pays the fee. Preconditions, in the contract's order: the escrow is
+   * pooled and still `Funded`; its `fundingDeadline` has passed (else
+   * `RefundNotOpen`); the target was not reached (else
+   * `FundingTargetReached`); and **nothing was contributed** (else
+   * `RefundNotOpen`). A round with contributions is not stuck: it closes on
+   * its last contributor's `claimRefund`, so `RefundNotOpen` there is
+   * expected, not a bug. Returns the transaction's hash.
+   */
+  async closeFailedRound(escrowId: bigint, options: CloseFailedRoundOptions): Promise<{ txHash: string }> {
+    const client = this.contractClient(options.source);
+    const sent = await this.invoke(
+      "close_failed_round",
+      escrowId,
+      () => client.close_failed_round({ escrow_id: escrowId }),
+      { address: signerAddress(options.source) },
+    );
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
   }
 
   /**
@@ -1648,7 +2142,18 @@ export class EscrowClient {
    * Settles several escrows (`release` or `refund`), chunked to the
    * contract's max batch size and mapped back to the caller's input order.
    * Each operation goes through the existing single-op `release`/`refund`
-   * path, so auth and state rules are unchanged.
+   * path, so auth and state rules are unchanged — and each one is its own
+   * transaction, never one contract `settle_many` invocation.
+   *
+   * That per-op transaction boundary is what keeps a hostile payee callback
+   * (`notifyPayee`) from blocking the rest: a failing `on_escrow_released`
+   * after the payout aborts only that release, which surfaces as one failed
+   * result (`CallbackFailed`) while the other ops settle (issue #367,
+   * docs/adr/0012). Refund ops never invoke the callback.
+   *
+   * Callers that build the contract's `settle_many` call themselves must
+   * isolate `notifyPayee` release ops into single-op batches for the same
+   * reason.
    *
    * A failure never stops later chunks: every operation is attempted, then
    * a `BatchPartialFailureError` carrying all per-op results is thrown if

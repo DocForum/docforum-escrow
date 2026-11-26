@@ -257,9 +257,7 @@ impl EscrowContract {
         }
         let accepted_at = env.ledger().timestamp();
         data.accepted_at = Some(accepted_at);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &data);
+        Self::write_escrow(&env, escrow_id, &data);
         Self::extend_escrow_ttl(&env, escrow_id, data.refund_after);
         env.events()
             .publish((symbol_short!("accepted"), escrow_id), (payee, accepted_at));

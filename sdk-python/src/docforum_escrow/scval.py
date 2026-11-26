@@ -8,7 +8,7 @@ values into :mod:`docforum_escrow.types` objects.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, TypeVar
 
 from stellar_sdk import Address, scval, xdr
@@ -41,6 +41,13 @@ def address(name: str, value: Any) -> xdr.SCVal:
         return scval.to_address(Address(value))
     except Exception as exc:  # stellar_sdk raises ValueError and its own types
         raise InvalidArgumentError(f"{name} is not a valid Stellar address: {value!r}") from exc
+
+
+def address_vec(name: str, values: Sequence[Any]) -> xdr.SCVal:
+    """A Soroban ``Vec<Address>`` (releaser sets and approval lists)."""
+    if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+        raise InvalidArgumentError(f"{name} must be a sequence of strkeys")
+    return scval.to_vec([address(f"{name}[{index}]", value) for index, value in enumerate(values)])
 
 
 def i128(name: str, value: Any) -> xdr.SCVal:

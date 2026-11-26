@@ -8,11 +8,7 @@ impl EscrowContract {
     pub fn get_vesting(env: Env, escrow_id: u64) -> Result<VestingInfo, Error> {
         // A settled stream's record is reclaimed (docs/adr/0013); its schedule
         // and withdrawal totals live in their own entries and stay readable.
-        let funded = match env
-            .storage()
-            .persistent()
-            .get::<_, EscrowData>(&DataKey::Escrow(escrow_id))
-        {
+        let funded = match Self::read_escrow(&env, escrow_id) {
             Some(data) => data.status == EscrowStatus::Funded,
             None if env.storage().persistent().has(&DataKey::Status(escrow_id)) => false,
             None => return Err(Error::NotFound),
@@ -86,9 +82,7 @@ impl EscrowContract {
         }
         let updated_withdrawn = withdrawn.checked_add(claimable).ok_or(Error::Overflow)?;
         data.amount = data.amount.checked_sub(claimable).ok_or(Error::Overflow)?;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &data);
+        Self::write_escrow(&env, escrow_id, &data);
         env.storage()
             .persistent()
             .set(&DataKey::Withdrawn(escrow_id), &updated_withdrawn);

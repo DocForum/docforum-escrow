@@ -486,7 +486,7 @@ An opt-in creation method can require the payee to authorize `accept` before rel
   must verify a submitted transaction hash before any caller-controlled retry.
 
 ## Phase E7 — Verification, testing & release engineering
-- [ ] Assert exact auth trees throughout contract tests (issue #105). This contribution strengthens `create_escrow`, `release`, and `refund` with complete tree comparisons and a wrong-signer creation regression; remaining contract-test modules still need conversion.
+- [ ] Assert exact auth trees throughout contract tests (issue #105). `create_escrow`, `release`, `refund`, and the lifecycle amendments `cancel`, `top_up`, `transfer_payee`, `extend_refund_after`, `rotate_releaser` and `rotate_releaser_with_approvals` now compare complete trees and cover wrong-signer and missing-party regressions; remaining contract-test modules still need conversion.
 - [x] Contract version and reproducible build provenance exposed in the
   contract interface and WASM metadata (issue #52).
 - [x] **Storage and resource optimisation guided by benchmarks (issue #98)** — `get_status` reads a dedicated persistent status value instead of decoding `EscrowData`. Benchmarks showed that moving `NextId` to persistent storage raised creation costs, so it remains in instance storage. The added status record improves `get_status` while adding writes to creation and settlement. Storage layout changed, so deploy as a new testnet contract ID under ADR 0005 and let existing escrows settle on their original contract.
@@ -505,8 +505,8 @@ An opt-in creation method can require the payee to authorize `accept` before rel
 - [x] **Nightly testnet escrow lifecycle soak** (issue #108) —
   `.github/workflows/nightly-testnet-soak.yml` runs the SDK live integration
   suite nightly with generated identities, transient Friendbot retries,
-  release/refund paths, and a short timeout refund. Quorum coverage remains
-  skipped until the documented testnet contract supports it. Failures
+  release/refund paths, and a short timeout refund. Quorum, cancel, pooled
+  rounds, the protocol fee, settleMany, the pause reads and transferPayee run too. Failures
   update one tracking issue in place and classify contract-missing resets,
   infrastructure failures, and SDK test failures. Manual dispatch includes
   a forced-failure reporting check.
