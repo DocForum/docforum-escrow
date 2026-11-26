@@ -32,6 +32,18 @@ test('a function covered by a pending fragment passes', () => {
   assert.deepEqual(findMissing(root), []);
 });
 
+test('a fragment anchored after a block line passes', () => {
+  const fragment = '---\nfile: ARCHITECTURE_ESSENTIALS.md\nafter: "alpha(a) -> ()"\n---\nbeta(b) -> () // note\n';
+  const root = repo({ block: 'alpha(a) -> ()', fragments: { '1-x.md': fragment } });
+  assert.deepEqual(findMissing(root), []);
+});
+
+test('an after fragment anchored outside the block does not count', () => {
+  const fragment = '---\nfile: ARCHITECTURE_ESSENTIALS.md\nafter: "beta(x)"\n---\nbeta(b) -> () // note\n';
+  const root = repo({ block: 'alpha(a) -> ()', fragments: { '1-x.md': fragment } });
+  assert.deepEqual(findMissing(root), ['beta']);
+});
+
 test('a function in the block passes, constructor is exempt', () => {
   const root = repo({ block: 'alpha(a) -> ()\nbeta(b) -> ()' });
   assert.deepEqual(findMissing(root), []);

@@ -308,3 +308,7 @@ func TestIsSupportedContractVersionMatchesTypeScriptRange(t *testing.T) {
 		}
 	}
 }
+
+func (f *fakeRPC) GetEvents(_ context.Context, _ protocol.GetEventsRequest) (protocol.GetEventsResponse, error) {
+	return protocol.GetEventsResponse{}, nil
+}
