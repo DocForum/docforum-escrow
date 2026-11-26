@@ -36,9 +36,6 @@ import {
   hash,
   xdr,
 } from "@stellar/stellar-sdk";
-// @ts-ignore - @stellar/js-xdr ships no bundled type declarations
-import xdrPkg from "@stellar/js-xdr";
-const { XdrWriter } = xdrPkg as any;
 import { Server as RpcServer } from "@stellar/stellar-sdk/rpc";
 
 /** Hex-encoded ed25519 public key (32 bytes). */
@@ -76,12 +73,8 @@ export namespace ManagementPayload {
   const DOMAIN = "DOCESCROW";
 
   function toScValBytes(scVal: xdr.ScVal): Buffer {
-    const writer = new XdrWriter();
-    // js-xdr ships no bundled type declarations; `XdrWriter` is duck-typed at
-    // runtime (stellar-sdk's `ScVal.write` accepts anything with write
-    // methods), so cast to satisfy the `Buffer`-typed parameter.
-    xdr.ScVal.write(scVal, writer as unknown as Buffer);
-    return Buffer.from(writer.toArray());
+    // Canonical XDR bytes of the ScVal, as the contract hashes them.
+    return scVal.toXDR();
   }
 
   /** Encode a `ManagementAction` as the ScVal the contract expects. */

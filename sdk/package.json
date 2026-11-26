@@ -60,7 +60,6 @@
     "smoke": "npm run smoke:cjs && npm run smoke:esm && npm run smoke:browser"
   },
   "dependencies": {
-    "@stellar/js-xdr": "^4.0.0",
     "@stellar/stellar-sdk": "^16.0.1"
   },
   "peerDependencies": {
