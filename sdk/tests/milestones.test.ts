@@ -91,11 +91,13 @@ describe("milestoneConditionRef", () => {
   });
 
   it("counts the tag's room in UTF-8 bytes for multi-byte base refs", () => {
-    // "é" is 2 bytes; 30 of them is 60 bytes, leaving 4 for "#m1/2".
-    const accented = "é".repeat(30);
+    // "é" is 2 bytes and the tag "#m1/2" is 5: 29 of them plus "x" is 59
+    // bytes, so the tagged ref is exactly 64 bytes (but only 35 UTF-16 units).
+    const accented = "é".repeat(29) + "x";
     expect(utf8ByteLength(milestoneConditionRef(accented, 0, 2))).toBe(64);
-    // 31 of them is 62 bytes, leaving only 2 — not enough for the tag.
-    expect(() => milestoneConditionRef("é".repeat(31), 0, 2)).toThrow(MilestoneScheduleError);
+    // 30 of them is 60 bytes; with the tag that is 65, one over the limit,
+    // although the string is only 35 UTF-16 units long.
+    expect(() => milestoneConditionRef("é".repeat(30), 0, 2)).toThrow(MilestoneScheduleError);
   });
 
   it("rejects a base ref with no room left for the tag", () => {
