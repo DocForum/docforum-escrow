@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+# scripts/verify-deployment: cross-check a deployed contract against the source
+# build and the deployment record (issues #91 and #349).
+#
+# Usage:
+#   scripts/verify-deployment <contract-id> [--network testnet|futurenet|local]
+#
+# Options:
+#   --network NAME   testnet (default), futurenet or a local quickstart.
+#                    `--network=NAME` is accepted too.
+#                    mainnet/public/pubnet are refused (hard rule 4).
+#   -h, --help       Show this help.
+#
+# Environment:
+#   LOCAL_RPC_URL    Quickstart RPC URL for --network local
+#                    (default http://localhost:8000/rpc).
+#   DOCFORUM_GIT_SHA Optional checkout sha to compare with the record's
+#                    gitSha when git is unavailable (e.g. a shallow clone).
+#
+# Prints the local build, on-chain and recorded SHA-256 values. All present
+# hashes must match; a missing record or a different checkout sha is a warning.
+# Requires the pinned Stellar CLI (scripts/stellar-cli-version), the pinned
+# Rust toolchain via scripts/build-wasm.sh, node and git (or DOCFORUM_GIT_SHA).
+
+set -euo pipefail
+
+usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
+die() { echo "verify-deployment: $*" >&2; exit 2; }
+
+network="testnet"
+contract_id=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --network)
+      [[ $# -ge 2 && -n "$2" ]] || die "--network needs a value"
+      network="$2"
+      shift 2
+      ;;
+    --network=*)
+      network="${1#*=}"
+      [[ -n "$network" ]] || die "--network needs a value"
+      shift
+      ;;
+    -h|--help) usage; exit 0 ;;
+    -*) die "unknown argument: $1" ;;
+    *)
+      if [[ -n "$contract_id" ]]; then die "unexpected argument: $1"; fi
+      contract_id="$1"
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "$contract_id" ]]; then
+  usage >&2
+  die "missing contract id"
+fi
+
+case "$network" in
+  testnet|futurenet) ;;
+  local)
+    rpc_url="${LOCAL_RPC_URL:-http://localhost:8000/rpc}"
+    network_passphrase="Standalone Network ; February 2017"
+    ;;
+  mainnet|public|pubnet)
+    die "mainnet verification is not supported until the security review (ROADMAP.md Phase E4) is done."
+    ;;
+  *)
+    die "unsupported network '$network' (use testnet, futurenet or local)."
+    ;;
+esac
+
+command -v node >/dev/null || die "node is required to read deployments.json."
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cli_version="$(sed -n 's/^version=//p' "$repo_root/scripts/stellar-cli-version")"
+actual_cli_version="$(stellar --version | awk 'NR == 1 { print $2 }' | sed 's/^v//')"
+if [[ "$actual_cli_version" != "$cli_version" ]]; then
+  echo "Expected Stellar CLI $cli_version, found $actual_cli_version." >&2
+  exit 2
+fi
+
+# Read the record for this contract id *on this network* without jq: a small
+# node script is enough and node is already used by scripts/deploy.
+record_fields="$(node - "$repo_root/deployments.json" "$contract_id" "$network" <<'NODE'
+const fs = require('node:fs');
+const [file, contractId, network] = process.argv.slice(2);
+let deployments = [];
+if (fs.existsSync(file)) {
+  try {
+    deployments = JSON.parse(fs.readFileSync(file, 'utf8')).deployments || [];
+  } catch (error) {
+    console.error(`verify-deployment: cannot read ${file}: ${error.message}`);
+    process.exit(2);
+  }
+}
+const found = deployments.find((d) => d.contractId === contractId && d.network === network);
+process.stdout.write(
+  `${found ? 1 : 0}\n${(found && found.wasmHash) || ''}\n${(found && found.gitSha) || ''}\n`,
+);
+NODE
+)"
+record_found="$(sed -n '1p' <<<"$record_fields")"
+recorded_hash="$(sed -n '2p' <<<"$record_fields")"
+recorded_git_sha="$(sed -n '3p' <<<"$record_fields")"
+
+if [[ "$record_found" == "1" && -n "$recorded_git_sha" ]]; then
+  current_sha="${DOCFORUM_GIT_SHA:-}"
+  if [[ -z "$current_sha" ]] && command -v git >/dev/null 2>&1; then
+    current_sha="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)"
+  fi
+  if [[ -z "$current_sha" ]]; then
+    echo "WARNING: cannot determine the checkout git sha; recorded gitSha is $recorded_git_sha." >&2
+  elif [[ "$current_sha" != "$recorded_git_sha" ]]; then
+    echo "WARNING: checkout $current_sha is not the recorded gitSha $recorded_git_sha; the local build may differ from the deployed source." >&2
+  fi
+fi
+
+temp_root="$(mktemp -d "${TMPDIR:-/tmp}/escrow deployment verify.XXXXXX")"
+trap 'rm -rf "$temp_root"' EXIT
+on_chain_wasm="$temp_root/on-chain.wasm"
+
+bash "$repo_root/scripts/build-wasm.sh"
+local_wasm="$repo_root/contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm"
+
+fetch_args=(--config-dir "$temp_root/stellar-config" --id "$contract_id" --out-file "$on_chain_wasm")
+if [[ "$network" == "local" ]]; then
+  fetch_args+=(--rpc-url "$rpc_url" --network-passphrase "$network_passphrase")
+else
+  fetch_args+=(--network "$network")
+fi
+stellar contract fetch "${fetch_args[@]}"
+
+hash_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d ' ' -f 1
+  else
+    shasum -a 256 "$1" | cut -d ' ' -f 1
+  fi
+}
+
+local_hash="$(hash_file "$local_wasm")"
+on_chain_hash="$(hash_file "$on_chain_wasm")"
+printf 'Local build SHA-256:    %s\n' "$local_hash"
+printf 'On-chain SHA-256:       %s\n' "$on_chain_hash"
+if [[ -n "$recorded_hash" ]]; then
+  printf 'Deployment record SHA-256: %s\n' "$recorded_hash"
+else
+  echo "Deployment record SHA-256: not recorded (warning)"
+fi
+
+result=0
+if [[ "$local_hash" != "$on_chain_hash" ]]; then
+  echo "FAIL: on-chain WASM does not match this source build ($network)." >&2
+  result=1
+fi
+if [[ -n "$recorded_hash" ]]; then
+  if [[ "$recorded_hash" != "$local_hash" ]]; then
+    echo "FAIL: recorded wasmHash does not match this source build." >&2
+    result=1
+  fi
+  if [[ "$recorded_hash" != "$on_chain_hash" ]]; then
+    echo "FAIL: recorded wasmHash does not match the on-chain WASM." >&2
+    result=1
+  fi
+elif [[ "$record_found" == "1" ]]; then
+  echo "WARNING: $contract_id is recorded for $network but has no wasmHash; verified against the local build only." >&2
+else
+  echo "WARNING: $contract_id is not in deployments.json for $network; verified against the local build only." >&2
+fi
+
+if [[ "$result" -ne 0 ]]; then
+  exit 1
+fi
+if [[ -n "$recorded_hash" ]]; then
+  echo "PASS: local build, on-chain WASM and deployment record agree ($network)."
+elif [[ "$record_found" == "1" ]]; then
+  echo "PASS: deployed WASM matches this source build ($network); the deployment record has no wasmHash."
+else
+  echo "PASS: deployed WASM matches this source build ($network); no deployment record found."
+fi

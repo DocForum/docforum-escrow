@@ -1,0 +1,217 @@
+name: Go SDK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sdk-go/**'
+      - '.github/workflows/sdk-go.yml'
+  pull_request:
+    paths:
+      - 'sdk-go/**'
+      - '.github/workflows/sdk-go.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Go SDK unit tests (offline)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk-go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: sdk-go/go.mod
+          cache: true
+          cache-dependency-path: sdk-go/go.sum
+
+      - name: gofmt check
+        run: |
+          set -eu
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed for:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (offline)
+        run: go test ./...
+
+  integration:
+    name: Go SDK integration (local quickstart)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      stellar:
+        # Quickstart's local mode is an ephemeral single-node network with
+        # Soroban RPC. NETWORK=local is the documented env-var equivalent of
+        # `stellar/quickstart --local`; RPC is exposed at /rpc on port 8000.
+        #
+        # Pinned by digest: the 2026-10-26 `latest` (core/RPC v30) makes the
+        # pinned Stellar CLI's very first simulation (`contract asset deploy
+        # --asset native`) fail with `HostError: Error(Context, InternalError)`
+        # on every PR, before the escrow contract is touched. This digest is
+        # the `latest` that main last passed with (run 39607326690). Bump it
+        # together with scripts/stellar-cli-version.
+        image: stellar/quickstart@sha256:4f8dfd693deba57fddef7f0bc722e4782c2e606c8675e3adc5438cebae249295
+        env:
+          NETWORK: local
+          ENABLE_SOROBAN_RPC: "true"
+        ports:
+          - 8000:8000
+    defaults:
+      run:
+        working-directory: sdk-go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: sdk-go/go.mod
+          cache: true
+          cache-dependency-path: sdk-go/go.sum
+
+      - name: Install Rust toolchain (wasm target)
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: wasm32v1-none
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+
+      - name: Build escrow contract WASM
+        working-directory: contracts/escrow
+        run: cargo build --target wasm32v1-none --release
+
+      - name: Install pinned Stellar CLI
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version=//p' ../scripts/stellar-cli-version)
+          checksum=$(sed -n 's/^linux-x86_64-sha256=//p' ../scripts/stellar-cli-version)
+          url="https://github.com/stellar/stellar-cli/releases/download/v${version}/stellar-cli-${version}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o /tmp/stellar-cli.tar.gz "$url"
+          echo "${checksum}  /tmp/stellar-cli.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf /tmp/stellar-cli.tar.gz -C "$HOME/.local/bin"
+          "$HOME/.local/bin/stellar" --version
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Wait for local quickstart RPC
+        run: |
+          set -euo pipefail
+          rpc_url="http://localhost:8000/rpc"
+          for attempt in $(seq 1 90); do
+            if curl -fsS -X POST "$rpc_url" \
+              -H 'Content-Type: application/json' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' >/dev/null; then
+              echo "RPC is healthy after ${attempt} attempt(s)."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::local quickstart RPC did not become healthy"
+          docker logs "${{ job.services.stellar.id }}" || true
+          exit 1
+
+      - name: Configure local network
+        run: |
+          set -euo pipefail
+          # "local" is already a built-in CLI network, so use a distinct name.
+          stellar network add escrow-local \
+            --rpc-url "http://localhost:8000/rpc" \
+            --network-passphrase "Standalone Network ; February 2017"
+
+      - name: Generate and fund deployer identity
+        run: |
+          set -euo pipefail
+          stellar keys generate deployer --network escrow-local --overwrite
+          # RPC health can be ready before quickstart finishes starting Horizon
+          # and friendbot, so retry the faucet instead of racing startup.
+          for attempt in $(seq 1 60); do
+            if stellar keys fund deployer --network escrow-local; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "::error::friendbot did not fund deployer"
+              exit 1
+            fi
+            sleep 2
+          done
+          stellar keys public-key deployer
+
+      - name: Generate and fund contributor identity
+        run: |
+          set -euo pipefail
+          # The two-party integration cases (payee acceptance by a signer that
+          # is not Config.Signer, and a pooled failed round with two claims)
+          # need a second funded account of their own.
+          stellar keys generate contributor --network escrow-local --overwrite
+          for attempt in $(seq 1 60); do
+            if stellar keys fund contributor --network escrow-local; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "::error::friendbot did not fund contributor"
+              exit 1
+            fi
+            sleep 2
+          done
+          stellar keys public-key contributor
+
+      - name: Deploy native asset SAC and escrow contract
+        id: deploy
+        run: |
+          set -euo pipefail
+          wasm="../contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm"
+          test -f "$wasm"
+
+          stellar contract asset deploy \
+            --asset native \
+            --source-account deployer \
+            --network escrow-local \
+            --alias native-token
+          token_id=$(stellar contract alias show native-token --network escrow-local)
+
+          # __constructor(allowed_tokens: Vec<Address>, pause_admin: Address) —
+          # empty list keeps the legacy open-token behavior, which is fine for
+          # an ephemeral local net; the deployer doubles as the pause
+          # custodian (docs/adr/0011).
+          stellar contract deploy \
+            --wasm "$wasm" \
+            --source-account deployer \
+            --network escrow-local \
+            --alias escrow \
+            -- --allowed_tokens '[]' --pause_admin "$(stellar keys public-key deployer)"
+          contract_id=$(stellar contract alias show escrow --network escrow-local)
+
+          echo "token_id=$token_id"
+          echo "contract_id=$contract_id"
+          {
+            echo "STELLAR_RPC_URL=http://localhost:8000/rpc"
+            echo "STELLAR_NETWORK_PASSPHRASE=Standalone Network ; February 2017"
+            echo "STELLAR_SECRET_KEY=$(stellar keys secret deployer)"
+            echo "STELLAR_CONTRIBUTOR_SECRET_KEY=$(stellar keys secret contributor)"
+            echo "ESCROW_CONTRACT_ID=$contract_id"
+            echo "ESCROW_TOKEN_ID=$token_id"
+            echo "ESCROW_INTEGRATION=1"
+          } >> "$GITHUB_ENV"
+
+      - name: go test (integration)
+        run: go test -tags=integration -v ./...

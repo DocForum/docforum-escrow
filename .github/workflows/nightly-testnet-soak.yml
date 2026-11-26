@@ -1,0 +1,127 @@
+name: Nightly testnet escrow soak
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      simulate_failure:
+        description: Force a reporting failure after the integration suite
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-testnet-soak
+  cancel-in-progress: false
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Only the failure-reporting step needs to create or update an issue.
+    permissions:
+      contents: read
+      issues: write
+    defaults:
+      run:
+        working-directory: sdk
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+
+      - run: npm ci
+
+      # Issue #353: the suite runs every deployed feature with no opt-in env
+      # flags -- quorum, cancel, pooled rounds (succeed and fail), a protocol-fee
+      # release, two-op settleMany, the pause reads and transferPayee. The extra
+      # cases reuse one funded identity set per run, so Friendbot use stays
+      # bounded; the classifier below is what still separates a testnet reset
+      # from an SDK failure.
+      - name: Run full live testnet integration suite
+        id: integration
+        run: |
+          set +e
+          npm run test:integration 2>&1 | tee testnet-soak.log
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            if grep -Eq 'MismatchingParameterLen' testnet-soak.log; then
+              echo 'failure_kind=DEPLOYMENT_OUTDATED: deployed escrow contract does not match the SDK' >> "$GITHUB_OUTPUT"
+            elif grep -Eqi 'contract.{0,30}(not found|missing)|wasm.{0,30}(not found|missing)' testnet-soak.log; then
+              echo 'failure_kind=TESTNET_RESET: deployed escrow contract or WASM missing' >> "$GITHUB_OUTPUT"
+            elif grep -Eq 'Friendbot funding failed|ECONN(REFUSED|RESET)|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up|temporarily unavailable|status code (50[234]|429)' testnet-soak.log; then
+              echo 'failure_kind=INFRASTRUCTURE_FAILURE: Friendbot, RPC, or testnet unavailable' >> "$GITHUB_OUTPUT"
+            else
+              echo 'failure_kind=SDK_TEST_FAILURE: integration assertion or SDK call failed' >> "$GITHUB_OUTPUT"
+            fi
+          fi
+          exit "$result"
+        shell: bash
+
+      - name: Forced failure reporting check
+        if: ${{ inputs.simulate_failure == true }}
+        run: |
+          echo 'SOAK_FORCED_FAILURE: manual issue-reporting check' | tee -a testnet-soak.log
+          exit 1
+        shell: bash
+
+      - name: Update the single testnet soak tracking issue
+        if: ${{ failure() }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FAILURE_OUTCOME: ${{ steps.integration.outcome }}
+          FAILURE_KIND: ${{ steps.integration.outputs.failure_kind || 'workflow infrastructure' }}
+          SIMULATED: ${{ inputs.simulate_failure }}
+        with:
+          script: |
+            const marker = '<!-- nightly-testnet-soak -->';
+            const { owner, repo } = context.repo;
+            const title = '[testnet soak] Nightly escrow lifecycle failures';
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'all', per_page: 100,
+            });
+            const existing = issues.find((issue) => !issue.pull_request && issue.title === title);
+            const kind = process.env.SIMULATED === 'true'
+              ? 'forced reporting check'
+              : process.env.FAILURE_KIND;
+            const resetNote = kind.startsWith('DEPLOYMENT_OUTDATED')
+              ? 'The SDK calls a contract function with a different argument count than the deployed contract, so the contract changed after the last deployment. Redeploy with scripts/deploy, which records the new contract id in deployments.json.'
+              : kind.startsWith('TESTNET_RESET')
+              ? 'If the failure reports that the escrow contract or its WASM is missing, the testnet may have reset; redeploy the documented testnet contract before treating this as an SDK regression.'
+              : kind.startsWith('SDK_TEST_FAILURE')
+                ? 'This run reached the integration suite and an SDK call or assertion failed. Inspect the run log for the failing lifecycle path.'
+                : 'The SDK assertions did not fail; inspect setup, Friendbot, RPC, or testnet availability in the run log.';
+            const body = `${marker}\n## Latest nightly run\n\n- Result: **${kind}**\n- Run: ${process.env.RUN_URL}\n- Run ID: ${context.runId}\n\n${resetNote}\n\nThis issue is updated in place by the nightly workflow to avoid duplicate tracking issues.`;
+            if (existing) {
+              if (existing.state === 'closed') {
+                await github.rest.issues.update({ owner, repo, issue_number: existing.number, state: 'open' });
+              }
+              await github.rest.issues.update({ owner, repo, issue_number: existing.number, body });
+            } else {
+              await github.rest.issues.create({ owner, repo, title, body });
+            }
+
+      - name: Publish failure classification
+        if: ${{ failure() }}
+        env:
+          FAILURE_KIND: ${{ steps.integration.outputs.failure_kind }}
+          SIMULATED: ${{ inputs.simulate_failure }}
+        run: |
+          if [ "$SIMULATED" = 'true' ]; then
+            echo '::error::SOAK_FORCED_FAILURE: manual issue-reporting check'
+          elif [ -n "$FAILURE_KIND" ]; then
+            echo "::error::$FAILURE_KIND"
+          else
+            echo '::error::INFRASTRUCTURE_FAILURE: workflow setup failed before the SDK test log was created.'
+          fi
+        shell: bash

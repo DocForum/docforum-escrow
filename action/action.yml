@@ -1,0 +1,52 @@
+name: DocForum Escrow
+description: Create, release, refund, or inspect a DocForum escrow on Stellar testnet
+author: DocForum
+inputs:
+  mode:
+    description: Operation to perform: create, release, refund, or status
+    required: true
+  contract-id:
+    description: Deployed docforum-escrow contract id
+    required: true
+  signer-secret:
+    description: Stellar secret key from an encrypted repository or environment secret (not used by status)
+    required: false
+  payee:
+    description: Destination address for create mode
+    required: false
+  token:
+    description: SEP-41 token contract address for create mode
+    required: false
+  amount:
+    description: Positive token amount in the token's smallest unit for create mode
+    required: false
+  condition-ref:
+    description: Opaque condition reference for create mode
+    required: false
+  releaser:
+    description: Releaser address for create mode (defaults to the signer)
+    required: false
+  refund-after:
+    description: Optional future Unix timestamp after which anyone may refund
+    required: false
+  escrow-id:
+    description: Escrow id for release, refund, or status mode
+    required: false
+  rpc-url:
+    description: Soroban RPC URL; defaults to Stellar testnet
+    required: false
+  network-passphrase:
+    description: Stellar network passphrase; defaults to Stellar testnet
+    required: false
+outputs:
+  escrow-id:
+    description: Created or inspected escrow id
+  tx-hash:
+    description: Submitted transaction hash, when the mode writes state
+  status:
+    description: Escrow lifecycle status
+  payer:
+    description: Signer public address in create mode
+runs:
+  using: node22
+  main: dist/index.js

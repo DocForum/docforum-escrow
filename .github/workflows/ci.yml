@@ -4,49 +4,293 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Nightly run of the property-based state-machine tests (larger case count).
+    - cron: '0 3 * * *'
 
-# Every job here is a required branch-protection check on main (issue #107):
-# contract, sdk, fmt, clippy, scout, deny, audit.
-#
-# Tool versions are pinned deliberately:
-# - Rust: 1.91.0 via dtolnay/rust-toolchain and contracts/escrow/rust-toolchain.toml
-# - cargo-deny: 0.22.0 (prebuilt release, checksum verified)
-# - cargo-audit: 0.23.0 (prebuilt release, checksum verified)
-# - Scout: cargo-scout-audit 0.3.17
-# Bump any of them in a dedicated PR, after running the gate locally.
+permissions:
+  contents: read
 
 jobs:
-  contract:
-    name: Soroban contract (test + wasm build)
+  contract-interface:
+    name: Contract interface snapshot
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: contracts/escrow
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify interface and append-only error codes
+        run: ./scripts/check-contract-interface.sh
+      - name: SDK deployments module matches deployments.json
+        run: |
+          node scripts/deploy-record.mjs --sync
+          git diff --exit-code -- sdk/src/deployments.generated.ts || {
+            echo "::error::sdk/src/deployments.generated.ts is out of date. Run: node scripts/deploy-record.mjs --sync"
+            exit 1
+          }
+      - name: SDK constants mirror the contract
+        run: node scripts/check-sdk-constants.mjs
+      - name: Contract surface docs cover every public function
+        run: |
+          node --test scripts/check-surface-docs.test.mjs
+          node scripts/check-surface-docs.mjs
+
+  config-guards:
+    name: Verifier configuration guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install workflow checker dependency
+        run: python -m pip install --disable-pip-version-check -r scripts/requirements.txt
+      - name: Test GitHub Actions pin checker
+        run: python3 -m unittest discover -s scripts -p 'test_check_github_action_pins.py'
+      - name: Require immutable GitHub Actions pins
+        run: python3 scripts/check_github_action_pins.py
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # No install step: the verifier test uses a stubbed Stellar CLI and this
+      # script's own copy of build-wasm.sh. The indexer's network tests run in
+      # the `indexer` job through vitest.
+      - run: node --test scripts/verify-deployment.test.mjs
+
+  contract-fuzz:
+    name: Contract cargo-fuzz (${{ github.event_name == 'schedule' && 'nightly' || 'PR' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: nightly
+          components: rust-src, llvm-tools-preview
+
+      - name: Cache fuzz build and corpus
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/fuzz/target
+          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('contracts/escrow/Cargo.lock', 'contracts/escrow/fuzz/Cargo.toml', 'contracts/escrow/fuzz/Cargo.lock') }}
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Build fuzzers
+        working-directory: contracts/escrow
+        run: |
+          cargo +nightly fuzz build lifecycle
+          cargo +nightly fuzz build settlement
+
+      # Issue #308: two targets share the old single-target budget (30 s on
+      # PRs, 600 s nightly) instead of doubling it. Each runs even if the
+      # other fails, so the artifact step sees both targets' crashes.
+      - name: Run lifecycle fuzzer
+        working-directory: contracts/escrow
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            cargo +nightly fuzz run lifecycle -- -max_total_time=300 -timeout=30
+          else
+            cargo +nightly fuzz run lifecycle -- -max_total_time=15 -timeout=30
+          fi
+
+      - name: Run settlement fuzzer
+        if: success() || failure()
+        working-directory: contracts/escrow
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            cargo +nightly fuzz run settlement -- -max_total_time=300 -timeout=30
+          else
+            cargo +nightly fuzz run settlement -- -max_total_time=15 -timeout=30
+          fi
+
+      - name: Upload crash artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: contract-fuzz-artifacts-${{ github.run_id }}
+          path: contracts/escrow/fuzz/artifacts
+          if-no-files-found: ignore
+
+  # Issue #315: keep the bounded TLA+ model executable so specification edits
+  # fail CI on parse errors, invariant violations, or temporal-property failures.
+  tlc:
+    name: TLA+ escrow model (TLC)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The model-change probe uses the pull requests API to read changed files.
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check whether the model changed
+        id: spec-changes
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const isSpecFile = (path) => path.startsWith('spec/');
+            let files = [];
+            if (context.eventName === 'schedule') {
+              core.setOutput('changed', 'true');
+              return;
+            }
+            if (context.eventName === 'pull_request') {
+              files = await github.paginate(github.rest.pulls.listFiles, {
+                ...context.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              });
+            } else if (context.eventName === 'push') {
+              const comparison = await github.rest.repos.compareCommits({
+                ...context.repo,
+                base: context.payload.before,
+                head: context.sha,
+              });
+              files = comparison.data.files || [];
+            }
+            core.setOutput('changed', String(files.some((file) => isSpecFile(file.filename))));
+
+      - name: Download pinned TLC
+        if: steps.spec-changes.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/tla2tools.jar \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo '936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  /tmp/tla2tools.jar' | sha256sum -c -
+
+      - name: Run TLC with the committed model configuration
+        if: steps.spec-changes.outputs.changed == 'true'
+        run: java -jar /tmp/tla2tools.jar -config spec/Escrow.cfg spec/Escrow.tla
+
+  resource-baseline:
+    name: Resource cost baseline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.91.0
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          targets: wasm32v1-none
+          toolchain: 1.96.0
 
       - name: Cache cargo registry + target
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             contracts/escrow/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/escrow/Cargo.lock', 'contracts/escrow/rust-toolchain.toml') }}
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+
+      # Issue #319: the baseline check reads measured costs now, so CI takes the
+      # measurement with the profile bench. The bench profiles every function
+      # twice and fails when the runs disagree, which is what makes comparing
+      # against benchmarks/baseline.json meaningful.
+      - name: Profile public function resources
+        working-directory: contracts/escrow
+        run: cargo bench --bench resource_profile -- --out ../../benchmarks/resource-profile.json
+
+      - name: Compare measured costs with the baseline
+        run: python3 scripts/check-resource-baseline.py
+
+  contract:
+    name: Soroban contract (test + wasm build)
+    runs-on: ubuntu-latest
+    env:
+      DOCFORUM_GIT_SHA: ${{ github.sha }}
+    defaults:
+      run:
+        working-directory: contracts/escrow
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Contract changes use a fragment, not a version bump
+        if: github.event_name == 'pull_request'
+        working-directory: .
+        run: node scripts/check-contract-change.mjs "origin/${{ github.base_ref }}"
+
+      - name: Test contract-change tooling
+        working-directory: .
+        run: node --test scripts/contract-change.test.mjs
+
+      - name: No tracked backup files
+        working-directory: .
+        run: node scripts/check-no-backup-files.mjs
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.96.0
+          targets: wasm32v1-none
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/escrow/Cargo.lock') }}
 
       - name: cargo test
         run: cargo test
+
+      - name: cargo test (proptest state-machine, bounded)
+        env:
+          PROPTEST_CASES: '64'
+        run: cargo test --test model -- --nocapture
+
+      - name: cargo test (proptest state-machine, nightly)
+        if: github.event_name == 'schedule'
+        env:
+          PROPTEST_CASES: '4096'
+        run: cargo test --test model -- --nocapture
+
+      # Issue #120: test snapshots are committed so events, storage and auth
+      # changes show up as reviewable diffs. `cargo test` above rewrites them;
+      # any difference from the committed files means the test run produced a
+      # snapshot nobody reviewed. Contribution flow: `cargo test`, inspect
+      # `git diff contracts/escrow/test_snapshots`, commit intentionally.
+      - name: Fail if committed test snapshots changed
+        run: |
+          set -eu
+          if [ -n "$(git status --porcelain -- test_snapshots)" ]; then
+            echo "::error::cargo test changed committed Soroban snapshots under contracts/escrow/test_snapshots."
+            git status --porcelain -- test_snapshots
+            git --no-pager diff -- test_snapshots
+            echo "Review the snapshot change (events/storage/auth), then commit it with your change. See CONTRIBUTING.md."
+            exit 1
+          fi
+          echo "Committed test snapshots match this run."
+
+      - name: Fail if test snapshots are orphaned
+        working-directory: .
+        run: node scripts/check-orphaned-snapshots.mjs
 
       - name: cargo build --release (wasm)
         run: cargo build --target wasm32v1-none --release
 
       - name: Confirm wasm artifact exists
         run: test -f target/wasm32v1-none/release/docforum_escrow.wasm
+
+      - name: Test custom releaser account
+        run: cargo test --manifest-path ../releaser-account/Cargo.toml
+
+      - name: Build custom releaser account (wasm)
+        run: cargo build --manifest-path ../releaser-account/Cargo.toml --target wasm32v1-none --release
+
+      - name: Confirm custom account wasm exists
+        run: test -f ../releaser-account/target/wasm32v1-none/release/docforum_releaser_account.wasm
 
   fmt:
     name: Rust formatting (cargo fmt --check)
@@ -55,9 +299,10 @@ jobs:
       run:
         working-directory: contracts/escrow
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.91.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: 1.91.0
           components: rustfmt
       - run: cargo fmt --check
 
@@ -68,13 +313,14 @@ jobs:
       run:
         working-directory: contracts/escrow
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.91.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: 1.91.0
           components: clippy
           targets: wasm32v1-none
       - name: Cache cargo registry + target
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -92,13 +338,14 @@ jobs:
       run:
         working-directory: contracts/escrow
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.91.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: 1.91.0
           targets: wasm32v1-none
 
       - name: Cache Scout binary + cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/bin/cargo-scout-audit
@@ -134,7 +381,7 @@ jobs:
 
       - name: Upload Scout report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: scout-report
           path: contracts/escrow/scout-report/report.md
@@ -147,8 +394,10 @@ jobs:
       run:
         working-directory: contracts/escrow
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.91.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.91.0
 
       - name: Install pinned cargo-deny
         run: |
@@ -171,8 +420,10 @@ jobs:
       run:
         working-directory: contracts/escrow
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.91.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.91.0
 
       - name: Install pinned cargo-audit
         run: |
@@ -192,30 +443,365 @@ jobs:
       # reason.
       - run: cargo audit --deny yanked --ignore RUSTSEC-2026-0387
 
-  sdk:
-    name: TypeScript SDK (typecheck + build)
+
+  reproducible-wasm:
+    name: Reproducible WASM across checkout paths
     runs-on: ubuntu-latest
+    container: rust:1.96.0-bookworm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install WASM target
+        run: rustup target add wasm32v1-none
+
+      - name: Compare builds from two different checkout paths
+        run: bash scripts/check-wasm-reproducibility.sh
+
+  # Issue #121: the committed generated client must match the pinned CLI output.
+  sdk-bindings:
+    name: SDK bindings match contract WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.96.0
+          targets: wasm32v1-none
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/escrow/Cargo.lock') }}
+
+      - name: Install pinned Stellar CLI
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version=//p' scripts/stellar-cli-version)
+          checksum=$(sed -n 's/^linux-x86_64-sha256=//p' scripts/stellar-cli-version)
+          url="https://github.com/stellar/stellar-cli/releases/download/v${version}/stellar-cli-${version}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o /tmp/stellar-cli.tar.gz "$url"
+          echo "${checksum}  /tmp/stellar-cli.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf /tmp/stellar-cli.tar.gz -C "$HOME/.local/bin"
+          "$HOME/.local/bin/stellar" --version
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Check generated SDK bindings
+        run: ./scripts/check-generated-bindings.sh
+
+  sdk-node:
+    name: TypeScript SDK (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22, 24]
     defaults:
       run:
         working-directory: sdk
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          # @stellar/stellar-sdk requires Node >=22.
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: npm
           cache-dependency-path: sdk/package-lock.json
 
       - run: npm ci
 
+      - name: Check generated contract error mapping
+        run: node scripts/check-contract-errors.mjs --check
+
+      - name: Run SDK error unit tests
+        run: npx vitest run tests/errors.test.ts
+
       - run: npm run typecheck
 
       - run: npm run build
 
-      # Deliberately NOT run here: `npm run test:integration`
-      # (tests/testnet-integration.test.ts) — it depends on live testnet
-      # + Friendbot funding, a materially different reliability profile
-      # than this job's deterministic checks. Run it manually; see that
-      # file's own comment for why.
+      # Type-check the runnable examples against the freshly built dist.
+      # NOT executed here: they fund accounts via Friendbot and talk to the
+      # live testnet contract (see sdk/examples/README.md) — running them is a
+      # manual, testnet-only step, like the SDK's own live suite.
+      - run: npm run typecheck:examples
+      - name: Verify CJS, ESM, and browser package entrypoints
+        run: npm run smoke
+
+      # The offline project includes every non-network SDK test automatically.
+      # Never run the live project in PR CI (see the note at the end of this file).
+      - run: npm run test:offline
+
+      - run: npm run test:runtime
+
+  sdk-docs:
+    name: SDK API reference (TypeDoc + missing-doc lint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+      - run: npm ci
+      # Fails if any exported symbol lacks a doc comment, if a doc link is
+      # broken, or if a referenced type is unexpectedly not exported — the
+      # "missing-doc lint" (typedoc.json treats these validation warnings as
+      # errors). Also proves the reference builds.
+      - run: npm run docs
+
+  sdk-bun:
+    name: TypeScript SDK (Bun)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - run: npm ci
+        working-directory: sdk
+      - run: npm run build
+        working-directory: sdk
+      - run: bun tests/runtime-smoke.mjs
+        working-directory: sdk
+
+  sdk-deno:
+    name: TypeScript SDK (Deno)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.x
+      - run: npm ci
+        working-directory: sdk
+      - run: npm run build
+        working-directory: sdk
+      - run: deno run tests/runtime-smoke.mjs
+        working-directory: sdk
+
+  sdk-browser:
+    name: TypeScript SDK (Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+      - run: npm ci
+        working-directory: sdk
+      - run: npx playwright install --with-deps chromium
+        working-directory: sdk
+      - run: npm run test:browser
+        working-directory: sdk
+
+      # Deliberately NOT run here: `npm run test:integration` selects the
+      # live project, which depends on testnet/Friendbot funding. Runtime
+      # checks use local fixtures only.
+
+  escrow-react:
+    name: React hooks package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            sdk/package-lock.json
+            packages/escrow-react/package-lock.json
+      # The hooks package resolves the SDK's types from `sdk/dist/esm` via a
+      # tsconfig path (the SDK is an optional peer), so build it first.
+      - run: npm ci
+        working-directory: sdk
+      - run: npm run build
+        working-directory: sdk
+      - run: npm ci
+        working-directory: packages/escrow-react
+      - run: npm run typecheck
+        working-directory: packages/escrow-react
+      - run: npm test
+        working-directory: packages/escrow-react
+      - run: npm run build
+        working-directory: packages/escrow-react
+
+  # Issue #356: build the browser demo against the freshly built workspace SDK
+  # and React hooks package, only when one of their source trees changes.
+  web-demo:
+    name: Web demo (local SDK + hooks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check whether web demo dependencies changed
+        id: web-demo-changes
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const prefixes = ['sdk/', 'packages/', 'examples/web-demo/'];
+            let files = [];
+            if (context.eventName === 'schedule') {
+              core.setOutput('changed', 'true');
+              return;
+            }
+            if (context.eventName === 'pull_request') {
+              files = await github.paginate(github.rest.pulls.listFiles, {
+                ...context.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              });
+            } else if (context.eventName === 'push') {
+              const comparison = await github.rest.repos.compareCommits({
+                ...context.repo,
+                base: context.payload.before,
+                head: context.sha,
+              });
+              files = comparison.data.files || [];
+            }
+            core.setOutput('changed', String(files.some((file) => prefixes.some((prefix) => file.filename.startsWith(prefix)))));
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            sdk/package-lock.json
+            packages/escrow-react/package-lock.json
+            examples/web-demo/package-lock.json
+
+      - name: Install SDK dependencies
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        working-directory: sdk
+        run: npm ci
+
+      - name: Build SDK from this checkout
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        working-directory: sdk
+        run: npm run build
+
+      - name: Install React hooks dependencies
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        working-directory: packages/escrow-react
+        run: npm ci
+
+      - name: Build React hooks from this checkout
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        working-directory: packages/escrow-react
+        run: npm run build
+
+      - name: Install web demo dependencies
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        working-directory: examples/web-demo
+        run: npm ci
+
+      - name: Verify TypeScript and Vite resolve the local workspace builds
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        working-directory: examples/web-demo
+        run: node scripts/verify-local-workspace-packages.mjs
+
+      - name: Type-check web demo
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        working-directory: examples/web-demo
+        run: npx tsc --noEmit
+
+      - name: Build web demo for production
+        if: steps.web-demo-changes.outputs.changed == 'true'
+        working-directory: examples/web-demo
+        run: npx vite build
+
+  # Issue #347: the indexer has its own pinned dependencies and tests. The job
+  # only does work when indexer/** changed (or on the nightly schedule), so an
+  # unrelated PR does not pay for codegen + build + tests.
+  indexer:
+    name: Indexer (codegen + build + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check whether the indexer changed
+        id: indexer-changes
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const isIndexerFile = (path) => path.startsWith('indexer/');
+            let files = [];
+            if (context.eventName === 'schedule') {
+              core.setOutput('changed', 'true');
+              return;
+            }
+            if (context.eventName === 'pull_request') {
+              files = await github.paginate(github.rest.pulls.listFiles, {
+                ...context.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              });
+            } else if (context.eventName === 'push') {
+              const comparison = await github.rest.repos.compareCommits({
+                ...context.repo,
+                base: context.payload.before,
+                head: context.sha,
+              });
+              files = comparison.data.files || [];
+            }
+            core.setOutput('changed', String(files.some((file) => isIndexerFile(file.filename))));
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.indexer-changes.outputs.changed == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: indexer/package-lock.json
+
+      - name: Install indexer dependencies
+        if: steps.indexer-changes.outputs.changed == 'true'
+        working-directory: indexer
+        run: npm ci
+
+      # src/types and project.yaml are generated (not committed); see
+      # indexer/README.md. project.ts needs a contract id and start ledger, so
+      # the build-time values are placeholders for codegen/build only.
+      - name: Codegen
+        if: steps.indexer-changes.outputs.changed == 'true'
+        working-directory: indexer
+        env:
+          DOCFORUM_ESCROW_CONTRACT_ID: CDX2JEMA5SO7GZVXDNGDDB35GPV43J7BUTYYH77ALAT72S65GOW5KNEO
+          DOCFORUM_START_LEDGER: '1'
+        run: npm run codegen
+
+      - name: Build
+        if: steps.indexer-changes.outputs.changed == 'true'
+        working-directory: indexer
+        env:
+          DOCFORUM_ESCROW_CONTRACT_ID: CDX2JEMA5SO7GZVXDNGDDB35GPV43J7BUTYYH77ALAT72S65GOW5KNEO
+          DOCFORUM_START_LEDGER: '1'
+        run: npm run build
+
+      - name: Test
+        if: steps.indexer-changes.outputs.changed == 'true'
+        working-directory: indexer
+        run: npm test

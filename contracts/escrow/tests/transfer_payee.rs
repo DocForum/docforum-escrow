@@ -1,0 +1,432 @@
+// Phase E5 tests — transfer_payee().
+//
+// Invariant under test: only the current payee may reassign the payout
+// destination; no other party (payer, releaser, stranger) may redirect
+// funds. After a successful transfer, release sends funds to the new
+// address — and refund still goes back to the payer.
+//
+// transfer_payee is only valid while Funded. Rejected targets:
+//   - the contract's own address
+//   - the payer's address
+
+use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus, SettleAction};
+use soroban_sdk::{
+    testutils::{Address as _, MockAuth, MockAuthInvoke},
+    token::{StellarAssetClient, TokenClient},
+    Address, Env, IntoVal, String, Vec,
+};
+
+#[path = "common/auth.rs"]
+mod auth;
+
+struct Fixture<'a> {
+    client: EscrowContractClient<'a>,
+    token: TokenClient<'a>,
+    payer: Address,
+    payee: Address,
+    releaser: Address,
+    contract_id: Address,
+    escrow_id: u64,
+}
+
+fn setup(env: &Env) -> Fixture<'_> {
+    env.mock_all_auths();
+
+    let token_contract = env.register_stellar_asset_contract_v2(Address::generate(env));
+    let token_id = token_contract.address();
+    let token = TokenClient::new(env, &token_id);
+    let asset = StellarAssetClient::new(env, &token_id);
+
+    let payer = Address::generate(env);
+    let payee = Address::generate(env);
+    let releaser = Address::generate(env);
+    asset.mint(&payer, &1_000);
+
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
+    let client = EscrowContractClient::new(env, &contract_id);
+
+    let escrow_id = client.create_escrow(
+        &payer,
+        &payee,
+        &token_id,
+        &500,
+        &String::from_str(env, "opaque-condition-ref"),
+        &releaser,
+        &None,
+        &false,
+        &None,
+        &None,
+        &None,
+    );
+
+    Fixture {
+        client,
+        token,
+        payer,
+        payee,
+        releaser,
+        contract_id,
+        escrow_id,
+    }
+}
+
+fn setup_with_notify(env: &Env, notify_payee: bool) -> Fixture<'_> {
+    env.mock_all_auths();
+
+    let token_contract = env.register_stellar_asset_contract_v2(Address::generate(env));
+    let token_id = token_contract.address();
+    let token = TokenClient::new(env, &token_id);
+    let asset = StellarAssetClient::new(env, &token_id);
+
+    let payer = Address::generate(env);
+    let payee = Address::generate(env);
+    let releaser = Address::generate(env);
+    asset.mint(&payer, &1_000);
+
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
+    let client = EscrowContractClient::new(env, &contract_id);
+
+    let escrow_id = client.create_escrow(
+        &payer,
+        &payee,
+        &token_id,
+        &500,
+        &String::from_str(env, "opaque-condition-ref"),
+        &releaser,
+        &None,
+        &notify_payee,
+        &None,
+        &None,
+        &None,
+    );
+
+    Fixture {
+        client,
+        token,
+        payer,
+        payee,
+        releaser,
+        contract_id,
+        escrow_id,
+    }
+}
+
+// --- happy path ---
+
+#[test]
+fn transfer_payee_updates_stored_payee() {
+    let env = Env::default();
+    let f = setup(&env);
+    let new_payee = Address::generate(&env);
+
+    f.client.transfer_payee(&f.escrow_id, &f.payee, &new_payee);
+
+    let data = f.client.get_escrow(&f.escrow_id);
+    assert_eq!(data.payee, new_payee);
+    assert_eq!(data.status, EscrowStatus::Funded);
+}
+
+#[test]
+fn release_after_transfer_pays_new_payee_not_old() {
+    let env = Env::default();
+    let f = setup(&env);
+    let new_payee = Address::generate(&env);
+
+    f.client.transfer_payee(&f.escrow_id, &f.payee, &new_payee);
+    f.client.release(&f.escrow_id, &f.releaser);
+
+    assert_eq!(f.token.balance(&new_payee), 500);
+    assert_eq!(f.token.balance(&f.payee), 0); // old payee gets nothing
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Released);
+}
+
+#[test]
+fn refund_after_transfer_still_returns_to_payer() {
+    let env = Env::default();
+    let f = setup(&env);
+    let new_payee = Address::generate(&env);
+
+    f.client.transfer_payee(&f.escrow_id, &f.payee, &new_payee);
+    f.client.refund(&f.escrow_id, &f.releaser);
+
+    assert_eq!(f.token.balance(&f.payer), 1_000); // full refund
+    assert_eq!(f.token.balance(&new_payee), 0);
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Refunded);
+}
+
+#[test]
+fn payee_can_transfer_multiple_times_before_release() {
+    let env = Env::default();
+    let f = setup(&env);
+    let payee_b = Address::generate(&env);
+    let payee_c = Address::generate(&env);
+
+    f.client.transfer_payee(&f.escrow_id, &f.payee, &payee_b);
+    f.client.transfer_payee(&f.escrow_id, &payee_b, &payee_c);
+    f.client.release(&f.escrow_id, &f.releaser);
+
+    assert_eq!(f.token.balance(&payee_c), 500);
+    assert_eq!(f.token.balance(&f.payee), 0);
+    assert_eq!(f.token.balance(&payee_b), 0);
+}
+
+// --- auth ---
+
+#[test]
+fn transfer_payee_rejects_stranger() {
+    let env = Env::default();
+    let f = setup(&env);
+    let stranger = Address::generate(&env);
+    let new_payee = Address::generate(&env);
+
+    let result = f
+        .client
+        .try_transfer_payee(&f.escrow_id, &stranger, &new_payee);
+
+    assert!(result.is_err());
+    // payee unchanged
+    assert_eq!(f.client.get_escrow(&f.escrow_id).payee, f.payee);
+}
+
+#[test]
+fn transfer_payee_rejects_payer_acting_as_current_payee() {
+    let env = Env::default();
+    let f = setup(&env);
+    let new_payee = Address::generate(&env);
+
+    // The payer is not the current payee — even if they try to claim it.
+    let result = f
+        .client
+        .try_transfer_payee(&f.escrow_id, &f.payer, &new_payee);
+
+    assert!(result.is_err());
+    assert_eq!(f.client.get_escrow(&f.escrow_id).payee, f.payee);
+}
+
+#[test]
+fn transfer_payee_rejects_releaser_acting_as_current_payee() {
+    let env = Env::default();
+    let f = setup(&env);
+    let new_payee = Address::generate(&env);
+
+    let result = f
+        .client
+        .try_transfer_payee(&f.escrow_id, &f.releaser, &new_payee);
+
+    assert!(result.is_err());
+    assert_eq!(f.client.get_escrow(&f.escrow_id).payee, f.payee);
+}
+
+// --- rejected new_payee targets ---
+
+#[test]
+fn transfer_payee_rejects_contract_address_as_new_payee() {
+    let env = Env::default();
+    let f = setup(&env);
+
+    // new_payee == the contract's own address is rejected — it can never
+    // sign to claim a payout, so funds would be permanently locked.
+    let result = f
+        .client
+        .try_transfer_payee(&f.escrow_id, &f.payee, &f.contract_id);
+
+    assert!(result.is_err());
+    assert_eq!(f.client.get_escrow(&f.escrow_id).payee, f.payee);
+}
+
+#[test]
+fn transfer_payee_rejects_payer_as_new_payee() {
+    let env = Env::default();
+    let f = setup(&env);
+
+    // new_payee == payer is rejected: it would let the payer claw back
+    // the escrow via a release (bypassing refund's auth), undermining
+    // the payee's claim. Even a colluding current_payee cannot do this.
+    let result = f
+        .client
+        .try_transfer_payee(&f.escrow_id, &f.payee, &f.payer);
+
+    assert!(result.is_err());
+    assert_eq!(f.client.get_escrow(&f.escrow_id).payee, f.payee);
+}
+
+// --- state checks ---
+
+#[test]
+fn transfer_payee_rejects_after_release() {
+    let env = Env::default();
+    let f = setup(&env);
+    let new_payee = Address::generate(&env);
+
+    f.client.release(&f.escrow_id, &f.releaser);
+    let result = f
+        .client
+        .try_transfer_payee(&f.escrow_id, &f.payee, &new_payee);
+
+    assert!(result.is_err());
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Released);
+}
+
+#[test]
+fn transfer_payee_rejects_after_refund() {
+    let env = Env::default();
+    let f = setup(&env);
+    let new_payee = Address::generate(&env);
+
+    f.client.refund(&f.escrow_id, &f.releaser);
+    let result = f
+        .client
+        .try_transfer_payee(&f.escrow_id, &f.payee, &new_payee);
+
+    assert!(result.is_err());
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Refunded);
+}
+
+#[test]
+fn transfer_payee_rejects_unknown_escrow_id() {
+    let env = Env::default();
+    let f = setup(&env);
+    let new_payee = Address::generate(&env);
+
+    let result = f.client.try_transfer_payee(&999u64, &f.payee, &new_payee);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn transfer_payee_clears_notify_payee_and_allows_release() {
+    let env = Env::default();
+    let f = setup_with_notify(&env, true);
+    let new_payee = Address::generate(&env);
+
+    // Prior to transfer, notify_payee is true
+    let data_before = f.client.get_escrow(&f.escrow_id);
+    assert!(data_before.notify_payee);
+
+    // Payee transfers to a standard account address (which has no callback hook)
+    f.client.transfer_payee(&f.escrow_id, &f.payee, &new_payee);
+
+    // After transfer, notify_payee is cleared to false (issue #286)
+    let data_after = f.client.get_escrow(&f.escrow_id);
+    assert!(!data_after.notify_payee);
+    assert_eq!(data_after.payee, new_payee);
+
+    // Release succeeds without attempting callback on the new payee account
+    f.client.release(&f.escrow_id, &f.releaser);
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Released);
+    assert_eq!(f.token.balance(&new_payee), 500);
+    assert_eq!(f.token.balance(&f.payee), 0);
+}
+
+#[test]
+fn transfer_payee_clears_notify_payee_and_allows_settle_many_release() {
+    let env = Env::default();
+    let f = setup_with_notify(&env, true);
+    let new_payee = Address::generate(&env);
+
+    f.client.transfer_payee(&f.escrow_id, &f.payee, &new_payee);
+
+    let ops = soroban_sdk::vec![&env, (f.escrow_id, SettleAction::Release)];
+
+    let results = f.client.settle_many(&f.releaser, &ops);
+    assert_eq!(results.len(), 1);
+    assert!(results.get(0).unwrap().is_ok());
+    assert_eq!(f.client.get_status(&f.escrow_id), EscrowStatus::Released);
+    assert_eq!(f.token.balance(&new_payee), 500);
+}
+
+// --- exact authorization tree (issue #474) -------------------------------
+
+#[test]
+fn transfer_payee_records_only_the_current_payees_exact_tree() {
+    let env = Env::default();
+    let f = setup(&env); // fixture mint and creation stay under the blanket mock
+    let new_payee = Address::generate(&env);
+
+    let transfer = MockAuthInvoke {
+        contract: &f.contract_id,
+        fn_name: "transfer_payee",
+        args: (f.escrow_id, f.payee.clone(), new_payee.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth {
+        address: &f.payee,
+        invoke: &transfer,
+    }]);
+
+    f.client.transfer_payee(&f.escrow_id, &f.payee, &new_payee);
+
+    auth::assert_auth_tree(&env, &f.payee, &transfer);
+    assert_eq!(f.client.get_escrow(&f.escrow_id).payee, new_payee);
+}
+
+#[test]
+fn transfer_payee_rejects_the_payer_signing_as_current_payee() {
+    let env = Env::default();
+    let f = setup(&env);
+    let new_payee = Address::generate(&env);
+
+    let transfer = MockAuthInvoke {
+        contract: &f.contract_id,
+        fn_name: "transfer_payee",
+        args: (f.escrow_id, f.payer.clone(), new_payee.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth {
+        address: &f.payer,
+        invoke: &transfer,
+    }]);
+
+    let result = f
+        .client
+        .try_transfer_payee(&f.escrow_id, &f.payer, &new_payee);
+    assert_eq!(result, Err(Ok(docforum_escrow::Error::Unauthorized)));
+    assert_eq!(f.client.get_escrow(&f.escrow_id).payee, f.payee);
+}
+
+#[test]
+fn transfer_payee_rejects_a_stranger_signing_the_payees_exact_tree() {
+    let env = Env::default();
+    let f = setup(&env);
+    let new_payee = Address::generate(&env);
+    let stranger = Address::generate(&env);
+
+    let transfer = MockAuthInvoke {
+        contract: &f.contract_id,
+        fn_name: "transfer_payee",
+        args: (f.escrow_id, f.payee.clone(), new_payee.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth {
+        address: &stranger,
+        invoke: &transfer,
+    }]);
+
+    assert!(matches!(
+        f.client
+            .try_transfer_payee(&f.escrow_id, &f.payee, &new_payee),
+        Err(Err(soroban_sdk::InvokeError::Abort))
+    ));
+    assert_eq!(f.client.get_escrow(&f.escrow_id).payee, f.payee);
+}
+
+#[test]
+fn transfer_payee_fails_without_the_current_payees_signature() {
+    let env = Env::default();
+    let f = setup(&env);
+    let new_payee = Address::generate(&env);
+
+    env.mock_auths(&[]);
+    assert!(matches!(
+        f.client
+            .try_transfer_payee(&f.escrow_id, &f.payee, &new_payee),
+        Err(Err(soroban_sdk::InvokeError::Abort))
+    ));
+    assert_eq!(f.client.get_escrow(&f.escrow_id).payee, f.payee);
+}

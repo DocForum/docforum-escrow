@@ -1,0 +1,19 @@
+# Generated files. `linguist-generated` makes GitHub collapse them in PR diffs
+# and leave them out of language stats. Only list a file here if CI
+# regenerates or verifies it, because collapsed diffs get less human review.
+#
+# If one of these conflicts after a rebase, don't hand-merge it: take main's
+# version, then regenerate it with the command noted next to it.
+
+# stellar CLI bindings; CI: "SDK bindings match contract WASM"
+# (scripts/check-generated-bindings.sh prints the regeneration command).
+sdk/src/generated/contract-client.ts linguist-generated=true
+# node sdk/scripts/check-contract-errors.mjs; CI: "TypeScript SDK" (--check).
+sdk/src/contract-errors.generated.ts linguist-generated=true
+# node scripts/deploy-record.mjs --sync; CI: "Contract interface snapshot".
+sdk/src/deployments.generated.ts linguist-generated=true
+# python3 scripts/check-contract-interface.py > contract-spec.json;
+# CI: "Contract interface snapshot".
+contract-spec.json linguist-generated=true
+# cargo test (in contracts/escrow); CI fails if cargo test changes them.
+contracts/escrow/test_snapshots/** linguist-generated=true

@@ -1,0 +1,27 @@
+type Escrow @entity {
+  id: ID!
+  escrowId: BigInt!
+  payer: String!
+  payee: String!
+  token: String!
+  amount: BigInt!
+  conditionRef: String!
+  releasers: [String!]!
+  threshold: BigInt!
+  refundAfter: BigInt
+  notifyPayee: Boolean!
+  requiresAcceptance: Boolean!
+  acceptedAt: BigInt
+  feeRecipient: String
+  feeBps: BigInt
+  status: String!
+  updatedLedger: BigInt!
+}
+
+type EscrowEvent @entity {
+  id: ID!
+  escrowId: BigInt!
+  action: String!
+  transactionHash: String!
+  ledger: BigInt!
+}

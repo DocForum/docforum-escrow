@@ -1,0 +1,63 @@
+{
+  "format": 3,
+  "threshold_percent": 20,
+  "profile_method": "Soroban native budget; one successful call per fresh environment; setup excluded; every run must match",
+  "last_update": {
+    "date": "2026-11-22",
+    "note": "Issue #319: re-measured after rebasing onto main (#402, #404 and #389 landed); every function moved by less than 1.5%, so no reviewed regression is being accepted."
+  },
+  "functions": {
+    "accept": {
+      "cpu_instructions": 206926,
+      "memory_bytes": 98066
+    },
+    "create_escrow": {
+      "cpu_instructions": 599522,
+      "memory_bytes": 205601
+    },
+    "create_escrow_release_time": {
+      "cpu_instructions": 599761,
+      "memory_bytes": 205883
+    },
+    "create_escrow_with_acceptance": {
+      "cpu_instructions": 599518,
+      "memory_bytes": 205569
+    },
+    "create_escrow_with_releasers": {
+      "cpu_instructions": 597810,
+      "memory_bytes": 205401
+    },
+    "get_escrow": {
+      "cpu_instructions": 130359,
+      "memory_bytes": 68819
+    },
+    "get_status": {
+      "cpu_instructions": 69319,
+      "memory_bytes": 32351
+    },
+    "refund": {
+      "cpu_instructions": 492288,
+      "memory_bytes": 156843
+    },
+    "refund_with_approvals": {
+      "cpu_instructions": 468693,
+      "memory_bytes": 154019
+    },
+    "release": {
+      "cpu_instructions": 477352,
+      "memory_bytes": 160311
+    },
+    "release_with_approvals": {
+      "cpu_instructions": 481831,
+      "memory_bytes": 160520
+    },
+    "rotate_releaser": {
+      "cpu_instructions": 231758,
+      "memory_bytes": 107271
+    },
+    "top_up": {
+      "cpu_instructions": 641721,
+      "memory_bytes": 210934
+    }
+  }
+}

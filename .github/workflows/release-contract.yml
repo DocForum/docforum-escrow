@@ -1,0 +1,67 @@
+name: Release contract WASM
+
+on:
+  push:
+    tags:
+      - "contract-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Build and publish reproducible testnet contract artifacts
+    runs-on: ubuntu-latest
+    container: rust:1.96.0-bookworm
+    # contents: write publishes release assets; the OIDC and attestations
+    # scopes attach Sigstore build provenance to each WASM artifact.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install WASM target
+        run: rustup target add wasm32v1-none
+
+      - name: Confirm escrow WASM is reproducible across checkout paths
+        run: bash scripts/check-wasm-reproducibility.sh escrow
+
+      - name: Confirm releaser-account WASM is reproducible across checkout paths
+        run: bash scripts/check-wasm-reproducibility.sh releaser-account
+
+      - name: Build both WASM artifacts
+        run: |
+          bash scripts/build-wasm.sh escrow
+          bash scripts/build-wasm.sh releaser-account
+
+      - name: Create SHA-256 files
+        run: |
+          set -eu
+          escrow=contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm
+          releaser=contracts/releaser-account/target/wasm32v1-none/release/docforum_releaser_account.wasm
+          sha256sum "$escrow" | awk '{ print $1 "  docforum_escrow.wasm" }' > docforum_escrow.wasm.sha256
+          sha256sum "$releaser" | awk '{ print $1 "  docforum_releaser_account.wasm" }' > docforum_releaser_account.wasm.sha256
+
+      # Each WASM receives its own attestation whose subject path is the exact
+      # artifact uploaded below. Attesting one does not cover the other.
+      - name: Attest escrow WASM build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm
+
+      - name: Attest releaser-account WASM build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: contracts/releaser-account/target/wasm32v1-none/release/docforum_releaser_account.wasm
+
+      - name: Publish WASM artifacts and SHA-256 files
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          files: |
+            contracts/escrow/target/wasm32v1-none/release/docforum_escrow.wasm
+            docforum_escrow.wasm.sha256
+            contracts/releaser-account/target/wasm32v1-none/release/docforum_releaser_account.wasm
+            docforum_releaser_account.wasm.sha256
+          generate_release_notes: true
