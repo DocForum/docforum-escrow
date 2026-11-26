@@ -40,6 +40,37 @@ impl EscrowContract {
         )
     }
 
+    /// Pooled-escrow variant settled by an M-of-N releaser set (issue #290).
+    /// Takes the same funding rules as `create_pooled_escrow`, with
+    /// `releasers`/`threshold` validated by the shared `check_releaser_set`;
+    /// a fully funded round requires `threshold` approvals through
+    /// `release_with_approvals`. Push refunds stay unavailable, so failed
+    /// rounds are still refunded per contributor with `claim_refund`.
+    pub fn create_pooled_quorum_escrow(
+        env: Env,
+        creator: Address,
+        payee: Address,
+        token: Address,
+        funding_target: i128,
+        condition_ref: String,
+        releasers: Vec<Address>,
+        threshold: u32,
+        funding_deadline: u64,
+    ) -> Result<u64, Error> {
+        Self::create_pooled_escrow_inner(
+            env,
+            creator,
+            payee,
+            token,
+            funding_target,
+            condition_ref,
+            releasers,
+            threshold,
+            funding_deadline,
+            None,
+        )
+    }
+
     /// Creates a pooled escrow with an optional release deadline (issue #288).
     /// If `release_deadline` is set, it must be strictly after `funding_deadline`.
     /// When the release deadline passes on a fully funded pool without release,
@@ -53,6 +84,34 @@ impl EscrowContract {
         funding_target: i128,
         condition_ref: String,
         releaser: Address,
+        funding_deadline: u64,
+        release_deadline: Option<u64>,
+    ) -> Result<u64, Error> {
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        Self::create_pooled_escrow_inner(
+            env,
+            creator,
+            payee,
+            token,
+            funding_target,
+            condition_ref,
+            releasers,
+            1,
+            funding_deadline,
+            release_deadline,
+        )
+    }
+
+    fn create_pooled_escrow_inner(
+        env: Env,
+        creator: Address,
+        payee: Address,
+        token: Address,
+        funding_target: i128,
+        condition_ref: String,
+        releasers: Vec<Address>,
+        threshold: u32,
         funding_deadline: u64,
         release_deadline: Option<u64>,
     ) -> Result<u64, Error> {
