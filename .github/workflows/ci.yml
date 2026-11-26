@@ -292,6 +292,9 @@ jobs:
       - name: Confirm custom account wasm exists
         run: test -f ../releaser-account/target/wasm32v1-none/release/docforum_releaser_account.wasm
 
+      - name: Test example payee callback contract
+        run: cargo test --manifest-path ../../examples/payee-callback/Cargo.toml
+
   fmt:
     name: Rust formatting (cargo fmt --check)
     runs-on: ubuntu-latest
@@ -442,7 +445,6 @@ jobs:
       # deny.toml and docs/supply-chain.md, and is ignored here for the same
       # reason.
       - run: cargo audit --deny yanked --ignore RUSTSEC-2026-0387
-
 
   reproducible-wasm:
     name: Reproducible WASM across checkout paths

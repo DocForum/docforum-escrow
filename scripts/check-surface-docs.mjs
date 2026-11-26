@@ -36,9 +36,12 @@ export function surfaceBlock(doc) {
   throw new Error(`${DOC}: no code block under "Contract surface"`);
 }
 
-// Bodies of pending fragments aimed at the Contract surface section.
-export function fragmentBodies(dir) {
+// Bodies of pending fragments aimed at the Contract surface section: either a
+// `section:` fragment, or an `after:` fragment anchored on one of the block's
+// own lines, which is how docs.d/README.md says to add a listing line.
+export function fragmentBodies(dir, block = '') {
   if (!fs.existsSync(dir)) return [];
+  const blockLines = block.split(/\r?\n/);
   const bodies = [];
   for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.md') && n !== 'README.md').sort()) {
     const m = fs.readFileSync(path.join(dir, f), 'utf8').match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
@@ -48,7 +51,10 @@ export function fragmentBodies(dir) {
       const kv = line.match(/^([a-z]+):\s*(.*)$/);
       if (kv) meta[kv[1]] = kv[2].trim().replace(/^(['"])(.*)\1$/, '$2');
     }
-    if (meta.file === DOC && meta.section && norm(meta.section) === SECTION) bodies.push({ file: f, body: m[2] });
+    if (meta.file !== DOC) continue;
+    const inSection = meta.section && norm(meta.section) === SECTION;
+    const afterBlockLine = meta.after && blockLines.some((l) => l.includes(meta.after));
+    if (inSection || afterBlockLine) bodies.push({ file: f, body: m[2] });
   }
   return bodies;
 }
@@ -58,7 +64,7 @@ const mentions = (text, name) => new RegExp(`(^|[^A-Za-z0-9_])${name}\\(`, 'm').
 export function findMissing(root) {
   const spec = JSON.parse(fs.readFileSync(path.join(root, 'contract-spec.json'), 'utf8'));
   const block = surfaceBlock(fs.readFileSync(path.join(root, DOC), 'utf8'));
-  const frags = fragmentBodies(path.join(root, 'docs.d'));
+  const frags = fragmentBodies(path.join(root, 'docs.d'), block);
   return spec.functions
     .map((f) => f.name)
     .filter((n) => !EXEMPT.has(n))

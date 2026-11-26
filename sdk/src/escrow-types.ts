@@ -95,8 +95,9 @@ export interface Escrow {
 export const MAX_FEE_BPS = 1_000;
 
 /**
- * Maximum allowed length of `conditionRef` in bytes — must match the
- * contract's bound (currently 64 bytes, see contracts/escrow/src/lib.rs
+ * Maximum allowed length of `conditionRef` in UTF-8 bytes (not UTF-16
+ * code units) — must match the contract's bound (currently 64 bytes,
+ * see contracts/escrow/src/lib.rs
  * and docs/threat-model.md T10). Validated client-side so callers fail
  * fast instead of paying network fees for a rejected transaction.
  *
@@ -124,7 +125,7 @@ export interface CreateEscrowParams {
   token: string;
   /** Amount of `token` to lock, in the token's smallest unit. Must be positive. */
   amount: bigint;
-  /** Opaque reference the contract stores but never interprets; at most {@link MAX_CONDITION_REF_LENGTH} bytes. */
+  /** Opaque reference the contract stores but never interprets; at most {@link MAX_CONDITION_REF_LENGTH} UTF-8 bytes. */
   conditionRef: string;
   /**
    * The only address later permitted to call `release`/`refund` on this

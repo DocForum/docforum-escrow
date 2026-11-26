@@ -1,0 +1,1 @@
+Issue #324: the SDK now measures `conditionRef` in UTF-8 bytes in `createEscrow`, `createStreamedEscrow`, `createQuorumEscrow`, `createPooledEscrow`, the fee-split create path and `milestoneConditionRef`, so multi-byte refs that the contract would reject fail fast client-side.
