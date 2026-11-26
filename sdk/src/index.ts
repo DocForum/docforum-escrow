@@ -582,9 +582,9 @@ export class EscrowClient {
     if (params.amount <= 0n) {
       throw new Error(`InvalidAmount (error 2): amount must be a positive raw amount, got ${params.amount}`);
     }
-    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+    if (utf8ByteLength(params.conditionRef) > MAX_CONDITION_REF_LENGTH) {
       throw new Error(
-        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${utf8ByteLength(params.conditionRef)}`
       );
     }
     if ((params.feeRecipient === undefined) !== (params.feeBps === undefined)) {
@@ -742,9 +742,9 @@ export class EscrowClient {
   async createStreamedEscrow(
     params: CreateStreamedEscrowParams,
   ): Promise<{ escrowId: bigint; txHash: string }> {
-    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+    if (utf8ByteLength(params.conditionRef) > MAX_CONDITION_REF_LENGTH) {
       throw new Error(
-        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`,
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${utf8ByteLength(params.conditionRef)}`,
       );
     }
     if (params.amount <= 0n) throw new RangeError(`amount must be positive, got ${params.amount}`);
@@ -882,9 +882,9 @@ export class EscrowClient {
   async createQuorumEscrow(
     params: CreateQuorumEscrowParams
   ): Promise<{ escrowId: bigint; txHash: string }> {
-    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+    if (utf8ByteLength(params.conditionRef) > MAX_CONDITION_REF_LENGTH) {
       throw new Error(
-        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${utf8ByteLength(params.conditionRef)}`
       );
     }
     if (params.releasers.length === 0) {
@@ -1873,9 +1873,9 @@ export class EscrowClient {
   async createPooledEscrow(
     params: CreatePooledEscrowParams
   ): Promise<{ escrowId: bigint; txHash: string }> {
-    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+    if (utf8ByteLength(params.conditionRef) > MAX_CONDITION_REF_LENGTH) {
       throw new Error(
-        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${utf8ByteLength(params.conditionRef)}`
       );
     }
     if (params.fundingTarget <= 0n) {
@@ -2539,9 +2539,9 @@ export class EscrowClient {
     if (params.feeBps !== undefined && (!Number.isInteger(params.feeBps) || params.feeBps < 0 || params.feeBps > MAX_FEE_BPS)) {
       throw new RangeError(`feeBps must be an integer between 0 and ${MAX_FEE_BPS} (10 %)`);
     }
-    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+    if (utf8ByteLength(params.conditionRef) > MAX_CONDITION_REF_LENGTH) {
       throw new Error(
-        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${utf8ByteLength(params.conditionRef)}`
       );
     }
     const validForLedgers = params.validForLedgers ?? PREPARED_TX_TTL_LEDGERS;

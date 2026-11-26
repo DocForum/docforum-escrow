@@ -9,7 +9,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   EscrowClient,
-  MAX_CONDITION_REF_LENGTH,
   MilestoneEscrowPartialError,
   MilestoneScheduleError,
   milestoneConditionRef,
@@ -17,6 +16,8 @@ import {
   type CreateMilestoneEscrowParams,
   type MilestoneEscrow,
 } from "../src/index.js";
+import { MAX_CONDITION_REF_LENGTH } from "../src/escrow-types.js";
+import { utf8ByteLength } from "../src/internal.js";
 
 const CONTRACT_ID = "CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5";
 const TOKEN = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
@@ -85,8 +86,18 @@ describe("milestoneConditionRef", () => {
 
   it("keeps the tagged ref inside the contract's byte limit", () => {
     const longest = "x".repeat(MAX_CONDITION_REF_LENGTH - "#m10/10".length);
-    expect(milestoneConditionRef(longest, 9, 10)).toHaveLength(MAX_CONDITION_REF_LENGTH);
+    expect(utf8ByteLength(milestoneConditionRef(longest, 9, 10))).toBe(MAX_CONDITION_REF_LENGTH);
     expect(() => milestoneConditionRef(longest, 9, 10)).not.toThrow();
+  });
+
+  it("counts the tag's room in UTF-8 bytes for multi-byte base refs", () => {
+    // "é" is 2 bytes and the tag "#m1/2" is 5: 29 of them plus "x" is 59
+    // bytes, so the tagged ref is exactly 64 bytes (but only 35 UTF-16 units).
+    const accented = "é".repeat(29) + "x";
+    expect(utf8ByteLength(milestoneConditionRef(accented, 0, 2))).toBe(64);
+    // 30 of them is 60 bytes; with the tag that is 65, one over the limit,
+    // although the string is only 35 UTF-16 units long.
+    expect(() => milestoneConditionRef("é".repeat(30), 0, 2)).toThrow(MilestoneScheduleError);
   });
 
   it("rejects a base ref with no room left for the tag", () => {

@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Keypair, nativeToScVal, xdr } from "@stellar/stellar-sdk";
 import { ContractError, EscrowClient, MAX_CONDITION_REF_LENGTH, pooledPhase } from "../src/index.js";
+import { utf8ByteLength } from "../src/internal.js";
 import { encodeArgs, expectMatchesSpec, makeClient, readResult, sendableTx } from "./contract-spec-args.js";
 
 const client = new EscrowClient({
@@ -38,6 +39,13 @@ describe("createPooledEscrow validation", () => {
     ).rejects.toThrow(/conditionRef/);
   });
 
+  it("rejects a conditionRef over the byte limit even when its char count fits", async () => {
+    // 33 two-byte characters = 66 bytes (> 64) but only 33 UTF-16 units.
+    await expect(
+      client.createPooledEscrow(pooledCreateParams({ conditionRef: "é".repeat(33) }))
+    ).rejects.toThrow(/conditionRef/);
+  });
+
   it("rejects a non-positive funding target", async () => {
     for (const fundingTarget of [0n, -1n]) {
       await expect(
@@ -58,6 +66,29 @@ describe("createPooledEscrow validation", () => {
     await expect(client.createPooledEscrow(pooledCreateParams({}))).rejects.not.toThrow(
       /conditionRef must|fundingTarget must|fundingDeadline must/
     );
+  });
+});
+
+describe("utf8ByteLength boundary", () => {
+  it("counts astral (emoji) characters as 4 bytes", () => {
+    expect(utf8ByteLength("😀")).toBe(4);
+    expect(utf8ByteLength("😀".repeat(16))).toBe(64);
+  });
+
+  it("accepts exactly 64 bytes and rejects 65 for multi-byte input", async () => {
+    // 32 two-byte characters = 64 bytes: the length check must pass.
+    // The call then fails on the unreachable network, not on conditionRef.
+    await expect(
+      client.createPooledEscrow(pooledCreateParams({ conditionRef: "é".repeat(32) }))
+    ).rejects.not.toThrow(/conditionRef/);
+    // 16 emoji = 64 bytes: must pass the length check.
+    await expect(
+      client.createPooledEscrow(pooledCreateParams({ conditionRef: "😀".repeat(16) }))
+    ).rejects.not.toThrow(/conditionRef/);
+    // 16 emoji + 1 ASCII = 65 bytes: must fail.
+    await expect(
+      client.createPooledEscrow(pooledCreateParams({ conditionRef: "😀".repeat(16) + "a" }))
+    ).rejects.toThrow(/conditionRef/);
   });
 });
 
