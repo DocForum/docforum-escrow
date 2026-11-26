@@ -1150,7 +1150,6 @@ fn pooled_escrow_without_deadline_keeps_existing_behavior() {
     assert_eq!(f.token.balance(&f.payee), 100);
 }
 
-
 // ---------------------------------------------------------------------------
 // Pooled escrows settled by an M-of-N releaser set (issue #290)
 // ---------------------------------------------------------------------------
