@@ -31,7 +31,7 @@ import {
   type Contribution as GeneratedContribution,
   type VestingInfo as GeneratedVestingInfo,
 } from "./generated/contract-client.js";
-import { decodeEscrowDataFromScVal } from "./escrow-data.js";
+import { decodeEscrowDataFromScVal, escrowLedgerKey } from "./escrow-data.js";
 import {
   beginPhase,
   isInstrumentationEnabled,
@@ -195,7 +195,7 @@ export * from "./rpc-providers.js";
 export * from "./solvency.js";
 export * from "./vesting.js";
 
-import { type ArchivedEntryBehavior } from "./archived-entries.js";
+import { type ArchivedEntryBehavior, ArchivedEntryError } from "./archived-entries.js";
 import { type BatchCreateItem, type BatchItemResult, type BatchOptions, BatchPartialFailureError, type BatchSettleOperation, MAX_BATCH_SIZE } from "./batch.js";
 import { type EscrowClientConfig } from "./client-config.js";
 import { UnsupportedContractVersionError, isSupportedContractVersion } from "./contract-version.js";
@@ -1016,6 +1016,53 @@ export class EscrowClient {
       };
       void poll();
     });
+  }
+
+  /**
+   * Read-only: fetches many escrows in batched `getLedgerEntries` RPC calls
+   * (up to 200 keys per call) instead of one simulation per id. Returns a
+   * `Map` in the order of `ids`, with `undefined` for missing/reclaimed ids.
+   * Throws {@link ArchivedEntryError} if an entry's TTL has expired.
+   */
+  async getEscrows(ids: readonly bigint[]): Promise<Map<bigint, Escrow | undefined>> {
+    const result = new Map<bigint, Escrow | undefined>();
+    if (ids.length === 0) return result;
+
+    await this.ensureNetworkVerified();
+
+    const uniqueIds: bigint[] = [];
+    for (const id of ids) {
+      if (!result.has(id)) {
+        result.set(id, undefined);
+        uniqueIds.push(id);
+      }
+    }
+
+    const MAX_LEDGER_ENTRIES_PER_CALL = 200;
+    for (let i = 0; i < uniqueIds.length; i += MAX_LEDGER_ENTRIES_PER_CALL) {
+      const chunkIds = uniqueIds.slice(i, i + MAX_LEDGER_ENTRIES_PER_CALL);
+      const keyToId = new Map<string, bigint>();
+      const keys = chunkIds.map((id) => {
+        const key = escrowLedgerKey(this.contractId, id);
+        keyToId.set(key.toXDR("base64"), id);
+        return key;
+      });
+
+      const response = await this.rpc.getLedgerEntries(...keys);
+      for (const entry of response.entries ?? []) {
+        if (
+          entry.liveUntilLedgerSeq !== undefined &&
+          entry.liveUntilLedgerSeq < response.latestLedger
+        ) {
+          throw new ArchivedEntryError("getEscrows", "error");
+        }
+        const id = keyToId.get(entry.key.toXDR("base64"));
+        if (id === undefined) continue;
+        result.set(id, decodeEscrowDataFromScVal(entry.val.contractData().val()));
+      }
+    }
+
+    return result;
   }
 
   /**
