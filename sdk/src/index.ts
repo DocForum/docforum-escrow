@@ -208,7 +208,7 @@ import { type AcceptParams, DEFAULT_WAIT_POLL_INTERVAL_MS, type EscrowPreconditi
 import { type CreateStreamedEscrowParams, type VestingInfo, type WithdrawParams, validateVestingSchedule } from "./vesting.js";
 import { type CreateMilestoneEscrowParams, type Milestone, type MilestoneEscrow, MilestoneEscrowPartialError, type MilestoneStatus, type RefundMilestoneParams, type ReleaseMilestoneParams, milestoneConditionRef, validateMilestoneSchedule } from "./milestones.js";
 import { MAINNET_NETWORK_PASSPHRASE, MainnetNotAllowedError } from "./networks.js";
-import { type ClaimRefundParams, type CloseFailedRoundOptions, type ContributeParams, type ContributionRecord, type CreatePooledEscrowParams, type PooledEscrow, type SolvencyReport } from "./pooled.js";
+import { type ClaimRefundParams, type CloseFailedRoundOptions, type ContributeParams, type ContributionRecord, type CreatePooledEscrowParams, type PooledEscrow, type PooledPhaseInfo, pooledPhase, type SolvencyReport } from "./pooled.js";
 import { canRefund as evaluateRefund, canRelease as evaluateRelease, type SettlementCheck, type SettlementCheckParams } from "./preflight.js";
 import { DEFAULT_SUBMIT_MAX_FEE, OFFLINE_PREPARED_TX_TTL_LEDGERS, PREPARED_TX_TTL_LEDGERS, type PrepareCreateEscrowParams, type PrepareSettlementParams, type SubmitSignedOptions, type SubmitSignedResult } from "./prepare-submit.js";
 import { RELAYED_AUTH_TTL_LEDGERS, type RelayedAuthorization, type RelayedAuthorizationParams } from "./relayed-auth.js";
@@ -1951,6 +1951,20 @@ export class EscrowClient {
     );
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Read-only: combines `getEscrow`, `getPooled`, and `getLedgerTime` (not the
+   * local clock) to report whether a pooled escrow is `"open"`, `"funded"`,
+   * `"failed"`, or `"released"`, along with `remaining` and `deadline`.
+   */
+  async getPooledPhase(escrowId: bigint): Promise<PooledPhaseInfo> {
+    const [escrow, pooled, ledgerTime] = await Promise.all([
+      this.getEscrow(escrowId),
+      this.getPooled(escrowId),
+      this.getLedgerTime(),
+    ]);
+    return pooledPhase(escrow, pooled, ledgerTime.closeTime);
   }
 
   /**
