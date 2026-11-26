@@ -128,7 +128,7 @@ struct Fixture<'a> {
     releaser: Address,
 }
 
-fn deploy<'a>(env: &'a Env) -> Fixture<'a> {
+fn deploy(env: &Env) -> Fixture<'_> {
     env.ledger().set_timestamp(CREATED_AT);
 
     let (token_id, token, asset) = setup_asset(env);
@@ -198,7 +198,7 @@ fn every_contract_entrypoint_has_a_pause_classification() {
     );
     for name in &snapshot {
         assert!(
-            classified.contains(&name),
+            classified.contains(name),
             "unclassified contract entry point: {name}"
         );
     }

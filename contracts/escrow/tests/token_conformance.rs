@@ -206,7 +206,7 @@ impl<'a> Token<'a> {
             }
             Kind::IssuedSac => StellarAssetClient::new(self.env, &self.address).mint(who, &amount),
             Kind::Custom(_) => {
-                ReferenceTokenClient::new(self.env, &self.address).mint(who, &amount)
+                ReferenceTokenClient::new(self.env, &self.address).mint(who, &amount);
             }
         }
     }
@@ -402,7 +402,9 @@ fn payer_cancels_unaccepted_escrow(kind: Kind) {
         &None,
     );
     assert_eq!(
-        f.c.try_release(&id, &f.releaser).err().map(|e| e.ok()),
+        f.c.try_release(&id, &f.releaser)
+            .err()
+            .map(std::result::Result::ok),
         Some(Some(Error::AcceptanceRequired))
     );
     f.c.cancel(&id, &f.payer);

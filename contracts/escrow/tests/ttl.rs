@@ -44,7 +44,7 @@ struct Fixture<'a> {
     escrow_id: u64,
 }
 
-fn create_test_escrow<'a>(env: &'a Env, amount: i128, refund_after: Option<u64>) -> Fixture<'a> {
+fn create_test_escrow(env: &Env, amount: i128, refund_after: Option<u64>) -> Fixture<'_> {
     let (token_id, token, asset) = setup_token(env);
     let payer = Address::generate(env);
     let payee = Address::generate(env);
@@ -100,18 +100,14 @@ fn create_escrow_extends_escrow_and_instance_ttl() {
             .get_ttl(&DataKey::Escrow(f.escrow_id));
         assert!(
             escrow_ttl >= ESCROW_EXTEND_TO - 1,
-            "escrow TTL {} should be >= {}",
-            escrow_ttl,
-            ESCROW_EXTEND_TO
+            "escrow TTL {escrow_ttl} should be >= {ESCROW_EXTEND_TO}"
         );
 
         // Instance entry should be extended to INSTANCE_EXTEND_TO (~30 days = 518,400 ledgers)
         let instance_ttl = env.storage().instance().get_ttl();
         assert!(
             instance_ttl >= INSTANCE_EXTEND_TO - 1,
-            "instance TTL {} should be >= {}",
-            instance_ttl,
-            INSTANCE_EXTEND_TO
+            "instance TTL {instance_ttl} should be >= {INSTANCE_EXTEND_TO}"
         );
     });
 }
@@ -174,9 +170,7 @@ fn dynamic_ttl_sized_to_refund_deadline_plus_grace() {
             .get_ttl(&DataKey::Escrow(f.escrow_id));
         assert!(
             ttl >= expected_target - 1,
-            "escrow TTL {} should cover deadline + grace {}",
-            ttl,
-            expected_target
+            "escrow TTL {ttl} should cover deadline + grace {expected_target}"
         );
         assert!(
             ttl <= MAX_NETWORK_TTL_LEDGERS,
@@ -238,9 +232,7 @@ fn write_paths_extend_ttl_top_up_rotate_accept_settle() {
         let ttl = storage.get_ttl(&DataKey::Status(f.escrow_id));
         assert!(
             ttl >= SETTLED_ESCROW_EXTEND_TO - 1,
-            "settled status TTL {} should be >= {}",
-            ttl,
-            SETTLED_ESCROW_EXTEND_TO
+            "settled status TTL {ttl} should be >= {SETTLED_ESCROW_EXTEND_TO}"
         );
     });
 }

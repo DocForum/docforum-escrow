@@ -904,7 +904,11 @@ fn create_pooled_escrow_accepts_a_condition_ref_at_the_length_limit() {
     assert_eq!(f.client.get_status(&id), EscrowStatus::Funded);
 }
 
-fn setup_with_release_deadline(env: &Env, target: i128, release_deadline: Option<u64>) -> Fixture<'_> {
+fn setup_with_release_deadline(
+    env: &Env,
+    target: i128,
+    release_deadline: Option<u64>,
+) -> Fixture<'_> {
     env.mock_all_auths();
     env.ledger().set_timestamp(CREATED_AT);
 

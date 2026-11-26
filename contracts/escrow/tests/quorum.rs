@@ -525,7 +525,7 @@ fn single_releaser_escrow_behaves_as_a_one_of_one_quorum() {
     assert_eq!(token.balance(&payee), AMOUNT * 2);
 }
 
-fn empty_fixture<'a>(env: &'a Env) -> (EscrowContractClient<'a>, Address, Address) {
+fn empty_fixture(env: &Env) -> (EscrowContractClient<'_>, Address, Address) {
     let token_id = env
         .register_stellar_asset_contract_v2(Address::generate(env))
         .address();

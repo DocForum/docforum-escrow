@@ -177,9 +177,7 @@ impl FailingPayoutToken {
             .persistent()
             .get(&MockKey::PayoutBlocked)
             .unwrap_or(false);
-        if armed {
-            panic!("payout blocked");
-        }
+        assert!(!armed, "payout blocked");
         mock_debit_credit(&env, &from, &to, amount, amount);
     }
 }
