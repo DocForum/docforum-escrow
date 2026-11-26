@@ -1,0 +1,225 @@
+name: Release React hooks
+
+# Issue #352: the hooks package had a published name but no release workflow.
+# This mirrors release-sdk.yml (tag/version guard, provenance, trusted
+# publishing) and additionally exercises the two ends of the declared
+# @docforum/escrow-sdk peer range before anything is published.
+
+on:
+  push:
+    tags:
+      - "react-v*"
+  # Manual runs never publish: they pack (`npm publish --dry-run`) so the
+  # workflow can be verified on a fork before the first tagged release.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Issue #352: "nothing checks that the package works with the SDK version
+  # range it declares." Resolve the lowest and highest *published*
+  # @docforum/escrow-sdk version that satisfies the peer range in
+  # packages/escrow-react/package.json and typecheck + test against each.
+  peers:
+    name: Peer compatibility (${{ matrix.bound }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        bound: [lowest, highest]
+    defaults:
+      run:
+        working-directory: packages/escrow-react/
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Resolve the ${{ matrix.bound }} supported SDK peer version
+        id: peer
+        run: |
+          set -eu
+          RANGE=$(node -p "require('./package.json').peerDependencies['@docforum/escrow-sdk']")
+          echo "Declared peer range: ${RANGE}"
+
+          set +e
+          npm view @docforum/escrow-sdk version --json >/dev/null 2>&1
+          EXISTS=$?
+          set -e
+
+          if [ "${EXISTS}" -ne 0 ]; then
+            # Nothing published yet (the SDK release is still gated on the
+            # one-time npm trusted-publisher setup). Fall back to the SDK in
+            # this checkout so the job still guards typecheck and tests, and
+            # say so instead of silently passing.
+            echo "::warning::@docforum/escrow-sdk is not on npm yet; testing against the SDK in this checkout. This peer check becomes real once the SDK is published."
+            echo "available=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          set +e
+          PUBLISHED=$(npm view "@docforum/escrow-sdk@${RANGE}" version --json 2>/dev/null)
+          STATUS=$?
+          set -e
+
+          if [ "${STATUS}" -ne 0 ] || [ -z "${PUBLISHED}" ]; then
+            # The SDK exists but the declared peer range admits no release:
+            # the package promises a version that cannot be installed.
+            echo "::error::@docforum/escrow-sdk is published, but no version satisfies the declared peer range ${RANGE}"
+            exit 1
+          fi
+
+          VERSION=$(printf '%s' "${PUBLISHED}" | node -e '
+            let raw = "";
+            process.stdin.on("data", (chunk) => { raw += chunk; });
+            process.stdin.on("end", () => {
+              const versions = [].concat(JSON.parse(raw));
+              versions.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+              console.log(process.argv[1] === "lowest" ? versions[0] : versions[versions.length - 1]);
+            });
+          ' "${{ matrix.bound }}")
+
+          echo "Resolved ${RANGE} -> ${VERSION}"
+          echo "available=true" >> "${GITHUB_OUTPUT}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The package's tsconfig maps @docforum/escrow-sdk to ../../sdk/dist, so
+      # the fallback path needs that build before typechecking.
+      - name: Build the SDK from this checkout (peer not published yet)
+        if: steps.peer.outputs.available != 'true'
+        working-directory: sdk/
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install the published SDK peer
+        if: steps.peer.outputs.available == 'true'
+        run: |
+          # The SDK is an *optional* peer, so `npm install` inside this package
+          # skips it. Install it into a scratch prefix and link it into
+          # node_modules instead: package.json and the lockfile stay untouched,
+          # because the published peer is test input, not a dependency.
+          PREFIX="${RUNNER_TEMP}/escrow-sdk-peer"
+          npm install --prefix "${PREFIX}" --no-package-lock --no-save \
+            --ignore-scripts \
+            "@docforum/escrow-sdk@${{ steps.peer.outputs.version }}"
+          mkdir -p node_modules/@docforum
+          ln -sfn "${PREFIX}/node_modules/@docforum/escrow-sdk" \
+            node_modules/@docforum/escrow-sdk
+
+      - name: Typecheck against the local SDK
+        if: steps.peer.outputs.available != 'true'
+        run: npm run typecheck
+
+      - name: Typecheck against the published SDK peer
+        if: steps.peer.outputs.available == 'true'
+        run: |
+          # Drop the local-sdk `paths` mapping so TypeScript resolves the
+          # installed peer's real declarations, which is the point of this job.
+          node -e '
+            const fs = require("fs");
+            const config = JSON.parse(fs.readFileSync("tsconfig.json", "utf8"));
+            delete config.compilerOptions.paths;
+            delete config.compilerOptions.baseUrl;
+            config.compilerOptions.noEmit = true;
+            fs.writeFileSync("tsconfig.peer.json", JSON.stringify(config, null, 2) + "\n");
+          '
+          npx tsc -p tsconfig.peer.json
+
+      - name: Test
+        run: npm test
+
+  release:
+    name: Build, test, and publish @docforum/escrow-react
+    needs: peers
+    runs-on: ubuntu-latest
+    # contents: write attaches the release tarball; id-token enables npm
+    # trusted publishing and provenance; attestations: write publishes it.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    defaults:
+      run:
+        working-directory: packages/escrow-react/
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Verify tag matches package.json version
+        if: github.event_name == 'push'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          EXPECTED="react-v${PKG_VERSION}"
+          if [ "${TAG}" != "${EXPECTED}" ]; then
+            echo "::error::Tag ${TAG} does not match package.json version ${PKG_VERSION} (expected ${EXPECTED})"
+            exit 1
+          fi
+
+      # The hooks package resolves the SDK's types from `sdk/dist/esm` via a
+      # tsconfig path (the SDK is an optional peer), so build it first.
+      - name: Build the SDK
+        working-directory: sdk/
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Pack tarball
+        run: npm pack
+
+      # Same dry run as a manual (fork) verification run; it also proves the
+      # publish path packs cleanly before the real publish below.
+      - name: Dry-run publish
+        run: npm publish --dry-run --access public
+
+      # Issue #352: the tarball attached below carries a Sigstore-backed build
+      # provenance attestation for this workflow run, verifiable with
+      # `gh attestation verify <tarball> -R DocForum/docforum-escrow`.
+      - name: Attest tarball build provenance
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: packages/escrow-react/*.tgz
+
+      # Manual runs stop at the dry run above; this requires the tag and the
+      # one-time npm trusted-publisher setup for @docforum/escrow-react.
+      - name: Publish to npm with provenance
+        if: github.event_name == 'push'
+        run: npm publish --provenance --access public
+
+      - name: Attach tarball to GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          files: packages/escrow-react/*.tgz
+          generate_release_notes: true

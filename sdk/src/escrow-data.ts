@@ -1,4 +1,4 @@
-import { scValToNative, xdr } from "@stellar/stellar-sdk";
+import { Address, nativeToScVal, scValToNative, xdr } from "@stellar/stellar-sdk";
 import type { Escrow, EscrowStatus } from "./index.js";
 
 const ESCROW_STATUSES: ReadonlySet<string> = new Set<EscrowStatus>([
@@ -91,4 +91,28 @@ export function decodeEscrowDataFromScVal(value: xdr.ScVal): Escrow {
     acceptedAt: asOptionalBigInt(record.accepted_at, "accepted_at"),
     status: asStatus(record.status),
   };
+}
+
+/**
+ * Builds the `DataKey::Escrow(id)` `ScVal` matching the contract's
+ * `#[contracttype] pub enum DataKey { Escrow(u64), ... }` encoding.
+ */
+export function escrowDataKey(escrowId: bigint): xdr.ScVal {
+  return xdr.ScVal.scvVec([
+    xdr.ScVal.scvSymbol("Escrow"),
+    nativeToScVal(escrowId, { type: "u64" }),
+  ]);
+}
+
+/**
+ * Builds the persistent `LedgerKey` for `DataKey::Escrow(id)` on `contractId`.
+ */
+export function escrowLedgerKey(contractId: string, escrowId: bigint): xdr.LedgerKey {
+  return xdr.LedgerKey.contractData(
+    new xdr.LedgerKeyContractData({
+      contract: Address.fromString(contractId).toScAddress(),
+      key: escrowDataKey(escrowId),
+      durability: xdr.ContractDataDurability.persistent(),
+    }),
+  );
 }

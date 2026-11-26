@@ -37,8 +37,8 @@ const expectedErrors = [
   [57, ScheduleCancelledError, "ScheduleCancelled"],
   [58, AllowanceExhaustedError, "AllowanceExhausted"],
   [59, InvalidScheduleError, "InvalidSchedule"],
-  [4700, DuplicateConditionRefError, "DuplicateConditionRef"],
-  [28800, InvalidReleaseDeadlineError, "InvalidReleaseDeadline"],
+  [60, DuplicateConditionRefError, "DuplicateConditionRef"],
+  [61, InvalidReleaseDeadlineError, "InvalidReleaseDeadline"],
 ] as const;
 
 describe("SDK errors", () => {
