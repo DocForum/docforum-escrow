@@ -1,14 +1,6 @@
 import { type EscrowSigner } from "./signers/types.js";
 
 /**
- * Length of `value` in UTF-8 bytes (not UTF-16 code units). Uses TextEncoder,
- * which is available in both browsers and Node.
- */
-export function utf8ByteLength(value: string): number {
-  return new TextEncoder().encode(value).length;
-}
-
-/**
  * The lifecycle state of an escrow, as returned by {@link EscrowClient.getStatus}
  * and carried on {@link Escrow.status}: `Funded` after creation, then `Released`
  * (paid to the payee), `Refunded` (returned to `refundTo`), or `Cancelled`.
@@ -112,7 +104,7 @@ export const MAX_FEE_BPS = 1_000;
  * Keep in sync with the contract: if the contract bound changes, update
  * this constant and bump the SDK's semver (hard rule 3).
  */
-export const MAX_CONDITION_REF_LENGTH: number = 64;
+export const MAX_CONDITION_REF_LENGTH = 64;
 
 /**
  * Maximum number of addresses in one escrow's releaser set — must match the

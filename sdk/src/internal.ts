@@ -6,17 +6,6 @@ import { type EscrowSpanAttributes } from "./instrumentation.js";
 import { EscrowPreconditionError, type LifecycleCall, type LifecycleMethod } from "./lifecycle.js";
 import { type Milestone, type MilestoneEscrow } from "./milestones.js";
 
-const UTF8_ENCODER = new TextEncoder();
-
-/**
- * Length of a string in UTF-8 bytes. The contract bounds `condition_ref` in
- * bytes, so every client-side length check must use this rather than
- * `String.prototype.length` (which counts UTF-16 code units).
- */
-export function utf8ByteLength(value: string): number {
-  return UTF8_ENCODER.encode(value).length;
-}
-
 export function safeScValToNative(value: xdr.ScVal): unknown {
   try { return scValToNative(value); }
   catch { return { xdr: value.toXDR("base64") }; }

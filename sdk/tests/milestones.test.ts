@@ -16,7 +16,8 @@ import {
   type CreateMilestoneEscrowParams,
   type MilestoneEscrow,
 } from "../src/index.js";
-import { MAX_CONDITION_REF_LENGTH, utf8ByteLength } from "../src/escrow-types.js";
+import { MAX_CONDITION_REF_LENGTH } from "../src/escrow-types.js";
+import { utf8ByteLength } from "../src/internal.js";
 
 const CONTRACT_ID = "CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5";
 const TOKEN = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";

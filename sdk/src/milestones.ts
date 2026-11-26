@@ -1,6 +1,6 @@
 import { type EscrowSigner } from "./signers/types.js";
 import { type CreateEscrowParams, MAX_CONDITION_REF_LENGTH } from "./escrow-types.js";
-import { utf8ByteLength } from "./escrow-types.js";
+import { utf8ByteLength } from "./internal.js";
 
 /**
  * One tranche of a milestone schedule. A milestone escrow is a *group* of

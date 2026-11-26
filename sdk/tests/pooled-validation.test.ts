@@ -7,7 +7,8 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { Keypair, nativeToScVal, xdr } from "@stellar/stellar-sdk";
-import { ContractError, EscrowClient, MAX_CONDITION_REF_LENGTH, utf8ByteLength } from "../src/index.js";
+import { ContractError, EscrowClient, MAX_CONDITION_REF_LENGTH } from "../src/index.js";
+import { utf8ByteLength } from "../src/internal.js";
 import { encodeArgs, expectMatchesSpec, makeClient, readResult, sendableTx } from "./contract-spec-args.js";
 
 const client = new EscrowClient({
