@@ -11,14 +11,14 @@ All commands run from `contracts/escrow/`.
 
 | Check | Job name | Tool version | Command |
 |---|---|---|---|
-| Formatting | `Rust formatting (cargo fmt --check)` | rustfmt 1.91.0 | `cargo fmt --check` |
-| Lints | `Rust lints (clippy -D warnings)` | clippy 1.91.0 | `cargo clippy --all-targets -- -D warnings` |
+| Formatting | `Rust formatting (cargo fmt --check)` | rustfmt 1.96.0 | `cargo fmt --check` |
+| Lints | `Rust lints (clippy -D warnings)` | clippy 1.96.0 | `cargo clippy --all-targets -- -D warnings` |
 | Soroban static analysis | `Soroban static analysis (Scout)` | `cargo-scout-audit` 0.3.17 | `cargo scout-audit --output-format md --cicd scout-report --exclude ...` |
 | Dependencies | `Supply chain (cargo-deny)` | cargo-deny 0.22.0 | `cargo deny check` |
 | Advisories | `Supply chain (cargo-audit)` | cargo-audit 0.23.0 | `cargo audit --deny yanked --ignore RUSTSEC-2026-0387` |
 
 The Rust version is pinned twice on purpose: `rust-toolchain.toml` for local
-use, and `dtolnay/rust-toolchain@1.91.0` in CI so a new compiler/lint/rustfmt
+use, and `dtolnay/rust-toolchain@1.96.0` in CI so a new compiler/lint/rustfmt
 release cannot turn an unchanged commit red. cargo-deny and cargo-audit are
 installed from their release tarballs with a checked-in SHA-256, not
 `latest`. Scout is installed from crates.io with `--locked` at 0.3.17.

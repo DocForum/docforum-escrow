@@ -14,12 +14,12 @@ use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String,
+    Address, Env, String, Vec,
 };
 
 /// Ledger close time at escrow creation.
 const CREATED_AT: u64 = 1_000;
-/// The escrow's timeout deadline — always strictly after `CREATED_AT`.
+/// The escrow's timeout deadline — always strictly after CREATED_AT.
 const DEADLINE: u64 = 1_100;
 
 fn setup<'a>(env: &Env) -> (Address, TokenClient<'a>, StellarAssetClient<'a>) {
@@ -49,7 +49,10 @@ fn fund_escrow(env: &Env, refund_after: Option<u64>) -> Fixture<'_> {
     let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(env), Address::generate(env)),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
 
     let escrow_id = client.create_escrow(
@@ -60,6 +63,10 @@ fn fund_escrow(env: &Env, refund_after: Option<u64>) -> Fixture<'_> {
         &String::from_str(env, "opaque-condition-ref"),
         &releaser,
         &refund_after,
+        &false,
+        &None,
+        &None,
+        &None,
     );
 
     Fixture {
@@ -118,7 +125,10 @@ fn create_escrow_rejects_deadline_already_passed_or_now() {
     asset.mint(&payer, &1_000);
     env.ledger().set_timestamp(CREATED_AT);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let now = client.try_create_escrow(
@@ -129,6 +139,10 @@ fn create_escrow_rejects_deadline_already_passed_or_now() {
         &String::from_str(&env, "ref-now"),
         &releaser,
         &Some(CREATED_AT),
+        &false,
+        &None,
+        &None,
+        &None,
     );
     let past = client.try_create_escrow(
         &payer,
@@ -138,6 +152,10 @@ fn create_escrow_rejects_deadline_already_passed_or_now() {
         &String::from_str(&env, "ref-past"),
         &releaser,
         &Some(CREATED_AT - 1),
+        &false,
+        &None,
+        &None,
+        &None,
     );
 
     assert!(now.is_err());
@@ -349,7 +367,11 @@ fn get_escrow_exposes_the_stored_parties_and_deadline() {
     assert_eq!(data.payer, f.payer);
     assert_eq!(data.payee, f.payee);
     assert_eq!(data.amount, 300);
-    assert_eq!(data.releaser, f.releaser);
+    // A single-releaser escrow is stored as a one-address set with a
+    // threshold of 1 (docs/adr/0007) — same authority, same behaviour.
+    assert_eq!(data.releasers.len(), 1);
+    assert_eq!(data.releasers.get(0).unwrap(), f.releaser);
+    assert_eq!(data.threshold, 1);
     assert_eq!(data.refund_after, Some(DEADLINE));
     assert_eq!(data.status, EscrowStatus::Funded);
 }
@@ -371,7 +393,10 @@ fn get_escrow_errors_for_unknown_escrow() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_get_escrow(&999);

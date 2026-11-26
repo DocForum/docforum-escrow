@@ -2,7 +2,7 @@
 # between two otherwise-identical commits (issue #107). Bump deliberately,
 # in its own PR, after running the full local gate.
 [toolchain]
-channel = "1.91.0"
+channel = "1.96.0"
 components = ["clippy", "rustfmt"]
 targets = ["wasm32v1-none"]
 profile = "minimal"
