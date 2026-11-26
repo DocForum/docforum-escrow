@@ -209,7 +209,7 @@ export * from "./solvency.js";
 export * from "./vesting.js";
 
 import { type ArchivedEntryBehavior, ArchivedEntryError } from "./archived-entries.js";
-import { type BatchCreateItem, type BatchItemResult, type BatchOptions, BatchPartialFailureError, type BatchSettleOperation, MAX_BATCH_SIZE } from "./batch.js";
+import { type BatchCreateItem, type BatchItemResult, type BatchOptions, BatchPartialFailureError, type BatchSettleOperation, MAX_BATCH_SIZE, MAX_SETTLE_OPS } from "./batch.js";
 import { type EscrowClientConfig } from "./client-config.js";
 import { UnsupportedContractVersionError, isSupportedContractVersion } from "./contract-version.js";
 import { type CancelParams, type CreatedEscrow, type CreateEscrowParams, type CreateQuorumEscrowParams, type Escrow, type EscrowStatus, type ExtendRefundAfterParams, MAX_CONDITION_REF_LENGTH, MAX_FEE_BPS, MAX_RELEASERS, type ReleaseOrRefundParams, type SettlementApprovalsParams, TERMINAL_ESCROW_STATUSES, type UniqueCreateEscrowParams, type UniqueCreateEscrowResult } from "./escrow-types.js";
@@ -2207,6 +2207,101 @@ export class EscrowClient {
     const results = this.batchResults(items, options.resumeFrom);
     const chunkSize = this.resolveChunkSize(options.chunkSize);
 
+    if (options.mode === "onchain") {
+      await this.ensureNetworkVerified();
+      const byPayer = new Map<string, { signer: BatchCreateItem["payer"]; indices: number[] }>();
+      const fallbackIndices: number[] = [];
+
+      for (let index = 0; index < items.length; index++) {
+        if (results[index].ok) continue;
+        const item = items[index];
+        const payerAddr = signerAddress(item.payer);
+        const canUseCreateEscrows =
+          item.releaser !== undefined &&
+          item.feeBps === undefined &&
+          item.feeRecipient === undefined &&
+          (item.refundTo === undefined || item.refundTo === payerAddr) &&
+          item.notifyPayee !== true;
+
+        if (!canUseCreateEscrows) {
+          fallbackIndices.push(index);
+          continue;
+        }
+        let group = byPayer.get(payerAddr);
+        if (!group) {
+          group = { signer: item.payer, indices: [] };
+          byPayer.set(payerAddr, group);
+        }
+        group.indices.push(index);
+      }
+
+      for (const index of fallbackIndices) {
+        try {
+          const created = await this.createEscrow(items[index]);
+          results[index] = { index, item: items[index], ok: true, skipped: false, ...created };
+        } catch (error) {
+          results[index] = {
+            index,
+            item: items[index],
+            ok: false,
+            skipped: false,
+            error: batchErrorMessage(error),
+          };
+        }
+      }
+
+      for (const [payerAddr, { signer, indices }] of byPayer) {
+        const client = this.contractClient(signer);
+        for (let start = 0; start < indices.length; start += chunkSize) {
+          const chunkIndices = indices.slice(start, start + chunkSize);
+          const chunkItems = chunkIndices.map((idx) => {
+            const item = items[idx];
+            return {
+              payee: item.payee,
+              token: item.token,
+              amount: item.amount,
+              condition_ref: item.conditionRef,
+              releaser: item.releaser!,
+              refund_after: item.refundAfter,
+              release_not_before: item.releaseNotBefore,
+              requires_acceptance: item.requiresAcceptance ?? false,
+            };
+          });
+          try {
+            const tx = await client.create_escrows({ payer: payerAddr, items: chunkItems });
+            const sent = await tx.signAndSend();
+            const ids = tx.result.unwrap();
+            const txHash = sent.sendTransactionResponse?.hash ?? "";
+            for (let i = 0; i < chunkIndices.length; i++) {
+              const idx = chunkIndices[i];
+              results[idx] = {
+                index: idx,
+                item: items[idx],
+                ok: true,
+                skipped: false,
+                escrowId: ids[i],
+                txHash,
+              };
+            }
+          } catch (error) {
+            const message = batchErrorMessage(error);
+            for (const idx of chunkIndices) {
+              results[idx] = {
+                index: idx,
+                item: items[idx],
+                ok: false,
+                skipped: false,
+                error: message,
+              };
+            }
+          }
+        }
+      }
+
+      this.throwOnBatchFailure(results);
+      return results;
+    }
+
     for (let start = 0; start < items.length; start += chunkSize) {
       const end = Math.min(start + chunkSize, items.length);
       for (let index = start; index < end; index++) {
@@ -2247,6 +2342,15 @@ export class EscrowClient {
    * isolate `notifyPayee` release ops into single-op batches for the same
    * reason.
    *
+   * `{ mode: "onchain" }` (opt-in) instead sends up to `MAX_SETTLE_OPS` ops
+   * per caller as one contract `settle_many` call, reporting the contract's
+   * per-op results. A failing payee callback reverts that whole call, so a
+   * chunk that reverts is retried one transaction per op: the hostile
+   * payee's release still fails alone, at the cost of the extra
+   * transactions. Ops in such a chunk that had already landed (e.g. after a
+   * lost response) report `NotFunded` on the retry rather than settling
+   * twice.
+   *
    * A failure never stops later chunks: every operation is attempted, then
    * a `BatchPartialFailureError` carrying all per-op results is thrown if
    * any failed. Retry with `{ resumeFrom: error.results }` to send only the
@@ -2257,26 +2361,107 @@ export class EscrowClient {
     options: BatchOptions<BatchSettleOperation> = {},
   ): Promise<BatchItemResult<BatchSettleOperation>[]> {
     const results = this.batchResults(ops, options.resumeFrom);
+
+    if (options.mode === "onchain") {
+      await this.ensureNetworkVerified();
+      const chunkSize = Math.min(this.resolveChunkSize(options.chunkSize), MAX_SETTLE_OPS);
+      const byCaller = new Map<string, { signer: BatchSettleOperation["caller"]; indices: number[] }>();
+
+      for (let index = 0; index < ops.length; index++) {
+        if (results[index].ok) continue;
+        const op = ops[index];
+        const callerAddr = signerAddress(op.caller);
+        let group = byCaller.get(callerAddr);
+        if (!group) {
+          group = { signer: op.caller, indices: [] };
+          byCaller.set(callerAddr, group);
+        }
+        group.indices.push(index);
+      }
+
+      for (const [callerAddr, { signer, indices }] of byCaller) {
+        const client = this.contractClient(signer);
+        for (let start = 0; start < indices.length; start += chunkSize) {
+          const chunkIndices = indices.slice(start, start + chunkSize);
+          const chunkOps = chunkIndices.map((idx) => {
+            const op = ops[idx];
+            return [
+              op.escrowId,
+              { tag: op.kind === "release" ? "Release" : "Refund", values: undefined },
+            ] as const;
+          });
+          try {
+            const tx = await client.settle_many({ caller: callerAddr, ops: chunkOps });
+            const sent = await tx.signAndSend();
+            const outcomes = tx.result.unwrap();
+            const txHash = sent.sendTransactionResponse?.hash ?? "";
+            for (let i = 0; i < chunkIndices.length; i++) {
+              const idx = chunkIndices[i];
+              const outcome = outcomes[i];
+              if (outcome && outcome.isOk()) {
+                results[idx] = {
+                  index: idx,
+                  item: ops[idx],
+                  ok: true,
+                  skipped: false,
+                  txHash,
+                };
+              } else {
+                const err = outcome ? outcome.unwrapErr() : new Error("missing settle_many outcome");
+                results[idx] = {
+                  index: idx,
+                  item: ops[idx],
+                  ok: false,
+                  skipped: false,
+                  error: batchErrorMessage(err),
+                };
+              }
+            }
+          } catch {
+            // The whole settle_many invocation reverted. A failing opted-in
+            // payee callback (or token transfer) aborts every op in the chunk
+            // (issue #367, docs/adr/0012), so retry this chunk one
+            // transaction per op: a hostile payee can then only fail its own
+            // release. Ops that did land (e.g. on a lost response) answer
+            // NotFunded on the retry, so nothing is settled twice.
+            for (const idx of chunkIndices) {
+              results[idx] = await this.settleOne(idx, ops[idx]);
+            }
+          }
+        }
+      }
+
+      this.throwOnBatchFailure(results);
+      return results;
+    }
+
     const chunkSize = this.resolveChunkSize(options.chunkSize);
 
     for (let start = 0; start < ops.length; start += chunkSize) {
       const end = Math.min(start + chunkSize, ops.length);
       for (let index = start; index < end; index++) {
         if (results[index].ok) continue;
-        const op = ops[index];
-        try {
-          const settled = op.kind === "release"
-            ? await this.release({ escrowId: op.escrowId, caller: op.caller })
-            : await this.refund({ escrowId: op.escrowId, caller: op.caller });
-          results[index] = { index, item: op, ok: true, skipped: false, ...settled };
-        } catch (error) {
-          results[index] = { index, item: op, ok: false, skipped: false, error: batchErrorMessage(error) };
-        }
+        results[index] = await this.settleOne(index, ops[index]);
       }
     }
 
     this.throwOnBatchFailure(results);
     return results;
+  }
+
+  /** One `settleMany` op as its own `release`/`refund` transaction. */
+  private async settleOne(
+    index: number,
+    op: BatchSettleOperation,
+  ): Promise<BatchItemResult<BatchSettleOperation>> {
+    try {
+      const settled = op.kind === "release"
+        ? await this.release({ escrowId: op.escrowId, caller: op.caller })
+        : await this.refund({ escrowId: op.escrowId, caller: op.caller });
+      return { index, item: op, ok: true, skipped: false, ...settled };
+    } catch (error) {
+      return { index, item: op, ok: false, skipped: false, error: batchErrorMessage(error) };
+    }
   }
 
   /** One not-yet-successful result per input, pre-filled from `resumeFrom`. */
