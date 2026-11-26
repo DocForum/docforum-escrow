@@ -226,13 +226,13 @@ describe("per-tranche settlement", () => {
     ]);
   });
 
-  it("reports refunded and cancelled tranches as refunded", async () => {
+  it("reports refunded tranches as refunded and cancelled tranches as cancelled", async () => {
     const statuses: Record<string, string> = { "11": "Refunded", "12": "Cancelled" };
     const escrowClient = Object.assign(client(), {
       getEscrow: vi.fn(async (escrowId: bigint) => ({ status: statuses[escrowId.toString()] })),
     });
 
     const milestones = await escrowClient.getMilestones(group);
-    expect(milestones.map((milestone) => milestone.status)).toEqual(["refunded", "refunded"]);
+    expect(milestones.map((milestone) => milestone.status)).toEqual(["refunded", "cancelled"]);
   });
 });

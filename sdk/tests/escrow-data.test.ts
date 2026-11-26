@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Address, Keypair, nativeToScVal, xdr } from "@stellar/stellar-sdk";
-import { EscrowClient } from "../src/index.js";
-import { decodeEscrowDataFromScVal } from "../src/escrow-data.js";
+import { ArchivedEntryError, EscrowClient } from "../src/index.js";
+import { decodeEscrowDataFromScVal, escrowDataKey, escrowLedgerKey } from "../src/escrow-data.js";
 
 function field(name: string, value: xdr.ScVal): xdr.ScMapEntry {
   return new xdr.ScMapEntry({
@@ -120,5 +120,116 @@ describe("get_escrow cross-version decoding", () => {
     );
 
     await expect(client.getEscrow(5n)).rejects.toBe(layoutError);
+  });
+});
+
+describe("getEscrows (batched getLedgerEntries)", () => {
+  it("pins DataKey::Escrow(id) encoding to Soroban's enum(Symbol, u64) persistent key", () => {
+    const contractId = "CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5";
+    const key = escrowLedgerKey(contractId, 42n);
+    const cd = key.contractData();
+
+    expect(cd.durability().name).toBe("persistent");
+    expect(Address.fromScAddress(cd.contract()).toString()).toBe(contractId);
+    expect(cd.key().toXDR("base64")).toBe(
+      escrowDataKey(42n).toXDR("base64"),
+    );
+    const vec = cd.key().vec()!;
+    expect(vec).toHaveLength(2);
+    expect(vec[0].sym().toString()).toBe("Escrow");
+    expect(vec[1].u64().toString()).toBe("42");
+  });
+
+  it("returns an empty Map without calling RPC when given no ids", async () => {
+    const getLedgerEntries = vi.fn();
+    const client = Object.assign(
+      new EscrowClient({
+        contractId: "CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5",
+        rpcUrl: "https://127.0.0.1:1",
+      }),
+      {
+        ensureNetworkVerified: vi.fn(async () => {}),
+        rpc: { getLedgerEntries },
+      },
+    );
+
+    const result = await client.getEscrows([]);
+    expect(result.size).toBe(0);
+    expect(getLedgerEntries).not.toHaveBeenCalled();
+  });
+
+  it("batches getLedgerEntries calls, decodes records, and returns undefined for missing ids", async () => {
+    const contractId = "CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5";
+    const { record, payer, payee } = legacyEscrowRecord();
+    const key1 = escrowLedgerKey(contractId, 1n);
+
+    const getLedgerEntries = vi.fn(async (...keys: xdr.LedgerKey[]) => ({
+      latestLedger: 1000,
+      entries: keys
+        .filter((k) => k.toXDR("base64") === key1.toXDR("base64"))
+        .map((k) => ({
+          key: k,
+          val: xdr.LedgerEntryData.contractData(
+            new xdr.ContractDataEntry({
+              ext: new xdr.ExtensionPoint(0),
+              contract: Address.fromString(contractId).toScAddress(),
+              key: escrowDataKey(1n),
+              durability: xdr.ContractDataDurability.persistent(),
+              val: record,
+            }),
+          ),
+          liveUntilLedgerSeq: 2000,
+        })),
+    }));
+
+    const client = Object.assign(
+      new EscrowClient({ contractId, rpcUrl: "https://127.0.0.1:1" }),
+      {
+        ensureNetworkVerified: vi.fn(async () => {}),
+        rpc: { getLedgerEntries },
+      },
+    );
+
+    const result = await client.getEscrows([1n, 2n, 1n]);
+    expect(getLedgerEntries).toHaveBeenCalledTimes(1);
+    expect(Array.from(result.keys())).toEqual([1n, 2n]);
+    expect(result.get(1n)?.payer).toBe(payer);
+    expect(result.get(1n)?.payee).toBe(payee);
+    expect(result.get(2n)).toBeUndefined();
+  });
+
+  it("throws ArchivedEntryError when an entry's liveUntilLedgerSeq is below latestLedger", async () => {
+    const contractId = "CAHQ4J3T23WSIBBG6SI6EAYR5Q2HIPKG5YMC4SMZBOTYA6MYK2VADEV5";
+    const { record } = legacyEscrowRecord();
+    const key1 = escrowLedgerKey(contractId, 1n);
+
+    const getLedgerEntries = vi.fn(async () => ({
+      latestLedger: 1000,
+      entries: [
+        {
+          key: key1,
+          val: xdr.LedgerEntryData.contractData(
+            new xdr.ContractDataEntry({
+              ext: new xdr.ExtensionPoint(0),
+              contract: Address.fromString(contractId).toScAddress(),
+              key: escrowDataKey(1n),
+              durability: xdr.ContractDataDurability.persistent(),
+              val: record,
+            }),
+          ),
+          liveUntilLedgerSeq: 999,
+        },
+      ],
+    }));
+
+    const client = Object.assign(
+      new EscrowClient({ contractId, rpcUrl: "https://127.0.0.1:1" }),
+      {
+        ensureNetworkVerified: vi.fn(async () => {}),
+        rpc: { getLedgerEntries },
+      },
+    );
+
+    await expect(client.getEscrows([1n])).rejects.toThrow(ArchivedEntryError);
   });
 });
