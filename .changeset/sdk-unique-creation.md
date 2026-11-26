@@ -8,4 +8,4 @@ Retry-safe escrow creation (issue #469; contract issue #47).
 - The recovered escrow's payee, token and amount are compared with the request while its record is readable. A mismatch throws the new `UniqueEscrowMismatchError` and is never reported as success. A settled duplicate (record reclaimed, index kept) returns its id and terminal `status` without the terms check.
 - `unique` with `requiresAcceptance`, `releaseNotBefore` or quorum options throws a `TypeError` before anything is sent.
 - `client.getUniqueEscrow(payer, conditionRef)` → `bigint | undefined`.
-- New typed `DuplicateConditionRefError` (provisional code 4700).
+- New typed `DuplicateConditionRefError` (code 60).
