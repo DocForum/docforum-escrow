@@ -1019,14 +1019,6 @@ export class EscrowClient {
   }
 
   /**
-   * Read-only: everything stored about `escrowId` — including the
-   * `releasers` set, its `threshold` and `refundAfter`, which payees should
-   * check before relying on a `Funded` escrow (docs/adr/0004, threat model
-   * T8). Throws if `escrowId` doesn't exist, **and also once the escrow has
-   * settled**: its record is reclaimed (docs/adr/0013). Use `getStatus` for a
-   * settled id and the `ESCROW` state event for its history.
-   */
-  /**
    * Read-only: fetches many escrows in batched `getLedgerEntries` RPC calls
    * (up to 200 keys per call) instead of one simulation per id. Returns a
    * `Map` in the order of `ids`, with `undefined` for missing/reclaimed ids.
@@ -1074,7 +1066,9 @@ export class EscrowClient {
   }
 
   /**
-   * Read-only: returns the escrow's current state (see `ARCHITECTURE_ESSENTIALS.md`
+   * Read-only: everything stored about `escrowId` — including the
+   * `releasers` set, its `threshold` and `refundAfter`, which payees should
+   * check before relying on a `Funded` escrow (docs/adr/0004, threat model
    * T8). Throws if `escrowId` doesn't exist, **and also once the escrow has
    * settled**: its record is reclaimed (docs/adr/0013). Use `getStatus` for a
    * settled id and the `ESCROW` state event for its history.
