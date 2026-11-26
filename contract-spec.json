@@ -478,11 +478,11 @@
     },
     {
       "name": "DuplicateConditionRef",
-      "code": 4700
+      "code": 60
     },
     {
       "name": "InvalidReleaseDeadline",
-      "code": 28800
+      "code": 61
     }
   ]
 }
