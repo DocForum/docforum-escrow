@@ -141,6 +141,19 @@ export {
   type DeploymentsDocument,
 } from "./deployments.js";
 export type { FactoryClientConfig, DeployInstanceParams, DeployInstanceResult, FactoryInstance } from "./factory.js";
+export {
+  ReleaserAccountClient,
+  ManagementPayload,
+  signManagement,
+  buildSettleSignatures,
+} from "./releaser-account.js";
+export type {
+  PublicKey,
+  Signature,
+  ReleaserAccountAction,
+  SignerSignature,
+  ReleaserAccountClientConfig,
+} from "./releaser-account.js";
 
 // Multisig releaser account helpers (T1 mitigation). Client-side only: they
 // build classic `setOptions` transactions for the releaser account itself and
