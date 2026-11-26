@@ -97,6 +97,7 @@ export type PooledPhase = "open" | "funded" | "failed" | "released";
 
 /** Combined phase, remaining target, and deadline for a pooled escrow. */
 export interface PooledPhaseInfo {
+  /** Current phase of the round. */
   phase: PooledPhase;
   /** Remaining amount needed to reach `fundingTarget` (`0n` once funded). */
   remaining: bigint;

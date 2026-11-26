@@ -1888,15 +1888,6 @@ export class EscrowClient {
   }
 
   /**
-   * Read-only: a pooled escrow's immutable funding config. Combine with
-   * `getEscrow().amount` and the current ledger time to classify the
-   * round: `amount === fundingTarget` succeeded (releasable at any time);
-   * `now >= fundingDeadline && amount < fundingTarget` failed
-   * (`claimRefund` is open). A failed round still reads `"Funded"` from
-   * `getStatus` — status describes settlement, not funding. Throws
-   * `NotPooled` (error 26) on a non-pooled or unknown id.
-   */
-  /**
    * Read-only: combines `getEscrow`, `getPooled`, and `getLedgerTime` (not the
    * local clock) to report whether a pooled escrow is `"open"`, `"funded"`,
    * `"failed"`, or `"released"`, along with `remaining` and `deadline`.
@@ -1911,8 +1902,13 @@ export class EscrowClient {
   }
 
   /**
-   * Read-only: returns a pooled escrow's funding target and deadline.
-   * Throws `NotPooled` (error 26) on a non-pooled or unknown id.
+   * Read-only: a pooled escrow's immutable funding config. Combine with
+   * `getEscrow().amount` and the current ledger time to classify the
+   * round: `amount === fundingTarget` succeeded (releasable at any time);
+   * `now >= fundingDeadline && amount < fundingTarget` failed
+   * (`claimRefund` is open). A failed round still reads `"Funded"` from
+   * `getStatus` — status describes settlement, not funding. Throws
+   * `NotPooled` (error 26) on a non-pooled or unknown id.
    */
   async getPooled(escrowId: bigint): Promise<PooledEscrow> {
     await this.ensureNetworkVerified();
