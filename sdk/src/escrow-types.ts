@@ -95,8 +95,9 @@ export interface Escrow {
 export const MAX_FEE_BPS = 1_000;
 
 /**
- * Maximum allowed length of `conditionRef` in bytes — must match the
- * contract's bound (currently 64 bytes, see contracts/escrow/src/lib.rs
+ * Maximum allowed length of `conditionRef` in UTF-8 bytes (not UTF-16
+ * code units) — must match the contract's bound (currently 64 bytes,
+ * see contracts/escrow/src/lib.rs
  * and docs/threat-model.md T10). Validated client-side so callers fail
  * fast instead of paying network fees for a rejected transaction.
  *
@@ -124,7 +125,7 @@ export interface CreateEscrowParams {
   token: string;
   /** Amount of `token` to lock, in the token's smallest unit. Must be positive. */
   amount: bigint;
-  /** Opaque reference the contract stores but never interprets; at most {@link MAX_CONDITION_REF_LENGTH} bytes. */
+  /** Opaque reference the contract stores but never interprets; at most {@link MAX_CONDITION_REF_LENGTH} UTF-8 bytes. */
   conditionRef: string;
   /**
    * The only address later permitted to call `release`/`refund` on this
@@ -168,7 +169,58 @@ export interface CreateEscrowParams {
    * `releaseNotBefore` (the contract has no such creation entry point).
    */
   requiresAcceptance?: boolean;
+  /**
+   * `false` (or omitted) is a normal, non-idempotent creation. To make
+   * creation idempotent, pass `unique: true` with
+   * {@link UniqueCreateEscrowParams}. It is a separate type so that a
+   * variable typed `CreateEscrowParams` always gets the plain
+   * {@link CreatedEscrow} result.
+   */
+  unique?: false;
 }
+
+/**
+ * Parameters for retry-safe creation, `createEscrow({ ..., unique: true })`
+ * (issue #469, contract #47). Calls `create_escrow_with_uniqueness` with the
+ * same arguments `create_escrow` would get, plus `unique_ref: true`. A retry
+ * with the same `(payer, conditionRef)` returns the existing escrow
+ * (`existing: true`) instead of locking funds twice. See
+ * {@link UniqueCreateEscrowResult}.
+ *
+ * That entry point is single-releaser with no acceptance or release time, so
+ * `requiresAcceptance` and `releaseNotBefore` are rejected with a `TypeError`
+ * before anything is sent. The index is scoped to the payer: the same
+ * `conditionRef` from another payer is not a duplicate.
+ */
+export type UniqueCreateEscrowParams = Omit<CreateEscrowParams, "unique"> & {
+  /** Opt in to idempotent creation per `(payer, conditionRef)`. */
+  unique: true;
+};
+
+/** What `createEscrow` returns for a non-unique creation. */
+export interface CreatedEscrow {
+  escrowId: bigint;
+  /** Hash of the funding transaction. */
+  txHash: string;
+}
+
+/**
+ * What `createEscrow({ unique: true })` returns (issue #469). Discriminate on
+ * `existing`:
+ * - `existing: false` (always set by the SDK on this path): a new escrow was
+ *   created and funded by `txHash`.
+ * - `existing: true`: an escrow already existed for this `(payer,
+ *   conditionRef)`, so nothing was sent or funded (`txHash` is `undefined`).
+ *   `status` is its current status. Its terms (payee, token, amount) were
+ *   checked against the request while the record was still readable; a
+ *   mismatch throws `UniqueEscrowMismatchError` instead. Once the escrow has
+ *   settled its record is reclaimed (docs/adr/0013) but the uniqueness index
+ *   survives, so a settled duplicate still returns `existing: true` with its
+ *   terminal `status`, and the terms check is skipped.
+ */
+export type UniqueCreateEscrowResult =
+  | (CreatedEscrow & { existing?: false })
+  | { escrowId: bigint; txHash: undefined; existing: true; status: EscrowStatus };
 
 /** Parameters for {@link EscrowClient.cancel} — the payer cancels an unreleased escrow. */
 export interface CancelParams {

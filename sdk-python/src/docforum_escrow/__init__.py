@@ -14,7 +14,7 @@ from .errors import *  # noqa: F403 - the error classes are part of the public A
 from .errors import __all__ as _errors_all
 from .types import CreateEscrowResult, Escrow, EscrowStatus, PayeeShare, TxResult
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "EscrowClient",

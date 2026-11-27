@@ -293,6 +293,46 @@ func TestDecodePooledData(t *testing.T) {
 	}
 }
 
+func TestDecodePooledDataReleaseDeadline(t *testing.T) {
+	base := []xdr.ScMapEntry{
+		{Key: scvSymbol("funding_target"), Val: mustI128(t, big.NewInt(1_000))},
+		{Key: scvSymbol("funding_deadline"), Val: scvU64(1_912_000_000)},
+	}
+
+	// A deployment that predates issue #288 has no release_deadline field.
+	legacy, err := decodePooledData(scvMap(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.ReleaseDeadline != nil {
+		t.Fatalf("legacy release deadline = %d, want nil", *legacy.ReleaseDeadline)
+	}
+
+	// Current deployments always send the field: None is void.
+	none, err := decodePooledData(scvMap(append(append([]xdr.ScMapEntry{}, base...),
+		xdr.ScMapEntry{Key: scvSymbol("release_deadline"), Val: scvVoid()})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if none.ReleaseDeadline != nil {
+		t.Fatalf("None release deadline = %d, want nil", *none.ReleaseDeadline)
+	}
+
+	some, err := decodePooledData(scvMap(append(append([]xdr.ScMapEntry{}, base...),
+		xdr.ScMapEntry{Key: scvSymbol("release_deadline"), Val: scvU64(1_913_000_000)})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if some.ReleaseDeadline == nil || *some.ReleaseDeadline != 1_913_000_000 {
+		t.Fatalf("release deadline = %v, want 1913000000", some.ReleaseDeadline)
+	}
+
+	if _, err := decodePooledData(scvMap(append(append([]xdr.ScMapEntry{}, base...),
+		xdr.ScMapEntry{Key: scvSymbol("release_deadline"), Val: scvString("soon")}))); err == nil {
+		t.Fatal("decodePooledData accepted a non-u64 release_deadline")
+	}
+}
+
 func TestDecodeContributionAndOption(t *testing.T) {
 	encoded := scvMap([]xdr.ScMapEntry{
 		{Key: scvSymbol("amount"), Val: mustI128(t, big.NewInt(650_000))},
@@ -378,4 +418,101 @@ func mustI128(t *testing.T, value *big.Int) xdr.ScVal {
 		t.Fatal(err)
 	}
 	return encoded
+}
+
+func makeEventSnapshot(t *testing.T, withFee bool) xdr.ScVal {
+	t.Helper()
+	payer := keypair.MustRandom().Address()
+	payee := keypair.MustRandom().Address()
+	token := testContractID
+	releaser := keypair.MustRandom().Address()
+	feeRecipient := keypair.MustRandom().Address()
+	refundAfter := uint64(1_912_000_000)
+	acceptedAt := uint64(1_911_000_000)
+	amount := big.NewInt(300)
+	feeBps := uint32(100)
+
+	fields := []xdr.ScVal{
+		mustAddress(t, payer),
+		mustAddress(t, payee),
+		mustAddress(t, token),
+		mustI128(t, amount),
+		scvString("invoice-42"),
+		scvVec([]xdr.ScVal{mustAddress(t, releaser)}),
+		scvU32(1),
+		scvOptionU64(&refundAfter),
+		scvBool(true),
+		scvBool(true),
+		scvOptionU64(&acceptedAt),
+		scvStatus(EscrowStatusReleased),
+	}
+	if withFee {
+		fields = append(fields, scvVec([]xdr.ScVal{
+			mustAddress(t, feeRecipient),
+			scvU32(feeBps),
+		}))
+	}
+	return scvVec(fields)
+}
+
+func TestDecodeEventSnapshotThirteenFields(t *testing.T) {
+	snap := makeEventSnapshot(t, true)
+	got, err := decodeEventSnapshot(&snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != EscrowStatusReleased {
+		t.Fatalf("unexpected status: %v", got.Status)
+	}
+	if got.Amount == nil || got.Amount.Cmp(big.NewInt(300)) != 0 {
+		t.Fatalf("unexpected amount: %v", got.Amount)
+	}
+	if got.FeeRecipient == nil || *got.FeeRecipient == "" {
+		t.Fatal("fee recipient missing")
+	}
+	if got.FeeBps == nil || *got.FeeBps != 100 {
+		t.Fatalf("unexpected fee bps: %v", got.FeeBps)
+	}
+	if len(got.Releasers) != 1 {
+		t.Fatalf("unexpected releasers: %v", got.Releasers)
+	}
+	if !got.NotifyPayee || !got.RequiresAcceptance {
+		t.Fatalf("unexpected flags: %#v", got)
+	}
+	if got.RefundAfter == nil || *got.RefundAfter != 1_912_000_000 {
+		t.Fatalf("unexpected refund after: %v", got.RefundAfter)
+	}
+	if got.AcceptedAt == nil || *got.AcceptedAt != 1_911_000_000 {
+		t.Fatalf("unexpected accepted at: %v", got.AcceptedAt)
+	}
+}
+
+func TestDecodeEventSnapshotTwelveFields(t *testing.T) {
+	snap := makeEventSnapshot(t, false)
+	got, err := decodeEventSnapshot(&snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != EscrowStatusReleased {
+		t.Fatalf("unexpected status: %v", got.Status)
+	}
+	if got.FeeRecipient != nil {
+		t.Fatalf("expected no fee recipient, got %v", got.FeeRecipient)
+	}
+	if got.FeeBps != nil {
+		t.Fatalf("expected no fee bps, got %v", got.FeeBps)
+	}
+}
+
+func TestDecodeEventSnapshotRejectsShort(t *testing.T) {
+	_, err := decodeEventSnapshot(&xdr.ScVal{Type: xdr.ScValTypeScvVec})
+	if err == nil {
+		t.Fatal("decodeEventSnapshot accepted an empty snapshot")
+	}
+}
+
+func TestDecodeEventSnapshotRejectsUnknownShape(t *testing.T) {
+	if _, err := decodeEventSnapshot(&xdr.ScVal{Type: xdr.ScValTypeScvBool}); err == nil {
+		t.Fatal("decodeEventSnapshot accepted a non-vec value")
+	}
 }

@@ -355,7 +355,15 @@ func decodePooledData(v xdr.ScVal) (PooledData, error) {
 	if err != nil {
 		return PooledData{}, err
 	}
-	return PooledData{FundingTarget: fundingTarget, FundingDeadline: fundingDeadline}, nil
+	result := PooledData{FundingTarget: fundingTarget, FundingDeadline: fundingDeadline}
+	// release_deadline was added by issue #288. A deployment that predates it
+	// returns no such field, which decodes as "no release deadline".
+	if field, ok := fields["release_deadline"]; ok {
+		if result.ReleaseDeadline, err = decodeOptionU64(field); err != nil {
+			return PooledData{}, err
+		}
+	}
+	return result, nil
 }
 
 // decodeContribution decodes the contracttype Contribution struct.
