@@ -41,7 +41,7 @@ import {
 } from "./instrumentation.js";
 import type { FactoryClient as FactoryClientType } from "./factory.js";
 import { contractSigner, signerAddress, type EscrowSigner } from "./signers/types.js";
-import { ContractError, NetworkMismatchError, NotFoundError, NotFundedError, UniqueEscrowMismatchError, WaitTimeoutError, toEscrowError } from "./errors.js";
+import { AuthorizationExpiredError, ContractError, NetworkMismatchError, NotFoundError, NotFundedError, UniqueEscrowMismatchError, WaitTimeoutError, toEscrowError } from "./errors.js";
 import { getTokenInfo as readTokenInfo, rpcTokenInfoSource, type TokenInfo } from "./amounts.js";
 import {
   PreparedTransactionExpiredError,
@@ -92,6 +92,7 @@ export {
 } from "./signers/types.js";
 export {
   AllowanceExhaustedError,
+  AuthorizationExpiredError,
   BalanceMismatchError,
   ContractError,
   DuplicateConditionRefError,
@@ -225,7 +226,8 @@ import { MAINNET_NETWORK_PASSPHRASE, MainnetNotAllowedError } from "./networks.j
 import { type ClaimRefundParams, type CloseFailedRoundOptions, type ContributeParams, type ContributionRecord, type CreatePooledEscrowParams, type PooledEscrow, type PooledPhaseInfo, pooledPhase, type SolvencyReport } from "./pooled.js";
 import { canRefund as evaluateRefund, canRelease as evaluateRelease, type SettlementCheck, type SettlementCheckParams } from "./preflight.js";
 import { DEFAULT_SUBMIT_MAX_FEE, OFFLINE_PREPARED_TX_TTL_LEDGERS, PREPARED_TX_TTL_LEDGERS, type PrepareCreateEscrowParams, type PrepareSettlementParams, type SubmitSignedOptions, type SubmitSignedResult } from "./prepare-submit.js";
-import { RELAYED_AUTH_TTL_LEDGERS, type RelayedAuthorization, type RelayedAuthorizationParams } from "./relayed-auth.js";
+import { RELAYED_AUTH_TTL_LEDGERS, type RelayedAuthorization, type RelayedAuthorizationParams, isRelayedAuthExpired } from "./relayed-auth.js";
+import { type PrepareRotateReleaserParams, ROTATION_AUTH_TTL_LEDGERS, type RotationAuthorization, RotationAuthorizationError, RotationPreconditionError, assertRotationAuthScope, mergeRotationAuthorizations, parseRotationTransaction } from "./rotation.js";
 import { type ApproveScheduleAllowanceParams, type CancelScheduleParams, type CreateScheduleParams, type FundNextOptions, type RecurringSchedule, ScheduleParamsError } from "./recurring.js";
 import { RpcProviderPool } from "./rpc-providers.js";
 
@@ -2816,6 +2818,124 @@ export class EscrowClient {
     await this.ensureNetworkVerified();
     const client = this.contractClient(relayer);
     const tx = client.txFromJSON<Result<void>>(authorization.transaction);
+    const sent = await tx.signAndSend();
+    sent.result.unwrap();
+    return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Builds and simulates a `rotate_releaser` for a funded single-releaser
+   * escrow (issue #326). Nothing is signed. The returned authorization lists
+   * the auth entries still to sign (`pendingSigners`: the current releaser
+   * and the payer, or one address when they are the same) and the ledger
+   * they expire at. Each party then calls {@link signRotationAuth} with its
+   * own key, and `source` (or anyone holding its key) calls
+   * {@link submitRotation}.
+   *
+   * Checks client-side, before simulating, that the escrow is `Funded`, has
+   * exactly one releaser, and that `newReleaser` is not the payee, the
+   * contract or the current releaser ({@link RotationPreconditionError}).
+   */
+  async prepareRotateReleaser(params: PrepareRotateReleaserParams): Promise<RotationAuthorization> {
+    const authValidForLedgers = params.authValidForLedgers ?? ROTATION_AUTH_TTL_LEDGERS;
+    assertLedgerWindow("authValidForLedgers", authValidForLedgers);
+    const escrow = await this.getEscrow(params.escrowId);
+    if (escrow.status !== "Funded") {
+      throw new RotationPreconditionError("NotFunded", `Escrow ${params.escrowId} is ${escrow.status}; only a Funded escrow can rotate its releaser.`);
+    }
+    if (escrow.releasers.length !== 1 || escrow.threshold !== 1) {
+      throw new RotationPreconditionError(
+        "NotSingleReleaser",
+        `Escrow ${params.escrowId} has a ${escrow.threshold}-of-${escrow.releasers.length} releaser set; use rotate_releaser_with_approvals.`,
+      );
+    }
+    const releaser = escrow.releasers[0]!;
+    if (params.newReleaser === escrow.payee) {
+      throw new RotationPreconditionError("NewReleaserIsPayee", "The new releaser cannot be the escrow's payee.");
+    }
+    if (params.newReleaser === this.contractId) {
+      throw new RotationPreconditionError("NewReleaserIsContract", "The new releaser cannot be the escrow contract.");
+    }
+    if (params.newReleaser === releaser) {
+      throw new RotationPreconditionError("NewReleaserUnchanged", "The new releaser is already the escrow's releaser.");
+    }
+
+    const client = this.publicContractClient(params.source);
+    const tx = await client.rotate_releaser({
+      escrow_id: params.escrowId,
+      caller: releaser,
+      new_releaser: params.newReleaser,
+    });
+    if (tx.isReadCall) {
+      throw new Error("rotate_releaser was simulated as a read call; no transaction was assembled.");
+    }
+    const latest = await this.rpc.getLatestLedger();
+    return {
+      transaction: tx.toJSON(),
+      expiresAtLedger: latest.sequence + authValidForLedgers,
+      pendingSigners: tx.needsNonInvokerSigningBy(),
+    };
+  }
+
+  /**
+   * Signs `signer`'s own auth entry in a prepared rotation and nothing else:
+   * no other party's entry and not the envelope. Refuses if the entry
+   * authorizes anything but a single `rotate_releaser` on this contract, if
+   * `signer` has no unsigned entry, or if the authorization has expired
+   * (`AuthorizationExpiredError`). Parties can sign the same prepared copy in
+   * turn or separate copies in parallel; {@link submitRotation} merges them.
+   */
+  async signRotationAuth(authorization: RotationAuthorization, signer: EscrowSigner): Promise<RotationAuthorization> {
+    parseRotationTransaction(authorization);
+    const current = (await this.rpc.getLatestLedger()).sequence;
+    if (isRelayedAuthExpired(authorization.expiresAtLedger, current)) {
+      throw new AuthorizationExpiredError(authorization.expiresAtLedger, current);
+    }
+    const address = signerAddress(signer);
+    const tx = this.contractClient().txFromJSON<Result<void>>(authorization.transaction);
+    if (!tx.needsNonInvokerSigningBy().includes(address)) {
+      throw new RotationAuthorizationError(`${address} has no unsigned auth entry in this rotation.`);
+    }
+    const operation = tx.built?.operations[0] as { auth?: xdr.SorobanAuthorizationEntry[] } | undefined;
+    assertRotationAuthScope(operation?.auth ?? [], this.contractId, address);
+    await tx.signAuthEntries({
+      address,
+      signAuthEntry: contractSigner(signer, this.networkPassphrase),
+      expiration: authorization.expiresAtLedger,
+    });
+    return {
+      transaction: tx.toJSON(),
+      expiresAtLedger: authorization.expiresAtLedger,
+      pendingSigners: tx.needsNonInvokerSigningBy(),
+    };
+  }
+
+  /**
+   * Merges the signed copies of a rotation, signs the envelope as `submitter`
+   * (the `source` given to {@link prepareRotateReleaser}) and submits it. The
+   * submitter needs neither the releaser's nor the payer's key. Checks the
+   * expiration ledger first and throws `AuthorizationExpiredError` once it
+   * has passed, and throws {@link RotationAuthorizationError} if any party's
+   * entry is still unsigned. Returns the transaction hash.
+   */
+  async submitRotation(
+    authorizations: RotationAuthorization | RotationAuthorization[],
+    submitter: EscrowSigner,
+  ): Promise<{ txHash: string }> {
+    const copies = Array.isArray(authorizations) ? authorizations : [authorizations];
+    const transaction = mergeRotationAuthorizations(copies);
+    const expiresAtLedger = Math.min(...copies.map((copy) => copy.expiresAtLedger));
+    const current = (await this.rpc.getLatestLedger()).sequence;
+    if (isRelayedAuthExpired(expiresAtLedger, current)) {
+      throw new AuthorizationExpiredError(expiresAtLedger, current);
+    }
+
+    await this.ensureNetworkVerified();
+    const tx = this.contractClient(submitter).txFromJSON<Result<void>>(transaction);
+    const missing = tx.needsNonInvokerSigningBy();
+    if (missing.length > 0) {
+      throw new RotationAuthorizationError(`The rotation still needs auth from: ${missing.join(", ")}.`);
+    }
     const sent = await tx.signAndSend();
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
