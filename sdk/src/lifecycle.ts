@@ -2,6 +2,42 @@ import { type EscrowStatus } from "./escrow-types.js";
 import { type SettlementReason } from "./preflight.js";
 import { type EscrowSigner } from "./signers/types.js";
 
+/**
+ * Timeouts and retry budget for the transaction lifecycle (Phase E6, issue
+ * #62). Set once on `EscrowClientConfig.transaction`, or per call on
+ * `SubmitSignedOptions.transaction`; each field falls back to
+ * {@link DEFAULT_LIFECYCLE_OPTIONS} on its own.
+ */
+export interface TransactionLifecycleOptions {
+  /** Timeout for simulating a `prepare*` transaction, in milliseconds. */
+  simulateTimeoutMs?: number;
+  /** Timeout for each `sendTransaction` request, in milliseconds. */
+  sendTimeoutMs?: number;
+  /** Total time to wait for the submitted transaction to confirm, in milliseconds. */
+  confirmTimeoutMs?: number;
+  /** Maximum resends of the same envelope after `TRY_AGAIN_LATER` before giving up. */
+  maxTryAgainLaterAttempts?: number;
+  /** First `TRY_AGAIN_LATER` backoff, in milliseconds; doubles on each retry. */
+  tryAgainLaterBackoffMs?: number;
+}
+
+/** Defaults applied when a lifecycle option is not provided. */
+export const DEFAULT_LIFECYCLE_OPTIONS: Required<TransactionLifecycleOptions> = {
+  simulateTimeoutMs: 30_000,
+  sendTimeoutMs: 30_000,
+  confirmTimeoutMs: 120_000,
+  maxTryAgainLaterAttempts: 5,
+  tryAgainLaterBackoffMs: 1_000,
+};
+
+/**
+ * Callback invoked as soon as the transaction hash is known, before it is
+ * sent. Persist the hash here so a timeout or crash never loses track of a
+ * transaction that may already have landed. The SDK awaits it, so a failing
+ * callback aborts the submission before anything reaches the network.
+ */
+export type OnTransactionHash = (hash: string) => void | Promise<void>;
+
 /** Options for {@link EscrowClient.waitForStatus}. */
 export interface WaitForStatusOptions {
   /** Overall deadline in milliseconds, measured from the call. Must be positive. */
