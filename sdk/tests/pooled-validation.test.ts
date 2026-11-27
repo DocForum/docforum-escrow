@@ -7,7 +7,8 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { Keypair, nativeToScVal, xdr } from "@stellar/stellar-sdk";
-import { ContractError, EscrowClient, MAX_CONDITION_REF_LENGTH } from "../src/index.js";
+import { ContractError, EscrowClient, MAX_CONDITION_REF_LENGTH, pooledPhase } from "../src/index.js";
+import { utf8ByteLength } from "../src/internal.js";
 import { encodeArgs, expectMatchesSpec, makeClient, readResult, sendableTx } from "./contract-spec-args.js";
 
 const client = new EscrowClient({
@@ -38,6 +39,13 @@ describe("createPooledEscrow validation", () => {
     ).rejects.toThrow(/conditionRef/);
   });
 
+  it("rejects a conditionRef over the byte limit even when its char count fits", async () => {
+    // 33 two-byte characters = 66 bytes (> 64) but only 33 UTF-16 units.
+    await expect(
+      client.createPooledEscrow(pooledCreateParams({ conditionRef: "é".repeat(33) }))
+    ).rejects.toThrow(/conditionRef/);
+  });
+
   it("rejects a non-positive funding target", async () => {
     for (const fundingTarget of [0n, -1n]) {
       await expect(
@@ -58,6 +66,29 @@ describe("createPooledEscrow validation", () => {
     await expect(client.createPooledEscrow(pooledCreateParams({}))).rejects.not.toThrow(
       /conditionRef must|fundingTarget must|fundingDeadline must/
     );
+  });
+});
+
+describe("utf8ByteLength boundary", () => {
+  it("counts astral (emoji) characters as 4 bytes", () => {
+    expect(utf8ByteLength("😀")).toBe(4);
+    expect(utf8ByteLength("😀".repeat(16))).toBe(64);
+  });
+
+  it("accepts exactly 64 bytes and rejects 65 for multi-byte input", async () => {
+    // 32 two-byte characters = 64 bytes: the length check must pass.
+    // The call then fails on the unreachable network, not on conditionRef.
+    await expect(
+      client.createPooledEscrow(pooledCreateParams({ conditionRef: "é".repeat(32) }))
+    ).rejects.not.toThrow(/conditionRef/);
+    // 16 emoji = 64 bytes: must pass the length check.
+    await expect(
+      client.createPooledEscrow(pooledCreateParams({ conditionRef: "😀".repeat(16) }))
+    ).rejects.not.toThrow(/conditionRef/);
+    // 16 emoji + 1 ASCII = 65 bytes: must fail.
+    await expect(
+      client.createPooledEscrow(pooledCreateParams({ conditionRef: "😀".repeat(16) + "a" }))
+    ).rejects.toThrow(/conditionRef/);
   });
 });
 
@@ -222,5 +253,78 @@ describe("closeFailedRound", () => {
     const error = await client.closeFailedRound(8n, { source: Keypair.random() }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ContractError);
     expect((error as ContractError).code).toBe(code);
+  });
+});
+
+describe("pooledPhase & getPooledPhase (issue #331)", () => {
+  const pooled = { fundingTarget: 1_000_000n, fundingDeadline: 1_760_000_000n };
+
+  it("reports open strictly before the deadline when under target", () => {
+    expect(
+      pooledPhase({ status: "Funded", amount: 400_000n }, pooled, 1_759_999_999n),
+    ).toEqual({
+      phase: "open",
+      remaining: 600_000n,
+      deadline: 1_760_000_000n,
+    });
+  });
+
+  it("reports failed at exactly the deadline when under target (>= boundary)", () => {
+    expect(
+      pooledPhase({ status: "Funded", amount: 999_999n }, pooled, 1_760_000_000n),
+    ).toEqual({
+      phase: "failed",
+      remaining: 1n,
+      deadline: 1_760_000_000n,
+    });
+  });
+
+  it("reports funded when amount reaches or exceeds target, even at/after deadline", () => {
+    expect(
+      pooledPhase({ status: "Funded", amount: 1_000_000n }, pooled, 1_760_000_000n),
+    ).toEqual({
+      phase: "funded",
+      remaining: 0n,
+      deadline: 1_760_000_000n,
+    });
+  });
+
+  it("reports released when status is Released", () => {
+    expect(
+      pooledPhase({ status: "Released", amount: 1_000_000n }, pooled, 1_760_000_500n),
+    ).toEqual({
+      phase: "released",
+      remaining: 0n,
+      deadline: 1_760_000_000n,
+    });
+  });
+
+  it("reports failed when status is Refunded or Cancelled", () => {
+    expect(
+      pooledPhase({ status: "Refunded", amount: 0n }, pooled, 1_750_000_000n).phase,
+    ).toBe("failed");
+    expect(
+      pooledPhase({ status: "Cancelled", amount: 0n }, pooled, 1_750_000_000n).phase,
+    ).toBe("failed");
+  });
+
+  it("getPooledPhase combines getEscrow, getPooled, and getLedgerTime", async () => {
+    const fakeClient = Object.assign(
+      new EscrowClient({
+        contractId: Keypair.random().publicKey(),
+        rpcUrl: "https://127.0.0.1:1",
+      }),
+      {
+        getEscrow: vi.fn(async () => ({ status: "Funded" as const, amount: 250_000n })),
+        getPooled: vi.fn(async () => pooled),
+        getLedgerTime: vi.fn(async () => ({ closeTime: 1_759_999_999n, ledgerSequence: 100 })),
+      },
+    );
+
+    await expect(fakeClient.getPooledPhase(9n)).resolves.toEqual({
+      phase: "open",
+      remaining: 750_000n,
+      deadline: 1_760_000_000n,
+    });
   });
 });
