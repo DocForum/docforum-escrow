@@ -152,7 +152,7 @@ impl EscrowContract {
 
         creator.require_auth();
 
-        let id = Self::next_id(&env);
+        let id = Self::next_id(&env)?;
         let mut pooled_payees = Vec::new(&env);
         pooled_payees.push_back(PayeeShare {
             payee: payee.clone(),
