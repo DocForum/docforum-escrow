@@ -147,7 +147,7 @@ fn rotation_requires_both_stored_parties_and_updates_the_releaser() {
     let invoke = MockAuthInvoke {
         contract: &client.address,
         fn_name: "rotate_releaser",
-        args: (id.clone(), old_releaser.clone(), replacement.clone()).into_val(&env),
+        args: (id, old_releaser.clone(), replacement.clone()).into_val(&env),
         sub_invokes: &[],
     };
 

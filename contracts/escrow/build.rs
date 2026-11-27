@@ -13,9 +13,8 @@ fn main() {
         .unwrap_or_else(|_| "unknown".to_owned());
     let sdk_version = locked_dependency_version("soroban-sdk");
     let generated = format!(
-        "soroban_sdk::contractmeta!(key = \"git_sha\", val = {:?});\n\
-         soroban_sdk::contractmeta!(key = \"soroban_sdk_version\", val = {:?});\n",
-        git_sha, sdk_version
+        "soroban_sdk::contractmeta!(key = \"git_sha\", val = {git_sha:?});\n\
+         soroban_sdk::contractmeta!(key = \"soroban_sdk_version\", val = {sdk_version:?});\n"
     );
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set by Cargo"));
     fs::write(output.join("contract_metadata.rs"), generated)

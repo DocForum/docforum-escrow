@@ -62,6 +62,8 @@ struct PayeeHook;
 
 #[contractimpl]
 impl PayeeHook {
+    // The callback ABI the escrow invokes returns a Result.
+    #[allow(clippy::unnecessary_wraps)]
     pub fn on_escrow_released(_env: Env, _escrow_id: u64, _amount: i128) -> Result<(), HookError> {
         Ok(())
     }
@@ -600,7 +602,7 @@ fn parse_options(mut args: impl Iterator<Item = StdString>) -> Result<Options, S
     while let Some(arg) = args.next() {
         match arg.as_str() {
             // cargo passes `--bench` to a `harness = false` binary.
-            "--bench" => continue,
+            "--bench" => {}
             "--out" => {
                 options.out = Some(
                     args.next()

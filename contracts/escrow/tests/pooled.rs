@@ -21,6 +21,9 @@
 // Every payout assertion checks real token balances, not just state
 // fields (hard rule 2).
 
+// Contributor fixtures use single-letter names (a, b, c, ...).
+#![allow(clippy::many_single_char_names)]
+
 use docforum_escrow::{
     Contribution, Error, EscrowContract, EscrowContractClient, EscrowStatus, PooledData,
 };
@@ -929,7 +932,11 @@ fn create_pooled_escrow_accepts_a_condition_ref_at_the_length_limit() {
     assert_eq!(f.client.get_status(&id), EscrowStatus::Funded);
 }
 
-fn setup_with_release_deadline(env: &Env, target: i128, release_deadline: Option<u64>) -> Fixture<'_> {
+fn setup_with_release_deadline(
+    env: &Env,
+    target: i128,
+    release_deadline: Option<u64>,
+) -> Fixture<'_> {
     env.mock_all_auths();
     env.ledger().set_timestamp(CREATED_AT);
 
@@ -1145,7 +1152,6 @@ fn pooled_escrow_without_deadline_keeps_existing_behavior() {
     assert_eq!(f.client.get_status(&f.id), EscrowStatus::Released);
     assert_eq!(f.token.balance(&f.payee), 100);
 }
-
 
 // ---------------------------------------------------------------------------
 // Pooled escrows settled by an M-of-N releaser set (issue #290)

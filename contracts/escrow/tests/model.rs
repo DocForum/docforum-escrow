@@ -299,12 +299,12 @@ fn quiet_env() -> Env {
     env
 }
 
-fn fixture<'a>(
-    env: &'a Env,
+fn fixture(
+    env: &Env,
     amount: i128,
     refund_after: Option<u64>,
     requires_acceptance: bool,
-) -> Fixture<'a> {
+) -> Fixture<'_> {
     env.ledger().set_timestamp(CREATED_AT);
     env.mock_all_auths();
 

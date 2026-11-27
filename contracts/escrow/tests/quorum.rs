@@ -680,7 +680,7 @@ fn pooled_quorum_refunds_and_single_rotation_stay_rejected() {
     assert_eq!(client.get_status(&escrow_id), EscrowStatus::Funded);
 }
 
-fn empty_fixture<'a>(env: &'a Env) -> (EscrowContractClient<'a>, Address, Address) {
+fn empty_fixture(env: &Env) -> (EscrowContractClient<'_>, Address, Address) {
     let token_id = env
         .register_stellar_asset_contract_v2(Address::generate(env))
         .address();

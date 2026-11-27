@@ -1,0 +1,5 @@
+# Keep formatting deterministic across machines. Style is otherwise rustfmt's
+# defaults — CI runs `cargo fmt --check`, so any change here must be paired
+# with a formatting commit (issue #107).
+edition = "2021"
+newline_style = "Unix"

@@ -72,7 +72,7 @@ fn fixture(env: &Env) -> Fixture<'_> {
             .address();
         let asset = StellarAssetClient::new(env, &id);
         asset.mint(&payer, &MINTED);
-        for c in contributors.iter() {
+        for c in &contributors {
             asset.mint(c, &MINTED);
         }
         id
@@ -101,7 +101,7 @@ fn fixture(env: &Env) -> Fixture<'_> {
     }
 }
 
-impl<'a> Fixture<'a> {
+impl Fixture<'_> {
     fn cond(&self) -> String {
         String::from_str(self.env, "liability-test")
     }
