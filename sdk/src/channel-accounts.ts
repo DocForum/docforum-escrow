@@ -1,1 +1,131 @@
-Ly8gQ2hhbm5lbC1hY2NvdW50IGhlbHBlciAoaXNzdWUgIzEzMikuCi8vCi8vIEEgU3RlbGxhciB0cmFuc2FjdGlvbiBoYXMgZXhhY3RseSBvbmUgc291cmNlIGFjY291bnQsIGFuZCB0aGF0IGFjY291bnQncwovLyBzZXF1ZW5jZSBudW1iZXIgbXVzdCBiZSB1c2VkIGV4YWN0bHkgb25jZSBwZXIgaW4tZmxpZ2h0IHRyYW5zYWN0aW9uLgovLyBTdWJtaXR0aW5nIG1hbnkgZXNjcm93cyBmcm9tIG9uZSBrZXkgdGhlcmVmb3JlIHNlcmlhbGlzZXMgb24gdGhhdCBrZXkncwovLyBzZXF1ZW5jZSBudW1iZXIgKGFuZCByZWFkcyBzdGFsZSBzZXF1ZW5jZXMgdW5kZXIgY29uY3VycmVuY3kpLiBUaGUKLy8gc3RhbmRhcmQgZml4IGlzICpjaGFubmVsIGFjY291bnRzKjogYSBwb29sIG9mIGZ1bmRlZCBhY2NvdW50cyB0aGF0IGVhY2gKLy8gc291cmNlIGEgc2hhcmUgb2YgdGhlIHRyYWZmaWMsIHNvIE4gY2hhbm5lbHMgYWxsb3cgTiB0cmFuc2FjdGlvbnMgaW4KLy8gZmxpZ2h0LgovLwovLyBUaGlzIHBvb2wgaGFuZHMgb3V0IGV4Y2x1c2l2ZSB1c2Ugb2YgYSBjaGFubmVsIGZvciBvbmUgb3BlcmF0aW9uIGF0IGEKLy8gdGltZS4gSXQgZG9lcyBub3QgZmV0Y2ggb3IgY2FjaGUgc2VxdWVuY2UgbnVtYmVycyDigJQgYEBzdGVsbGFyL3N0ZWxsYXItc2RrYAovLyByZWFkcyB0aGUgY3VycmVudCBzZXF1ZW5jZSB3aGVuIGl0IGFzc2VtYmxlcyBhIHRyYW5zYWN0aW9uIOKAlCBzbyBleGNsdXNpdmUKLy8gY2hlY2tvdXQgaXMgd2hhdCBrZWVwcyBjb25jdXJyZW50IHN1Ym1pc3Npb25zIGZyb20gcmV1c2luZyBhIHNlcXVlbmNlLgovLwovLyBObyBuZXR3b3JrIGFjY2VzcyBoZXJlOyB0aGUgbG9hZCBoYXJuZXNzIGluIGBzY3JpcHRzL2xvYWQvYCB1c2VzIGl0LCBhbmQKLy8gaXQgaXMgZXhwb3J0ZWQgZm9yIGludGVncmF0b3JzIHdpdGggdGhlIHNhbWUgcHJvYmxlbS4KaW1wb3J0IHR5cGUgeyBLZXlwYWlyIH0gZnJvbSAiQHN0ZWxsYXIvc3RlbGxhci1zZGsiOwoKLyoqCiAqIE9wdGlvbnMgZm9yIGNvbnN0cnVjdGluZyBhIHtAbGluayBDaGFubmVsQWNjb3VudFBvb2x9LgogKi8KZXhwb3J0IGludGVyZmFjZSBDaGFubmVsQWNjb3VudFBvb2xPcHRpb25zIHsKICAvKiogVGhyb3cgaW5zdGVhZCBvZiBxdWV1ZWluZyB3aGVuIGV2ZXJ5IGNoYW5uZWwgaXMgaW4gdXNlLiAqLwogIGZhaWxGYXN0PzogYm9vbGVhbjsKfQoKaW50ZXJmYWNlIFdhaXRlciB7CiAgcmVzb2x2ZTogKGNoYW5uZWw6IEtleXBhaXIpID0+IHZvaWQ7CiAgcmVqZWN0OiAoZXJyb3I6IEVycm9yKSA9PiB2b2lkOwp9CgovKioKICogQSBwb29sIG9mIGV4Y2x1c2l2ZS11c2UgU3RlbGxhciBjaGFubmVsIGFjY291bnRzLgogKgogKiBFYWNoIGNoYW5uZWwgY2FuIHNvdXJjZSBvbmUgaW4tZmxpZ2h0IHRyYW5zYWN0aW9uIGF0IGEgdGltZSB3aXRob3V0CiAqIHJldXNpbmcgYSBzZXF1ZW5jZSBudW1iZXIuIENhbGxlcnMgYGFjcXVpcmVgIGEgY2hhbm5lbCwgdXNlIGl0IHRvCiAqIGFzc2VtYmxlIGFuZCBzdWJtaXQgYSB0cmFuc2FjdGlvbiwgdGhlbiBgcmVsZWFzZWAgaXQ7IHF1ZXVlZCBjYWxsZXJzCiAqIGFyZSBzZXJ2ZWQgaW4gb3JkZXIuCiAqLwpleHBvcnQgY2xhc3MgQ2hhbm5lbEFjY291bnRQb29sIHsKICBwcml2YXRlIHJlYWRvbmx5IGNoYW5uZWxzOiBLZXlwYWlyW107CiAgcHJpdmF0ZSByZWFkb25seSBpZGxlOiBLZXlwYWlyW107CiAgcHJpdmF0ZSByZWFkb25seSBidXN5ID0gbmV3IFNldDxzdHJpbmc+KCk7CiAgcHJpdmF0ZSByZWFkb25seSB3YWl0ZXJzOiBXYWl0ZXJbXSA9IFtdOwogIHByaXZhdGUgY2xvc2VkID0gZmFsc2U7CgogIGNvbnN0cnVjdG9yKGNoYW5uZWxzOiBLZXlwYWlyW10sIG9wdGlvbnM6IENoYW5uZWxBY2NvdW50UG9vbE9wdGlvbnMgPSB7fSkgewogICAgaWYgKGNoYW5uZWxzLmxlbmd0aCA9PT0gMCkgewogICAgICB0aHJvdyBuZXcgRXJyb3IoIkNoYW5uZWxBY2NvdW50UG9vbCByZXF1aXJlcyBhdCBsZWFzdCBvbmUgY2hhbm5lbCBhY2NvdW50Iik7CiAgICB9CiAgICBjb25zdCBwdWJsaWNLZXlzID0gY2hhbm5lbHMubWFwKChjaGFubmVsKSA9PiBjaGFubmVsLnB1YmxpY0tleSgpKTsKICAgIGlmIChuZXcgU2V0KHB1YmxpY0tleXMpLnNpemUgIT09IHB1YmxpY0tleXMubGVuZ3RoKSB7CiAgICAgIHRocm93IG5ldyBFcnJvcigiQ2hhbm5lbEFjY291bnRQb29sIGRvZXMgbm90IGFjY2VwdCBkdXBsaWNhdGUgY2hhbm5lbCBhY2NvdW50cyIpOwogICAgfQogICAgdGhpcy5jaGFubmVscyA9IFsuLi5jaGFubmVsc107CiAgICB0aGlzLmlkbGUgPSBbLi4uY2hhbm5lbHNdOwogICAgdGhpcy5vcHRpb25zID0gb3B0aW9uczsKICB9CgogIHByaXZhdGUgcmVhZG9ubHkgb3B0aW9uczogQ2hhbm5lbEFjY291bnRQb29sT3B0aW9uczsKCiAgLyoqIFRvdGFsIGNoYW5uZWxzIGluIHRoZSBwb29sLiAqLwogIGdldCBzaXplKCk6IG51bWJlciB7CiAgICByZXR1cm4gdGhpcy5jaGFubmVscy5sZW5ndGg7CiAgfQoKICAvKiogQ2hhbm5lbHMgY3VycmVudGx5IGNoZWNrZWQgb3V0LiAqLwogIGdldCBpblVzZSgpOiBudW1iZXIgewogICAgcmV0dXJuIHRoaXMuYnVzeS5zaXplOwogIH0KCiAgLyoqIENoYW5uZWxzIGF2YWlsYWJsZSByaWdodCBub3cuICovCiAgZ2V0IGF2YWlsYWJsZSgpOiBudW1iZXIgewogICAgcmV0dXJuIHRoaXMuaWRsZS5sZW5ndGg7CiAgfQoKICAvKioKICAgKiBXYWl0IGZvciBhbiBpZGxlIGNoYW5uZWwuIENhbGxzIGFyZSBzZXJ2ZWQgaW4gb3JkZXIsIHNvIGEgcXVldWUgb2YKICAgKiBvcGVyYXRpb25zIHNoYXJlcyB0aGUgY2hhbm5lbHMgZmFpcmx5IGluc3RlYWQgb2Ygc3RhcnZpbmcgYW55IG9uZS4KICAgKi8KICBhc3luYyBhY3F1aXJlKCk6IFByb21pc2U8S2V5cGFpcj4gewogICAgaWYgKHRoaXMuY2xvc2VkKSB7CiAgICAgIHRocm93IG5ldyBFcnJvcigiQ2hhbm5lbEFjY291bnRQb29sIGlzIGNsb3NlZCIpOwogICAgfQogICAgY29uc3QgY2hhbm5lbCA9IHRoaXMuaWRsZS5zaGlmdCgpOwogICAgaWYgKGNoYW5uZWwpIHsKICAgICAgdGhpcy5idXN5LmFkZChjaGFubmVsLnB1YmxpY0tleSgpKTsKICAgICAgcmV0dXJuIGNoYW5uZWw7CiAgICB9CiAgICBpZiAodGhpcy5vcHRpb25zLmZhaWxGYXN0KSB7CiAgICAgIHRocm93IG5ldyBFcnJvcihgTm8gaWRsZSBjaGFubmVsIGFjY291bnRzIChhbGwgJHt0aGlzLnNpemV9IGFyZSBpbiB1c2UpYCk7CiAgICB9CiAgICByZXR1cm4gbmV3IFByb21pc2U8S2V5cGFpcj4oKHJlc29sdmUsIHJlamVjdCkgPT4gewogICAgICB0aGlzLndhaXRlcnMucHVzaCh7IHJlc29sdmUsIHJlamVjdCB9KTsKICAgIH0pOwogIH0KCiAgLyoqIFJldHVybiBhIGNoYW5uZWwgdG8gdGhlIHBvb2wgYWZ0ZXIgaXRzIHRyYW5zYWN0aW9uIGhhcyBmaW5pc2hlZC4gKi8KICByZWxlYXNlKGNoYW5uZWw6IEtleXBhaXIpOiB2b2lkIHsKICAgIGNvbnN0IHB1YmxpY0tleSA9IGNoYW5uZWwucHVibGljS2V5KCk7CiAgICBpZiAoIXRoaXMuYnVzeS5kZWxldGUocHVibGljS2V5KSkgewogICAgICB0aHJvdyBuZXcgRXJyb3IoYENoYW5uZWwgJHtwdWJsaWNLZXl9IGlzIG5vdCBjaGVja2VkIG91dCBvZiB0aGlzIHBvb2xgKTsKICAgIH0KICAgIGNvbnN0IHdhaXRlciA9IHRoaXMud2FpdGVycy5zaGlmdCgpOwogICAgaWYgKHdhaXRlcikgewogICAgICB0aGlzLmJ1c3kuYWRkKHB1YmxpY0tleSk7CiAgICAgIHdhaXRlci5yZXNvbHZlKGNoYW5uZWwpOwogICAgfSBlbHNlIHsKICAgICAgdGhpcy5pZGxlLnB1c2goY2hhbm5lbCk7CiAgICB9CiAgfQoKICAvKiogQWNxdWlyZSBhIGNoYW5uZWwsIHJ1biBgZm5gLCBhbmQgYWx3YXlzIHJlbGVhc2UgaXQgYWZ0ZXJ3YXJkcy4gKi8KICBhc3luYyBydW48VD4oZm46IChjaGFubmVsOiBLZXlwYWlyKSA9PiBQcm9taXNlPFQ+KTogUHJvbWlzZTxUPiB7CiAgICBjb25zdCBjaGFubmVsID0gYXdhaXQgdGhpcy5hY3F1aXJlKCk7CiAgICB0cnkgewogICAgICByZXR1cm4gYXdhaXQgZm4oY2hhbm5lbCk7CiAgICB9IGZpbmFsbHkgewogICAgICB0aGlzLnJlbGVhc2UoY2hhbm5lbCk7CiAgICB9CiAgfQoKICAvKiogUmVqZWN0IGV2ZXJ5IHF1ZXVlZCB3YWl0ZXI7IGluLWZsaWdodCBjaGVja291dHMgbXVzdCBzdGlsbCByZWxlYXNlLiAqLwogIGNsb3NlKHJlYXNvbiA9IG5ldyBFcnJvcigiQ2hhbm5lbEFjY291bnRQb29sIGlzIGNsb3NlZCIpKTogdm9pZCB7CiAgICB0aGlzLmNsb3NlZCA9IHRydWU7CiAgICBmb3IgKGNvbnN0IHdhaXRlciBvZiB0aGlzLndhaXRlcnMuc3BsaWNlKDApKSB7CiAgICAgIHdhaXRlci5yZWplY3QocmVhc29uKTsKICAgIH0KICB9Cn0K
+// Channel-account helper (issue #132).
+//
+// A Stellar transaction has exactly one source account, and that account's
+// sequence number must be used exactly once per in-flight transaction.
+// Submitting many escrows from one key therefore serialises on that key's
+// sequence number (and reads stale sequences under concurrency). The
+// standard fix is *channel accounts*: a pool of funded accounts that each
+// source a share of the traffic, so N channels allow N transactions in
+// flight.
+//
+// This pool hands out exclusive use of a channel for one operation at a
+// time. It does not fetch or cache sequence numbers — `@stellar/stellar-sdk`
+// reads the current sequence when it assembles a transaction — so exclusive
+// checkout is what keeps concurrent submissions from reusing a sequence.
+//
+// No network access here; the load harness in `scripts/load/` uses it, and
+// it is exported for integrators with the same problem.
+import type { Keypair } from "@stellar/stellar-sdk";
+
+/**
+ * Options for constructing a {@link ChannelAccountPool}.
+ */
+export interface ChannelAccountPoolOptions {
+  /** Throw instead of queueing when every channel is in use. */
+  failFast?: boolean;
+}
+
+interface Waiter {
+  resolve: (channel: Keypair) => void;
+  reject: (error: Error) => void;
+}
+
+/**
+ * A pool of exclusive-use Stellar channel accounts.
+ *
+ * Each channel can source one in-flight transaction at a time without
+ * reusing a sequence number. Callers `acquire` a channel, use it to
+ * assemble and submit a transaction, then `release` it; queued callers
+ * are served in order.
+ */
+export class ChannelAccountPool {
+  private readonly channels: Keypair[];
+  private readonly idle: Keypair[];
+  private readonly busy = new Set<string>();
+  private readonly waiters: Waiter[] = [];
+  private closed = false;
+
+  constructor(channels: Keypair[], options: ChannelAccountPoolOptions = {}) {
+    if (channels.length === 0) {
+      throw new Error("ChannelAccountPool requires at least one channel account");
+    }
+    const publicKeys = channels.map((channel) => channel.publicKey());
+    if (new Set(publicKeys).size !== publicKeys.length) {
+      throw new Error("ChannelAccountPool does not accept duplicate channel accounts");
+    }
+    this.channels = [...channels];
+    this.idle = [...channels];
+    this.options = options;
+  }
+
+  private readonly options: ChannelAccountPoolOptions;
+
+  /** Total channels in the pool. */
+  get size(): number {
+    return this.channels.length;
+  }
+
+  /** Channels currently checked out. */
+  get inUse(): number {
+    return this.busy.size;
+  }
+
+  /** Channels available right now. */
+  get available(): number {
+    return this.idle.length;
+  }
+
+  /**
+   * Wait for an idle channel. Calls are served in order, so a queue of
+   * operations shares the channels fairly instead of starving any one.
+   */
+  async acquire(): Promise<Keypair> {
+    if (this.closed) {
+      throw new Error("ChannelAccountPool is closed");
+    }
+    const channel = this.idle.shift();
+    if (channel) {
+      this.busy.add(channel.publicKey());
+      return channel;
+    }
+    if (this.options.failFast) {
+      throw new Error(`No idle channel accounts (all ${this.size} are in use)`);
+    }
+    return new Promise<Keypair>((resolve, reject) => {
+      this.waiters.push({ resolve, reject });
+    });
+  }
+
+  /** Return a channel to the pool after its transaction has finished. */
+  release(channel: Keypair): void {
+    const publicKey = channel.publicKey();
+    if (!this.busy.delete(publicKey)) {
+      throw new Error(`Channel ${publicKey} is not checked out of this pool`);
+    }
+    const waiter = this.waiters.shift();
+    if (waiter) {
+      this.busy.add(publicKey);
+      waiter.resolve(channel);
+    } else {
+      this.idle.push(channel);
+    }
+  }
+
+  /** Acquire a channel, run `fn`, and always release it afterwards. */
+  async run<T>(fn: (channel: Keypair) => Promise<T>): Promise<T> {
+    const channel = await this.acquire();
+    try {
+      return await fn(channel);
+    } finally {
+      this.release(channel);
+    }
+  }
+
+  /** Reject every queued waiter; in-flight checkouts must still release. */
+  close(reason = new Error("ChannelAccountPool is closed")): void {
+    this.closed = true;
+    for (const waiter of this.waiters.splice(0)) {
+      waiter.reject(reason);
+    }
+  }
+}
