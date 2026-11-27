@@ -29,6 +29,47 @@ func TestContractErrorCodeMapping(t *testing.T) {
 		18: "AcceptanceRequired",
 		19: "AcceptanceNotConfigured",
 		20: "AlreadyAccepted",
+		21: "InvalidRefundTo",
+		22: "InvalidReleaseNotBefore",
+		23: "ReleaseTooEarly",
+		24: "InvalidReleaser",
+		25: "BatchTooLarge",
+		26: "NotPooled",
+		27: "FundingDeadlinePassed",
+		28: "FundingTargetReached",
+		29: "FundingIncomplete",
+		30: "RefundNotOpen",
+		31: "AlreadyRefunded",
+		32: "NoContribution",
+		33: "NotSupportedForPooled",
+		34: "InvalidFundingDeadline",
+		35: "InvalidFee",
+		36: "Undeliverable",
+		37: "InvalidNewPayee",
+		38: "Paused",
+		39: "AlreadyPaused",
+		40: "NotPaused",
+		41: "InvalidPayeeList",
+		42: "TooManyPayees",
+		43: "DuplicatePayee",
+		44: "InvalidBasisPoints",
+		45: "SplitAmountOverflow",
+		46: "InvalidRefundExtension",
+		47: "PoolInsufficient",
+		48: "NotStreamed",
+		49: "InvalidVestingSchedule",
+		50: "NothingToWithdraw",
+		51: "StreamTopUpUnsupported",
+		52: "InvalidSettlementAmount",
+		53: "SettlementNotSupported",
+		54: "AttesterNotConfigured",
+		55: "ScheduleTooEarly",
+		56: "ScheduleComplete",
+		57: "ScheduleCancelled",
+		58: "AllowanceExhausted",
+		59: "InvalidSchedule",
+		60: "DuplicateConditionRef",
+		61: "InvalidReleaseDeadline",
 	}
 	for code, name := range want {
 		err := NewContractError(code)
@@ -171,8 +212,48 @@ func TestReturnValueFromMeta(t *testing.T) {
 	}
 }
 
+func TestLifecycleContractErrors(t *testing.T) {
+	// Issue #340: accept/cancel/transfer_payee map these four codes.
+	for _, want := range []struct {
+		code uint32
+		err  error
+	}{
+		{18, ErrAcceptanceRequired},
+		{19, ErrAcceptanceNotConfigured},
+		{20, ErrAlreadyAccepted},
+		{37, ErrInvalidNewPayee},
+	} {
+		if err := NewContractError(want.code); !errors.Is(err, want.err) {
+			t.Fatalf("code %d does not match its sentinel", want.code)
+		}
+	}
+	// Issue #341: pooled escrows map codes 26-34.
+	for _, want := range []struct {
+		code uint32
+		err  error
+	}{
+		{26, ErrNotPooled},
+		{27, ErrFundingDeadlinePassed},
+		{28, ErrFundingTargetReached},
+		{29, ErrFundingIncomplete},
+		{30, ErrRefundNotOpen},
+		{31, ErrAlreadyRefunded},
+		{32, ErrNoContribution},
+		{33, ErrNotSupportedForPooled},
+		{34, ErrInvalidFundingDeadline},
+	} {
+		if err := NewContractError(want.code); !errors.Is(err, want.err) {
+			t.Fatalf("code %d does not match its sentinel", want.code)
+		}
+	}
+	// Issue #344: chunking past the contract's limit is a typed error.
+	if !errors.Is(NewContractError(25), ErrBatchTooLarge) {
+		t.Fatal("code 25 does not match ErrBatchTooLarge")
+	}
+}
+
 func TestStatusDecoding(t *testing.T) {
-	for _, status := range []EscrowStatus{EscrowStatusFunded, EscrowStatusReleased, EscrowStatusRefunded} {
+	for _, status := range []EscrowStatus{EscrowStatusFunded, EscrowStatusReleased, EscrowStatusRefunded, EscrowStatusCancelled} {
 		got, err := decodeStatus(scvStatus(status))
 		if err != nil || got != status {
 			t.Fatalf("decodeStatus(%s) = %v, %v", status, got, err)

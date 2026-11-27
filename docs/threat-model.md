@@ -154,6 +154,8 @@ pause custodian.
   cannot change itself after deployment (no setter, no upgrade,
   constructor-only).
 - **Residual, accepted:** the pause is not time-bounded. An auto-expiring
+- Operational runbook: [`docs/runbooks/emergency-pause.md`](runbooks/emergency-pause.md)
+  details custodian signing, operational triggers, verification, and unpause criteria.
   pause was considered in ADR 0011 (option 3) and rejected because a pause
   that silently lapses during an incident is worse than the bounded
   griefing it prevents. Detection is the mitigation: the `Paused` event,
@@ -191,8 +193,8 @@ pause custodian.
      time lock, acceptance, pooled rules); handle it on its own path.
   4. Escrows with an opted-in payee callback (`notify_payee`): a failing
      callback aborts the **whole** batch (the transfer already happened,
-     so it can't be reported per-op). Put those in their own batch, or
-     release them singly.
+     so it can't be reported per-op) and the payee controls it. Release
+     those one per transaction; refunds never call the payee (see T11).
   - A batch never widens the key's reach: each op is checked against that
     escrow's own stored releaser set, exactly like `release`/`refund`, and
     funds still only go to the stored `payee`/`refund_to` (I1).
@@ -345,6 +347,19 @@ pause custodian.
   for a contract address implementing `on_escrow_released(u64, i128)`; a
   consenting address without the method cannot complete release. See ADR 0005.
 - When `transfer_payee` reassigns payout rights to a new payee, `notify_payee` is automatically reset to `false` (issue #286). This ensures that transferring an escrow to a plain account or a contract without the callback hook cannot leave the escrow permanently unreleasable with `CallbackFailed`.
+- **Batch amplification (issue #367):** a failing callback aborts the whole
+  `settle_many` invocation, so one consenting payee contract that fails
+  `on_escrow_released` on demand can revert every otherwise valid release in
+  a batch. That is a cheap denial of service against other payees in the
+  same batch, and during a T1 race-to-settle it costs the defender a round.
+  The contract cannot report it per-op (the transfer and the `Released` write
+  already happened); the mitigation is operational — settle `notify_payee`
+  **release** ops one per transaction and keep them out of shared batches
+  (docs/adr/0012, `docs/runbooks/releaser-compromise.md`). Refund ops never
+  invoke the callback, so only releases need isolating.
+  Tests: `tests/settle_many.rs::hostile_callback_payee_reverts_a_batch_of_valid_releases`,
+  `::isolating_the_callback_escrow_lets_the_valid_releases_settle`,
+  `::refund_ops_never_invoke_the_payee_callback`.
 
 ### T5 — Malicious or non-standard `token` · **Medium**
 `token` is any address the payer supplies. The contract trusts it to
@@ -718,6 +733,13 @@ escrow.
 - **Accepted trade-off:** the funding target and deadline are immutable
   creator choices; a payee must read them via `get_escrow` + `get_pooled`
   before relying on a pooled escrow (same advice as T8 for `refundAfter`).
+- **Release deadline recovery (issue #288 / ADR 0011):** pooled escrows may be
+  created with an optional `release_deadline` (via `create_pooled_release_deadline`)
+  strictly after `funding_deadline` (`InvalidReleaseDeadline`). When the release
+  deadline passes on a fully funded pool without release, contributors can pull
+  their contributions back with `claim_refund`, preventing a lost releaser key
+  from locking pool funds forever. Release and claims at the boundary are mutually
+  exclusive: once any claim has paid out, release is blocked (`FundingIncomplete`).
 
 ### T19 — Contributor-list exhaustion / refund resource exhaustion · **Low (design choice)**
 - **Unbounded refund loops are structurally absent:** no pooled entry
@@ -822,7 +844,7 @@ escrow.
 
 | Threat | Test coverage | Status |
 |---|---|---|
-| T1 — `releaser` key leaked or stolen | `cancel.rs::only_the_stored_payer_may_cancel`, `cancel.rs::cancel_requires_the_payers_signature`, `releaser_rotation.rs::rotation_rejects_wrong_releaser_and_non_funded_escrows`; batch response: `settle_many.rs::another_releasers_escrow_is_never_settled`, `::same_escrow_twice_second_op_fails_not_funded`, `::max_batch_fits_mainnet_limits` | Covered |
+| T1 — `releaser` key leaked or stolen | `cancel.rs::only_the_stored_payer_may_cancel`, `cancel.rs::cancel_requires_the_payers_signature`, `releaser_rotation.rs::rotation_rejects_wrong_releaser_and_non_funded_escrows`; batch response: `settle_many.rs::another_releasers_escrow_is_never_settled`, `::same_escrow_twice_second_op_fails_not_funded`, `::max_batch_fits_mainnet_limits`, `::hostile_callback_payee_reverts_a_batch_of_valid_releases`, `::isolating_the_callback_escrow_lets_the_valid_releases_settle` | Covered |
 | T2 — `releaser` key lost | `timeout_refund.rs`, `cancel.rs::cancel_still_works_after_refund_after_has_passed_if_still_funded`, `cancel.rs::cancel_after_timeout_refund_is_rejected` | Covered |
 | T3 — Double‑spend / double payout | `tests/release_refund.rs` (double‑release, release‑after‑refund, refund‑after‑release) | Covered |
 | T4 — Reentrancy | `tests/malicious_token.rs` (failed payout leaves escrow funded), `tests/release_callback.rs` | Covered |
@@ -841,8 +863,27 @@ escrow.
 | T17 — Pooled double refund / claim theft / ordering | `tests/pooled.rs::double_claim_is_rejected`, `::contributor_cannot_claim_another_contributors_funds`, `::claiming_requires_the_contributors_signature`, `::refund_entitlements_are_order_independent`, `::release_and_refund_can_never_share_funds` | Covered |
 | T18 — Pooled funding-window manipulation | `tests/pooled.rs::reaching_the_target_releases_the_pooled_total` (late + overfunding + post-success claim), `::partial_funding_records_and_blocks_release` (premature release), `::pooled_creation_validation` (deadline at creation) | Covered |
 | T19 — Contributor-resource exhaustion / unbounded refund loops | `tests/pooled.rs::no_contributor_cap_each_claim_is_independent` (bounded per-claim work, no cap by design) | Covered (design) |
+| T295 — Fee recipient cannot receive at release | `tests/undeliverable.rs::unauthorized_sac_fee_recipient_blocks_release_atomically_and_can_be_retried` | Covered: the fee-first transfer fails atomically with `Undeliverable`; the escrow remains funded for retry |
 
 *Key: "Covered" = at least one test explicitly exercises the threat and verifies the mitigation. "Residual risk: accepted" = the threat is understood and intentionally tolerated with a documented mitigation. "Uncovered" = no test or mitigation exists — should be evaluated for a future release.*
+
+### T295 — Fee recipient cannot receive at release · **Medium (liveness), document and retry**
+
+- **What can go wrong:** the fixed fee destination can be deauthorized, lose
+  its trustline, or otherwise reject the token transfer after the escrow was
+  funded.
+- **Effect:** release returns `Undeliverable` before the payee is paid. Soroban
+  transaction atomicity restores the pre-call state: the escrow remains
+  `Funded`, the full liability remains recorded, and no destination receives
+  a partial payout.
+- **Decision:** keep the release blocked until the fee recipient can receive.
+  Paying the payee alone would leave the declared fee unpaid and violate I7's
+  exact conservation rule. The releaser can retry once the recipient is
+  reachable; a `fee_bps` of zero skips the fee transfer entirely.
+- **Consumer mitigation:** validate the fee recipient's trustline and
+  authorization before creating an escrow, monitor failed `Undeliverable`
+  releases, and repair the destination before retrying. A payer who needs
+  independent payee liveness should create a fee-free escrow.
 
 | T26 — Keeper drains a schedule beyond the payer's authorisation | `tests/recurring.rs` (early trigger, allowance exhaustion, expired allowance, cancel, completion, one-period-per-call) | Covered |
 

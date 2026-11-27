@@ -11,8 +11,8 @@
     "types": ["vite/client"],
     "baseUrl": ".",
     "paths": {
-      "@docforum/escrow-sdk": ["../../sdk/dist/index.d.ts"],
-      "@docforum/escrow-sdk/signers/wallets-kit": ["../../sdk/dist/signers/wallets-kit.d.ts"],
+      "@docforum/escrow-sdk": ["../../sdk/dist/esm/index.d.ts"],
+      "@docforum/escrow-sdk/signers/wallets-kit": ["../../sdk/dist/esm/signers/wallets-kit.d.ts"],
       "@docforum/escrow-react": ["../../packages/escrow-react/dist/index.d.ts"]
     }
   },

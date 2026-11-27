@@ -52,12 +52,19 @@ the top at release and never on a refund — see
 topped up by the original payer, and `get_status`/`get_escrow` are
 read-only (`get_escrow` is for funded escrows; a settled escrow's record is
 reclaimed, so use `get_status` and the state event:
-[ADR 0013](docs/adr/0013-reclaim-storage-for-settled-escrows.md)). `settle_many` releases or refunds up to 20 escrows in one
+[ADR 0013](docs/adr/0013-reclaim-storage-for-settled-escrows.md)). `settle_many` releases or refunds up to 12 escrows in one
 transaction with per-op results (the fast response to a leaked releaser
 key, see [ADR 0012](docs/adr/0012-batch-settlement-best-effort.md)). A token
 allowlist and an optional emergency-pause custodian are fixed at deploy
 time; the custodian can only block **new** deposits, never touch escrowed
 funds (see [Emergency pause](#emergency-pause)).
+
+For retry-safe funding, `create_escrow_with_uniqueness` optionally indexes
+`(payer, condition_ref)` on chain. A duplicate returns
+`DuplicateConditionRef`; call `get_unique_escrow(payer, condition_ref)` to
+recover the original id. The index is payer-scoped, retained through
+settlement, and follows the escrow storage TTL. The legacy `create_escrow`
+entry point does not enable uniqueness.
 
 ### Emergency pause
 
@@ -124,6 +131,52 @@ sequenceDiagram
 — it never calls this contract as a running network service, and this
 repo never crosses back into `docforum-core`'s database or domain model.
 
+### `waitForStatus` helper for settlement confirmation
+
+Integrators that hand settlement to another party (a relayer, an M-of-N
+quorum, a payee that accepts first) need to wait until an escrow reaches a
+given status, and each one otherwise writes its own `getStatus` polling loop
+with its own timeout and cleanup bugs.
+
+`client.waitForStatus(escrowId, statuses, { timeoutMs, pollIntervalMs, signal })`
+polls until the status is one of `statuses` and resolves with
+`{ escrowId, status }` — not a full escrow, since a settled escrow's record is
+reclaimed ([ADR 0013](docs/adr/0013-reclaim-storage-for-settled-escrows.md)). It
+rejects with a typed `WaitTimeoutError` on timeout, and also when the escrow
+settles on a terminal status outside the target set (for example, waiting for
+`Released` but it is now `Refunded`); `lastStatus` holds the last status seen.
+An unknown escrow id rejects immediately with the same `NotFoundError`
+`getStatus` raises, and an aborted `signal` rejects with the signal's reason
+(an `AbortError` by default).
+
+```ts
+import { EscrowClient, WaitTimeoutError } from "@docforum/escrow-sdk";
+
+const client = new EscrowClient({ contractId: "C…" });
+
+const controller = new AbortController();
+try {
+  const { status } = await client.waitForStatus(escrowId, ["Released"], {
+    timeoutMs: 30_000,
+    pollIntervalMs: 2_000,
+    signal: controller.signal,
+  });
+  console.log(`escrow ${escrowId} is ${status}`);
+} catch (error) {
+  if (error instanceof WaitTimeoutError) {
+    // `undefined` when no read completed before the deadline.
+    console.log(`timed out; last status: ${error.lastStatus ?? "unknown"}`);
+  } else if (error instanceof DOMException && error.name === "AbortError") {
+    console.log("cancelled");
+  }
+}
+```
+
+No timer or pending poll survives resolution, rejection or abort, so a helper
+call never keeps a Node process alive. Offline tests with fake timers cover
+resolution, timeout (including while a status read is in flight),
+terminal-status mismatch, abort, and an unknown escrow id.
+
 ## Trust model for integrators
 
 The contract enforces **who** may settle an escrow, not **why** — so a
@@ -184,6 +237,7 @@ sdk-python/              Python client for the same contract (int i128 amounts)
 examples/web-demo/       Vite + React demo wiring hooks, wallet and telemetry
 scripts/
   check-generated-bindings.sh   CI/regeneration check for the generated bindings
+  check-sdk-constants.mjs       CI check that SDK limits mirror the contract source (issue #333)
   stellar-cli-version           Pinned generator version (+ release checksum)
 docs/adr/                Architecture decision records
 .github/                 CI workflow, issue/PR templates
@@ -303,6 +357,14 @@ await client.release({ escrowId, caller: releaser }); // 1_000_000 to payee
 //     contributor pulls back their own exact record, in any order.
 await client.claimRefund({ escrowId, contributor: alice }); // 650_000 back to alice
 await client.claimRefund({ escrowId, contributor: bob });   // 350_000 back to bob
+// Optional release deadline (issue #288): after it, contributors can claimRefund even from a fully
+// funded pool that was never released, so a lost releaser key can't lock it. Must be after fundingDeadline.
+const { escrowId: guarded } = await client.createPooledEscrow({ ...poolParams, releaseDeadline: 1_760_086_400n });
+(await client.getPooled(guarded)).releaseDeadline; // 1_760_086_400n, or undefined if unset
+
+// A failed round nobody contributed to: anyone may give it its terminal Refunded status (issue #289).
+// A round with contributions returns RefundNotOpen here; it closes on its last claimRefund instead.
+await client.closeFailedRound(escrowId, { source: anyone });
 ```
 
 Rules worth knowing before integrating:
@@ -324,11 +386,56 @@ Rules worth knowing before integrating:
   `refund_after` either — a *failed* round is the only refund window.
 - **Read funding state with `getPooled`:** `getStatus` still returns
   `"Funded"` for a failed round (status describes settlement), so poll
-  `getPooled()` (`fundingTarget`, `fundingDeadline`) plus the escrow's
+  `getPooled()` (`fundingTarget`, `fundingDeadline`, `releaseDeadline`) plus the escrow's
   `amount` to tell open / succeeded / failed apart.
 - The live testnet deployment predates these entry points; pooled
   functions work locally until the next redeploy
   ([`docs/testnet-deployments.md`](docs/testnet-deployments.md)).
+
+### Recurring escrows
+
+A recurring schedule funds one escrow per period from the payer's SEP-41
+allowance (issue #115, [ADR 0015](docs/adr/0015-recurring-escrows-token-allowances.md); SDK
+issue #468). The payer records the terms and grants the escrow contract an
+allowance once. After that, any keeper funds each due period without the payer
+signing again.
+
+```ts
+import { scheduleAllowanceExpirationLedger, scheduleAllowanceNeeded, scheduleState } from "@docforum/escrow-sdk";
+
+const { scheduleId } = await client.createSchedule({
+  payer, payee, token, releaser,
+  amount: 250_000n, conditionRef: "sub-42",
+  periodSeconds: 2_592_000n, totalPeriods: 12, firstDue: 1_900_000_000n,
+  refundAfterSeconds: 86_400n, // relative: each period escrow's refundAfter = its funding time + 1 day
+});
+
+// The allowance is per payer and contract (and token), shared by all of this
+// payer's schedules here, and `approve` replaces it: sum what each one needs.
+const schedule = await client.getSchedule(scheduleId);
+const latest = await client.getLedgerTime();
+await client.approveScheduleAllowance({
+  payer, token,
+  amount: scheduleAllowanceNeeded(schedule), // remaining periods × amount
+  expirationLedger: scheduleAllowanceExpirationLedger(schedule, latest),
+});
+
+// Keeper loop: compare against ledger time, never the local clock.
+if (scheduleState(await client.getSchedule(scheduleId), (await client.getLedgerTime()).closeTime) === "due") {
+  const { escrowId } = await client.fundNext(scheduleId, { source: keeper }); // one period per call
+}
+
+await client.cancelSchedule({ scheduleId, payer }); // funded periods are unaffected
+```
+
+`fundNext` funds exactly one period per call. A late keeper leaves the next
+period due immediately, so check `scheduleState` again. Failures are typed:
+`ScheduleTooEarlyError`, `ScheduleCompleteError`, `ScheduleCancelledError`,
+`AllowanceExhaustedError` (the allowance is too small or expired, and the payer
+must `approve` again) and `PausedError`, none of which the SDK retries.
+`createSchedule` also runs offline the creation rules the contract only checks
+at the first `fund_next`, so a misconfigured schedule fails before it is
+recorded. The recorded testnet deployment predates recurring escrows.
 
 ## Verify this deployment
 
@@ -352,7 +459,7 @@ On other systems, install Stellar CLI 28.1.0 using its official
 instructions and check `stellar --version` before continuing.
 
 From the repository root, run the verifier with the contract ID. It builds
-the current source and fetches deployed WASM from testnet:
+the current source and cross-checks the deployed WASM against its record:
 
 ```bash
 bash scripts/verify-deployment CB7WHNBNHEVPFTGDOWHFMDOWKLTA2Z4CBR3KZGYIVSSJNUT3OGWYSW2H
@@ -367,6 +474,30 @@ paths produce identical bytes, run
 `bash scripts/check-wasm-reproducibility.sh`; CI runs the comparison in
 the pinned `rust:1.96.0-bookworm` container. No `stellar contract optimize`
 step is used.
+
+The verifier also looks up the contract in `deployments.json` and prints the
+recorded `wasmHash` next to the local build and on-chain hashes. All three
+must agree; a missing record or a checkout that is not the recorded `gitSha`
+is a warning, so an older deployment can still be checked. Pass
+`--network testnet|futurenet|local` (or `--network=local`; testnet is the
+default) and mainnet is refused until the security review. For a local
+quickstart, set `LOCAL_RPC_URL` if it is not the default
+`http://localhost:8000/rpc`.
+
+Every `contract-v*` release WASM also carries a GitHub artifact attestation
+(Sigstore-backed build provenance), which ties the published bytes to the
+workflow run and commit that built them. After downloading the file, verify it
+with the GitHub CLI:
+
+```bash
+gh attestation verify docforum_escrow.wasm -R DocForum/docforum-escrow
+```
+
+The SDK tarball attached to an `sdf-v*` release is attested the same way;
+verify it with
+`gh attestation verify docforum-escrow-sdk-<version>.tgz -R DocForum/docforum-escrow`.
+`sha256sum -c` still detects corruption in transit;
+the attestation answers where the bytes came from.
 
 ### Deploying with `scripts/deploy`
 
@@ -436,6 +567,33 @@ const signed = await client.signLifecycleCall(prepared, payer);
 // Machine A
 await client.submitLifecycleCall(signed, relayer, "top_up");
 ```
+
+### Retry-safe creation
+
+A backend that retries "fund order X" after a timeout must not lock funds
+twice. Pass `unique: true` to make creation idempotent per `(payer,
+conditionRef)` (contract #47, SDK issue #469):
+
+```ts
+const result = await client.createEscrow({ ...params, conditionRef: "order-42", unique: true });
+if (result.existing) {
+  // A previous attempt already created it: no transaction was sent.
+  console.log(`escrow ${result.escrowId} already exists (${result.status})`);
+} else {
+  console.log(`created escrow ${result.escrowId} in ${result.txHash}`);
+}
+const id = await client.getUniqueEscrow(payer, "order-42"); // bigint | undefined
+```
+
+A duplicate is detected whether it shows up at simulation or after submission,
+for example when a resubmitted transaction has already landed. The existing
+escrow's payee, token and amount are checked against the request, and a
+mismatch throws `UniqueEscrowMismatchError` rather than reporting success.
+Once the escrow settles, its record is reclaimed but the index survives, so a
+retry still returns `existing: true` with the terminal `status` (the terms
+can't be checked then). The index is per payer. `unique` can't be combined
+with `requiresAcceptance`, `releaseNotBefore` or quorum options. Without
+`unique`, `createEscrow` sends exactly what it always has.
 
 ### Fee estimation and fee-bump sponsorship
 
@@ -587,6 +745,22 @@ time vs local time. Hooks only — no components or styling.
 </QueryClientProvider>
 ```
 
+### Ledger time for deadlines
+
+`useEscrowTimeline` counts down to `refundAfter`, which the contract compares
+to the **ledger** close time, not the local clock. Ask the chain for the
+offset instead of passing one by hand:
+
+```tsx
+const offsetMs = await escrowClient.ledgerClockOffset(); // ledger time − local time
+const { remainingMs, expired } = useEscrowTimeline(escrow, { ledgerTimeOffsetMs: offsetMs });
+```
+
+`client.getLedgerTime()` returns the latest ledger's `closeTime`, `sequence`
+and that `offsetMs`, cached for a few seconds (`{ maxAgeMs: 0 }` forces a
+fresh read). The offset is advisory: ledger close time lags real time — often
+by several seconds — and the contract decides whether a deadline has passed.
+
 ### Telemetry
 
 `EscrowClient` accepts optional instrumentation (OpenTelemetry is an optional
@@ -613,6 +787,12 @@ count. Account addresses are **omitted by default** and only included with
 typed contract errors and `big.Int` i128 amounts. See
 [`sdk-go/README.md`](sdk-go/README.md).
 
+The same client also wraps payee acceptance (`accept`, `cancel`,
+`transfer_payee`), pooled escrows (`create_pooled_escrow`, `contribute`,
+`claim_refund`, `get_pooled`, `get_contribution`) and the chunked batch entry
+points (`create_escrows`, `settle_many`, with `MaxBatchSize`/`MaxSettleOps`
+mirroring the contract's measured limits) — see issues #340, #341 and #344.
+
 The TypeScript SDK (`sdk/`) wraps the contract and is distributed as a tagged
 GitHub Release tarball; see [issue #4](https://github.com/DocForum/docforum-escrow/issues/4)
 and [ADR 0003](docs/adr/0003-sdk-distribution.md).
@@ -623,10 +803,60 @@ consumer migration example.
 
 ### Python client
 
-[`sdk-python/`](sdk-python) mirrors the TypeScript surface (`create_escrow`,
-`get_status`, `get_escrow`, `release`, `refund`) on the Stellar Python SDK,
+[`sdk-python/`](sdk-python) mirrors the TypeScript surface (creation, reads,
+settlement and the single-party amendments) on the Stellar Python SDK,
 with typed contract errors and plain `int` i128 amounts. Testnet only, not
 on PyPI yet. See [`sdk-python/README.md`](sdk-python/README.md).
+
+### Verify a deployed releaser account
+
+Each `contract-v*` GitHub release publishes `docforum_releaser_account.wasm`
+and `docforum_releaser_account.wasm.sha256`. Download both from the
+[repository's Releases](https://github.com/DocForum/docforum-escrow/releases)
+and verify the downloaded file:
+
+```bash
+sha256sum -c docforum_releaser_account.wasm.sha256
+```
+
+A deployed releaser account has a contract address distinct from the escrow
+contract it is configured to authorize. Fetch the WASM for the deployed
+account and compare its SHA-256 with the release asset:
+
+```bash
+stellar contract fetch --id "$RELEASER_ACCOUNT_ID" \
+  --rpc-url https://soroban-testnet.stellar.org \
+  --network-passphrase 'Test SDF Network ; September 2015' \
+  --out-file deployed_releaser_account.wasm
+sha256sum deployed_releaser_account.wasm docforum_releaser_account.wasm
+```
+
+The checksum file verifies the bytes downloaded from GitHub; the fetched
+on-chain WASM hash identifies the code used by that deployed account. They
+should match when that account was deployed from the published artifact. Then
+inspect its immutable escrow target and current quorum/policy settings with the
+read-only views `escrow`, `threshold`, `signer_count`, and `policy`. For
+example, with a Stellar CLI source alias configured for your testnet:
+
+```bash
+stellar contract invoke --send=no --id "$RELEASER_ACCOUNT_ID" \
+  --source "$SOURCE_ACCOUNT" --rpc-url https://soroban-testnet.stellar.org \
+  --network-passphrase 'Test SDF Network ; September 2015' -- escrow
+stellar contract invoke --send=no --id "$RELEASER_ACCOUNT_ID" \
+  --source "$SOURCE_ACCOUNT" --rpc-url https://soroban-testnet.stellar.org \
+  --network-passphrase 'Test SDF Network ; September 2015' -- threshold
+stellar contract invoke --send=no --id "$RELEASER_ACCOUNT_ID" \
+  --source "$SOURCE_ACCOUNT" --rpc-url https://soroban-testnet.stellar.org \
+  --network-passphrase 'Test SDF Network ; September 2015' -- signer_count
+stellar contract invoke --send=no --id "$RELEASER_ACCOUNT_ID" \
+  --source "$SOURCE_ACCOUNT" --rpc-url https://soroban-testnet.stellar.org \
+  --network-passphrase 'Test SDF Network ; September 2015' -- policy
+```
+
+Compare those values with the deployment's independently recorded
+configuration. The contract exposes a signer count but no signer-list view, so
+verify the signer set against the deployment configuration and its
+key-management records.
 
 ## Documentation
 
@@ -639,6 +869,9 @@ on PyPI yet. See [`sdk-python/README.md`](sdk-python/README.md).
 | [`docs/adr/0001-generic-escrow-not-healthcare-specific.md`](docs/adr/0001-generic-escrow-not-healthcare-specific.md) | Why the contract stays domain-blind. |
 | [`sdk/examples/`](sdk/examples/) | Runnable, secret-free SDK examples — one per major flow, against testnet. |
 | SDK API reference | Generated by TypeDoc from `sdk/` (`npm run docs`); published to GitHub Pages. |
+| [`docs/runbooks/emergency-pause.md`](docs/runbooks/emergency-pause.md) | Operational runbook for activating, verifying, and lifting the deposit-only emergency pause. |
+| [`docs/runbooks/redeploy-cutover.md`](docs/runbooks/redeploy-cutover.md) | Step-by-step checklist and procedure for deploying new contract instances and migrating integrators. |
+| [`docs/guides/creation-matrix.md`](docs/guides/creation-matrix.md) | Matrix of escrow creation entry points, supported options, and SDK mapping. |
 
 ## Project status
 

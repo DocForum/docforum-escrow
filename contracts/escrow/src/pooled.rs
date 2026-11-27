@@ -16,7 +16,7 @@ impl EscrowContract {
     /// the escrow's `payer` (co-authorization for `rotate_releaser` only)
     /// and as the `refund_to` placeholder; no push refund path exists for
     /// pooled escrows. No `refund_after`, no acceptance gate, no callback:
-    /// pooled settlement reuses the plain releaser/threshold rules.
+    /// pooled settlement uses the stored releaser set and threshold.
     pub fn create_pooled_escrow(
         env: Env,
         creator: Address,
@@ -26,6 +26,94 @@ impl EscrowContract {
         condition_ref: String,
         releaser: Address,
         funding_deadline: u64,
+    ) -> Result<u64, Error> {
+        Self::create_pooled_release_deadline(
+            env,
+            creator,
+            payee,
+            token,
+            funding_target,
+            condition_ref,
+            releaser,
+            funding_deadline,
+            None,
+        )
+    }
+
+    /// Pooled-escrow variant settled by an M-of-N releaser set (issue #290).
+    /// Takes the same funding rules as `create_pooled_escrow`, with
+    /// `releasers`/`threshold` validated by the shared `check_releaser_set`;
+    /// a fully funded round requires `threshold` approvals through
+    /// `release_with_approvals`. Push refunds stay unavailable, so failed
+    /// rounds are still refunded per contributor with `claim_refund`.
+    pub fn create_pooled_quorum_escrow(
+        env: Env,
+        creator: Address,
+        payee: Address,
+        token: Address,
+        funding_target: i128,
+        condition_ref: String,
+        releasers: Vec<Address>,
+        threshold: u32,
+        funding_deadline: u64,
+    ) -> Result<u64, Error> {
+        Self::create_pooled_escrow_inner(
+            env,
+            creator,
+            payee,
+            token,
+            funding_target,
+            condition_ref,
+            releasers,
+            threshold,
+            funding_deadline,
+            None,
+        )
+    }
+
+    /// Creates a pooled escrow with an optional release deadline (issue #288).
+    /// If `release_deadline` is set, it must be strictly after `funding_deadline`.
+    /// When the release deadline passes on a fully funded pool without release,
+    /// contributors may pull their contributions back with `claim_refund`,
+    /// ensuring that a lost releaser key does not lock pool funds forever.
+    pub fn create_pooled_release_deadline(
+        env: Env,
+        creator: Address,
+        payee: Address,
+        token: Address,
+        funding_target: i128,
+        condition_ref: String,
+        releaser: Address,
+        funding_deadline: u64,
+        release_deadline: Option<u64>,
+    ) -> Result<u64, Error> {
+        let mut releasers = Vec::new(&env);
+        releasers.push_back(releaser);
+        Self::create_pooled_escrow_inner(
+            env,
+            creator,
+            payee,
+            token,
+            funding_target,
+            condition_ref,
+            releasers,
+            1,
+            funding_deadline,
+            release_deadline,
+        )
+    }
+
+    fn create_pooled_escrow_inner(
+        env: Env,
+        creator: Address,
+        payee: Address,
+        token: Address,
+        funding_target: i128,
+        condition_ref: String,
+        releasers: Vec<Address>,
+        threshold: u32,
+        funding_deadline: u64,
+        release_deadline: Option<u64>,
     ) -> Result<u64, Error> {
         // Creating a pooled escrow opens a new deposit target, so the
         // emergency pause gates it like every other creation entry point
@@ -52,12 +140,15 @@ impl EscrowContract {
         if funding_deadline <= env.ledger().timestamp() {
             return Err(Error::InvalidFundingDeadline);
         }
+        if let Some(rd) = release_deadline {
+            if rd <= funding_deadline {
+                return Err(Error::InvalidReleaseDeadline);
+            }
+        }
         if condition_ref.len() > MAX_CONDITION_REF_LEN {
             return Err(Error::ConditionRefTooLong);
         }
-        let mut releasers = Vec::new(&env);
-        releasers.push_back(releaser);
-        Self::check_releaser_set(&env, &releasers, 1)?;
+        Self::check_releaser_set(&env, &releasers, threshold)?;
 
         creator.require_auth();
 
@@ -77,7 +168,7 @@ impl EscrowContract {
             condition_ref,
             status: EscrowStatus::Funded,
             releasers,
-            threshold: 1,
+            threshold,
             // No push timeout exists for pooled escrows, so the field is
             // inert; kept for read-shape compatibility.
             refund_after: None,
@@ -96,7 +187,7 @@ impl EscrowContract {
             fee_bps: None,
             attester: None,
         };
-        env.storage().persistent().set(&DataKey::Escrow(id), &data);
+        Self::write_escrow(&env, id, &data);
         env.storage()
             .persistent()
             .set(&DataKey::Status(id), &data.status);
@@ -105,8 +196,10 @@ impl EscrowContract {
             &PooledData {
                 funding_target,
                 funding_deadline,
+                release_deadline,
             },
         );
+        Self::extend_escrow_ttl(&env, id, release_deadline);
         Self::publish_state(&env, symbol_short!("created"), id, &data);
         Ok(id)
     }
@@ -173,9 +266,7 @@ impl EscrowContract {
         let funded = data.amount.checked_add(amount).ok_or(Error::Overflow)?;
         data.amount = funded;
         env.storage().persistent().set(&key, &contribution);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(escrow_id), &data);
+        Self::write_escrow(&env, escrow_id, &data);
         env.events().publish(
             (symbol_short!("contrib"), escrow_id),
             (payer, amount, funded),
@@ -223,12 +314,19 @@ impl EscrowContract {
         };
         let pooled = Self::pooled_data(&env, escrow_id)?;
         Self::check_funded(&data)?;
-        if env.ledger().timestamp() < pooled.funding_deadline {
+        let now = env.ledger().timestamp();
+        let funding_failed = now >= pooled.funding_deadline && data.amount < pooled.funding_target;
+        let release_timeout = pooled.release_deadline.is_some_and(|rd| now >= rd);
+
+        if !funding_failed && !release_timeout {
+            if now < pooled.funding_deadline {
+                return Err(Error::RefundNotOpen);
+            }
+            if data.amount >= pooled.funding_target {
+                // The round succeeded and release deadline has not passed: release, don't refund.
+                return Err(Error::FundingTargetReached);
+            }
             return Err(Error::RefundNotOpen);
-        }
-        if data.amount >= pooled.funding_target {
-            // The round succeeded: release, don't refund.
-            return Err(Error::FundingTargetReached);
         }
 
         let mut contribution: Contribution = env
@@ -262,9 +360,7 @@ impl EscrowContract {
                 .persistent()
                 .set(&DataKey::Status(escrow_id), &data.status);
         } else {
-            env.storage()
-                .persistent()
-                .set(&DataKey::Escrow(escrow_id), &data);
+            Self::write_escrow(&env, escrow_id, &data);
         }
         // Issue #39: the pooled total just dropped by `refund_amount`.
         Self::sub_liability(&env, &data.token, refund_amount)?;

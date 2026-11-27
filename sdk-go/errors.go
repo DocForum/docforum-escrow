@@ -42,17 +42,34 @@ var (
 	// ErrUnsupportedAuthorization means the simulation required an
 	// authorization entry for an address the client cannot sign for. For a
 	// single-signer call this normally means notify_payee was true and the
-	// payee is not the configured signer.
+	// payee is not the configured signer; for the lifecycle, pooled and batch
+	// paths it means a per-call signer other than Config.Signer is not a
+	// *KeypairSigner, so its Soroban auth entry cannot be signed locally.
 	ErrUnsupportedAuthorization = errors.New("escrow: unsupported authorization requirement")
 
 	// ErrTimeout means the client gave up waiting for the transaction to
 	// reach a terminal state at Config.PollTimeout.
 	ErrTimeout = errors.New("escrow: timed out waiting for transaction")
+
+	// ErrVersionUnavailable means the deployment has no version() function.
+	// Use errors.Is with it, or errors.As to *VersionUnavailableError for the
+	// contract id.
+	ErrVersionUnavailable = errors.New("escrow: deployment has no version() function")
+
+	// ErrUnsupportedContractVersion means version() returned a value outside
+	// the range this SDK supports. Use errors.As to
+	// *UnsupportedContractVersionError for the reported version.
+	ErrUnsupportedContractVersion = errors.New("escrow: unsupported contract version")
+
+	// ErrAuthorizationExpired means a relayed authorization's auth entry has
+	// expired and must be produced again by the releaser.
+	ErrAuthorizationExpired = errors.New("escrow: relayed authorization expired")
 )
 
-// contractErrorNames maps the contract's `Error` enum (contracts/escrow/src/lib.rs)
+// contractErrorNames maps the contract's `Error` enum (contracts/escrow/src/errors.rs)
 // to the names used in Go errors. Codes 10 and 11 are intentionally absent:
-// the contract does not define them.
+// the contract does not define them. Codes 21–25 and 35–59 are not contiguous
+// because the contract appends variants instead of renumbering them.
 var contractErrorNames = map[uint32]string{
 	1:  "NotFound",
 	2:  "InvalidAmount",
@@ -72,11 +89,53 @@ var contractErrorNames = map[uint32]string{
 	18: "AcceptanceRequired",
 	19: "AcceptanceNotConfigured",
 	20: "AlreadyAccepted",
+	21: "InvalidRefundTo",
+	22: "InvalidReleaseNotBefore",
+	23: "ReleaseTooEarly",
+	24: "InvalidReleaser",
+	25: "BatchTooLarge",
+	26: "NotPooled",
+	27: "FundingDeadlinePassed",
+	28: "FundingTargetReached",
+	29: "FundingIncomplete",
+	30: "RefundNotOpen",
+	31: "AlreadyRefunded",
+	32: "NoContribution",
+	33: "NotSupportedForPooled",
+	34: "InvalidFundingDeadline",
+	35: "InvalidFee",
+	36: "Undeliverable",
+	37: "InvalidNewPayee",
+	38: "Paused",
+	39: "AlreadyPaused",
+	40: "NotPaused",
+	41: "InvalidPayeeList",
+	42: "TooManyPayees",
+	43: "DuplicatePayee",
+	44: "InvalidBasisPoints",
+	45: "SplitAmountOverflow",
+	46: "InvalidRefundExtension",
+	47: "PoolInsufficient",
+	48: "NotStreamed",
+	49: "InvalidVestingSchedule",
+	50: "NothingToWithdraw",
+	51: "StreamTopUpUnsupported",
+	52: "InvalidSettlementAmount",
+	53: "SettlementNotSupported",
+	54: "AttesterNotConfigured",
+	55: "ScheduleTooEarly",
+	56: "ScheduleComplete",
+	57: "ScheduleCancelled",
+	58: "AllowanceExhausted",
+	59: "InvalidSchedule",
+	60: "DuplicateConditionRef",
+	61: "InvalidReleaseDeadline",
 }
 
 // ContractError is an error returned by the escrow contract. Code matches the
-// contract's `Error` enum (1..20; codes 10 and 11 are unused). Use errors.As to
-// extract it, or errors.Is with one of the Err* sentinels below.
+// contract's `Error` enum (1..61; codes 10 and 11
+// are unused). Use errors.As to extract it, or errors.Is with one of the Err*
+// sentinels below.
 type ContractError struct {
 	Code uint32
 	Name string
@@ -130,4 +189,45 @@ var (
 	ErrAcceptanceRequired      = NewContractError(18)
 	ErrAcceptanceNotConfigured = NewContractError(19)
 	ErrAlreadyAccepted         = NewContractError(20)
+	ErrInvalidRefundTo         = NewContractError(21)
+	ErrInvalidReleaseNotBefore = NewContractError(22)
+	ErrReleaseTooEarly         = NewContractError(23)
+	ErrInvalidReleaser         = NewContractError(24)
+	ErrBatchTooLarge           = NewContractError(25)
+	ErrNotPooled               = NewContractError(26)
+	ErrFundingDeadlinePassed   = NewContractError(27)
+	ErrFundingTargetReached    = NewContractError(28)
+	ErrFundingIncomplete       = NewContractError(29)
+	ErrRefundNotOpen           = NewContractError(30)
+	ErrAlreadyRefunded         = NewContractError(31)
+	ErrNoContribution          = NewContractError(32)
+	ErrNotSupportedForPooled   = NewContractError(33)
+	ErrInvalidFundingDeadline  = NewContractError(34)
+	ErrInvalidFee              = NewContractError(35)
+	ErrUndeliverable           = NewContractError(36)
+	ErrInvalidNewPayee         = NewContractError(37)
+	ErrPaused                  = NewContractError(38)
+	ErrAlreadyPaused           = NewContractError(39)
+	ErrNotPaused               = NewContractError(40)
+	ErrInvalidPayeeList        = NewContractError(41)
+	ErrTooManyPayees           = NewContractError(42)
+	ErrDuplicatePayee          = NewContractError(43)
+	ErrInvalidBasisPoints      = NewContractError(44)
+	ErrSplitAmountOverflow     = NewContractError(45)
+	ErrInvalidRefundExtension  = NewContractError(46)
+	ErrPoolInsufficient        = NewContractError(47)
+	ErrNotStreamed             = NewContractError(48)
+	ErrInvalidVestingSchedule  = NewContractError(49)
+	ErrNothingToWithdraw       = NewContractError(50)
+	ErrStreamTopUpUnsupported  = NewContractError(51)
+	ErrInvalidSettlementAmount = NewContractError(52)
+	ErrSettlementNotSupported  = NewContractError(53)
+	ErrAttesterNotConfigured   = NewContractError(54)
+	ErrScheduleTooEarly        = NewContractError(55)
+	ErrScheduleComplete        = NewContractError(56)
+	ErrScheduleCancelled       = NewContractError(57)
+	ErrAllowanceExhausted      = NewContractError(58)
+	ErrInvalidSchedule         = NewContractError(59)
+	ErrDuplicateConditionRef   = NewContractError(60)
+	ErrInvalidReleaseDeadline  = NewContractError(61)
 )

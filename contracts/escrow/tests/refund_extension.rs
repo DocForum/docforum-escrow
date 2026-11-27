@@ -3,10 +3,13 @@
 
 use docforum_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
+    testutils::{Address as _, Ledger as _, MockAuth, MockAuthInvoke},
     token::StellarAssetClient,
-    Address, Env, String, Vec,
+    Address, Env, IntoVal, String, Vec,
 };
+
+#[path = "common/auth.rs"]
+mod auth;
 
 const CREATED_AT: u64 = 1_000;
 const DEADLINE: u64 = 1_100;
@@ -14,6 +17,9 @@ const DEADLINE: u64 = 1_100;
 struct Fixture<'a> {
     client: EscrowContractClient<'a>,
     escrow_id: u64,
+    contract_id: Address,
+    payer: Address,
+    releaser: Address,
 }
 
 fn fund_escrow(env: &Env, refund_after: Option<u64>) -> Fixture<'_> {
@@ -43,7 +49,13 @@ fn fund_escrow(env: &Env, refund_after: Option<u64>) -> Fixture<'_> {
         &None,
     );
 
-    Fixture { client, escrow_id }
+    Fixture {
+        client,
+        escrow_id,
+        contract_id,
+        payer,
+        releaser,
+    }
 }
 
 #[test]
@@ -128,4 +140,113 @@ fn extension_requires_an_existing_deadline() {
         .try_extend_refund_after(&f.escrow_id, &(DEADLINE + 100))
         .is_err());
     assert_eq!(f.client.get_escrow(&f.escrow_id).refund_after, None);
+}
+
+// --- exact authorization trees (issue #474) -------------------------------
+
+fn extension_invoke<'a>(env: &Env, f: &'a Fixture<'a>, new_deadline: u64) -> MockAuthInvoke<'a> {
+    MockAuthInvoke {
+        contract: &f.contract_id,
+        fn_name: "extend_refund_after",
+        args: (f.escrow_id, new_deadline).into_val(env),
+        sub_invokes: &[],
+    }
+}
+
+#[test]
+fn extension_records_the_payers_and_releasers_exact_trees() {
+    let env = Env::default();
+    env.mock_all_auths(); // fixture funding only
+    let f = fund_escrow(&env, Some(DEADLINE));
+    let new_deadline = DEADLINE + 100;
+    let invoke = extension_invoke(&env, &f, new_deadline);
+
+    env.mock_auths(&[
+        MockAuth {
+            address: &f.payer,
+            invoke: &invoke,
+        },
+        MockAuth {
+            address: &f.releaser,
+            invoke: &invoke,
+        },
+    ]);
+
+    f.client.extend_refund_after(&f.escrow_id, &new_deadline);
+
+    auth::assert_auth_trees(&env, &[(&f.payer, &invoke), (&f.releaser, &invoke)]);
+    assert_eq!(
+        f.client.get_escrow(&f.escrow_id).refund_after,
+        Some(new_deadline)
+    );
+}
+
+#[test]
+fn extension_fails_when_only_the_payer_signs() {
+    let env = Env::default();
+    env.mock_all_auths(); // fixture funding only
+    let f = fund_escrow(&env, Some(DEADLINE));
+    let invoke = extension_invoke(&env, &f, DEADLINE + 100);
+
+    env.mock_auths(&[MockAuth {
+        address: &f.payer,
+        invoke: &invoke,
+    }]);
+
+    assert!(matches!(
+        f.client
+            .try_extend_refund_after(&f.escrow_id, &(DEADLINE + 100)),
+        Err(Err(soroban_sdk::InvokeError::Abort))
+    ));
+    assert_eq!(
+        f.client.get_escrow(&f.escrow_id).refund_after,
+        Some(DEADLINE)
+    );
+}
+
+#[test]
+fn extension_fails_when_only_the_releaser_signs() {
+    let env = Env::default();
+    env.mock_all_auths(); // fixture funding only
+    let f = fund_escrow(&env, Some(DEADLINE));
+    let invoke = extension_invoke(&env, &f, DEADLINE + 100);
+
+    env.mock_auths(&[MockAuth {
+        address: &f.releaser,
+        invoke: &invoke,
+    }]);
+
+    assert!(matches!(
+        f.client
+            .try_extend_refund_after(&f.escrow_id, &(DEADLINE + 100)),
+        Err(Err(soroban_sdk::InvokeError::Abort))
+    ));
+    assert_eq!(
+        f.client.get_escrow(&f.escrow_id).refund_after,
+        Some(DEADLINE)
+    );
+}
+
+#[test]
+fn extension_rejects_a_stranger_signing_the_exact_tree() {
+    let env = Env::default();
+    env.mock_all_auths(); // fixture funding only
+    let f = fund_escrow(&env, Some(DEADLINE));
+    let stranger = Address::generate(&env);
+    let invoke = extension_invoke(&env, &f, DEADLINE + 100);
+
+    env.mock_auths(&[MockAuth {
+        address: &stranger,
+        invoke: &invoke,
+    }]);
+
+    assert!(matches!(
+        f.client
+            .try_extend_refund_after(&f.escrow_id, &(DEADLINE + 100)),
+        Err(Err(soroban_sdk::InvokeError::Abort))
+    ));
+    assert_eq!(
+        f.client.get_escrow(&f.escrow_id).refund_after,
+        Some(DEADLINE)
+    );
 }
