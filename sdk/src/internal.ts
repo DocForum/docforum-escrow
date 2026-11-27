@@ -5,6 +5,7 @@ import { ContractError, contractErrorName, toEscrowError } from "./errors.js";
 import { type EscrowSpanAttributes } from "./instrumentation.js";
 import { EscrowPreconditionError, type LifecycleCall, type LifecycleMethod } from "./lifecycle.js";
 import { type Milestone, type MilestoneEscrow } from "./milestones.js";
+import { type EscrowEvent, type EscrowLifecycleEventType } from "./events.js";
 
 export function safeScValToNative(value: xdr.ScVal): unknown {
   try { return scValToNative(value); }
@@ -105,4 +106,89 @@ export function isContractError(error: unknown, name: string): boolean {
   if (normalized instanceof ContractError && contractErrorName(normalized.code) === name) return true;
   const message = error instanceof Error ? error.message : String(error);
   return new RegExp(`(^|\\W)${name}(\\W|$)`).test(message);
+}
+
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+/** The typed fields of a non-lifecycle {@link EscrowEvent}, without the RPC envelope. */
+export type DecodedEventFields = DistributiveOmit<
+  Exclude<EscrowEvent, { type: EscrowLifecycleEventType | "unknown" }>,
+  "ledger" | "cursor" | "transactionHash" | "data"
+>;
+
+const asBigInt = (v: unknown): bigint | undefined =>
+  typeof v === "bigint" ? v : typeof v === "number" && Number.isSafeInteger(v) ? BigInt(v) : undefined;
+const asAddress = (v: unknown): string | undefined =>
+  typeof v === "string" && /^[GC][A-Z2-7]{55}$/.test(v) ? v : undefined;
+const asRecord = (v: unknown): Record<string, unknown> | undefined =>
+  v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+function allDefined<T extends Record<string, unknown>>(fields: T): { [K in keyof T]: Exclude<T[K], undefined> } | undefined {
+  return Object.values(fields).every((v) => v !== undefined) ? (fields as { [K in keyof T]: Exclude<T[K], undefined> }) : undefined;
+}
+
+/**
+ * Decodes the contract's non-lifecycle events from native topics and data,
+ * using the shapes the contract publishes (see `contracts/escrow/src/`).
+ * Returns `undefined` for an unrecognised name or a payload of the wrong
+ * shape, so the caller can fall back to an `unknown` event.
+ */
+export function decodeNonLifecycleEvent(topics: unknown[], data: unknown): DecodedEventFields | undefined {
+  const [name, t1, t2, t3] = topics;
+  const tuple = Array.isArray(data) ? data : [];
+  const map = asRecord(data) ?? {};
+  const escrowId = asBigInt(t1);
+  let fields: DecodedEventFields | undefined;
+  switch (name) {
+    case "top_up": {
+      const f = allDefined({ escrowId, amount: asBigInt(tuple[0]), newAmount: asBigInt(tuple[1]) });
+      fields = f && { type: "topUp", ...f };
+      break;
+    }
+    case "accepted": {
+      const f = allDefined({ escrowId, payee: asAddress(tuple[0]), acceptedAt: asBigInt(tuple[1]) });
+      fields = f && { type: "accepted", ...f };
+      break;
+    }
+    case "rotate": {
+      const f = allDefined({ escrowId, oldReleaser: asAddress(tuple[0]), newReleaser: asAddress(tuple[1]) });
+      fields = f && { type: "rotated", ...f };
+      break;
+    }
+    case "pay_xfer": {
+      const f = allDefined({ escrowId, oldPayee: asAddress(tuple[0]), newPayee: asAddress(tuple[1]) });
+      fields = f && { type: "payeeTransferred", ...f };
+      break;
+    }
+    case "contrib": {
+      const f = allDefined({ escrowId, contributor: asAddress(tuple[0]), amount: asBigInt(tuple[1]), funded: asBigInt(tuple[2]) });
+      fields = f && { type: "contributed", ...f };
+      break;
+    }
+    case "claimed": {
+      const f = allDefined({ escrowId, contributor: asAddress(tuple[0]), amount: asBigInt(tuple[1]) });
+      fields = f && { type: "claimed", ...f };
+      break;
+    }
+    case "settled": {
+      const f = allDefined({ escrowId, payeeAmount: asBigInt(tuple[0]), payerAmount: asBigInt(tuple[1]) });
+      fields = f && { type: "settled", ...f };
+      break;
+    }
+    case "payee_refunded": {
+      const f = allDefined({ escrowId, payer: asAddress(t2), payee: asAddress(t3), amount: asBigInt(map.amount) });
+      fields = f && { type: "payeeRefunded", ...f };
+      break;
+    }
+    case "refund_deadline_extended": {
+      const f = allDefined({ escrowId, oldDeadline: asBigInt(map.old_deadline), newDeadline: asBigInt(map.new_deadline) });
+      fields = f && { type: "refundDeadlineExtended", ...f };
+      break;
+    }
+    case "paused":
+    case "unpaused": {
+      const admin = asAddress(t1);
+      fields = admin === undefined ? undefined : { type: name, admin };
+      break;
+    }
+  }
+  return fields;
 }
