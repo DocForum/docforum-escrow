@@ -14,9 +14,9 @@ export default defineConfig({
     alias: [
       {
         find: "@docforum/escrow-sdk/signers/wallets-kit",
-        replacement: fromRepo("../../sdk/dist/signers/wallets-kit.js"),
+        replacement: fromRepo("../../sdk/dist/esm/signers/wallets-kit.js"),
       },
-      { find: "@docforum/escrow-sdk", replacement: fromRepo("../../sdk/dist/index.js") },
+      { find: "@docforum/escrow-sdk", replacement: fromRepo("../../sdk/dist/esm/index.js") },
       {
         find: "@docforum/escrow-react",
         replacement: fromRepo("../../packages/escrow-react/dist/index.js"),

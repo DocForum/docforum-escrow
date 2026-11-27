@@ -1,0 +1,86 @@
+# cargo-deny policy for the escrow contract (issue #107).
+#
+# Every exception or suppression below carries a written reason. CI runs
+# `cargo deny check` with cargo-deny pinned in .github/workflows/ci.yml;
+# a finding that isn't listed here fails the build.
+#
+# Run locally from contracts/escrow/:  cargo deny check
+
+# No [graph] target filter: the policy deliberately checks the whole
+# Cargo.lock (including dev/test dependencies), because a compromised or
+# unexpectedly-licensed test dependency still runs on contributors' and
+# CI machines. The shipped wasm is a subset of this graph.
+
+[advisories]
+# Vulnerabilities fail the build. Unmaintained crates are reported (warn)
+# rather than denied: a transitive crate can become unmaintained through no
+# action of this repo, and the maintainers need a triage step, not a red CI
+# they cannot fix. Yanked crates are a hard failure — never ship one.
+yanked = "deny"
+unmaintained = "workspace"
+ignore = [
+    # Inherited from soroban-sdk 27.0.6, which pins elliptic-curve 0.13.8 /
+    # crypto-bigint 0.5.5; the fix is crypto-bigint 0.7.6, which requires an
+    # SDK/elliptic-curve upgrade we cannot make without changing the
+    # contract's compiled output. The affected constant-time arithmetic is
+    # only reachable through the host-side crypto in soroban-env-host (test
+    # mode); the wasm guest contract never calls it, and Soroban host
+    # execution is deterministic and not observable by a timing attacker.
+    # Revisit on the next soroban-sdk 27.x bump (tracked in ROADMAP.md).
+    { id = "RUSTSEC-2026-0387", reason = "host-only transitive via soroban-sdk 27.0.6 (crypto-bigint 0.5.5); no fixed upstream SDK, not reachable from the wasm guest" },
+]
+
+[licenses]
+# Permissive licenses only. This list is deliberately explicit rather than
+# `allow-osi-fsf-free`: a funds-holding contract should not silently absorb
+# a new copyleft or ambiguous license via a dependency update.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "Zlib",
+    "Unlicense",
+]
+confidence-threshold = 0.9
+# No per-crate license exceptions. Add one only with a reason comment and a
+# link to the crate's license file, so reviewers can verify it.
+
+[bans]
+# Duplicates are denied, with every known duplicate listed in `skip` below
+# and a reason. A new duplicate therefore fails CI instead of accumulating
+# silently. This matters here: two versions of a crypto crate means two
+# copies of security-critical code.
+multiple-versions = "deny"
+# `*` version requirements make builds non-reproducible; none are needed.
+wildcards = "deny"
+highlight = "all"
+skip = [
+    # All of these are inside soroban-sdk 27.0.6's own dependency graph.
+    # We cannot dedupe them without changing the SDK (which would change
+    # the on-chain contract's compiled output and is out of scope), and
+    # cargo-audit still scans both copies.
+    { crate = "block-buffer@0.10.4", reason = "soroban-sdk 27.0.6 pulls both 0.10 and 0.12 via sha2/digest majors; pinned by the SDK" },
+    { crate = "cpufeatures@0.2.17", reason = "soroban-sdk 27.0.6 pulls both 0.2 and 0.3 via digest/sha2 majors; pinned by the SDK" },
+    { crate = "crate-git-revision@0.0.6", reason = "soroban-sdk 27.0.6 build dependency; two patch versions in the SDK's pinned graph" },
+    { crate = "crypto-common@0.1.6", reason = "soroban-sdk 27.0.6 pulls both 0.1 and 0.2 via digest majors; pinned by the SDK" },
+    { crate = "curve25519-dalek@4.1.3", reason = "soroban-sdk 27.0.6 pulls both 4.x and 5.x via ed25519-dalek; pinned by the SDK" },
+    { crate = "darling@0.20.11", reason = "soroban-sdk 27.0.6 proc-macro graph; two majors of the darling family" },
+    { crate = "darling_core@0.20.11", reason = "soroban-sdk 27.0.6 proc-macro graph; two majors of the darling family" },
+    { crate = "darling_macro@0.20.11", reason = "soroban-sdk 27.0.6 proc-macro graph; two majors of the darling family" },
+    { crate = "digest@0.10.7", reason = "soroban-sdk 27.0.6 pulls both 0.10 and 0.11 via sha2/sha3; pinned by the SDK" },
+    { crate = "fiat-crypto@0.2.9", reason = "soroban-sdk 27.0.6 pulls both 0.2 and 0.3 via curve25519-dalek majors; pinned by the SDK" },
+    { crate = "hashbrown@0.15.5", reason = "soroban-sdk 27.0.6 pulls both 0.15 and 0.17 via ark-*/indexmap; pinned by the SDK" },
+    { crate = "stellar-strkey@0.0.13", reason = "soroban-sdk 27.0.6 build/proc-macro graph; two patch versions of the SDK's strkey crate" },
+    { crate = "syn@2.0.119", reason = "soroban-sdk 27.0.6 proc-macro graph pulls syn 2 and 3; pinned by the SDK" },
+]
+
+[sources]
+# Dependencies must come from crates.io. A malicious or typo-squatted git
+# source would bypass the license/advisory checks above.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

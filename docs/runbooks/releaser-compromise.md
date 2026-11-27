@@ -71,12 +71,38 @@ python3 scripts/settle-outcomes.py outcomes.json --submit-cmd \
 Without `--submit-cmd` the tool only prints the pending work as JSON lines,
 which is a safe way to check the file first.
 
+**Already settled elsewhere.** Add `--status-cmd`, a template with `{id}` that
+prints one escrow's current status (the same `stellar contract invoke` without
+`--source`, calling `get_status`):
+
+```bash
+python3 scripts/settle-outcomes.py outcomes.json --submit-cmd '…' \
+  --status-cmd 'stellar contract invoke --id C... --network testnet -- get_status --escrow_id {id}'
+```
+
+Before each submission the tool reads the status. An escrow that is no longer
+`Funded` was settled by someone else — the attacker, the timeout path, or
+another operator — so it is not submitted again: the tool prints `already
+settled` and records the observed status in the state file. Without
+`--status-cmd`, a submission that fails with `NotFunded`
+(`Error(Contract, #4)`) is recorded the same way with status `unknown`. Neither
+is a retry. If a status read itself fails, that escrow is reported as failed
+and not submitted; fix the status command and re-run. The tool never infers an
+outcome from the status it reads — it only uses it to know the race is over.
+
 **State file.** Progress lives in `outcomes.json.state.jsonl` next to the
 outcome file (change it with `--state PATH`). It holds one JSON line per
 escrow that settled successfully, with the transaction hash:
 
 ```json
 {"action": "release", "id": 12, "tx": "<hash>"}
+```
+
+An escrow this run did not submit is recorded instead, keeping the observed
+status so a re-run has nothing left to do:
+
+```json
+{"action": "refund", "id": 13, "settled_elsewhere": true, "status": "Refunded"}
 ```
 
 The file is rewritten atomically (temp file, fsync, rename) after every
@@ -94,12 +120,46 @@ records an escrow with a different action than the outcome file now says.
 **The gap between landing and recording.** If the tool dies after a
 transaction landed but before the state file was written, or a submission
 timed out, the next run submits that escrow again. The contract rejects the
-second settlement (`NotFunded`, error #4), so the tool reports it as failed.
-Check those ids with `get_status`; if the status matches the outcome, the
-earlier transaction landed.
+second settlement (`NotFunded`, error #4), which the tool records as settled
+elsewhere with the status read by `--status-cmd` (or `unknown` without it), so
+it is not retried again. Check those ids with `get_status` to confirm which way
+they settled.
 
 Submissions run one at a time: transactions from one source account share a
 sequence number, so parallel submits from the same key would collide.
+
+**Report.** Each run ends with counts of escrows settled as approved, settled
+the other way, settled with an unknown status, and still failed:
+
+```
+done: settled_as_approved=… settled_otherwise=… settled_status_unknown=… failed=… total=…
+```
+
+An escrow that settled the opposite way from the approved outcome (refunded
+when release was approved, or released when refund was approved) is an
+incident signal: it is also listed under an `INCIDENT:` heading with the
+approved and observed outcome, so add it to the incident timeline and
+reconcile the payout by hand. A run whose only settlements were external exits
+0; a run with failed submissions exits 1 and prints the ids to retry.
+
+### Escrows with a payee callback (release only)
+
+Release escrows created with `notify_payee` in **their own single-op
+transaction**, never in a shared `settle_many` batch. The callback runs after
+the payout, so a payee contract that fails it on demand would revert the
+whole batch and take every other escrow in it down with it (issue #367,
+ADR 0012, threat model T11). `scripts/settle-outcomes.py` already submits one
+escrow per transaction, so the outcome file needs no change; the rule only
+constrains any faster path you build around it, such as a raw `settle_many`
+batch.
+
+Find these escrows before settling: `get_escrow` returns `notify_payee`, and
+the indexer's `Escrow.notifyPayee` carries the same flag. For a `release`
+outcome, settle it alone and treat `CallbackFailed` (error 9) as "the payee's
+callback refused" — the escrow is untouched, so retry later or hand it to the
+outcome owner. **Refunds are exempt:** `refund` and a `Refund` batch op never
+invoke the payee callback, so `notify_payee` refund escrows can be settled in
+normal batches.
 
 ## 5. Verify
 

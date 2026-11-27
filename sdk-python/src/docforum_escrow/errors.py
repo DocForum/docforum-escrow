@@ -93,6 +93,7 @@ __all__ = [
     "ScheduleCancelledError",
     "AllowanceExhaustedError",
     "InvalidScheduleError",
+    "InvalidReleaseDeadlineError",
 ]
 
 # The contract's `Error` enum. tests/test_errors.py checks this against
@@ -155,7 +156,8 @@ CONTRACT_ERROR_NAMES: dict[int, str] = {
     57: "ScheduleCancelled",
     58: "AllowanceExhausted",
     59: "InvalidSchedule",
-    4700: "DuplicateConditionRef",
+    60: "DuplicateConditionRef",
+    61: "InvalidReleaseDeadline",
 }
 
 
@@ -623,10 +625,17 @@ class InvalidScheduleError(ContractError):
 
 
 class DuplicateConditionRefError(ContractError):
-    """Contract error 4700: ``DuplicateConditionRef``."""
+    """Contract error 60: ``DuplicateConditionRef``."""
 
-    code = 4700
+    code = 60
     contract_error = "DuplicateConditionRef"
+
+
+class InvalidReleaseDeadlineError(ContractError):
+    """Contract error 61: ``InvalidReleaseDeadline``."""
+
+    code = 61
+    contract_error = "InvalidReleaseDeadline"
 
 
 _CLASSES: dict[int, type[ContractError]] = {

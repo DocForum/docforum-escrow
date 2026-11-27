@@ -9,9 +9,10 @@ import (
 type EscrowStatus uint32
 
 const (
-	EscrowStatusFunded   EscrowStatus = 0
-	EscrowStatusReleased EscrowStatus = 1
-	EscrowStatusRefunded EscrowStatus = 2
+	EscrowStatusFunded    EscrowStatus = 0
+	EscrowStatusReleased  EscrowStatus = 1
+	EscrowStatusRefunded  EscrowStatus = 2
+	EscrowStatusCancelled EscrowStatus = 3
 )
 
 // String returns the contract's variant name.
@@ -23,6 +24,8 @@ func (s EscrowStatus) String() string {
 		return "Released"
 	case EscrowStatusRefunded:
 		return "Refunded"
+	case EscrowStatusCancelled:
+		return "Cancelled"
 	default:
 		return fmt.Sprintf("EscrowStatus(%d)", uint32(s))
 	}
@@ -30,7 +33,7 @@ func (s EscrowStatus) String() string {
 
 // IsValid reports whether s is a known contract status.
 func (s EscrowStatus) IsValid() bool {
-	return s <= EscrowStatusRefunded
+	return s <= EscrowStatusCancelled
 }
 
 // Escrow is everything the contract stores about one escrow, as returned by
@@ -53,8 +56,13 @@ type Escrow struct {
 	// ReleaseNotBefore is an optional ledger timestamp before which release is
 	// not allowed. nil means no time lock.
 	ReleaseNotBefore *uint64
-	NotifyPayee      bool
-	Status           EscrowStatus
+	// FeeRecipient is the optional protocol-fee recipient, and FeeBps the fee
+	// in basis points (0..1000). Both are set at creation and taken off the
+	// top at release. nil/0 means no fee. Populated from event snapshots.
+	FeeRecipient *string
+	FeeBps       *uint32
+	NotifyPayee  bool
+	Status       EscrowStatus
 	// RequiresAcceptance and AcceptedAt are present in EscrowData in current
 	// contract versions. They are exposed so callers can decode the full
 	// record; older deployments simply leave them zero/nil.
@@ -82,7 +90,9 @@ type CreateEscrowParams struct {
 	ReleaseNotBefore *uint64
 }
 
-// CreateEscrowResult is returned by CreateEscrow and CreateEscrowWithReleasers.
+// CreateEscrowResult is returned by CreateEscrow, CreateEscrowWithReleasers,
+// CreateEscrowWithReleaseTime, CreateEscrowWithAcceptance and
+// CreatePooledEscrow.
 type CreateEscrowResult struct {
 	EscrowID uint64
 	TxHash   string
@@ -124,4 +134,149 @@ type CreateEscrowWithReleaseTimeParams struct {
 	NotifyPayee      bool
 	RefundTo         *string
 	ReleaseNotBefore *uint64
+}
+
+// CreateEscrowWithAcceptanceParams are the arguments for an escrow with the
+// optional payee-acceptance gate (create_escrow_with_acceptance, issue #25).
+// RequiresAcceptance is the contract's `requires_acceptance` flag: pass true to
+// gate release on the payee's accept call and to open the payer's cancel
+// window; false creates exactly the same escrow as CreateEscrow.
+type CreateEscrowWithAcceptanceParams struct {
+	// Payer is optional; it defaults to the configured signer's address.
+	Payer              string
+	Payee              string
+	Token              string
+	Amount             *big.Int
+	ConditionRef       string
+	Releaser           string
+	RefundAfter        *uint64
+	RequiresAcceptance bool
+	// RefundTo is an optional refund destination distinct from the payer.
+	RefundTo *string
+}
+
+// CreatePooledEscrowParams are the arguments for a pooled escrow: one
+// agreement funded by many contributors (create_pooled_escrow, issue #113 and
+// docs/adr/0011). FundingTarget is in raw token units and must be positive;
+// FundingDeadline is unix seconds and must be in the future. The creator funds
+// nothing at creation.
+type CreatePooledEscrowParams struct {
+	// Creator is optional; it defaults to the configured signer's address.
+	Creator         string
+	Payee           string
+	Token           string
+	FundingTarget   *big.Int
+	ConditionRef    string
+	Releaser        string
+	FundingDeadline uint64
+}
+
+// PooledData is a pooled escrow's immutable funding configuration, as returned
+// by GetPooled. The aggregate funded amount is Escrow.Amount (from GetEscrow).
+type PooledData struct {
+	FundingTarget   *big.Int
+	FundingDeadline uint64
+	// ReleaseDeadline is the optional unix-seconds deadline set with
+	// create_pooled_release_deadline (issue #288). Once it passes on an
+	// unreleased pool, contributors can claim_refund even if the target was
+	// reached, so a lost releaser key cannot lock the pool. nil means no
+	// release deadline, and is also what a deployment predating #288 (no
+	// release_deadline field) decodes to.
+	ReleaseDeadline *uint64
+}
+
+// Contribution is one payer's record on a pooled escrow, as returned by
+// GetContribution. Amount accumulates every accepted contribution and
+// Refunded is set once that payer has claimed their refund.
+type Contribution struct {
+	Amount   *big.Int
+	Refunded bool
+}
+
+// CreateItem is one escrow in a batched create_escrows call. It mirrors the
+// single-escrow creation parameters minus the batch-wide payer.
+type CreateItem struct {
+	Payee        string
+	Token        string
+	Amount       *big.Int
+	ConditionRef string
+	Releaser     string
+	RefundAfter  *uint64
+}
+
+// CreateEscrowsParams are the arguments for CreateEscrows. Payer is optional;
+// it defaults to (and must match) the configured signer, which authorizes the
+// whole batch once.
+type CreateEscrowsParams struct {
+	Payer string
+	Items []CreateItem
+}
+
+// CreateEscrowsResult is returned by CreateEscrows. EscrowIDs is in input
+// order across every chunk; TxHashes has one entry per transaction sent
+// (len(Items) / MaxBatchSize, rounded up). When a later chunk fails, both
+// slices describe only the chunks that committed before the failure, and the
+// returned error is the failing chunk's error.
+type CreateEscrowsResult struct {
+	EscrowIDs []uint64
+	TxHashes  []string
+}
+
+// SettleAction is one of settle_many's two operations: Release pays the
+// escrow's stored payee, Refund returns the funds to the stored refund
+// destination. It mirrors the contract's SettleAction enum.
+type SettleAction uint32
+
+const (
+	SettleRelease SettleAction = 0
+	SettleRefund  SettleAction = 1
+)
+
+// String returns the contract's variant name.
+func (a SettleAction) String() string {
+	switch a {
+	case SettleRelease:
+		return "Release"
+	case SettleRefund:
+		return "Refund"
+	default:
+		return fmt.Sprintf("SettleAction(%d)", uint32(a))
+	}
+}
+
+// IsValid reports whether a is a known settle action.
+func (a SettleAction) IsValid() bool {
+	return a == SettleRelease || a == SettleRefund
+}
+
+// SettleOp is one operation in a settle_many call.
+type SettleOp struct {
+	EscrowID uint64
+	Action   SettleAction
+}
+
+// SettleOpResult is the contract's per-op outcome, always in input order.
+// Err is nil when the contract settled that escrow; a non-nil Err is the
+// contract's rejection (for example *ContractError Unauthorized or NotFunded)
+// and means the escrow was not touched.
+type SettleOpResult struct {
+	EscrowID uint64
+	Action   SettleAction
+	Err      error
+}
+
+// OK reports whether the contract settled this op.
+func (r SettleOpResult) OK() bool {
+	return r.Err == nil
+}
+
+// SettleManyResult is returned by SettleMany. Results has one entry per input
+// op, in input order, across every chunk. TxHashes has one entry per
+// transaction sent. When a later chunk fails, both slices describe only the
+// chunks that committed before the failure, and the returned error is the
+// failing chunk's error — a per-op rejection inside a successful chunk is in
+// Results, never in the returned error.
+type SettleManyResult struct {
+	Results  []SettleOpResult
+	TxHashes []string
 }

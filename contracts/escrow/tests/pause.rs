@@ -44,6 +44,8 @@ const DEPOSIT_ENTRYPOINTS: &[&str] = &[
     "create_escrows",
     "create_streamed_escrow",
     "create_pooled_escrow",
+    "create_pooled_quorum_escrow",
+    "create_pooled_release_deadline",
     "fund_next",
     "contribute",
     "top_up",
@@ -91,7 +93,10 @@ fn snapshot_function_names() -> std::vec::Vec<&'static str> {
     let snapshot = include_str!("../../../contract-spec.json");
     let functions = snapshot
         .split_once("\"functions\": [")
-        .and_then(|(_, rest)| rest.split_once("],\n  \"errors\""))
+        .and_then(|(_, rest)| {
+            rest.split_once("],\n  \"errors\"")
+                .or_else(|| rest.split_once("],\r\n  \"errors\""))
+        })
         .expect("contract-spec.json must contain a functions section")
         .0;
     functions
@@ -124,7 +129,7 @@ struct Fixture<'a> {
     releaser: Address,
 }
 
-fn deploy<'a>(env: &'a Env) -> Fixture<'a> {
+fn deploy(env: &Env) -> Fixture<'_> {
     env.ledger().set_timestamp(CREATED_AT);
 
     let (token_id, token, asset) = setup_asset(env);
@@ -194,7 +199,7 @@ fn every_contract_entrypoint_has_a_pause_classification() {
     );
     for name in &snapshot {
         assert!(
-            classified.contains(&name),
+            classified.contains(name),
             "unclassified contract entry point: {name}"
         );
     }
@@ -732,6 +737,20 @@ fn paused_blocks_pooled_creation_and_contributions() {
             &500,
             &String::from_str(&env, "blocked-pooled"),
             &f.releaser,
+            &FUNDING_DEADLINE,
+        ),
+        Error::Paused,
+    );
+    let quorum = soroban_sdk::vec![&env, f.releaser.clone(), Address::generate(&env)];
+    assert_contract_error(
+        f.client.try_create_pooled_quorum_escrow(
+            &f.payer,
+            &f.payee,
+            &f.token_id,
+            &500,
+            &String::from_str(&env, "blocked-quorum-pooled"),
+            &quorum,
+            &2,
             &FUNDING_DEADLINE,
         ),
         Error::Paused,

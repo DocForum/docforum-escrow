@@ -9,7 +9,9 @@
 // is no approval state to clear and no approval to replay. Single-releaser
 // escrows keep their old behaviour (stored as a one-address set, threshold 1).
 
-use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus, MAX_RELEASERS};
+use docforum_escrow::{
+    Error, EscrowContract, EscrowContractClient, EscrowStatus, SettleAction, MAX_RELEASERS,
+};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
@@ -525,7 +527,160 @@ fn single_releaser_escrow_behaves_as_a_one_of_one_quorum() {
     assert_eq!(token.balance(&payee), AMOUNT * 2);
 }
 
-fn empty_fixture<'a>(env: &'a Env) -> (EscrowContractClient<'a>, Address, Address) {
+#[test]
+fn pooled_quorum_releases_only_when_fully_funded_and_threshold_is_met() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_000);
+    let funding_deadline = 1_500u64;
+
+    let token_id = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
+    let token = TokenClient::new(&env, &token_id);
+    let asset = StellarAssetClient::new(&env, &token_id);
+    let creator = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releasers = releaser_set(&env, 3);
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let escrow_id = client.create_pooled_quorum_escrow(
+        &creator,
+        &payee,
+        &token_id,
+        &100,
+        &String::from_str(&env, "quorum-pooled"),
+        &releasers,
+        &2,
+        &funding_deadline,
+    );
+
+    let a = Address::generate(&env);
+    let b = Address::generate(&env);
+    asset.mint(&a, &40);
+    asset.mint(&b, &60);
+    client.contribute(&escrow_id, &a, &40);
+
+    let two = subset(&env, &releasers, &[0, 1]);
+    assert_eq!(
+        client.try_release_with_approvals(&escrow_id, &two),
+        Err(Ok(Error::FundingIncomplete))
+    );
+
+    client.contribute(&escrow_id, &b, &60);
+    assert_eq!(client.get_escrow(&escrow_id).amount, 100);
+
+    let one = subset(&env, &releasers, &[0]);
+    assert_eq!(
+        client.try_release_with_approvals(&escrow_id, &one),
+        Err(Ok(Error::ThresholdNotMet))
+    );
+    let duplicate = subset(&env, &releasers, &[0, 0]);
+    assert_eq!(
+        client.try_release_with_approvals(&escrow_id, &duplicate),
+        Err(Ok(Error::DuplicateApprover))
+    );
+
+    client.release_with_approvals(&escrow_id, &two);
+    assert_eq!(client.get_status(&escrow_id), EscrowStatus::Released);
+    assert_eq!(token.balance(&payee), 100);
+    assert_eq!(token.balance(&contract_id), 0);
+    assert_eq!(
+        client.try_claim_refund(&escrow_id, &a),
+        Err(Ok(Error::NotFunded))
+    );
+}
+
+#[test]
+fn settle_many_rejects_a_quorum_pool_with_threshold_not_met() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_000);
+
+    let token_id = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
+    let asset = StellarAssetClient::new(&env, &token_id);
+    let creator = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releasers = releaser_set(&env, 3);
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let escrow_id = client.create_pooled_quorum_escrow(
+        &creator,
+        &payee,
+        &token_id,
+        &100,
+        &String::from_str(&env, "quorum-pooled"),
+        &releasers,
+        &2,
+        &1_500,
+    );
+    asset.mint(&creator, &100);
+    client.contribute(&escrow_id, &creator, &100);
+
+    let results = client.settle_many(
+        &releasers.get(0).unwrap(),
+        &soroban_sdk::vec![&env, (escrow_id, SettleAction::Release)],
+    );
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results.get(0), Some(Err(Error::ThresholdNotMet)));
+    assert_eq!(client.get_status(&escrow_id), EscrowStatus::Funded);
+    assert_eq!(TokenClient::new(&env, &token_id).balance(&contract_id), 100);
+}
+
+#[test]
+fn pooled_quorum_refunds_and_single_rotation_stay_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_000);
+
+    let token_id = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
+    let creator = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let releasers = releaser_set(&env, 3);
+    let contract_id = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), Address::generate(&env)),
+    );
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let escrow_id = client.create_pooled_quorum_escrow(
+        &creator,
+        &payee,
+        &token_id,
+        &100,
+        &String::from_str(&env, "quorum-pooled"),
+        &releasers,
+        &2,
+        &1_500,
+    );
+    let two = subset(&env, &releasers, &[0, 1]);
+
+    assert_eq!(
+        client.try_refund_with_approvals(&escrow_id, &two),
+        Err(Ok(Error::NotSupportedForPooled))
+    );
+    assert_eq!(
+        client.try_rotate_releaser(
+            &escrow_id,
+            &releasers.get(0).unwrap(),
+            &Address::generate(&env)
+        ),
+        Err(Ok(Error::ThresholdNotMet))
+    );
+    assert_eq!(client.get_status(&escrow_id), EscrowStatus::Funded);
+}
+
+fn empty_fixture(env: &Env) -> (EscrowContractClient<'_>, Address, Address) {
     let token_id = env
         .register_stellar_asset_contract_v2(Address::generate(env))
         .address();

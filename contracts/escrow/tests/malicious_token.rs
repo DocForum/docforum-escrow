@@ -14,6 +14,9 @@
 // contract's balance, so `create_escrow` verifies the balance rises by
 // exactly `amount` and rejects the escrow otherwise.
 
+// The mock token contracts panic on purpose to model hostile tokens.
+#![allow(clippy::missing_panics_doc)]
+
 use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
     contract, contractimpl, contracttype,
@@ -177,9 +180,7 @@ impl FailingPayoutToken {
             .persistent()
             .get(&MockKey::PayoutBlocked)
             .unwrap_or(false);
-        if armed {
-            panic!("payout blocked");
-        }
+        assert!(!armed, "payout blocked");
         mock_debit_credit(&env, &from, &to, amount, amount);
     }
 }

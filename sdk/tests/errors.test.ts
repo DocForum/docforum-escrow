@@ -1,14 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { CONTRACT_ERROR_NAMES } from "../src/contract-errors.generated.js";
 import {
+  AllowanceExhaustedError,
   BalanceMismatchError,
   ContractError,
+  DuplicateConditionRefError,
   InvalidAmountContractError,
   InvalidRefundAfterError,
+  InvalidReleaseDeadlineError,
+  InvalidScheduleError,
   NetworkMismatchError,
   NotFoundError,
   NotFundedError,
+  PausedError,
   RequestTimeoutError,
+  ScheduleCancelledError,
+  ScheduleCompleteError,
+  ScheduleTooEarlyError,
   SimulationFailure,
   SubmissionFailure,
   UnauthorizedError,
@@ -22,6 +30,15 @@ const expectedErrors = [
   [4, NotFundedError, "NotFunded"],
   [5, InvalidRefundAfterError, "InvalidRefundAfter"],
   [6, BalanceMismatchError, "BalanceMismatch"],
+  // Issues #468 / #469 / #470: pause, recurring schedules, uniqueness, pooled deadline.
+  [38, PausedError, "Paused"],
+  [55, ScheduleTooEarlyError, "ScheduleTooEarly"],
+  [56, ScheduleCompleteError, "ScheduleComplete"],
+  [57, ScheduleCancelledError, "ScheduleCancelled"],
+  [58, AllowanceExhaustedError, "AllowanceExhausted"],
+  [59, InvalidScheduleError, "InvalidSchedule"],
+  [60, DuplicateConditionRefError, "DuplicateConditionRef"],
+  [61, InvalidReleaseDeadlineError, "InvalidReleaseDeadline"],
 ] as const;
 
 describe("SDK errors", () => {

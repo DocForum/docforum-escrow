@@ -71,7 +71,7 @@ use soroban_sdk::{
 
 // Bump this value whenever a contract interface or behavior change is made.
 // CI checks this constant against the base branch when this file changes.
-pub const CONTRACT_VERSION: &str = "3.3.0";
+pub const CONTRACT_VERSION: &str = "3.4.0";
 
 include!(concat!(env!("OUT_DIR"), "/contract_metadata.rs"));
 
@@ -95,6 +95,7 @@ mod admin;
 mod attestation;
 mod create;
 mod internal;
+mod layout;
 mod pause;
 mod payee_transfer;
 mod pooled;
@@ -107,3 +108,5 @@ mod settle;
 mod storage;
 mod top_up;
 mod vesting;
+
+pub use layout::{StoredEscrow, ESCROW_LAYOUT_VERSION};
