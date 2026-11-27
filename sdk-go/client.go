@@ -62,6 +62,7 @@ const (
 // rpcClient is the subset of *rpcclient.Client the SDK calls. Tests substitute
 // a fake so read paths can be exercised offline.
 type rpcClient interface {
+	GetEvents(ctx context.Context, request protocol.GetEventsRequest) (protocol.GetEventsResponse, error)
 	Close() error
 	GetNetwork(ctx context.Context) (protocol.GetNetworkResponse, error)
 	GetLatestLedger(ctx context.Context) (protocol.GetLatestLedgerResponse, error)
@@ -341,6 +342,69 @@ func (c *Client) GetEscrow(ctx context.Context, escrowID uint64) (Escrow, error)
 		return Escrow{}, err
 	}
 	return decodeEscrow(value)
+}
+
+// GetEvents returns a page of decoded contract events for the client's
+// contract (or query.ContractID when set), filtered by the query and resumed
+// from query.Cursor when non-empty. Lifecycle events are decoded into Escrow
+// snapshots; anything else is reported as an Unknown event so a page is never
+// failed by a newer event shape.
+func (c *Client) GetEvents(ctx context.Context, query EventsQuery) (GetEventsResult, error) {
+	contractID := query.ContractID
+	if contractID == "" {
+		contractID = c.contractID
+	}
+	filter := protocol.EventFilter{ContractIDs: []string{contractID}}
+	for _, t := range query.Topics {
+		tf, err := buildTopicFilter(t)
+		if err != nil {
+			return GetEventsResult{}, fmt.Errorf("escrow: invalid topic filter: %w", err)
+		}
+		filter.Topics = append(filter.Topics, tf)
+	}
+	req := protocol.GetEventsRequest{
+		StartLedger: query.StartLedger,
+		Filters:     []protocol.EventFilter{filter},
+		Pagination:  &protocol.PaginationOptions{},
+	}
+	if query.Limit > 0 {
+		req.Pagination.Limit = uint(query.Limit)
+	}
+	if query.Cursor != "" {
+		cur, err := protocol.ParseCursor(query.Cursor)
+		if err != nil {
+			return GetEventsResult{}, fmt.Errorf("escrow: invalid cursor: %w", err)
+		}
+		req.StartLedger = 0 // the RPC rejects startLedger together with a cursor
+		req.Pagination.Cursor = &cur
+	}
+	resp, err := c.rpc.GetEvents(ctx, req)
+	if err != nil {
+		return GetEventsResult{}, fmt.Errorf("escrow: get events: %w", err)
+	}
+	result := GetEventsResult{
+		Cursor:       resp.Cursor,
+		LatestLedger: resp.LatestLedger,
+	}
+	for _, ev := range resp.Events {
+		event, err := decodeContractEvent(ev)
+		if err != nil {
+			// Unknown or future event shapes must not fail the whole page.
+			topics, _ := decodeTopicXDR(ev.TopicXDR)
+			result.Events = append(result.Events, Event{
+				Ledger: uint32(ev.Ledger),
+				Type:   EventTypeUnknown,
+				Unknown: &UnknownEvent{
+					Name:   firstTopic(topics),
+					Topics: topics,
+					Data:   valueOrNil(ev.ValueXDR),
+				},
+			})
+			continue
+		}
+		result.Events = append(result.Events, event)
+	}
+	return result, nil
 }
 
 // CreateEscrow creates a single-releaser escrow. The configured signer is the
@@ -1341,4 +1405,23 @@ func (c *Client) prepareAuthEntries(simulation protocol.SimulateTransactionRespo
 		entries = append(entries, entry)
 	}
 	return entries, nil
+}
+
+// buildTopicFilter converts one topic pattern into an RPC TopicFilter. Each
+// segment is "*" or "**" (wildcards) or a base64-encoded XDR ScVal.
+func buildTopicFilter(segments []string) (protocol.TopicFilter, error) {
+	tf := make(protocol.TopicFilter, 0, len(segments))
+	for _, s := range segments {
+		if s == "*" || s == "**" {
+			w := s
+			tf = append(tf, protocol.SegmentFilter{Wildcard: &w})
+			continue
+		}
+		var v xdr.ScVal
+		if err := xdr.SafeUnmarshalBase64(s, &v); err != nil {
+			return nil, fmt.Errorf("segment %q: %w", s, err)
+		}
+		tf = append(tf, protocol.SegmentFilter{ScVal: &v})
+	}
+	return tf, nil
 }

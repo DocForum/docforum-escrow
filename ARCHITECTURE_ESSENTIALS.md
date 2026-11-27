@@ -47,7 +47,25 @@ create_schedule(payer, payee, token, amount, condition_ref, releaser, refund_aft
 fund_next(schedule_id) -> escrow_id // IMPLEMENTED (Phase E5, issue #115) — keeper-triggered; pulls exactly one period amount with transfer_from under the payer's allowance and creates a normal escrow; fails early, on exhaustion, or when complete/cancelled
 cancel_schedule(schedule_id, payer) -> () // IMPLEMENTED (Phase E5, issue #115) — payer only; period escrows already created are unaffected
 get_schedule(schedule_id) -> RecurringSchedule // read-only schedule record
+create_escrow_with_uniqueness(..., fee_recipient, fee_bps, unique_ref) -> escrow_id // IMPLEMENTED (issue #47) — optional persistent `(payer, condition_ref)` index; duplicate attempts return `DuplicateConditionRef`, and `get_unique_escrow` recovers the original id; legacy creation remains unchanged
+create_escrows(payer, items: Vec<CreateItem>) -> Vec<escrow_id> // IMPLEMENTED (ADR 0012) — batch of single-releaser creations; payer authorizes once for the whole call; atomic (any invalid item reverts every escrow, ids returned in input order); at most MAX_BATCH_SIZE = 16 items (BatchTooLarge)
+create_streamed_escrow(payer, payee, token, amount, condition_ref, releaser, refund_after, schedule: VestingSchedule) -> escrow_id // IMPLEMENTED (issue #44, ADR 0012) — payer-authorized via create_escrow; fixed total vesting linearly; schedule needs start < end and any cliff within [start, end] (InvalidVestingSchedule)
+get_vesting(escrow_id) -> VestingInfo // IMPLEMENTED (issue #44, ADR 0012) — read-only: schedule, total, vested, withdrawn and claimable amounts; claimable is 0 once settled, and a settled stream stays readable; NotStreamed on a non-streamed id, NotFound on an unknown one
+withdraw(escrow_id, payee) -> amount // IMPLEMENTED (issue #44, ADR 0012) — stored payee only, funded streams only; pays the vested-but-unwithdrawn amount and lowers the escrow amount and token liability by the same figure; NothingToWithdraw when none is claimable
+extend_refund_after(escrow_id, new_deadline) -> () // IMPLEMENTED (issue #41, ADR 0004) — funded, single-releaser escrow only (threshold != 1 → ThresholdNotMet); payer and the releaser both authorize; needs an existing deadline that has not passed and a strictly later new_deadline (InvalidRefundExtension); emits `refund_deadline_extended`
+rotate_releaser_with_approvals(escrow_id, approvers, old_releaser, new_releaser) -> () // IMPLEMENTED (issue #294, ADR 0009) — quorum counterpart of rotate_releaser; funded only; >= threshold distinct current releasers (the outgoing one counts) plus the payer authorize; new_releaser may not already be a member, the contract or the payee (InvalidReleaser); set size and threshold unchanged
+create_pooled_release_deadline(creator, payee, token, funding_target, condition_ref, releaser, funding_deadline, release_deadline: Option<u64>) -> escrow_id // IMPLEMENTED (issue #288, ADR 0011) — pooled creation with an optional release deadline strictly after funding_deadline (InvalidReleaseDeadline); blocked while paused; create_pooled_escrow calls it with None
+close_failed_round(escrow_id) -> () // IMPLEMENTED (issue #289, ADR 0011) — permissionless, no auth; pooled escrows only, funded, after funding_deadline with the target unmet and zero contributions (RefundNotOpen otherwise); sets Refunded and emits the terminal `ESCROW` snapshot
+next_escrow_id() -> u64 // IMPLEMENTED (issue #293) — read-only view of the id counter: the next id a creation entry point will assign; 0 on an untouched contract
+get_escrows(ids: Vec<u64>) -> Vec<Option<EscrowData>> // IMPLEMENTED (issue #293) — read-only batch of get_escrow; None for unknown ids and settled ids whose record was reclaimed (ADR 0013); at most MAX_GET_ESCROWS = 24 ids (BatchTooLarge)
+get_unique_escrow(payer, condition_ref) -> Option<escrow_id> // IMPLEMENTED — read-only lookup of the id indexed for a uniqueness-enabled (payer, condition_ref) pair; the index is kept through settlement and expires with its persistent storage TTL
 ```
+
+The `docforum-escrow-interface` crate provides the Soroban-compatible
+`EscrowClient`, `EscrowData`, `EscrowStatus` and `Error` types for Rust
+contracts that call this surface. A calling contract must arrange auth for
+the payer and releaser used by its nested invocation; the escrow contract
+still enforces those roles on-chain.
 
 ## Events
 
@@ -91,7 +109,7 @@ rotate a releaser or upgrade anything, and it never gates an outbound path.
 **Emergency pause (Phase E5, `docs/adr/0011`):** one address fixed at
 deployment by `__constructor` may set a flag that makes every deposit path
 (`create_escrow` and its variants, plus `top_up`) fail with `Paused`
-(error 26). That is its *only* power. `release`, `refund` (both the
+(error 38). That is its *only* power. `release`, `refund` (both the
 releaser and timeout paths), `get_status` and `get_escrow` do not read the
 flag, so a pause can never lock funds that are already escrowed — the
 contract-side tests state that explicitly
@@ -100,7 +118,7 @@ custodian's signature, are not idempotent (`AlreadyPaused`/`NotPaused`),
 and emit `Paused`/`Unpaused` events. There is no timelock on either
 direction and no unpause backdoor. Any future deposit path **must** apply
 the same check in the same PR.
-escrow data chosen by the payer at creation and immutable afterwards.There is still no admin, no owner, no pause and no upgrade path — OpenZeppelin's
+escrow data chosen by the payer at creation and immutable afterwards. There is still no admin, no owner and no upgrade path — OpenZeppelin's
 pausable/upgradeable/access modules were evaluated and rejected in
 `docs/adr/0006` precisely because they would add one.
 
@@ -224,12 +242,23 @@ const client2 = new EscrowClient({ contractId, network: networks.testnet }); // 
 // constructor; pass verifyNetwork: true with a custom rpcUrl so it cannot silently point at mainnet
 // (verifyNetwork: false turns the check off). Plain-HTTP RPC needs allowHttp (networks.local sets it).
 const { escrowId, txHash } = await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser, refundAfter, notifyPayee: true, refundTo, feeRecipient, feeBps });
+// Creation rejects offline with the matching contract error name, before any
+// transaction is built: InvalidAmount (2), InvalidRefundTo (21), InvalidFee (35)
+// and InvalidReleaseNotBefore (22) when releaseNotBefore is later than refundAfter.
+// Recurring schedules (issue #468): createSchedule → { scheduleId, txHash }; getSchedule → RecurringSchedule;
+// fundNext(scheduleId, { source }) → { escrowId, txHash } (keeper, no payer signature); cancelSchedule({ scheduleId, payer });
+// approveScheduleAllowance({ payer, token, amount, expirationLedger }) (allowance is per payer + contract, shared by all schedules);
+// pure scheduleState(schedule, ledgerTime) → "due" | "waiting" | "complete" | "cancelled"; scheduleAllowanceNeeded(schedule).
+// Retry-safe creation (issue #469): createEscrow({ ..., unique: true }) → { escrowId, txHash, existing: false }
+// or, on a duplicate (payer, conditionRef), { escrowId, txHash: undefined, existing: true, status }; mismatched terms throw
+// UniqueEscrowMismatchError. client.getUniqueEscrow(payer, conditionRef) → bigint | undefined.
+// Pooled (issue #470): createPooledEscrow({ ..., releaseDeadline }) → create_pooled_release_deadline (omitted: create_pooled_escrow);
+// getPooled() → { fundingTarget, fundingDeadline, releaseDeadline? }; closeFailedRound(escrowId, { source }) → { txHash }.
 await client.createQuorumEscrow({ payer, payee, token, amount, conditionRef, releasers, threshold, refundAfter, notifyPayee: true, refundTo }); // M-of-N, ADR 0007
-await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded"
+await client.getStatus(escrowId);            // "Funded" | "Released" | "Refunded" | "Cancelled"
 await client.getEscrow(escrowId);            // full stored record — incl. releasers + threshold + refundAfter, refundTo, so a payee can check the deal (docs/adr/0004/0007/0009, threat model T8)
 await client.release({ escrowId, caller });  // { txHash } — caller: Keypair or SEP-43 Signer, must be a releaser and threshold must be 1
 await client.releaseWithApprovals({ escrowId, approvers }); // { txHash } — one Keypair/Signer per approver (>= threshold, distinct)
-await client.refund({ escrowId, caller });   // { txHash } — releaser when threshold is 1; anyone after refundAfter has passed
 await client.isPaused();                     // boolean — are new deposits blocked? release/refund are unaffected
 await client.getPauseAdmin();                // custodian address set at deploy (docs/adr/0011)
 await client.pause(caller);                  // { txHash } — caller: Keypair/Signer, must be the pause custodian
@@ -237,6 +266,8 @@ await client.unpause(caller);                // { txHash } — same authority; r
 await client.refund({ escrowId, caller });   // { txHash } — releaser (threshold 1), the stored payee voluntarily, or anyone after refundAfter
 await client.refundWithApprovals({ escrowId, approvers });  // { txHash } — M-of-N refund
 await client.getTokenInfo(token);           // { decimals, symbol, name } — cached token metadata read from the SEP-41 contract
+client.getLedgerTime();                       // { closeTime, sequence, offsetMs } — latest ledger close time, cached ~5 s (issue #335)
+await client.ledgerClockOffset();             // ledger time − local time in ms, for useEscrowTimeline({ ledgerTimeOffsetMs })
 await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
 const stop = client.subscribe(handler, { cursor, pollIntervalMs }); // serial polling; await handler for back-pressure
 await client.createMilestoneEscrow({ payer, payee, token, amount, conditionRef, releaser, milestones }); // milestones: bigint[] tranches, validated client-side (sum == amount, all > 0); one escrow per tranche
@@ -251,6 +282,8 @@ client.submitSigned(signedXdr, { expectedHash?, feeBumpSigner?, maxFee? }); // {
 client.prepareRelease({ escrowId, releaser }); client.prepareRefund(...);  // unsigned, for cold keys / multisig releasers; ~1 day window (issue #59)
 client.mergeSignatures([signedXdr, ...]);                         // one envelope from separately signed copies; rejects a different transaction
 client.signAuthEntries(preparedXdr, keypair, { validUntilLedger? }); // when source != releaser; returns { xdr, hash, signedEntries }
+client.canRelease({ escrowId, caller });      // { ok, reasons } — no signature, no transaction; reasons[0] is the contract's error (issue #332)
+client.canRefund({ escrowId, caller });       // { ok, reasons } — also covers the payee-voluntary and timeout refund paths
 ```
 
 Milestones are an SDK-level grouping, not a contract entry point: the
@@ -384,6 +417,14 @@ ships `WalletsKitSigner`, which adapts Stellar Wallets Kit to that interface:
   unhandled throw.
 - 12 offline tests in `sdk/tests/signers.test.ts` with a fake kit.
 
+Issue #125 documentation fragment: add the Ledger signer entry point
+`@docforum/escrow-sdk/signers/ledger` to the SDK documentation and describe
+that it signs transaction envelopes and Soroban authorization preimages via an
+injected Ledger Stellar app. The `@ledgerhq/hw-app-str` package and its
+WebHID/Node HID transport are optional; disabled hash signing is reported and
+software signing is never used as a fallback. See `docs/ledger-signer.md` for
+the manual test checklist.
+
 ### React hooks (issue #126)
 
 `packages/escrow-react` (`@docforum/escrow-react`) is framework glue only: no
@@ -398,6 +439,18 @@ requires `EscrowProvider` (client) inside the app's `QueryClientProvider`.
   `refund_after` is a ledger timestamp, so a local countdown is advisory;
   pass `ledgerTimeOffsetMs` to align it. The contract, not the countdown,
   authorizes a timeout refund.
+- `useEscrowActions(signer)` also wraps `accept`, `cancel`, `topUp`,
+  `contribute` and `claimRefund`; a client-side `EscrowPreconditionError`
+  resolves as `{ status: "precondition", error }` (issues #337, #338).
+- `usePooledEscrow(id)` reads `getEscrow` + `getPooled` and derives the
+  funding phase (`open` / `funded` / `failed` / `released`), polling until the
+  phase settles rather than until the status changes — a failed round stays
+  `Funded` on-chain. `useContribution(id, address)` reads one contributor's
+  record. `contribute` / `claimRefund` invalidate both queries (issue #338).
+- `useEscrowEvents({ escrowId?, types?, cursor? })` owns a
+  `client.subscribe` lifecycle, keeps a bounded event list, exposes the latest
+  cursor, invalidates the escrow queries named in received events, and
+  surfaces `EventCursorExpiredError` as state (issue #339).
 
 ### Telemetry (issue #129)
 
@@ -418,6 +471,22 @@ errors matching the contract's codes, and `big.Int` for i128 amounts. It is an
 additive client — the contract and TypeScript SDK are unchanged by it. Offline
 unit tests run in CI; integration tests are opt-in and run against a local
 quickstart deployment.
+
+Beyond the original five calls it also wraps payee acceptance (`accept`,
+`cancel`, `transfer_payee`), pooled escrows (`create_pooled_escrow`,
+`contribute`, `claim_refund`, `get_pooled`, `get_contribution`) and the batch
+entry points (`create_escrows`, `settle_many`), chunking at the contract's
+`MAX_BATCH_SIZE` and `MAX_SETTLE_OPS` (issues #340, #341, #344). No contract
+change was involved.
+
+### GitHub Action
+
+The reusable [`action/`](action) runs `create`, `release`, `refund`, and
+`status` modes with the SDK. It defaults to Stellar testnet, masks the signer
+secret, rejects mainnet configuration, and refuses fork-origin `pull_request`
+events before reading secrets. The generated `action/dist/` bundle is not
+committed; workflows must install `sdk/` and `action/` dependencies and build
+the action before `uses: ./action`. See [the testnet example workflow](.github/workflows/escrow-action-testnet.yml).
 
 ## Storage TTL & Archival (issue #10, threat model T6)
 
@@ -440,6 +509,56 @@ archival model, the contract manages entry lifetimes automatically:
   they guarantee a post-settlement audit window (`SETTLED_ESCROW_TTL_THRESHOLD` = 7 days,
   `SETTLED_ESCROW_EXTEND_TO` = 30 days) so indexers, payees, and payers can retrieve
   settlement status and receipts without an archival restoration.
+
+### Versioned `EscrowData` layout (issue #37)
+
+Every `DataKey::Escrow(id)` entry is stored as `StoredEscrow::V<n>(…)`
+(`contracts/escrow/src/layout.rs`), so the layout version is part of the
+stored value. All reads go through `read_escrow`, which accepts every known
+version — plus the untagged `EscrowData` map written before issue #37, read
+as V1 — and upgrades it in memory; it never writes, so read-only calls stay
+read-only. Untagged maps come in two field sets: builds from issue #42
+(attestation-based release) on wrote the full V1 set, earlier builds wrote it
+without `attester`. The dispatch tells them apart by the `attester` key and
+reads the older form with `attester: None` added in memory, which is how
+those escrows always behaved. All writes go through `write_escrow`, which stores the latest
+version (`ESCROW_LAYOUT_VERSION`), so an old entry is rewritten on its next
+state change (`top_up`, `accept`, `rotate_releaser`, …). A settled non-pooled
+escrow's record is removed (ADR 0013), so an old entry may also settle without
+ever being rewritten. `StoredEscrow` is `export = false`: it is not part of the
+contract spec or the SDK.
+
+**Rule for adding (or removing, or retyping) an `EscrowData` field:**
+
+1. Never change the field set of a version a released build has written.
+   Freeze the current layout first: copy `EscrowData` into `EscrowDataV<n>`
+   with identical field names and types (the Rust type name is not part of
+   the encoding) and point `StoredEscrow::V<n>` — and, for V1, the
+   untagged-legacy branch — at the frozen struct.
+2. Change `EscrowData`, append `V<n+1>(EscrowData)` to `StoredEscrow`, and
+   bump `ESCROW_LAYOUT_VERSION`.
+3. Add a `V<n>` arm to `StoredEscrow::upgrade` that fills the new field with
+   the value that reproduces the old behaviour exactly (usually `None` or
+   `false`), so an upgraded entry settles exactly as it would have before.
+4. Add a test in `contracts/escrow/tests/storage_layout.rs` that stores a
+   `V<n>` entry directly and settles it by release **and** by refund.
+
+Never remove, rename or reorder a `StoredEscrow` variant, and never reuse a
+variant name. New per-escrow data that only some escrows need can still go
+in its own appended `DataKey` instead (as pooled and vesting data do).
+
+This sits under ADR 0005, not against it: the deployed WASM stays immutable
+and a behaviour change still ships as a new contract id, so within one
+deployment every entry is written by the same code. The version tag makes the
+stored data self-describing, keeps an old layout readable if a future,
+separately reviewed ADR ever adds an upgrade path, and turns "migration" into
+a lazy per-entry rewrite under each escrow's own calls rather than the bulk
+on-chain migration hook ADR 0005 rejects. Measured cost (local Soroban host,
+release WASM, issue #37 PR): reading a tagged V1 entry costs about 8.0k more
+CPU instructions than reading an untagged one (≈ 0.9 % of `get_escrow`), and
+with the 955-byte larger WASM every call costs ≈ 1.4–3.9 % more CPU than on
+`main`; memory moves by under 0.5 %. `tests/storage_layout.rs` guards the
+dispatch on the native host.
 
 ## Hard rules
 1. **No PHI, ever, anywhere in this repo.** Not in tests, not in example

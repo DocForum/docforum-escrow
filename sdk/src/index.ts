@@ -31,7 +31,7 @@ import {
   type Contribution as GeneratedContribution,
   type VestingInfo as GeneratedVestingInfo,
 } from "./generated/contract-client.js";
-import { decodeEscrowDataFromScVal } from "./escrow-data.js";
+import { decodeEscrowDataFromScVal, escrowLedgerKey } from "./escrow-data.js";
 import {
   beginPhase,
   isInstrumentationEnabled,
@@ -142,6 +142,19 @@ export {
   type DeploymentsDocument,
 } from "./deployments.js";
 export type { FactoryClientConfig, DeployInstanceParams, DeployInstanceResult, FactoryInstance } from "./factory.js";
+export {
+  ReleaserAccountClient,
+  ManagementPayload,
+  signManagement,
+  buildSettleSignatures,
+} from "./releaser-account.js";
+export type {
+  PublicKey,
+  Signature,
+  ReleaserAccountAction,
+  SignerSignature,
+  ReleaserAccountClientConfig,
+} from "./releaser-account.js";
 
 // Multisig releaser account helpers (T1 mitigation). Client-side only: they
 // build classic `setOptions` transactions for the releaser account itself and
@@ -197,8 +210,8 @@ export * from "./rpc-providers.js";
 export * from "./solvency.js";
 export * from "./vesting.js";
 
-import { type ArchivedEntryBehavior } from "./archived-entries.js";
-import { type BatchCreateItem, type BatchItemResult, type BatchOptions, BatchPartialFailureError, type BatchSettleOperation, MAX_BATCH_SIZE } from "./batch.js";
+import { type ArchivedEntryBehavior, ArchivedEntryError } from "./archived-entries.js";
+import { type BatchCreateItem, type BatchItemResult, type BatchOptions, BatchPartialFailureError, type BatchSettleOperation, MAX_BATCH_SIZE, MAX_SETTLE_OPS } from "./batch.js";
 import { type EscrowClientConfig } from "./client-config.js";
 import { UnsupportedContractVersionError, isSupportedContractVersion } from "./contract-version.js";
 import { type CancelParams, type CreatedEscrow, type CreateEscrowParams, type CreateQuorumEscrowParams, type Escrow, type EscrowStatus, type ExtendRefundAfterParams, MAX_CONDITION_REF_LENGTH, MAX_FEE_BPS, MAX_RELEASERS, type ReleaseOrRefundParams, type SettlementApprovalsParams, TERMINAL_ESCROW_STATUSES, type UniqueCreateEscrowParams, type UniqueCreateEscrowResult } from "./escrow-types.js";
@@ -208,9 +221,9 @@ import { EMPTY_SPAN_ATTRIBUTES, MISSING_FUNCTION_ERROR, TESTNET_NETWORK_PASSPHRA
 import { LedgerClock, type LedgerTime, type LedgerTimeOptions, type LatestLedger } from "./ledger-time.js";
 import { type AcceptParams, DEFAULT_WAIT_POLL_INTERVAL_MS, type EscrowPreconditionCode, EscrowPreconditionError, type LifecycleCall, type LifecycleMethod, PREPARED_AUTH_TTL_LEDGERS, type PrepareLifecycleParams, type PreparedLifecycleCall, type TopUpParams, type TransferPayeeParams, type WaitForStatusOptions, type WaitForStatusResult } from "./lifecycle.js";
 import { type CreateStreamedEscrowParams, type VestingInfo, type WithdrawParams, validateVestingSchedule } from "./vesting.js";
-import { type CreateMilestoneEscrowParams, type Milestone, type MilestoneEscrow, MilestoneEscrowPartialError, type RefundMilestoneParams, type ReleaseMilestoneParams, milestoneConditionRef, validateMilestoneSchedule } from "./milestones.js";
+import { type CreateMilestoneEscrowParams, type Milestone, type MilestoneEscrow, MilestoneEscrowPartialError, type MilestoneStatus, type RefundMilestoneParams, type ReleaseMilestoneParams, milestoneConditionRef, validateMilestoneSchedule } from "./milestones.js";
 import { MAINNET_NETWORK_PASSPHRASE, MainnetNotAllowedError } from "./networks.js";
-import { type ClaimRefundParams, type CloseFailedRoundOptions, type ContributeParams, type ContributionRecord, type CreatePooledEscrowParams, type PooledEscrow, type SolvencyReport } from "./pooled.js";
+import { type ClaimRefundParams, type CloseFailedRoundOptions, type ContributeParams, type ContributionRecord, type CreatePooledEscrowParams, type PooledEscrow, type PooledPhaseInfo, pooledPhase, type SolvencyReport } from "./pooled.js";
 import { canRefund as evaluateRefund, canRelease as evaluateRelease, type SettlementCheck, type SettlementCheckParams } from "./preflight.js";
 import { DEFAULT_SUBMIT_MAX_FEE, OFFLINE_PREPARED_TX_TTL_LEDGERS, PREPARED_TX_TTL_LEDGERS, type PrepareCreateEscrowParams, type PrepareSettlementParams, type SubmitSignedOptions, type SubmitSignedResult } from "./prepare-submit.js";
 import { RELAYED_AUTH_TTL_LEDGERS, type RelayedAuthorization, type RelayedAuthorizationParams } from "./relayed-auth.js";
@@ -571,9 +584,9 @@ export class EscrowClient {
     if (params.amount <= 0n) {
       throw new Error(`InvalidAmount (error 2): amount must be a positive raw amount, got ${params.amount}`);
     }
-    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+    if (utf8ByteLength(params.conditionRef) > MAX_CONDITION_REF_LENGTH) {
       throw new Error(
-        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${utf8ByteLength(params.conditionRef)}`
       );
     }
     if ((params.feeRecipient === undefined) !== (params.feeBps === undefined)) {
@@ -731,9 +744,9 @@ export class EscrowClient {
   async createStreamedEscrow(
     params: CreateStreamedEscrowParams,
   ): Promise<{ escrowId: bigint; txHash: string }> {
-    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+    if (utf8ByteLength(params.conditionRef) > MAX_CONDITION_REF_LENGTH) {
       throw new Error(
-        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`,
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${utf8ByteLength(params.conditionRef)}`,
       );
     }
     if (params.amount <= 0n) throw new RangeError(`amount must be positive, got ${params.amount}`);
@@ -862,9 +875,9 @@ export class EscrowClient {
   async createQuorumEscrow(
     params: CreateQuorumEscrowParams
   ): Promise<{ escrowId: bigint; txHash: string }> {
-    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+    if (utf8ByteLength(params.conditionRef) > MAX_CONDITION_REF_LENGTH) {
       throw new Error(
-        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${utf8ByteLength(params.conditionRef)}`
       );
     }
     if (params.releasers.length === 0) {
@@ -1012,6 +1025,53 @@ export class EscrowClient {
   }
 
   /**
+   * Read-only: fetches many escrows in batched `getLedgerEntries` RPC calls
+   * (up to 200 keys per call) instead of one simulation per id. Returns a
+   * `Map` in the order of `ids`, with `undefined` for missing/reclaimed ids.
+   * Throws {@link ArchivedEntryError} if an entry's TTL has expired.
+   */
+  async getEscrows(ids: readonly bigint[]): Promise<Map<bigint, Escrow | undefined>> {
+    const result = new Map<bigint, Escrow | undefined>();
+    if (ids.length === 0) return result;
+
+    await this.ensureNetworkVerified();
+
+    const uniqueIds: bigint[] = [];
+    for (const id of ids) {
+      if (!result.has(id)) {
+        result.set(id, undefined);
+        uniqueIds.push(id);
+      }
+    }
+
+    const MAX_LEDGER_ENTRIES_PER_CALL = 200;
+    for (let i = 0; i < uniqueIds.length; i += MAX_LEDGER_ENTRIES_PER_CALL) {
+      const chunkIds = uniqueIds.slice(i, i + MAX_LEDGER_ENTRIES_PER_CALL);
+      const keyToId = new Map<string, bigint>();
+      const keys = chunkIds.map((id) => {
+        const key = escrowLedgerKey(this.contractId, id);
+        keyToId.set(key.toXDR("base64"), id);
+        return key;
+      });
+
+      const response = await this.rpc.getLedgerEntries(...keys);
+      for (const entry of response.entries ?? []) {
+        if (
+          entry.liveUntilLedgerSeq !== undefined &&
+          entry.liveUntilLedgerSeq < response.latestLedger
+        ) {
+          throw new ArchivedEntryError("getEscrows", "error");
+        }
+        const id = keyToId.get(entry.key.toXDR("base64"));
+        if (id === undefined) continue;
+        result.set(id, decodeEscrowDataFromScVal(entry.val.contractData().val()));
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Read-only: everything stored about `escrowId` — including the
    * `releasers` set, its `threshold` and `refundAfter`, which payees should
    * check before relying on a `Funded` escrow (docs/adr/0004, threat model
@@ -1151,18 +1211,37 @@ export class EscrowClient {
 
   /**
    * Read-only: re-reads every tranche's escrow and reports it as
-   * `"unreleased"` (`Funded`), `"released"` (`Released`) or `"refunded"`
-   * (anything terminal otherwise). One `get_escrow` per tranche.
+   * `"unreleased"` (`Funded`), `"released"` (`Released`), `"refunded"`
+   * (`Refunded`), or `"cancelled"` (`Cancelled`). One `get_escrow` per tranche.
    */
   async getMilestones(escrow: MilestoneEscrow): Promise<Milestone[]> {
     return Promise.all(
       escrow.milestones.map(async ({ index, amount, escrowId }) => {
         const status = (await this.getEscrow(escrowId)).status;
+        let milestoneStatus: MilestoneStatus;
+        switch (status) {
+          case "Funded":
+            milestoneStatus = "unreleased";
+            break;
+          case "Released":
+            milestoneStatus = "released";
+            break;
+          case "Refunded":
+            milestoneStatus = "refunded";
+            break;
+          case "Cancelled":
+            milestoneStatus = "cancelled";
+            break;
+          default: {
+            const _exhaustive: never = status;
+            throw new Error(`Unhandled escrow status: ${String(_exhaustive)}`);
+          }
+        }
         return {
           index,
           amount,
           escrowId,
-          status: status === "Released" ? "released" : status === "Funded" ? "unreleased" : "refunded",
+          status: milestoneStatus,
         } satisfies Milestone;
       }),
     );
@@ -1787,9 +1866,9 @@ export class EscrowClient {
   async createPooledEscrow(
     params: CreatePooledEscrowParams
   ): Promise<{ escrowId: bigint; txHash: string }> {
-    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+    if (utf8ByteLength(params.conditionRef) > MAX_CONDITION_REF_LENGTH) {
       throw new Error(
-        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${utf8ByteLength(params.conditionRef)}`
       );
     }
     if (params.fundingTarget <= 0n) {
@@ -1878,6 +1957,20 @@ export class EscrowClient {
     );
     sent.result.unwrap();
     return { txHash: sent.sendTransactionResponse!.hash };
+  }
+
+  /**
+   * Read-only: combines `getEscrow`, `getPooled`, and `getLedgerTime` (not the
+   * local clock) to report whether a pooled escrow is `"open"`, `"funded"`,
+   * `"failed"`, or `"released"`, along with `remaining` and `deadline`.
+   */
+  async getPooledPhase(escrowId: bigint): Promise<PooledPhaseInfo> {
+    const [escrow, pooled, ledgerTime] = await Promise.all([
+      this.getEscrow(escrowId),
+      this.getPooled(escrowId),
+      this.getLedgerTime(),
+    ]);
+    return pooledPhase(escrow, pooled, ledgerTime.closeTime);
   }
 
   /**
@@ -2107,6 +2200,101 @@ export class EscrowClient {
     const results = this.batchResults(items, options.resumeFrom);
     const chunkSize = this.resolveChunkSize(options.chunkSize);
 
+    if (options.mode === "onchain") {
+      await this.ensureNetworkVerified();
+      const byPayer = new Map<string, { signer: BatchCreateItem["payer"]; indices: number[] }>();
+      const fallbackIndices: number[] = [];
+
+      for (let index = 0; index < items.length; index++) {
+        if (results[index].ok) continue;
+        const item = items[index];
+        const payerAddr = signerAddress(item.payer);
+        const canUseCreateEscrows =
+          item.releaser !== undefined &&
+          item.feeBps === undefined &&
+          item.feeRecipient === undefined &&
+          (item.refundTo === undefined || item.refundTo === payerAddr) &&
+          item.notifyPayee !== true;
+
+        if (!canUseCreateEscrows) {
+          fallbackIndices.push(index);
+          continue;
+        }
+        let group = byPayer.get(payerAddr);
+        if (!group) {
+          group = { signer: item.payer, indices: [] };
+          byPayer.set(payerAddr, group);
+        }
+        group.indices.push(index);
+      }
+
+      for (const index of fallbackIndices) {
+        try {
+          const created = await this.createEscrow(items[index]);
+          results[index] = { index, item: items[index], ok: true, skipped: false, ...created };
+        } catch (error) {
+          results[index] = {
+            index,
+            item: items[index],
+            ok: false,
+            skipped: false,
+            error: batchErrorMessage(error),
+          };
+        }
+      }
+
+      for (const [payerAddr, { signer, indices }] of byPayer) {
+        const client = this.contractClient(signer);
+        for (let start = 0; start < indices.length; start += chunkSize) {
+          const chunkIndices = indices.slice(start, start + chunkSize);
+          const chunkItems = chunkIndices.map((idx) => {
+            const item = items[idx];
+            return {
+              payee: item.payee,
+              token: item.token,
+              amount: item.amount,
+              condition_ref: item.conditionRef,
+              releaser: item.releaser!,
+              refund_after: item.refundAfter,
+              release_not_before: item.releaseNotBefore,
+              requires_acceptance: item.requiresAcceptance ?? false,
+            };
+          });
+          try {
+            const tx = await client.create_escrows({ payer: payerAddr, items: chunkItems });
+            const sent = await tx.signAndSend();
+            const ids = tx.result.unwrap();
+            const txHash = sent.sendTransactionResponse?.hash ?? "";
+            for (let i = 0; i < chunkIndices.length; i++) {
+              const idx = chunkIndices[i];
+              results[idx] = {
+                index: idx,
+                item: items[idx],
+                ok: true,
+                skipped: false,
+                escrowId: ids[i],
+                txHash,
+              };
+            }
+          } catch (error) {
+            const message = batchErrorMessage(error);
+            for (const idx of chunkIndices) {
+              results[idx] = {
+                index: idx,
+                item: items[idx],
+                ok: false,
+                skipped: false,
+                error: message,
+              };
+            }
+          }
+        }
+      }
+
+      this.throwOnBatchFailure(results);
+      return results;
+    }
+
     for (let start = 0; start < items.length; start += chunkSize) {
       const end = Math.min(start + chunkSize, items.length);
       for (let index = start; index < end; index++) {
@@ -2147,6 +2335,15 @@ export class EscrowClient {
    * isolate `notifyPayee` release ops into single-op batches for the same
    * reason.
    *
+   * `{ mode: "onchain" }` (opt-in) instead sends up to `MAX_SETTLE_OPS` ops
+   * per caller as one contract `settle_many` call, reporting the contract's
+   * per-op results. A failing payee callback reverts that whole call, so a
+   * chunk that reverts is retried one transaction per op: the hostile
+   * payee's release still fails alone, at the cost of the extra
+   * transactions. Ops in such a chunk that had already landed (e.g. after a
+   * lost response) report `NotFunded` on the retry rather than settling
+   * twice.
+   *
    * A failure never stops later chunks: every operation is attempted, then
    * a `BatchPartialFailureError` carrying all per-op results is thrown if
    * any failed. Retry with `{ resumeFrom: error.results }` to send only the
@@ -2157,26 +2354,107 @@ export class EscrowClient {
     options: BatchOptions<BatchSettleOperation> = {},
   ): Promise<BatchItemResult<BatchSettleOperation>[]> {
     const results = this.batchResults(ops, options.resumeFrom);
+
+    if (options.mode === "onchain") {
+      await this.ensureNetworkVerified();
+      const chunkSize = Math.min(this.resolveChunkSize(options.chunkSize), MAX_SETTLE_OPS);
+      const byCaller = new Map<string, { signer: BatchSettleOperation["caller"]; indices: number[] }>();
+
+      for (let index = 0; index < ops.length; index++) {
+        if (results[index].ok) continue;
+        const op = ops[index];
+        const callerAddr = signerAddress(op.caller);
+        let group = byCaller.get(callerAddr);
+        if (!group) {
+          group = { signer: op.caller, indices: [] };
+          byCaller.set(callerAddr, group);
+        }
+        group.indices.push(index);
+      }
+
+      for (const [callerAddr, { signer, indices }] of byCaller) {
+        const client = this.contractClient(signer);
+        for (let start = 0; start < indices.length; start += chunkSize) {
+          const chunkIndices = indices.slice(start, start + chunkSize);
+          const chunkOps = chunkIndices.map((idx) => {
+            const op = ops[idx];
+            return [
+              op.escrowId,
+              { tag: op.kind === "release" ? "Release" : "Refund", values: undefined },
+            ] as const;
+          });
+          try {
+            const tx = await client.settle_many({ caller: callerAddr, ops: chunkOps });
+            const sent = await tx.signAndSend();
+            const outcomes = tx.result.unwrap();
+            const txHash = sent.sendTransactionResponse?.hash ?? "";
+            for (let i = 0; i < chunkIndices.length; i++) {
+              const idx = chunkIndices[i];
+              const outcome = outcomes[i];
+              if (outcome && outcome.isOk()) {
+                results[idx] = {
+                  index: idx,
+                  item: ops[idx],
+                  ok: true,
+                  skipped: false,
+                  txHash,
+                };
+              } else {
+                const err = outcome ? outcome.unwrapErr() : new Error("missing settle_many outcome");
+                results[idx] = {
+                  index: idx,
+                  item: ops[idx],
+                  ok: false,
+                  skipped: false,
+                  error: batchErrorMessage(err),
+                };
+              }
+            }
+          } catch {
+            // The whole settle_many invocation reverted. A failing opted-in
+            // payee callback (or token transfer) aborts every op in the chunk
+            // (issue #367, docs/adr/0012), so retry this chunk one
+            // transaction per op: a hostile payee can then only fail its own
+            // release. Ops that did land (e.g. on a lost response) answer
+            // NotFunded on the retry, so nothing is settled twice.
+            for (const idx of chunkIndices) {
+              results[idx] = await this.settleOne(idx, ops[idx]);
+            }
+          }
+        }
+      }
+
+      this.throwOnBatchFailure(results);
+      return results;
+    }
+
     const chunkSize = this.resolveChunkSize(options.chunkSize);
 
     for (let start = 0; start < ops.length; start += chunkSize) {
       const end = Math.min(start + chunkSize, ops.length);
       for (let index = start; index < end; index++) {
         if (results[index].ok) continue;
-        const op = ops[index];
-        try {
-          const settled = op.kind === "release"
-            ? await this.release({ escrowId: op.escrowId, caller: op.caller })
-            : await this.refund({ escrowId: op.escrowId, caller: op.caller });
-          results[index] = { index, item: op, ok: true, skipped: false, ...settled };
-        } catch (error) {
-          results[index] = { index, item: op, ok: false, skipped: false, error: batchErrorMessage(error) };
-        }
+        results[index] = await this.settleOne(index, ops[index]);
       }
     }
 
     this.throwOnBatchFailure(results);
     return results;
+  }
+
+  /** One `settleMany` op as its own `release`/`refund` transaction. */
+  private async settleOne(
+    index: number,
+    op: BatchSettleOperation,
+  ): Promise<BatchItemResult<BatchSettleOperation>> {
+    try {
+      const settled = op.kind === "release"
+        ? await this.release({ escrowId: op.escrowId, caller: op.caller })
+        : await this.refund({ escrowId: op.escrowId, caller: op.caller });
+      return { index, item: op, ok: true, skipped: false, ...settled };
+    } catch (error) {
+      return { index, item: op, ok: false, skipped: false, error: batchErrorMessage(error) };
+    }
   }
 
   /** One not-yet-successful result per input, pre-filled from `resumeFrom`. */
@@ -2254,9 +2532,9 @@ export class EscrowClient {
     if (params.feeBps !== undefined && (!Number.isInteger(params.feeBps) || params.feeBps < 0 || params.feeBps > MAX_FEE_BPS)) {
       throw new RangeError(`feeBps must be an integer between 0 and ${MAX_FEE_BPS} (10 %)`);
     }
-    if (params.conditionRef.length > MAX_CONDITION_REF_LENGTH) {
+    if (utf8ByteLength(params.conditionRef) > MAX_CONDITION_REF_LENGTH) {
       throw new Error(
-        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${params.conditionRef.length}`
+        `conditionRef must be at most ${MAX_CONDITION_REF_LENGTH} bytes, got ${utf8ByteLength(params.conditionRef)}`
       );
     }
     const validForLedgers = params.validForLedgers ?? PREPARED_TX_TTL_LEDGERS;
