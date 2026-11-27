@@ -361,7 +361,14 @@ jobs:
           key: ${{ runner.os }}-scout-0.3.17
 
       - name: Install pinned Scout
-        run: cargo install cargo-scout-audit --version 0.3.17 --locked
+        # The cache above restores ~/.cargo/bin on a hit, and `cargo install`
+        # exits 101 when the binary already exists, so only install on a miss.
+        run: |
+          if cargo scout-audit --version 2>/dev/null | grep -q '0\.3\.17'; then
+            echo "cargo-scout-audit 0.3.17 restored from cache"
+          else
+            cargo install cargo-scout-audit --version 0.3.17 --locked --force
+          fi
 
       # Scout 0.3.17 builds its detectors through dylint 4.1.2, which clones
       # rust-lang/rust-clippy and checks out `master`. Clippy renamed that
