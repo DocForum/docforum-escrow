@@ -1,83 +1,5 @@
 # Soroban resource profile
 
-Reproduce with `cargo bench --bench resource_profile` from
-`contracts/escrow/`. The harness resets the Soroban budget tracker after
-fixture setup and records CPU instructions and memory for one representative
-successful call. Each call uses a fresh environment; the single-escrow entries
-use a one-address releaser set, a 100-unit escrow, and the same short condition
-reference, while the batch, pooled, payee-transfer, pause and solvency entries
-use the worst-case fixtures described below. These native host measurements
-compare this source with its parent revision; they are not ledger fee quotes.
-
-The before values were measured from the parent revision and the after values
-from this branch. For the ten entry points added by issue #320 the two are the
-same measurement: that change adds profiling only, does not touch the contract
-source, and repeat runs are identical. `benchmarks/baseline.json` contains the
-raw measurements.
-
-| Function | CPU before | CPU after | CPU change | Memory before | Memory after | Memory change |
-|---|---:|---:|---:|---:|---:|---:|
-| `create_escrow` | 469,580 | 494,344 | +5.3% | 154,508 | 167,118 | +8.2% |
-| `create_escrow_release_time` | 469,819 | 494,583 | +5.3% | 154,790 | 167,400 | +8.1% |
-| `create_escrow_with_acceptance` | 469,584 | 494,348 | +5.3% | 154,508 | 167,118 | +8.1% |
-| `create_escrow_with_releasers` | 467,876 | 492,640 | +5.3% | 154,340 | 166,950 | +8.2% |
-| `accept` | 144,234 | 143,415 | -0.6% | 65,558 | 65,898 | +0.5% |
-| `get_status` | 81,998 | 48,289 | -41.1% | 48,080 | 22,907 | -52.4% |
-| `get_escrow` | 92,687 | 92,353 | -0.4% | 49,173 | 49,241 | +0.1% |
-| `rotate_releaser` | 168,515 | 169,965 | +0.9% | 74,366 | 74,842 | +0.6% |
-| `top_up` | 499,982 | 506,300 | +1.3% | 157,977 | 158,657 | +0.4% |
-| `release` | 371,696 | 406,599 | +9.4% | 146,414 | 158,865 | +8.5% |
-| `release_with_approvals` | 373,763 | 409,566 | +9.6% | 146,623 | 159,074 | +8.5% |
-| `refund` | 374,162 | 402,326 | +7.5% | 140,489 | 152,779 | +8.8% |
-| `refund_with_approvals` | 377,529 | 405,382 | +7.4% | 140,791 | 153,081 | +8.7% |
-| `create_escrows` | 8,867,986 | 8,867,986 | — | 2,048,839 | 2,048,839 | — |
-| `settle_many` | 10,263,023 | 10,263,023 | — | 2,290,599 | 2,290,599 | — |
-| `create_pooled_escrow` | 238,018 | 238,018 | — | 111,082 | 111,082 | — |
-| `contribute` | 656,604 | 656,604 | — | 228,857 | 228,857 | — |
-| `claim_refund` | 539,726 | 539,726 | — | 201,949 | 201,949 | — |
-| `cancel` | 461,137 | 461,137 | — | 152,639 | 152,639 | — |
-| `transfer_payee` | 187,243 | 187,243 | — | 86,254 | 86,254 | — |
-| `pause` | 86,391 | 86,391 | — | 28,102 | 28,102 | — |
-| `unpause` | 87,250 | 87,250 | — | 27,950 | 27,950 | — |
-| `solvency` | 168,457 | 168,457 | — | 76,963 | 76,963 | — |
-
-## Worst-case batches vs Mainnet limits
-
-The batch fixtures use the most expensive configuration each entry point
-accepts. `create_escrows` takes `MAX_BATCH_SIZE` (16) items, each with a
-distinct payee, the 64-byte maximum `condition_ref` and a `refund_after`
-deadline set; the entry point fixes one releaser per item by shape, so there
-is no wider releaser set to measure. `settle_many` releases `MAX_SETTLE_OPS`
-(12) escrows, each created with the maximum protocol fee (`MAX_FEE_BPS` =
-1,000), an opted-in payee callback (a real contract payee, so the
-cross-contract `on_escrow_released` invoke is metered) and the 64-byte maximum
-`condition_ref`. A ten-address releaser set cannot be combined with a fee at
-creation — only `create_escrow*` takes one — so the releaser-heavy shape is
-measured separately.
-
-The Soroban test environment enforces Mainnet's per-invocation limits on
-every run, so a batch that exceeds any of them fails here too. The table
-reports the modelled footprint and its share of the limits from docs/adr/0012
-(events include the return value):
-
-| Batch | Ops | CPU instructions (400M) | Memory | Write entries (200) | Write bytes (132,096) | Events + return (16,384) |
-|---|---:|---:|---:|---:|---:|---:|
-| `create_escrows` | 16 | 8,867,986 (2.2%) | 2,048,839 | 37 (18.5%) | 17,932 (13.6%) | 11,264 (68.8%) |
-| `settle_many` (fee + callback) | 12 | 10,263,023 (2.6%) | 2,290,599 | 40 (20.0%) | 4,844 (3.7%) | 11,680 (71.3%) |
-| `settle_many` (10 releasers) | 12 | 6,748,563 (1.7%) | 1,491,850 | 28 (14.0%) | 2,156 (1.6%) | 12,688 (77.4%) |
-
-The events budget is the tightest limit in every case: a worst-case batch
-keeps 31.2% headroom for `create_escrows`, 28.7% for the fee + callback
-`settle_many` and 22.6% for the ten-releaser shape. The return allowance is
-16 bytes per id or result plus 64 bytes of overhead, the same allowance the
-`tests/create_escrow.rs` and `tests/settle_many.rs` headroom tests use.
-Settled escrows remove their record (ADR 0013), which is why `settle_many`
-writes far fewer bytes than `create_escrows` stores.
-
-The ten-releaser batch emits a bigger state event (the full releaser set)
-while the fee batch spends more CPU on two token transfers and the callback,
-so the fee + callback shape is the CPU worst case and the ten-releaser shape
-is the events worst case; both stay under 78% of the events budget.
 Issue #319. `cargo bench --bench resource_profile` measures the Soroban native
 budget for one representative successful call to each profiled public function
 and writes it as JSON, and `scripts/check-resource-baseline.py` fails CI when a
@@ -207,3 +129,43 @@ much cheaper status read. The contract behavior and public API are unchanged.
 The added storage key is a layout change: per ADR 0005, deploy new WASM under a
 new testnet contract ID and let existing escrows settle under their original
 contract.
+
+## Worst-case batches vs Mainnet limits
+
+The batch fixtures use the most expensive configuration each entry point
+accepts. `create_escrows` takes `MAX_BATCH_SIZE` (16) items, each with a
+distinct payee, the 64-byte maximum `condition_ref` and a `refund_after`
+deadline set; the entry point fixes one releaser per item by shape, so there
+is no wider releaser set to measure. `settle_many` releases `MAX_SETTLE_OPS`
+(12) escrows, each created with the maximum protocol fee (`MAX_FEE_BPS` =
+1,000), an opted-in payee callback (a real contract payee, so the
+cross-contract `on_escrow_released` invoke is metered) and the 64-byte maximum
+`condition_ref`. A ten-address releaser set cannot be combined with a fee at
+creation — only `create_escrow*` takes one — so the releaser-heavy shape is
+measured separately.
+
+The Soroban test environment enforces Mainnet's per-invocation limits on
+every run, so a batch that exceeds any of them fails here too. The table
+reports the modelled footprint and its share of the limits from docs/adr/0012
+(events include the return value):
+
+| Batch | Ops | CPU instructions (400M) | Memory | Write entries (200) | Write bytes (132,096) | Event bytes (16,384 incl. return) |
+|---|---:|---:|---:|---:|---:|---:|
+| `create_escrows` | 16 | 8,960,447 (2.2%) | 2,116,299 | 37 (18.5%) | 18,636 (14.1%) | 10,944 + return |
+| `settle_many` (fee + callback) | 12 | 10,445,336 (2.6%) | 2,335,616 | 40 (20.0%) | 4,844 (3.7%) | 11,424 + return |
+| `settle_many` (10 releasers) | 12 | 6,937,643 (1.7%) | 1,528,107 | 28 (14.0%) | 2,156 (1.6%) | 12,432 + return |
+
+The events budget is the tightest limit in every case. With the return
+allowance (16 bytes per id or result plus 64 bytes of overhead, the same
+allowance the `tests/create_escrow.rs` and `tests/settle_many.rs` headroom
+tests use) a worst-case batch keeps 31.2% headroom for `create_escrows`,
+28.7% for the fee + callback `settle_many` and 22.6% for the ten-releaser
+shape. The bench prints these footprints on stderr (`events_bytes`,
+`write_entries`, `write_bytes`); only CPU and memory go into the baseline.
+Settled escrows remove their record (ADR 0013), which is why `settle_many`
+writes far fewer bytes than `create_escrows` stores.
+
+The ten-releaser batch emits a bigger state event (the full releaser set)
+while the fee batch spends more CPU on two token transfers and the callback,
+so the fee + callback shape is the CPU worst case and the ten-releaser shape
+is the events worst case; both stay under 80% of the events budget.

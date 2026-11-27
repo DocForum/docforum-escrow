@@ -3,13 +3,25 @@
   "threshold_percent": 20,
   "profile_method": "Soroban native budget; one successful call per fresh environment; setup excluded; every run must match",
   "last_update": {
-    "date": "2026-11-22",
-    "note": "Issue #319: re-measured after rebasing onto main (#402, #404 and #389 landed); every function moved by less than 1.5%, so no reviewed regression is being accepted."
+    "date": "2026-11-27",
+    "note": "Issue #320: added the ten previously unprofiled entry points (create_escrows, settle_many, create_pooled_escrow, contribute, claim_refund, cancel, transfer_payee, pause, unpause, solvency); existing entries unchanged."
   },
   "functions": {
     "accept": {
       "cpu_instructions": 206926,
       "memory_bytes": 98066
+    },
+    "cancel": {
+      "cpu_instructions": 485561,
+      "memory_bytes": 159733
+    },
+    "claim_refund": {
+      "cpu_instructions": 501393,
+      "memory_bytes": 170130
+    },
+    "contribute": {
+      "cpu_instructions": 666204,
+      "memory_bytes": 233697
     },
     "create_escrow": {
       "cpu_instructions": 599522,
@@ -28,30 +40,13 @@
       "memory_bytes": 205401
     },
     "create_escrows": {
-      "source_bytes": 219,
-      "profile": {
-        "before": {
-          "cpu_instructions": 8867986,
-          "memory_bytes": 2048839
-        },
-        "after": {
-          "cpu_instructions": 8867986,
-          "memory_bytes": 2048839
-        }
-      }
+      "cpu_instructions": 8960447,
+      "memory_bytes": 2116299
     },
-    "accept": {
-      "source_bytes": 358,
-      "profile": {
-        "before": {
-          "cpu_instructions": 144234,
-          "memory_bytes": 65558
-        },
-        "after": {
-          "cpu_instructions": 143415,
-          "memory_bytes": 65898
-        }
-      }
+    "create_pooled_escrow": {
+      "cpu_instructions": 260838,
+      "memory_bytes": 118160
+    },
     "get_escrow": {
       "cpu_instructions": 130359,
       "memory_bytes": 68819
@@ -59,6 +54,10 @@
     "get_status": {
       "cpu_instructions": 69319,
       "memory_bytes": 32351
+    },
+    "pause": {
+      "cpu_instructions": 86391,
+      "memory_bytes": 28102
     },
     "refund": {
       "cpu_instructions": 492288,
@@ -80,138 +79,25 @@
       "cpu_instructions": 231758,
       "memory_bytes": 107271
     },
-    "refund_with_approvals": {
-      "source_bytes": 476,
-      "profile": {
-        "before": {
-          "cpu_instructions": 377529,
-          "memory_bytes": 140791
-        },
-        "after": {
-          "cpu_instructions": 405382,
-          "memory_bytes": 153081
-        }
-      }
-    },
     "settle_many": {
-      "source_bytes": 277,
-      "profile": {
-        "before": {
-          "cpu_instructions": 10263023,
-          "memory_bytes": 2290599
-        },
-        "after": {
-          "cpu_instructions": 10263023,
-          "memory_bytes": 2290599
-        }
-      }
-    },
-    "create_pooled_escrow": {
-      "source_bytes": 588,
-      "profile": {
-        "before": {
-          "cpu_instructions": 238018,
-          "memory_bytes": 111082
-        },
-        "after": {
-          "cpu_instructions": 238018,
-          "memory_bytes": 111082
-        }
-      }
-    },
-    "contribute": {
-      "source_bytes": 208,
-      "profile": {
-        "before": {
-          "cpu_instructions": 656604,
-          "memory_bytes": 228857
-        },
-        "after": {
-          "cpu_instructions": 656604,
-          "memory_bytes": 228857
-        }
-      }
-    },
-    "claim_refund": {
-      "source_bytes": 437,
-      "profile": {
-        "before": {
-          "cpu_instructions": 539726,
-          "memory_bytes": 201949
-        },
-        "after": {
-          "cpu_instructions": 539726,
-          "memory_bytes": 201949
-        }
-      }
-    },
-    "cancel": {
-      "source_bytes": 526,
-      "profile": {
-        "before": {
-          "cpu_instructions": 461137,
-          "memory_bytes": 152639
-        },
-        "after": {
-          "cpu_instructions": 461137,
-          "memory_bytes": 152639
-        }
-      }
-    },
-    "transfer_payee": {
-      "source_bytes": 492,
-      "profile": {
-        "before": {
-          "cpu_instructions": 187243,
-          "memory_bytes": 86254
-        },
-        "after": {
-          "cpu_instructions": 187243,
-          "memory_bytes": 86254
-        }
-      }
-    },
-    "pause": {
-      "source_bytes": 232,
-      "profile": {
-        "before": {
-          "cpu_instructions": 86391,
-          "memory_bytes": 28102
-        },
-        "after": {
-          "cpu_instructions": 86391,
-          "memory_bytes": 28102
-        }
-      }
-    },
-    "unpause": {
-      "source_bytes": 231,
-      "profile": {
-        "before": {
-          "cpu_instructions": 87250,
-          "memory_bytes": 27950
-        },
-        "after": {
-          "cpu_instructions": 87250,
-          "memory_bytes": 27950
-        }
-      }
+      "cpu_instructions": 10445336,
+      "memory_bytes": 2335616
     },
     "solvency": {
-      "source_bytes": 246,
-      "profile": {
-        "before": {
-          "cpu_instructions": 168457,
-          "memory_bytes": 76963
-        },
-        "after": {
-          "cpu_instructions": 168457,
-          "memory_bytes": 76963
-        }
-      }
+      "cpu_instructions": 168457,
+      "memory_bytes": 76963
+    },
     "top_up": {
       "cpu_instructions": 641721,
       "memory_bytes": 210934
+    },
+    "transfer_payee": {
+      "cpu_instructions": 194541,
+      "memory_bytes": 89906
+    },
+    "unpause": {
+      "cpu_instructions": 87250,
+      "memory_bytes": 27950
     }
   }
 }
