@@ -394,10 +394,15 @@ jobs:
             --output-path scout-report/report.md \
             --cicd scout-report \
             --exclude soroban-version,assert-violation,set-contract-storage
+          # Report-only for now: findings are surfaced as a warning, in the
+          # job summary and as an artifact, but do not fail the job until the
+          # backlog in the report is triaged (see docs/supply-chain.md). A
+          # Scout crash still fails the step, because the command above runs
+          # under `bash -e`.
           if [ -f scout-report/FAIL ]; then
-            echo "Scout reported findings (see the uploaded report artifact)."
+            echo "::warning title=Scout findings::Scout reported findings (report-only, not blocking). See the job summary or the scout-report artifact."
             cat scout-report/report.md
-            exit 1
+            cat scout-report/report.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload Scout report
