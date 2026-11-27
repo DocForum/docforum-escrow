@@ -1,0 +1,326 @@
+#!/usr/bin/env bash
+# scripts/deploy-releaser-account: deterministic deployment of the optional
+# M-of-N releaser custom account (issue #357, ADR 0005).
+#
+# The account's security *is* its constructor: target escrow, signer public
+# keys, threshold and rate-limit policy. This script deploys it from a reviewed
+# JSON config, verifies every constructor argument by reading it back from the
+# contract, confirms the on-chain WASM, and records the result in
+# releaser-account-deployments.json.
+#
+# Usage:
+#   scripts/deploy-releaser-account --config PATH [--network testnet]
+#                                   [--wasm PATH] [--expected-wasm-hash HEX]
+#                                   [--no-record]
+#   scripts/deploy-releaser-account --config PATH --dry-run
+#
+# Options:
+#   --config PATH            Reviewed JSON config (see
+#                            examples/releaser-account/deploy-config.example.json
+#                            and docs/releaser-account-deployment.md). The path
+#                            is resolved from the repository root.
+#                            It must not contain secret keys: signers are
+#                            Ed25519 public keys only (64 hex or G... strkey).
+#   --network NAME           testnet (default) or local. Nothing else is
+#                            accepted: mainnet is refused until the security
+#                            review (ROADMAP.md Phase E4) is done.
+#   --dry-run                Use the local quickstart network
+#                            (http://localhost:8000). The record is written to
+#                            a temp file and printed; tracked files are not
+#                            touched.
+#   --wasm PATH              Deploy this WASM instead of building the account.
+#   --expected-wasm-hash HEX Fail unless the WASM's SHA-256 equals HEX.
+#   --no-record              Deploy and verify, but write no record.
+#   -h, --help               Show this help.
+#
+# Environment:
+#   DEPLOY_SOURCE_SECRET     Secret key (S...) that pays for upload/deploy.
+#                            When unset, a fresh account is generated and
+#                            funded by friendbot (testnet and quickstart only).
+#   LOCAL_RPC_URL            Quickstart RPC URL (default
+#                            http://localhost:8000/rpc).
+#
+# Read-back verification covers every constructor argument: `escrow()`,
+# `threshold()`, `signer_count()` and `policy()` (max operations per window and
+# window ledgers), plus the fetched on-chain WASM hash. Any mismatch fails the
+# run before a record is written.
+#
+# Requires the pinned Stellar CLI (scripts/stellar-cli-version), node, git and,
+# unless --wasm is given, the pinned Rust toolchain with the wasm32v1-none
+# target. Refuses to run from a dirty git tree, so the recorded git sha is the
+# source.
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
+die() { echo "deploy-releaser-account: $*" >&2; exit 1; }
+log() { echo "==> $*" >&2; }
+
+config_path=""
+network="testnet"
+dry_run=false
+wasm_path=""
+expected_hash=""
+record=true
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --config) config_path="${2:?--config needs a path}"; shift 2 ;;
+    --network) network="${2:?--network needs a value}"; shift 2 ;;
+    --dry-run) dry_run=true; network="local"; shift ;;
+    --wasm) wasm_path="${2:?--wasm needs a path}"; shift 2 ;;
+    --expected-wasm-hash) expected_hash="${2:?--expected-wasm-hash needs a value}"; shift 2 ;;
+    --no-record) record=false; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; die "unknown argument: $1" ;;
+  esac
+done
+
+[[ -n "$config_path" ]] || { usage >&2; die "--config is required."; }
+[[ -f "$config_path" ]] || die "config not found: $config_path (paths are relative to the repository root)."
+
+# --- Network guard -----------------------------------------------------------
+case "$network" in
+  testnet)
+    network_passphrase="Test SDF Network ; September 2015"
+    rpc_url="https://soroban-testnet.stellar.org"
+    explorer_tx="https://stellar.expert/explorer/testnet/tx/"
+    explorer_contract="https://stellar.expert/explorer/testnet/contract/"
+    ;;
+  local)
+    network_passphrase="Standalone Network ; February 2017"
+    rpc_url="${LOCAL_RPC_URL:-http://localhost:8000/rpc}"
+    explorer_tx=""
+    explorer_contract=""
+    ;;
+  mainnet|public|pubnet)
+    die "mainnet deployment is not supported until the security review (ROADMAP.md Phase E4) is done."
+    ;;
+  *)
+    die "unsupported network '$network' (use testnet, or --dry-run for a local quickstart)."
+    ;;
+esac
+if [[ "$network_passphrase" == "Public Global Stellar Network ; September 2015" ]]; then
+  die "refusing the mainnet passphrase."
+fi
+if [[ "$dry_run" == false && "$network" == "local" ]]; then
+  dry_run=true
+fi
+
+# --- Validate the config before anything touches the network -----------------
+command -v node >/dev/null || die "node is required (config validation and records)."
+command -v git >/dev/null || die "git is required."
+command -v stellar >/dev/null || die "the Stellar CLI is required (see scripts/stellar-cli-version)."
+
+config_json="$(node scripts/releaser-account-config.mjs validate "$config_path")" ||
+  die "invalid config: $config_path (see docs/releaser-account-deployment.md)."
+config_hash="$(node scripts/releaser-account-config.mjs hash "$config_path")" ||
+  die "could not hash the config: $config_path."
+
+config_field() {
+  node -e 'const v=JSON.parse(process.argv[1])[process.argv[2]];process.stdout.write(typeof v==="object"?JSON.stringify(v):String(v))' \
+    "$config_json" "$1"
+}
+escrow="$(config_field escrow)"
+signers_json="$(config_field signers)"
+threshold="$(config_field threshold)"
+max_ops="$(config_field max_operations_per_window)"
+window_ledgers="$(config_field window_ledgers)"
+signer_total="$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).length))' "$signers_json")"
+log "Config valid: escrow=$escrow threshold=$threshold/$signer_total max_ops=$max_ops window_ledgers=$window_ledgers"
+log "Config SHA-256 $config_hash"
+
+# --- Clean tree + pinned CLI -------------------------------------------------
+if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+  git status --short >&2
+  die "refusing to deploy from a dirty git tree; commit or stash first."
+fi
+git_sha="$(git rev-parse HEAD)"
+
+cli_version="$(sed -n 's/^version=//p' scripts/stellar-cli-version)"
+actual_cli_version="$(stellar --version | awk 'NR == 1 { print $2 }' | sed 's/^v//')"
+[[ "$actual_cli_version" == "$cli_version" ]] ||
+  die "expected Stellar CLI $cli_version, found $actual_cli_version."
+
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/releaser-account-deploy.XXXXXX")"
+trap 'rm -rf "$work_dir"' EXIT
+config_dir="$work_dir/stellar-config"
+net_args=(--rpc-url "$rpc_url" --network-passphrase "$network_passphrase" --config-dir "$config_dir")
+
+hash_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d ' ' -f 1
+  else
+    shasum -a 256 "$1" | cut -d ' ' -f 1
+  fi
+}
+
+# Runs a CLI command that submits a transaction and prints its stdout. The
+# transaction hash (from the CLI's "Signing transaction: <hash>" line) is
+# written to a file because callers run this in $(...) subshells; read it back
+# with tx_of_last.
+tx_of_last() { cat "$work_dir/last_tx"; }
+submit() {
+  local out err last_tx=""
+  out="$work_dir/out" err="$work_dir/err"
+  : >"$work_dir/last_tx"
+  if ! stellar "$@" >"$out" 2>"$err"; then
+    cat "$err" >&2
+    return 1
+  fi
+  last_tx="$(sed -n 's/.*Signing transaction: \([0-9a-f]\{64\}\).*/\1/p' "$err" | tail -n 1)"
+  if [[ -z "$last_tx" ]]; then
+    # An upload of WASM that is already on the network submits nothing.
+    if [[ "$1 $2" == "contract upload" ]] && grep -q "already installed" "$err"; then
+      log "WASM already on $network; no upload transaction"
+    else
+      cat "$err" >&2
+      die "could not read the transaction hash from: stellar $1 $2"
+    fi
+  fi
+  printf '%s' "$last_tx" >"$work_dir/last_tx"
+  cat "$out"
+}
+
+# --- WASM: build or take, then hash ------------------------------------------
+if [[ -z "$wasm_path" ]]; then
+  command -v cargo >/dev/null || die "cargo is required to build the account (or pass --wasm)."
+  log "Building WASM (contracts/releaser-account)"
+  (
+    export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$repo_root=."
+    export SOURCE_DATE_EPOCH=0
+    cd "$repo_root/contracts/releaser-account"
+    cargo build --locked --target wasm32v1-none --release >&2
+  )
+  wasm_path="contracts/releaser-account/target/wasm32v1-none/release/docforum_releaser_account.wasm"
+fi
+[[ -f "$wasm_path" ]] || die "WASM not found: $wasm_path"
+wasm_hash="$(hash_file "$wasm_path")"
+log "WASM SHA-256 $wasm_hash"
+if [[ -n "$expected_hash" && "$expected_hash" != "$wasm_hash" ]]; then
+  die "WASM hash mismatch: expected $expected_hash, got $wasm_hash."
+fi
+
+# --- Accounts ----------------------------------------------------------------
+fund_new() {
+  stellar keys generate "$1" "${net_args[@]}" --fund >/dev/null 2>&1 ||
+    die "could not create and fund '$1' (is friendbot reachable at $rpc_url?)."
+}
+if [[ -n "${DEPLOY_SOURCE_SECRET:-}" ]]; then
+  printf '%s\n' "$DEPLOY_SOURCE_SECRET" |
+    stellar keys add deployer --secret-key --config-dir "$config_dir" >/dev/null
+else
+  log "Generating and funding a deployer account"
+  fund_new deployer
+fi
+deployer="$(stellar keys address deployer --config-dir "$config_dir")"
+
+# --- Upload + deploy ---------------------------------------------------------
+log "Uploading WASM to $network"
+uploaded_hash="$(submit contract upload --wasm "$wasm_path" --source deployer "${net_args[@]}" | tail -n 1)"
+upload_tx="$(tx_of_last)"
+[[ "$uploaded_hash" == "$wasm_hash" ]] ||
+  die "uploaded WASM hash $uploaded_hash does not match local $wasm_hash."
+
+log "Deploying account for escrow $escrow (threshold $threshold/$signer_total)"
+account_id="$(submit contract deploy --wasm-hash "$wasm_hash" --source deployer "${net_args[@]}" \
+  -- --escrow "$escrow" --signers "$signers_json" --threshold "$threshold" \
+  --max_operations_per_window "$max_ops" --window_ledgers "$window_ledgers" | tail -n 1)"
+deploy_tx="$(tx_of_last)"
+[[ "$account_id" =~ ^C[A-Z2-7]{55}$ ]] || die "unexpected account id: $account_id"
+log "Account $account_id"
+
+# --- Read-back verification of every constructor argument --------------------
+read_call() {
+  local out
+  if ! out="$(stellar contract invoke --id "$account_id" --source deployer "${net_args[@]}" \
+    --send=no -- "$@" 2>"$work_dir/read-err")"; then
+    cat "$work_dir/read-err" >&2
+    die "read-back failed: $1"
+  fi
+  printf '%s' "$out" | tail -n 1
+}
+# Runs a read and prints its integers in order, e.g. policy() -> "100 17280".
+read_numbers() {
+  read_call "$@" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write((s.match(/\d+/g)||[]).join(" ")))'
+}
+normalise_addr() { printf '%s' "$1" | tr -d '"[:space:]'; }
+
+assert_eq() { # label expected actual
+  if [[ "$2" != "$3" ]]; then
+    die "read-back mismatch for $1: config says '$2', contract says '$3'."
+  fi
+  log "verify: $1 = $3"
+}
+
+assert_eq "escrow" "$escrow" "$(normalise_addr "$(read_call escrow)")"
+assert_eq "threshold" "$threshold" "$(read_numbers threshold)"
+assert_eq "signer_count" "$signer_total" "$(read_numbers signer_count)"
+
+policy="$(read_numbers policy)"
+read -r got_max_ops got_window_ledgers <<<"$policy"
+[[ -n "${got_window_ledgers:-}" ]] ||
+  die "could not read policy(): expected (max_operations_per_window, window_ledgers), got '$policy'."
+assert_eq "policy.max_operations_per_window" "$max_ops" "$got_max_ops"
+assert_eq "policy.window_ledgers" "$window_ledgers" "$got_window_ledgers"
+
+log "Confirming on-chain WASM matches"
+stellar contract fetch --id "$account_id" "${net_args[@]}" --out-file "$work_dir/on-chain.wasm" >/dev/null 2>&1
+on_chain_hash="$(hash_file "$work_dir/on-chain.wasm")"
+[[ "$on_chain_hash" == "$wasm_hash" ]] ||
+  die "on-chain WASM $on_chain_hash does not match $wasm_hash."
+log "verify: wasm_hash = $on_chain_hash"
+
+# --- Record ------------------------------------------------------------------
+record_json="$work_dir/record.json"
+RECORD_NETWORK="$network" RECORD_PASSPHRASE="$network_passphrase" RECORD_RPC="$rpc_url" \
+  RECORD_ESCROW="$escrow" RECORD_ACCOUNT="$account_id" RECORD_WASM_HASH="$wasm_hash" \
+  RECORD_CONFIG_HASH="$config_hash" RECORD_CONFIG_JSON="$config_json" RECORD_GIT_SHA="$git_sha" \
+  RECORD_UPLOAD_TX="$upload_tx" RECORD_DEPLOY_TX="$deploy_tx" \
+  RECORD_EXPLORER_TX="$explorer_tx" RECORD_EXPLORER_CONTRACT="$explorer_contract" \
+  RECORD_OUT="$record_json" node -e '
+const fs = require("node:fs");
+const config = JSON.parse(process.env.RECORD_CONFIG_JSON);
+const [maxOps, windowLedgers] = config
+  ? [config.max_operations_per_window, config.window_ledgers]
+  : [];
+const record = {
+  network: process.env.RECORD_NETWORK,
+  networkPassphrase: process.env.RECORD_PASSPHRASE,
+  rpcUrl: process.env.RECORD_RPC,
+  escrow: process.env.RECORD_ESCROW,
+  accountId: process.env.RECORD_ACCOUNT,
+  wasmHash: process.env.RECORD_WASM_HASH,
+  configHash: process.env.RECORD_CONFIG_HASH,
+  config,
+  threshold: config.threshold,
+  signerCount: config.signers.length,
+  policy: { maxOperationsPerWindow: maxOps, windowLedgers },
+  gitSha: process.env.RECORD_GIT_SHA,
+  deployedAt: new Date().toISOString(),
+  uploadTxHash: process.env.RECORD_UPLOAD_TX || null,
+  deployTxHash: process.env.RECORD_DEPLOY_TX,
+};
+if (process.env.RECORD_EXPLORER_TX) {
+  record.explorer = {
+    contract: process.env.RECORD_EXPLORER_CONTRACT + process.env.RECORD_ACCOUNT,
+    tx: process.env.RECORD_EXPLORER_TX,
+  };
+}
+fs.writeFileSync(process.env.RECORD_OUT, JSON.stringify(record, null, 2) + "\n");
+'
+
+if [[ "$dry_run" == true ]]; then
+  log "Dry run: tracked files not changed. Record:"
+  cat "$record_json"
+elif [[ "$record" == true ]]; then
+  node scripts/releaser-account-config.mjs record "$record_json" >/dev/null
+  log "Recorded in releaser-account-deployments.json"
+else
+  log "--no-record: nothing written. Record:"
+  cat "$record_json"
+fi
+echo "$account_id"

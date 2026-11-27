@@ -54,6 +54,10 @@ jobs:
       # script's own copy of build-wasm.sh. The indexer's network tests run in
       # the `indexer` job through vitest.
       - run: node --test scripts/verify-deployment.test.mjs
+      - name: Releaser-account deployment config and read-back tests
+        run: |
+          node --test scripts/releaser-account-config.test.mjs
+          node --test scripts/deploy-releaser-account.test.mjs
 
   contract-fuzz:
     name: Contract cargo-fuzz (${{ github.event_name == 'schedule' && 'nightly' || 'PR' }})
