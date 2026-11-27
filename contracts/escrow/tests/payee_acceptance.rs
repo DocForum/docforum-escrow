@@ -9,6 +9,7 @@ struct Fixture<'a> {
     client: EscrowContractClient<'a>,
     token: TokenClient<'a>,
     contract_id: Address,
+    #[allow(dead_code)]
     payer: Address,
     payee: Address,
     releaser: Address,

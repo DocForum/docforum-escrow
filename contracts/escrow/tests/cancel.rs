@@ -33,7 +33,7 @@ struct Fixture<'a> {
     escrow_id: u64,
 }
 
-fn fund<'a>(env: &'a Env, requires_acceptance: bool, refund_after: Option<u64>) -> Fixture<'a> {
+fn fund(env: &Env, requires_acceptance: bool, refund_after: Option<u64>) -> Fixture<'_> {
     env.ledger().set_timestamp(CREATED_AT);
 
     let admin = Address::generate(env);
@@ -47,7 +47,7 @@ fn fund<'a>(env: &'a Env, requires_acceptance: bool, refund_after: Option<u64>) 
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(env), Address::generate(env)),
     );
     let client = EscrowContractClient::new(env, &contract_id);
     let condition = String::from_str(env, "opaque-condition-ref");
@@ -246,7 +246,7 @@ fn cancel_is_not_available_without_requires_acceptance() {
     assert_unchanged_funded(&f);
     let data = f.client.get_escrow(&f.escrow_id);
     assert!(!data.requires_acceptance);
-    assert!(!data.accepted_at.is_some());
+    assert!(data.accepted_at.is_none());
 }
 
 #[test]

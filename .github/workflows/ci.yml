@@ -54,6 +54,10 @@ jobs:
       # script's own copy of build-wasm.sh. The indexer's network tests run in
       # the `indexer` job through vitest.
       - run: node --test scripts/verify-deployment.test.mjs
+      - name: Releaser-account deployment config and read-back tests
+        run: |
+          node --test scripts/releaser-account-config.test.mjs
+          node --test scripts/deploy-releaser-account.test.mjs
 
   contract-fuzz:
     name: Contract cargo-fuzz (${{ github.event_name == 'schedule' && 'nightly' || 'PR' }})
@@ -294,6 +298,176 @@ jobs:
 
       - name: Test example payee callback contract
         run: cargo test --manifest-path ../../examples/payee-callback/Cargo.toml
+
+  fmt:
+    name: Rust formatting (cargo fmt --check)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/escrow
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.96.0
+          components: rustfmt
+      - run: cargo fmt --check
+
+  clippy:
+    name: Rust lints (clippy -D warnings)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/escrow
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.96.0
+          components: clippy
+          targets: wasm32v1-none
+      - name: Cache cargo registry + target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/escrow/target
+          key: ${{ runner.os }}-clippy-${{ hashFiles('contracts/escrow/Cargo.lock', 'contracts/escrow/rust-toolchain.toml') }}
+      # Pedantic lints are configured in contracts/escrow/Cargo.toml; the
+      # few allowed ones each carry a written reason there.
+      - run: cargo clippy --all-targets -- -D warnings
+
+  scout:
+    name: Soroban static analysis (Scout)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/escrow
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.96.0
+          targets: wasm32v1-none
+
+      - name: Cache Scout binary + cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/cargo-scout-audit
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-scout-0.3.17
+
+      - name: Install pinned Scout
+        run: cargo install cargo-scout-audit --version 0.3.17 --locked
+
+      # Scout 0.3.17 builds its detectors through dylint 4.1.2, which clones
+      # rust-lang/rust-clippy and checks out `master`. Clippy renamed that
+      # branch to `main`, so the build fails with "revspec 'master' not
+      # found". Serve dylint a local mirror whose default branch is called
+      # `master` (same commits as upstream `main`) until Scout ships a dylint
+      # with the fix.
+      - name: Work around dylint's rust-clippy `master` checkout
+        run: |
+          mirror="$RUNNER_TEMP/rust-clippy.git"
+          git clone --quiet --bare https://github.com/rust-lang/rust-clippy "$mirror"
+          git -C "$mirror" branch master main
+          git -C "$mirror" symbolic-ref HEAD refs/heads/master
+          git config --global url."$mirror".insteadOf https://github.com/rust-lang/rust-clippy
+
+      # Excluded detectors, each triaged in docs/supply-chain.md:
+      # - soroban-version: we pin soroban-sdk 27.0.6 for ABI compatibility
+      #   with the live testnet deployment; the 27 -> 28 upgrade is a
+      #   separate breaking contract change (ROADMAP Phase E4 follow-up).
+      # - assert-violation: the contract uses Result/Error, never assert!;
+      #   the detector only fires on the test suite's assertions.
+      # - set-contract-storage: get_status/get_escrow are read-only and must
+      #   not require auth; every actual storage write is preceded by
+      #   require_auth in the same function.
+      - name: Run Scout
+        run: |
+          mkdir -p scout-report
+          cargo scout-audit \
+            --output-format md \
+            --output-path scout-report/report.md \
+            --cicd scout-report \
+            --exclude soroban-version,assert-violation,set-contract-storage
+          # Report-only for now: findings are surfaced as a warning, in the
+          # job summary and as an artifact, but do not fail the job until the
+          # backlog in the report is triaged (see docs/supply-chain.md). A
+          # Scout crash still fails the step, because the command above runs
+          # under `bash -e`.
+          if [ -f scout-report/FAIL ]; then
+            echo "::warning title=Scout findings::Scout reported findings (report-only, not blocking). See the job summary or the scout-report artifact."
+            cat scout-report/report.md
+            cat scout-report/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload Scout report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scout-report
+          path: contracts/escrow/scout-report/report.md
+          if-no-files-found: ignore
+
+  deny:
+    name: Supply chain (cargo-deny)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/escrow
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.96.0
+
+      - name: Install pinned cargo-deny
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -sSfL -o "$RUNNER_TEMP/cargo-deny.tar.gz" \
+            https://github.com/EmbarkStudios/cargo-deny/releases/download/0.22.0/cargo-deny-0.22.0-x86_64-unknown-linux-musl.tar.gz
+          echo "98c56e6a408bfa5c3c60744b6015aaa6aa08f743fdeb88386d06fca035bb1786  $RUNNER_TEMP/cargo-deny.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/cargo-deny.tar.gz" -C "$RUNNER_TEMP"
+          cp "$RUNNER_TEMP/cargo-deny-0.22.0-x86_64-unknown-linux-musl/cargo-deny" "$RUNNER_TEMP/bin/"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      # deny.toml checks advisories, licenses, duplicate crates and sources.
+      # Every suppression/exception in it carries a written reason.
+      - run: cargo deny check
+
+  audit:
+    name: Supply chain (cargo-audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/escrow
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.96.0
+
+      - name: Install pinned cargo-audit
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -sSfL -o "$RUNNER_TEMP/cargo-audit.tar.gz" \
+            https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.23.0/cargo-audit-x86_64-unknown-linux-gnu-v0.23.0.tgz
+          echo "b77993532b253fcbf550996d7716465ec3d734d4e74e7f87bfb65a19add0fb59  $RUNNER_TEMP/cargo-audit.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/cargo-audit.tar.gz" -C "$RUNNER_TEMP"
+          cp "$RUNNER_TEMP/cargo-audit-x86_64-unknown-linux-gnu-v0.23.0/cargo-audit" "$RUNNER_TEMP/bin/"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      # Vulnerabilities and yanked crates fail the job. Unmaintained/unsound
+      # warnings are printed but do not fail: they all come from
+      # soroban-sdk 27.0.6's pinned graph and cannot be fixed here without an
+      # SDK bump. The one advisory that is ignored is explained in
+      # deny.toml and docs/supply-chain.md, and is ignored here for the same
+      # reason.
+      - run: cargo audit --deny yanked --ignore RUSTSEC-2026-0387
 
   reproducible-wasm:
     name: Reproducible WASM across checkout paths

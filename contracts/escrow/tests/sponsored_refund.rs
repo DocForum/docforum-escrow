@@ -35,7 +35,7 @@ struct Fixture<'a> {
 
 /// Funds a 300-unit escrow. With `distinct_refund_to` a fresh address is
 /// passed as `refund_to`; otherwise it is omitted (default = payer).
-fn fund<'a>(env: &'a Env, distinct_refund_to: bool, refund_after: Option<u64>) -> Fixture<'a> {
+fn fund(env: &Env, distinct_refund_to: bool, refund_after: Option<u64>) -> Fixture<'_> {
     env.ledger().set_timestamp(CREATED_AT);
 
     let admin = Address::generate(env);
@@ -49,7 +49,7 @@ fn fund<'a>(env: &'a Env, distinct_refund_to: bool, refund_after: Option<u64>) -
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(env), Address::generate(env)),
     );
     let client = EscrowContractClient::new(env, &contract_id);
 

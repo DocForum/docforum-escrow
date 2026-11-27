@@ -70,7 +70,7 @@ enum Encoding {
     Missing,
 }
 
-impl<'a> Fixture<'a> {
+impl Fixture<'_> {
     fn create(&self, amount: i128, refund_after: Option<u64>) -> u64 {
         self.client.create_escrow(
             &self.payer,

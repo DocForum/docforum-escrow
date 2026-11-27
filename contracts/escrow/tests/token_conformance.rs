@@ -18,6 +18,10 @@
 //! Every scenario is a function taking a `Token` and is run for every kind by
 //! the `conformance!` macro, so adding a kind adds it to every scenario.
 
+// Test-only token mocks: they panic on purpose, and fixtures build
+// default String32 values inline.
+#![allow(clippy::missing_panics_doc, clippy::default_trait_access)]
+
 use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus, SettleAction};
 use soroban_sdk::{
     contract, contractimpl, contracttype,
@@ -206,7 +210,7 @@ impl<'a> Token<'a> {
             }
             Kind::IssuedSac => StellarAssetClient::new(self.env, &self.address).mint(who, &amount),
             Kind::Custom(_) => {
-                ReferenceTokenClient::new(self.env, &self.address).mint(who, &amount)
+                ReferenceTokenClient::new(self.env, &self.address).mint(who, &amount);
             }
         }
     }
@@ -402,7 +406,9 @@ fn payer_cancels_unaccepted_escrow(kind: Kind) {
         &None,
     );
     assert_eq!(
-        f.c.try_release(&id, &f.releaser).err().map(|e| e.ok()),
+        f.c.try_release(&id, &f.releaser)
+            .err()
+            .map(std::result::Result::ok),
         Some(Some(Error::AcceptanceRequired))
     );
     f.c.cancel(&id, &f.payer);
