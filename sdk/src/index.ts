@@ -110,6 +110,9 @@ export {
   ScheduleTooEarlyError,
   SimulationFailure,
   SubmissionFailure,
+  TransactionFailedError,
+  TransactionPendingError,
+  TryAgainLaterExhaustedError,
   UnauthorizedError,
   UniqueEscrowMismatchError,
   WaitTimeoutError,
@@ -217,7 +220,7 @@ import { type EscrowEvent, type EscrowEventType, EventCursorExpiredError, type G
 import { type EstimateCallParams, type FeeBumpOptions, type FeeBumpResult, type FeeEstimate, type GuardResult, MaxFeeExceededError, SponsorshipGuardError, computeFeeEstimate } from "./fees.js";
 import { EMPTY_SPAN_ATTRIBUTES, MISSING_FUNCTION_ERROR, TESTNET_NETWORK_PASSPHRASE, TESTNET_RPC_URL, U32_MAX, U64_MAX, abortReason, assertLedgerWindow, assertPositiveAmount, batchErrorMessage, contractAddressOf, isContractError, isRetentionError, lifecycleCallSigner, safeScValToNative, sendErrorName, trancheOf, utf8ByteLength } from "./internal.js";
 import { LedgerClock, type LedgerTime, type LedgerTimeOptions, type LatestLedger } from "./ledger-time.js";
-import { type AcceptParams, DEFAULT_WAIT_POLL_INTERVAL_MS, type EscrowPreconditionCode, EscrowPreconditionError, type LifecycleCall, type LifecycleMethod, PREPARED_AUTH_TTL_LEDGERS, type PrepareLifecycleParams, type PreparedLifecycleCall, type TopUpParams, type TransferPayeeParams, type WaitForStatusOptions, type WaitForStatusResult } from "./lifecycle.js";
+import { type AcceptParams, DEFAULT_WAIT_POLL_INTERVAL_MS, type EscrowPreconditionCode, EscrowPreconditionError, type LifecycleCall, type LifecycleMethod, PREPARED_AUTH_TTL_LEDGERS, type PrepareLifecycleParams, type PreparedLifecycleCall, type TopUpParams, type TransactionLifecycleOptions, type TransferPayeeParams, type WaitForStatusOptions, type WaitForStatusResult } from "./lifecycle.js";
 import { type CreateStreamedEscrowParams, type VestingInfo, type WithdrawParams, validateVestingSchedule } from "./vesting.js";
 import { type CreateMilestoneEscrowParams, type Milestone, type MilestoneEscrow, MilestoneEscrowPartialError, type MilestoneStatus, type RefundMilestoneParams, type ReleaseMilestoneParams, milestoneConditionRef, validateMilestoneSchedule } from "./milestones.js";
 import { MAINNET_NETWORK_PASSPHRASE, MainnetNotAllowedError } from "./networks.js";
@@ -227,6 +230,7 @@ import { DEFAULT_SUBMIT_MAX_FEE, OFFLINE_PREPARED_TX_TTL_LEDGERS, PREPARED_TX_TT
 import { RELAYED_AUTH_TTL_LEDGERS, type RelayedAuthorization, type RelayedAuthorizationParams } from "./relayed-auth.js";
 import { type ApproveScheduleAllowanceParams, type CancelScheduleParams, type CreateScheduleParams, type FundNextOptions, type RecurringSchedule, ScheduleParamsError } from "./recurring.js";
 import { RpcProviderPool } from "./rpc-providers.js";
+import { resolveLifecycleOptions, sendAndConfirm, withStageTimeout } from "./transaction-lifecycle.js";
 
 /** Contract `Error::NotPooled` code (`contracts/escrow/src/errors.rs`). */
 const NOT_POOLED_CODE = 26;
@@ -284,6 +288,7 @@ export class EscrowClient {
   private contractVersionChecked = false;
   /** Cached ledger-clock reads behind `getLedgerTime` (issue #335). */
   private readonly ledgerClock: LedgerClock;
+  private readonly lifecycleOptions?: TransactionLifecycleOptions;
   /** The deploy-time token allowlist once read; immutable, so safe to cache. */
   private knownAllowedTokens?: readonly string[];
 
@@ -293,6 +298,8 @@ export class EscrowClient {
     this.networkPassphrase =
       config.networkPassphrase ?? config.network?.networkPassphrase ?? TESTNET_NETWORK_PASSPHRASE;
     this.allowMainnet = config.allowMainnet === true;
+    this.lifecycleOptions = config.transaction;
+    resolveLifecycleOptions(config.transaction);
     if (this.networkPassphrase === MAINNET_NETWORK_PASSPHRASE && !this.allowMainnet) {
       throw new MainnetNotAllowedError();
     }
@@ -863,15 +870,6 @@ export class EscrowClient {
     } catch (error) {
       throw toEscrowError(error);
     }
-    await this.ensureNetworkVerified();
-    const client = this.contractClient();
-    const tx = await tracePhase(
-      this.instrumentation,
-      "simulate",
-      this.spanAttributesIfEnabled("get_status", escrowId),
-      () => client.get_status({ escrow_id: escrowId }),    );
-    const status: GeneratedEscrowStatus = tx.result.unwrap();
-    return status.tag;
   }
 
   /**
@@ -1492,7 +1490,7 @@ export class EscrowClient {
     if (params.checkPreconditions !== false) await this.checkLifecycleCall(call);
     const source = params.source ?? lifecycleCallSigner(call);
     const client = this.contractClientForAddress(source);
-    const tx = await this.buildLifecycleCall(client, call);
+    const tx = await this.simulateWithTimeout(this.buildLifecycleCall(client, call));
     if (tx.isReadCall) {
       throw new Error(`${call.method} was simulated as a read call; no transaction was assembled.`);
     }
@@ -2563,12 +2561,12 @@ export class EscrowClient {
       fee_recipient: params.feeRecipient,
       fee_bps: params.feeBps,
     };
-    const assembled = params.releaseNotBefore === undefined
-      ? await client.create_escrow(createParams)
-      : await client.create_escrow_release_time({
+    const assembled = await this.simulateWithTimeout(params.releaseNotBefore === undefined
+      ? client.create_escrow(createParams)
+      : client.create_escrow_release_time({
           ...createParams,
           release_not_before: params.releaseNotBefore,
-        });
+        }));
     return this.finishPrepare(assembled, source, validForLedgers, authValidForLedgers, "create_escrow");
   }
 
@@ -2607,7 +2605,7 @@ export class EscrowClient {
     const source = params.source ?? params.releaser;
     const client = this.publicContractClient(source);
     const args = { escrow_id: params.escrowId, caller: params.releaser };
-    const assembled = method === "release" ? await client.release(args) : await client.refund(args);
+    const assembled = await this.simulateWithTimeout(method === "release" ? client.release(args) : client.refund(args));
     return this.finishPrepare(assembled, source, validForLedgers, authValidForLedgers, method);
   }
 
@@ -2637,6 +2635,11 @@ export class EscrowClient {
     const validUntilLedger = options.validUntilLedger
       ?? (await this.rpc.getLatestLedger()).sequence + OFFLINE_PREPARED_TX_TTL_LEDGERS;
     return signAuthEntriesInEnvelope(preparedXdr, signer, validUntilLedger, this.networkPassphrase);
+  }
+
+  /** Applies `transaction.simulateTimeoutMs` to a `prepare*` simulation. */
+  private simulateWithTimeout<T>(simulation: Promise<T>): Promise<T> {
+    return withStageTimeout(simulation, resolveLifecycleOptions(this.lifecycleOptions).simulateTimeoutMs, "Simulation");
   }
 
   /** Bounds a simulated transaction to a ledger window and describes it. */
@@ -2723,38 +2726,29 @@ export class EscrowClient {
       if (charged > maxFee) throw new MaxFeeExceededError(charged, maxFee);
     }
 
-    const sent = await this.rpc.sendTransaction(toSend);
-    if (sent.status === "ERROR") {
-      const reason = sendErrorName(sent);
-      if (reason === "txTooLate") {
-        throw new PreparedTransactionExpiredError(validUntilLedger ?? 0, (await this.rpc.getLatestLedger()).sequence);
-      }
-      if (reason === "txBadSeq") {
-        throw new StaleSequenceError(source, expectedSequence, onChainSequence);
-      }
-      throw new Error(`Transaction ${sent.hash} was rejected${reason ? `: ${reason}` : ""}.`);
-    }
-    if (sent.status === "TRY_AGAIN_LATER") {
-      throw new Error(`The RPC node asked to try again later; transaction ${sent.hash} was not accepted.`);
-    }
-
-    const final = await this.rpc.pollTransaction(sent.hash, { attempts: options.pollAttempts ?? 30 });
-    if (final.status === Api.GetTransactionStatus.FAILED) {
-      throw new Error(`Transaction ${sent.hash} failed on-chain.`);
-    }
-    if (final.status !== Api.GetTransactionStatus.SUCCESS) {
-      throw new Error(
-        `Transaction ${sent.hash} was not confirmed after ${options.pollAttempts ?? 30} polls; ` +
-          `it may still land, so check its hash before retrying.`
-      );
-    }
+    const pollAttempts = options.pollAttempts ?? 30;
+    const { hash: txHash, response: final } = await sendAndConfirm(this.rpc, toSend, {
+      lifecycle: resolveLifecycleOptions(this.lifecycleOptions, options.transaction),
+      pollAttempts,
+      onHash: options.onTransactionHash,
+      onError: async (sent) => {
+        const reason = sendErrorName(sent);
+        if (reason === "txTooLate") {
+          throw new PreparedTransactionExpiredError(validUntilLedger ?? 0, (await this.rpc.getLatestLedger()).sequence);
+        }
+        if (reason === "txBadSeq") {
+          throw new StaleSequenceError(source, expectedSequence, onChainSequence);
+        }
+        throw new Error(`Transaction ${sent.hash} was rejected${reason ? `: ${reason}` : ""}.`);
+      },
+    });
 
     const returnValue = final.returnValue;
     const escrowId = returnValue && returnValue.switch().name === "scvU64"
       ? BigInt(scValToNative(returnValue) as bigint | number | string)
       : undefined;
     return {
-      txHash: sent.hash,
+      txHash,
       innerTxHash: hash,
       ...(escrowId !== undefined ? { escrowId } : {}),
     };
@@ -3144,6 +3138,7 @@ export {
   FakeClock,
   FakeEscrowClient,
   FakeEscrowError,
+  type FakeEscrowClientConfig,
   type FakeEscrowErrorCode,
   type FakeFailure,
   type FakeFailureKind,
