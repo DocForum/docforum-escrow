@@ -90,11 +90,11 @@ export type AllowanceExhaustedError = InstanceType<typeof AllowanceExhaustedErro
 export const InvalidScheduleError = contractErrorClass("InvalidSchedule", codeFor("InvalidSchedule"));
 /** Instance type of {@link InvalidScheduleError}. */
 export type InvalidScheduleError = InstanceType<typeof InvalidScheduleError>;
-/** A unique creation reused a `(payer, condition_ref)` pair (issue #47, provisional code 4700). */
+/** A unique creation reused a `(payer, condition_ref)` pair (issue #47, code 60). */
 export const DuplicateConditionRefError = contractErrorClass("DuplicateConditionRef", codeFor("DuplicateConditionRef"));
 /** Instance type of {@link DuplicateConditionRefError}. */
 export type DuplicateConditionRefError = InstanceType<typeof DuplicateConditionRefError>;
-/** A pooled `release_deadline` was not after `funding_deadline` (issue #288, provisional code 28800). */
+/** A pooled `release_deadline` was not after `funding_deadline` (issue #288, code 61). */
 export const InvalidReleaseDeadlineError = contractErrorClass("InvalidReleaseDeadline", codeFor("InvalidReleaseDeadline"));
 /** Instance type of {@link InvalidReleaseDeadlineError}. */
 export type InvalidReleaseDeadlineError = InstanceType<typeof InvalidReleaseDeadlineError>;

@@ -1,11 +1,12 @@
 import { type EscrowSigner } from "./signers/types.js";
 import { type CreateEscrowParams, MAX_CONDITION_REF_LENGTH } from "./escrow-types.js";
+import { utf8ByteLength } from "./internal.js";
 
 /**
  * One tranche of a milestone schedule. A milestone escrow is a *group* of
  * single-tranche escrows — see `createMilestoneEscrow`.
  */
-export type MilestoneStatus = "unreleased" | "released" | "refunded";
+export type MilestoneStatus = "unreleased" | "released" | "refunded" | "cancelled";
 
 /** A single tranche of a milestone escrow. */
 export interface Milestone {
@@ -65,13 +66,16 @@ export function validateMilestoneSchedule(milestones: readonly bigint[], amount:
 /**
  * `condition_ref` for tranche `index` of `count`: `<base>#m<index+1>/<count>`.
  * Tagged so each tranche stays traceable back to its group on-chain, where
- * only the ref is visible.
+ * only the ref is visible. Length is checked in UTF-8 bytes, matching the
+ * contract: the byte limit is `MAX_CONDITION_REF_LENGTH`, and the message
+ * reports bytes rather than characters.
  */
 export function milestoneConditionRef(base: string, index: number, count: number): string {
   const ref = `${base}#m${index + 1}/${count}`;
-  if (ref.length > MAX_CONDITION_REF_LENGTH) {
+  const bytes = utf8ByteLength(ref);
+  if (bytes > MAX_CONDITION_REF_LENGTH) {
     throw new MilestoneScheduleError(
-      `conditionRef "${base}" is too long: the tranche tag needs "${ref}" (${ref.length} bytes) but the contract allows ${MAX_CONDITION_REF_LENGTH}`,
+      `conditionRef "${base}" is too long: the tranche tag needs "${ref}" (${bytes} bytes) but the contract allows ${MAX_CONDITION_REF_LENGTH} bytes`,
     );
   }
   return ref;

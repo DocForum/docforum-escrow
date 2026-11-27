@@ -8,7 +8,19 @@ instead.
 
 ## 1. Set up locally
 
-Requires a Rust toolchain with the `wasm32v1-none` target.
+The reproducible fast path is the devcontainer. Open the repo in VS Code or
+Codespaces and choose "Reopen in Container", then run `make dev` from the
+workspace root. It builds and tests the contract, deploys it to a local
+quickstart, and runs the SDK conformance suite against that deployment. Rust
+1.96.0 and `wasm32v1-none` come from `rust-toolchain.toml`, Stellar CLI 28.1.0
+and its checksums from `scripts/stellar-cli-version`, and quickstart is pinned
+to the same digest CI uses in `.devcontainer/docker-compose.yml`. The
+devcontainer works on Apple Silicon and x86 hosts and does not use
+`initializeCommand` or any other container autorun step; `make dev` is the only
+entry point. It writes deployment addresses and disposable secrets to the
+gitignored `.dev-env.local` file in the workspace root.
+
+For a host-only setup, requires a Rust toolchain with the `wasm32v1-none` target.
 
 ```bash
 git clone https://github.com/DocForum/docforum-escrow.git
@@ -227,6 +239,50 @@ Before the first automated release, a maintainer must do the following once:
 The release process itself is documented in `docs/adr/0005` (npm publishing),
 which supersedes ADR 0003 (tarball-only releases). Note: that ADR file is
 referenced by `ROADMAP.md` Phase E6 but is not present in this tree.
+
+## Releasing the React hooks package
+
+`@docforum/escrow-react` (in `packages/escrow-react/`) is released by pushing
+a `react-v*` tag (e.g. `react-v0.1.0`), mirroring the SDK's workflow.
+`.github/workflows/release-react.yml` then
+
+1. refuses to publish if the tag does not match
+   `packages/escrow-react/package.json`'s `version`,
+2. typechecks and tests the hooks against the lowest and highest **published**
+   `@docforum/escrow-sdk` version that satisfies the package's
+   `peerDependencies` range, so a peer range that promises more than the code
+   delivers fails the release. The range comes from `package.json`, so
+   narrowing it narrows the check. While no SDK version is published yet, the
+   job falls back to the SDK in the checkout and warns instead of failing,
+3. typechecks, builds and tests once more with the SDK built from this
+   checkout, runs `npm publish --dry-run`, then publishes to npm with
+   `provenance` via trusted publishing (OIDC — no long-lived token in
+   secrets), and
+4. attaches the `npm pack` tarball to the GitHub Release.
+
+Bump the package version by hand in
+`packages/escrow-react/package.json` (changesets cover the SDK only), in the
+same PR as the change:
+
+```bash
+cd packages/escrow-react
+npm version 0.2.0 --no-git-tag-version   # pick the semver bump
+# commit and merge, then tag the merge commit on main
+git tag react-v0.2.0 && git push origin react-v0.2.0
+```
+
+### One-time human setup (react trusted publisher)
+
+Before the first automated release, a maintainer must configure npm trusted
+publishing for `@docforum/escrow-react`, pointing at this repository and
+`.github/workflows/release-react.yml`. This is the same one-time npm org step
+as for the SDK; the workflow needs no `NPM_TOKEN`. Until it is done,
+`react-v0.1.0` is not published to npm.
+
+To check the workflow before a tag exists, run it manually
+(`Actions → Release React hooks → Run workflow`): `workflow_dispatch` runs the
+same typecheck, build, test and `npm publish --dry-run` steps and never
+publishes.
 
 ## Security reports and the audit package
 

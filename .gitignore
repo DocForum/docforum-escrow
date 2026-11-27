@@ -9,6 +9,7 @@ sdk/docs-api/
 *.tgz
 .env
 .env.local
+.dev-env.local
 *.log
 .DS_Store
 action/dist/
