@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Keypair, xdr } from "@stellar/stellar-sdk";
 import { Server } from "@stellar/stellar-sdk/rpc";
 import { EscrowClient, EventCursorExpiredError } from "../src/index.js";
-import { createdEventFixture, unknownEventFixture } from "./fixtures/events.js";
+import { createdEventFixture, nonLifecycleEventFixtures, unknownEventFixture } from "./fixtures/events.js";
 
 const contractId = Keypair.random().publicKey();
 const client = new EscrowClient({ contractId, rpcUrl: "https://rpc.example.test" });
@@ -17,6 +17,16 @@ const fixture = {
 };
 const response = { events: [fixture], cursor: fixture.id, latestLedger: 42, oldestLedger: 1, latestLedgerCloseTime: "", oldestLedgerCloseTime: "" };
 const unknownFixture = { ...fixture, id: unknownEventFixture.id, ledger: unknownEventFixture.ledger, topic: unknownEventFixture.topicXdr.map((encoded) => xdr.ScVal.fromXDR(encoded, "base64")) };
+type RecordedEvent = { id: string; ledger: number; topicXdr: readonly string[]; valueXdr: string };
+const toRpcEvent = (recorded: RecordedEvent) => ({
+  ...fixture,
+  id: recorded.id,
+  ledger: recorded.ledger,
+  topic: recorded.topicXdr.map((encoded) => xdr.ScVal.fromXDR(encoded, "base64")),
+  value: xdr.ScVal.fromXDR(recorded.valueXdr, "base64"),
+});
+const nonLifecycle = Object.values(nonLifecycleEventFixtures);
+const nonLifecycleResponse = { ...response, events: nonLifecycle.map((f) => toRpcEvent(f.raw)) };
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
@@ -28,6 +38,54 @@ describe("EscrowClient event history", () => {
     expect(page.nextCursor).toBe(fixture.id);
     expect(page.events).toEqual([expect.objectContaining({ type: "created", escrowId: 7n, ledger: 42, transactionHash: fixture.txHash })]);
     expect(page.events[0].data).toBe(250n);
+  });
+
+  it.each(nonLifecycle.map((f) => [f.expected.type, f] as const))("decodes a recorded %s event into its typed variant", async (_type, f) => {
+    vi.spyOn(Server.prototype, "getEvents").mockResolvedValue({ ...response, events: [toRpcEvent(f.raw)] } as never);
+    const page = await client.getEvents({ cursor: "resume" });
+    expect(page.events).toHaveLength(1);
+    expect(page.events[0]).toEqual({ ...f.expected, ledger: f.raw.ledger, cursor: f.raw.id, transactionHash: f.raw.txHash, data: expect.anything() });
+  });
+
+  it("filters the new event types in getEvents", async () => {
+    vi.spyOn(Server.prototype, "getEvents").mockResolvedValue(nonLifecycleResponse as never);
+    const page = await client.getEvents({ cursor: "resume", types: ["payeeTransferred", "paused"] });
+    expect(page.events.map((e) => e.type)).toEqual(["payeeTransferred", "paused"]);
+    const event = page.events[0];
+    if (event.type !== "payeeTransferred") throw new Error("expected payeeTransferred");
+    expect(event.newPayee).toBe(nonLifecycleEventFixtures.payeeTransferred.expected.newPayee);
+  });
+
+  it("filters new event types by escrow id, skipping contract-wide pause events", async () => {
+    vi.spyOn(Server.prototype, "getEvents").mockResolvedValue(nonLifecycleResponse as never);
+    const page = await client.getEvents({ cursor: "resume", escrowId: 0n });
+    expect(page.events.map((e) => e.type)).toEqual(["topUp", "contributed", "claimed"]);
+  });
+
+  it("delivers only the requested new types through subscribe", async () => {
+    vi.spyOn(Server.prototype, "getEvents").mockResolvedValue(nonLifecycleResponse as never);
+    const seen = await new Promise<string[]>((resolve) => {
+      const got: string[] = [];
+      const stop = client.subscribe((event) => {
+        got.push(event.type);
+        if (got.length === 2) { stop(); resolve(got); }
+      }, { cursor: "resume", types: ["rotated", "unpaused"], pollIntervalMs: 10 });
+    });
+    expect(seen).toEqual(["rotated", "unpaused"]);
+  });
+
+  it("falls back to unknown when a known event name has an unexpected payload", async () => {
+    const malformed = { ...nonLifecycleEventFixtures.topUp.raw, valueXdr: nonLifecycleEventFixtures.paused.raw.valueXdr };
+    vi.spyOn(Server.prototype, "getEvents").mockResolvedValue({ ...response, events: [toRpcEvent(malformed)] } as never);
+    const page = await client.getEvents({ cursor: "resume" });
+    expect(page.events[0]).toMatchObject({ type: "unknown", eventName: "top_up", escrowId: 0n });
+  });
+
+  it("does not read a recurring schedule's created event as an escrow creation", async () => {
+    const scheduleCreated = { ...fixture, topic: [xdr.ScVal.scvSymbol("schedule"), xdr.ScVal.scvSymbol("created"), xdr.ScVal.scvU64(new xdr.Uint64(4n))] };
+    vi.spyOn(Server.prototype, "getEvents").mockResolvedValue({ ...response, events: [scheduleCreated] } as never);
+    const page = await client.getEvents({ cursor: "resume" });
+    expect(page.events[0]).toMatchObject({ type: "unknown", eventName: "schedule", escrowId: 4n });
   });
 
   it("rejects mixing a cursor with a ledger start", async () => {
