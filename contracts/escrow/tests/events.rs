@@ -407,7 +407,7 @@ fn refund_unauthorized_emits_no_event() {
     let f = funded_escrow(&env, 300);
     let stranger = Address::generate(&env);
 
-    // The failed try_refund is the last call; its buffer must be empty.
+    // The failed try_refund is the last call; its events must be empty.
     let _ = f.client.try_refund(&f.escrow_id, &stranger);
 
     assert_eq!(
@@ -417,5 +417,6 @@ fn refund_unauthorized_emits_no_event() {
             .events()
             .len(),
         0,
+        "unauthorized refund must not emit any events"
     );
 }
