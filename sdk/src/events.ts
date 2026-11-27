@@ -44,8 +44,12 @@ export interface PayeeRefundedEvent extends EscrowEventBase { type: "payeeRefund
 export interface SettledEvent extends EscrowEventBase { type: "settled"; escrowId: bigint; payeeAmount: bigint; payerAmount: bigint }
 /** `RefundDeadlineExtended`: `refund_after` moved from `oldDeadline` to `newDeadline` (unix seconds). */
 export interface RefundDeadlineExtendedEvent extends EscrowEventBase { type: "refundDeadlineExtended"; escrowId: bigint; oldDeadline: bigint; newDeadline: bigint }
-/** `Paused` / `Unpaused`: contract-wide, so there is no `escrowId`; `admin` flipped the flag. */
-export interface PauseEvent extends EscrowEventBase { type: "paused" | "unpaused"; admin: string }
+/**
+ * `Paused` / `Unpaused`: contract-wide, so `escrowId` is always `undefined`
+ * (declared so `event.escrowId` stays readable on every variant); `admin`
+ * flipped the flag.
+ */
+export interface PauseEvent extends EscrowEventBase { type: "paused" | "unpaused"; escrowId?: undefined; admin: string }
 
 /**
  * A decoded contract event, discriminated on `type`.
