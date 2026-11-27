@@ -26,12 +26,48 @@ use std::process::ExitCode;
 // std types this harness builds its output with are named explicitly.
 use std::string::String as StdString;
 
-use docforum_escrow::{EscrowContract, EscrowContractClient};
-use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, Env, String, Vec};
+use docforum_escrow::{
+    CreateItem, EscrowContract, EscrowContractClient, SettleAction, MAX_BATCH_SIZE,
+    MAX_CONDITION_REF_LEN, MAX_FEE_BPS, MAX_SETTLE_OPS,
+};
+use soroban_sdk::{
+    contract, contracterror, contractimpl,
+    testutils::{Address as _, Events as _, Ledger as _},
+    token::StellarAssetClient,
+    xdr::{Limits, WriteXdr},
+    Address, Env, String, Vec,
+};
 
 /// Format of the JSON this bench writes; `--out` consumers check it.
 const SNAPSHOT_FORMAT: u32 = 1;
 const DEFAULT_RUNS: usize = 2;
+
+/// Ledger time the pooled fixtures are created at; their funding deadline
+/// follows it.
+const CREATED_AT: u64 = 1_000;
+const FUNDING_DEADLINE: u64 = CREATED_AT + 1_000;
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+enum HookError {
+    Rejected = 1,
+}
+
+/// A contract payee whose release callback succeeds. Used by the
+/// `settle_many` profile so the worst case includes the cross-contract
+/// `on_escrow_released` invoke, not just the token transfer.
+#[contract]
+struct PayeeHook;
+
+#[contractimpl]
+impl PayeeHook {
+    // The callback ABI the escrow invokes returns a Result.
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn on_escrow_released(_env: Env, _escrow_id: u64, _amount: i128) -> Result<(), HookError> {
+        Ok(())
+    }
+}
 
 const PROFILE_METHOD: &str =
     "Soroban native budget; one successful call per fresh environment; setup excluded; every run must match";
@@ -39,6 +75,7 @@ const PROFILE_METHOD: &str =
 struct Fixture<'a> {
     env: Env,
     client: EscrowContractClient<'a>,
+    pause_admin: Address,
     payer: Address,
     payee: Address,
     releaser: Address,
@@ -55,14 +92,17 @@ fn fixture() -> Fixture<'static> {
     let payee = Address::generate(&env);
     let releaser = Address::generate(&env);
     asset.mint(&payer, &10_000);
-    // The constructor also takes the immutable pause admin (docs/adr/0011);
-    // the profile never pauses, so any address will do.
+    // The constructor also takes the immutable pause admin (docs/adr/0011).
     let pause_admin = Address::generate(&env);
-    let contract = env.register(EscrowContract, (Vec::<Address>::new(&env), pause_admin));
+    let contract = env.register(
+        EscrowContract,
+        (Vec::<Address>::new(&env), pause_admin.clone()),
+    );
     let client = EscrowContractClient::new(&env, &contract);
     Fixture {
         env,
         client,
+        pause_admin,
         payer,
         payee,
         releaser,
@@ -71,6 +111,11 @@ fn fixture() -> Fixture<'static> {
 }
 
 impl Fixture<'_> {
+    /// The longest `condition_ref` the contract accepts (threat model T10).
+    fn long_ref(&self) -> String {
+        String::from_str(&self.env, &"r".repeat(MAX_CONDITION_REF_LEN as usize))
+    }
+
     fn create(&self) -> u64 {
         self.client.create_escrow(
             &self.payer,
@@ -84,6 +129,67 @@ impl Fixture<'_> {
             &None,
             &None,
             &None,
+        )
+    }
+
+    /// Worst-case settlement input: the maximum fee, an opted-in payee
+    /// callback and the longest condition reference.
+    fn create_fee_and_callback(&self, payee: &Address, amount: i128) -> u64 {
+        self.client.create_escrow(
+            &self.payer,
+            payee,
+            &self.token,
+            &amount,
+            &self.long_ref(),
+            &self.releaser,
+            &None,
+            &true,
+            &None,
+            &Some(Address::generate(&self.env)),
+            &Some(MAX_FEE_BPS),
+        )
+    }
+
+    /// Worst-case releaser set: ten distinct addresses, threshold 1 (the
+    /// highest threshold `settle_many` accepts), callback opted in and the
+    /// longest condition reference.
+    fn create_ten_releasers(&self, payee: &Address) -> u64 {
+        let mut releasers = Vec::new(&self.env);
+        releasers.push_back(self.releaser.clone());
+        for _ in 1..10 {
+            releasers.push_back(Address::generate(&self.env));
+        }
+        self.client.create_escrow_with_releasers(
+            &self.payer,
+            payee,
+            &self.token,
+            &1_000,
+            &self.long_ref(),
+            &releasers,
+            &1,
+            &None,
+            &true,
+            &None,
+        )
+    }
+
+    /// Tops the payer up for the batch fixtures, which lock far more than the
+    /// single-escrow default mint. Done here rather than in `fixture()` so
+    /// the existing per-function baselines are measured exactly as before.
+    fn fund_payer(&self) {
+        StellarAssetClient::new(&self.env, &self.token).mint(&self.payer, &10_000_000);
+    }
+
+    fn create_pooled(&self, target: i128) -> u64 {
+        self.env.ledger().set_timestamp(CREATED_AT);
+        self.client.create_pooled_escrow(
+            &self.payer,
+            &self.payee,
+            &self.token,
+            &target,
+            &self.long_ref(),
+            &self.releaser,
+            &FUNDING_DEADLINE,
         )
     }
 }
@@ -112,6 +218,29 @@ fn measure(name: &'static str, env: &Env, operation: impl FnOnce()) -> Measureme
         cpu_instructions: env.cost_estimate().budget().cpu_instruction_cost(),
         memory_bytes: env.cost_estimate().budget().memory_bytes_cost(),
     }
+}
+
+/// Like `measure`, plus (on stderr) the ledger footprint the call modelled and
+/// the XDR size of the events it emitted. For the batch entry points those are
+/// the Mainnet per-transaction limits a batch can hit (docs/adr/0012).
+fn measure_with_events(name: &'static str, env: &Env, operation: impl FnOnce()) -> Measurement {
+    let measurement = measure(name, env, operation);
+    let resources = env.cost_estimate().resources();
+    let events_bytes: usize = env
+        .events()
+        .all()
+        .events()
+        .iter()
+        .map(|event| event.to_xdr(Limits::none()).unwrap().len())
+        .sum();
+    eprintln!(
+        "{name}: cpu_insns={}, memory_bytes={}, events_bytes={events_bytes}, write_entries={}, write_bytes={}",
+        measurement.cpu_instructions,
+        measurement.memory_bytes,
+        resources.write_entries,
+        resources.write_bytes,
+    );
+    measurement
 }
 
 /// Measure every profiled function once, each in its own fresh environment.
@@ -262,6 +391,132 @@ fn profile_once() -> std::vec::Vec<Measurement> {
         f.client.refund_with_approvals(&id, &approvers);
     }));
 
+    // Worst-case batch: MAX_BATCH_SIZE items, each with a distinct payee,
+    // the longest condition reference and a refund deadline set.
+    let f = fixture();
+    f.fund_payer();
+    let mut items = Vec::new(&f.env);
+    for _ in 0..MAX_BATCH_SIZE {
+        items.push_back(CreateItem {
+            payee: Address::generate(&f.env),
+            token: f.token.clone(),
+            amount: 1_000,
+            condition_ref: f.long_ref(),
+            releaser: f.releaser.clone(),
+            refund_after: Some(u64::MAX),
+        });
+    }
+    f.env.cost_estimate().budget().reset_unlimited();
+    measurements.push(measure_with_events("create_escrows", &f.env, || {
+        let ids = f.client.create_escrows(&f.payer, &items);
+        assert_eq!(ids.len(), MAX_BATCH_SIZE);
+    }));
+
+    // Worst-case batch: MAX_SETTLE_OPS releases, each escrow carrying the
+    // maximum fee and an opted-in payee callback, with the longest
+    // condition reference.
+    let f = fixture();
+    f.fund_payer();
+    let hook = f.env.register(PayeeHook, ());
+    let mut ops = Vec::new(&f.env);
+    for _ in 0..MAX_SETTLE_OPS {
+        let id = f.create_fee_and_callback(&hook, 1_000);
+        ops.push_back((id, SettleAction::Release));
+    }
+    f.env.cost_estimate().budget().reset_unlimited();
+    measurements.push(measure_with_events("settle_many", &f.env, || {
+        let results = f.client.settle_many(&f.releaser, &ops);
+        assert_eq!(results.len(), MAX_SETTLE_OPS);
+        assert!(results.iter().all(|r| r.is_ok()));
+    }));
+
+    // Releaser-set comparison for the same worst-case batch size. A protocol
+    // fee and a ten-address releaser set cannot both be set at creation
+    // (only `create_escrow*` takes a fee), so the fee + callback shape above
+    // is the baseline and this measures the other expensive dimension.
+    let f = fixture();
+    f.fund_payer();
+    let hook = f.env.register(PayeeHook, ());
+    let mut ops = Vec::new(&f.env);
+    for _ in 0..MAX_SETTLE_OPS {
+        let id = f.create_ten_releasers(&hook);
+        ops.push_back((id, SettleAction::Release));
+    }
+    f.env.cost_estimate().budget().reset_unlimited();
+    // Printed on stderr only: the baseline holds one entry per public function.
+    let _ = measure_with_events("settle_many_ten_releasers", &f.env, || {
+        let results = f.client.settle_many(&f.releaser, &ops);
+        assert_eq!(results.len(), MAX_SETTLE_OPS);
+        assert!(results.iter().all(|r| r.is_ok()));
+    });
+
+    let f = fixture();
+    measurements.push(measure("create_pooled_escrow", &f.env, || {
+        f.create_pooled(1_000);
+    }));
+
+    let f = fixture();
+    let id = f.create_pooled(1_000);
+    let contributor = Address::generate(&f.env);
+    StellarAssetClient::new(&f.env, &f.token).mint(&contributor, &1_000);
+    measurements.push(measure("contribute", &f.env, || {
+        f.client.contribute(&id, &contributor, &1_000);
+    }));
+
+    // A failed round: the deadline has passed with the target unmet, so the
+    // contributor pulls their full recorded amount back.
+    let f = fixture();
+    let id = f.create_pooled(1_000);
+    let contributor = Address::generate(&f.env);
+    StellarAssetClient::new(&f.env, &f.token).mint(&contributor, &400);
+    f.client.contribute(&id, &contributor, &400);
+    f.env.ledger().set_timestamp(FUNDING_DEADLINE);
+    measurements.push(measure("claim_refund", &f.env, || {
+        f.client.claim_refund(&id, &contributor);
+    }));
+
+    let f = fixture();
+    let id = f.client.create_escrow_with_acceptance(
+        &f.payer,
+        &f.payee,
+        &f.token,
+        &100,
+        &String::from_str(&f.env, "resource-profile"),
+        &f.releaser,
+        &None,
+        &true,
+        &None,
+    );
+    measurements.push(measure("cancel", &f.env, || {
+        f.client.cancel(&id, &f.payer);
+    }));
+
+    let f = fixture();
+    let id = f.create();
+    let new_payee = Address::generate(&f.env);
+    measurements.push(measure("transfer_payee", &f.env, || {
+        f.client.transfer_payee(&id, &f.payee, &new_payee);
+    }));
+
+    let f = fixture();
+    measurements.push(measure("pause", &f.env, || {
+        f.client.pause(&f.pause_admin);
+    }));
+
+    let f = fixture();
+    f.client.pause(&f.pause_admin);
+    measurements.push(measure("unpause", &f.env, || {
+        f.client.unpause(&f.pause_admin);
+    }));
+
+    // Two funded escrows so the liability read is not trivially zero.
+    let f = fixture();
+    f.create();
+    f.create();
+    measurements.push(measure("solvency", &f.env, || {
+        f.client.solvency(&f.token);
+    }));
+
     measurements
 }
 
@@ -347,7 +602,7 @@ fn parse_options(mut args: impl Iterator<Item = StdString>) -> Result<Options, S
     while let Some(arg) = args.next() {
         match arg.as_str() {
             // cargo passes `--bench` to a `harness = false` binary.
-            "--bench" => continue,
+            "--bench" => {}
             "--out" => {
                 options.out = Some(
                     args.next()

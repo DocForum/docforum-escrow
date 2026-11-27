@@ -154,27 +154,27 @@ struct Fixture<'a> {
 
 fn fixture(env: &Env) -> Fixture<'_> {
     env.mock_all_auths();
-    let admin = Address::generate(&env);
+    let admin = Address::generate(env);
     let token_id = env.register_stellar_asset_contract_v2(admin);
-    let token = TokenClient::new(&env, &token_id.address());
-    let asset = StellarAssetClient::new(&env, &token_id.address());
-    let payer = Address::generate(&env);
-    let releaser = Address::generate(&env);
+    let token = TokenClient::new(env, &token_id.address());
+    let asset = StellarAssetClient::new(env, &token_id.address());
+    let payer = Address::generate(env);
+    let releaser = Address::generate(env);
     asset.mint(&payer, &1_000);
 
     let hook_id = env.register(PayeeHook, ());
-    let hook = PayeeHookClient::new(&env, &hook_id);
+    let hook = PayeeHookClient::new(env, &hook_id);
     let escrow_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(env), Address::generate(env)),
     );
-    let escrow = EscrowContractClient::new(&env, &escrow_id);
+    let escrow = EscrowContractClient::new(env, &escrow_id);
     let id = escrow.create_escrow(
         &payer,
         &hook_id,
         &token_id.address(),
         &300,
-        &String::from_str(&env, "callback-test"),
+        &String::from_str(env, "callback-test"),
         &releaser,
         &None,
         &true,

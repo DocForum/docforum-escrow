@@ -103,6 +103,15 @@ sees the trade instead of a diff that silently absorbs it.
 | `release_with_approvals` | Releaser auth checks and membership validation, escrow/pool reads, status writes, token transfer |
 | `refund` | Auth, escrow and pooled-key reads, `EscrowData` and status writes, token transfer |
 | `refund_with_approvals` | Releaser auth checks and membership validation, escrow/pool reads, status writes, token transfer |
+| `create_escrows` | One payer auth, then per item: token balance read and transfer, `EscrowData` and status writes, created event |
+| `settle_many` | One caller auth, then per op: escrow/pool reads, releaser check, fee and payout transfers, optional payee callback, status write, event |
+| `create_pooled_escrow` | Pause read, allowlist read, validation, auth, `EscrowData`, status and pooled-config writes, event |
+| `contribute` | Pause read, escrow and pooled reads, auth, token transfer with exact balance-delta check, contribution and escrow writes |
+| `claim_refund` | Auth, escrow, pooled and contribution reads, contribution and escrow writes, token transfer |
+| `cancel` | Auth, escrow read, acceptance checks, `EscrowData` and status writes, token transfer |
+| `transfer_payee` | Auth, escrow read/write, payee-transfer event |
+| `pause` / `unpause` | Auth, pause-admin read, pause-flag write, event |
+| `solvency` | Cross-contract token balance read plus the summed `Liability` entry |
 
 Creation is dominated by token balance reads, transfer, auth, and the
 persistent record writes. The status index adds one persistent write. The
@@ -120,3 +129,43 @@ much cheaper status read. The contract behavior and public API are unchanged.
 The added storage key is a layout change: per ADR 0005, deploy new WASM under a
 new testnet contract ID and let existing escrows settle under their original
 contract.
+
+## Worst-case batches vs Mainnet limits
+
+The batch fixtures use the most expensive configuration each entry point
+accepts. `create_escrows` takes `MAX_BATCH_SIZE` (16) items, each with a
+distinct payee, the 64-byte maximum `condition_ref` and a `refund_after`
+deadline set; the entry point fixes one releaser per item by shape, so there
+is no wider releaser set to measure. `settle_many` releases `MAX_SETTLE_OPS`
+(12) escrows, each created with the maximum protocol fee (`MAX_FEE_BPS` =
+1,000), an opted-in payee callback (a real contract payee, so the
+cross-contract `on_escrow_released` invoke is metered) and the 64-byte maximum
+`condition_ref`. A ten-address releaser set cannot be combined with a fee at
+creation — only `create_escrow*` takes one — so the releaser-heavy shape is
+measured separately.
+
+The Soroban test environment enforces Mainnet's per-invocation limits on
+every run, so a batch that exceeds any of them fails here too. The table
+reports the modelled footprint and its share of the limits from docs/adr/0012
+(events include the return value):
+
+| Batch | Ops | CPU instructions (400M) | Memory | Write entries (200) | Write bytes (132,096) | Event bytes (16,384 incl. return) |
+|---|---:|---:|---:|---:|---:|---:|
+| `create_escrows` | 16 | 8,960,447 (2.2%) | 2,116,299 | 37 (18.5%) | 18,636 (14.1%) | 10,944 + return |
+| `settle_many` (fee + callback) | 12 | 10,445,336 (2.6%) | 2,335,616 | 40 (20.0%) | 4,844 (3.7%) | 11,424 + return |
+| `settle_many` (10 releasers) | 12 | 6,937,643 (1.7%) | 1,528,107 | 28 (14.0%) | 2,156 (1.6%) | 12,432 + return |
+
+The events budget is the tightest limit in every case. With the return
+allowance (16 bytes per id or result plus 64 bytes of overhead, the same
+allowance the `tests/create_escrow.rs` and `tests/settle_many.rs` headroom
+tests use) a worst-case batch keeps 31.2% headroom for `create_escrows`,
+28.7% for the fee + callback `settle_many` and 22.6% for the ten-releaser
+shape. The bench prints these footprints on stderr (`events_bytes`,
+`write_entries`, `write_bytes`); only CPU and memory go into the baseline.
+Settled escrows remove their record (ADR 0013), which is why `settle_many`
+writes far fewer bytes than `create_escrows` stores.
+
+The ten-releaser batch emits a bigger state event (the full releaser set)
+while the fee batch spends more CPU on two token transfers and the callback,
+so the fee + callback shape is the CPU worst case and the ten-releaser shape
+is the events worst case; both stay under 80% of the events budget.

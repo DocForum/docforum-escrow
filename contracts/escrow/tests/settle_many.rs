@@ -72,7 +72,7 @@ fn fixture(env: &Env) -> Fixture<'_> {
     }
 }
 
-impl<'a> Fixture<'a> {
+impl Fixture<'_> {
     fn cond(&self) -> String {
         String::from_str(self.env, "batch-settle")
     }
@@ -110,6 +110,8 @@ impl<'a> Fixture<'a> {
     }
 }
 
+// Returns a Result so it compares directly against settle_many's per-op results.
+#[allow(clippy::unnecessary_wraps)]
 fn ok() -> Result<(), Error> {
     Ok(())
 }
@@ -538,17 +540,13 @@ fn isolating_the_callback_escrow_lets_the_valid_releases_settle() {
 
     // One transaction per notify_payee release; the plain one is unaffected.
     assert_eq!(
-        f.client.try_settle_many(
-            &f.releaser,
-            &f.ops(&[(plain, SettleAction::Release)]),
-        ),
+        f.client
+            .try_settle_many(&f.releaser, &f.ops(&[(plain, SettleAction::Release)]),),
         Ok(Ok(soroban_sdk::vec![&env, ok()]))
     );
     assert_eq!(
-        f.client.try_settle_many(
-            &f.releaser,
-            &f.ops(&[(hostile, SettleAction::Release)]),
-        ),
+        f.client
+            .try_settle_many(&f.releaser, &f.ops(&[(hostile, SettleAction::Release)]),),
         Err(Ok(Error::CallbackFailed))
     );
 
@@ -582,7 +580,10 @@ fn refund_ops_never_invoke_the_payee_callback() {
 
     let results = f.client.settle_many(
         &f.releaser,
-        &f.ops(&[(hooked, SettleAction::Refund), (plain, SettleAction::Refund)]),
+        &f.ops(&[
+            (hooked, SettleAction::Refund),
+            (plain, SettleAction::Refund),
+        ]),
     );
 
     assert_eq!(results, soroban_sdk::vec![&env, ok(), ok()]);
