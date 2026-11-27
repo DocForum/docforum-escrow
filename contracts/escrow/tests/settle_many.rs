@@ -110,6 +110,8 @@ impl Fixture<'_> {
     }
 }
 
+// Returns a Result so it compares directly against settle_many's per-op results.
+#[allow(clippy::unnecessary_wraps)]
 fn ok() -> Result<(), Error> {
     Ok(())
 }

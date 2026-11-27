@@ -11,6 +11,9 @@
 //    never reuses an escrow id, and never overwrites live or archived escrows.
 // 7. Edge case: an escrow that stays Funded past the network maximum TTL.
 
+// Ledger arithmetic on small test constants; the u64 -> u32 casts can't truncate.
+#![allow(clippy::cast_possible_truncation)]
+
 use docforum_escrow::{
     DataKey, EscrowContract, EscrowContractClient, EscrowStatus, ESCROW_EXTEND_TO,
     ESCROW_GRACE_PERIOD_LEDGERS, INSTANCE_EXTEND_TO, MAX_NETWORK_TTL_LEDGERS,

@@ -363,6 +363,20 @@ jobs:
       - name: Install pinned Scout
         run: cargo install cargo-scout-audit --version 0.3.17 --locked
 
+      # Scout 0.3.17 builds its detectors through dylint 4.1.2, which clones
+      # rust-lang/rust-clippy and checks out `master`. Clippy renamed that
+      # branch to `main`, so the build fails with "revspec 'master' not
+      # found". Serve dylint a local mirror whose default branch is called
+      # `master` (same commits as upstream `main`) until Scout ships a dylint
+      # with the fix.
+      - name: Work around dylint's rust-clippy `master` checkout
+        run: |
+          mirror="$RUNNER_TEMP/rust-clippy.git"
+          git clone --quiet --bare https://github.com/rust-lang/rust-clippy "$mirror"
+          git -C "$mirror" branch master main
+          git -C "$mirror" symbolic-ref HEAD refs/heads/master
+          git config --global url."$mirror".insteadOf https://github.com/rust-lang/rust-clippy
+
       # Excluded detectors, each triaged in docs/supply-chain.md:
       # - soroban-version: we pin soroban-sdk 27.0.6 for ABI compatibility
       #   with the live testnet deployment; the 27 -> 28 upgrade is a

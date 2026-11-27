@@ -68,25 +68,12 @@ must_use_candidate = "allow"
 cast_possible_wrap = "allow"
 cast_sign_loss = "allow"
 cast_lossless = "allow"
-ptr_arg = "allow" # test helpers take Vec by ref already handled via allow if needed
-naive_bytecount = "allow" # test setup counts bytes simply
-many_single_char_names = "allow" # contract-like test fixtures use single letters; domain brevity
-single_char_pattern = "allow" # test parsing uses char patterns intentionally
-cast_possible_truncation = "allow" # tests use small literal indices, usize->u32 is safe by construction
-unnecessary_wraps = "allow" # test ok() helpers return Result for uniform ? usage
-extra_unused_lifetimes = "allow" # test helper lifetime annotation is intentional
-default_trait_access = "allow" # Default::default() for String32 is idiomatic in tests
 used_underscore_binding = "allow" # SDK entry-point arg names like _live_until are contract ABI; renaming breaks binding generation
-missing_panics_doc = "allow" # test mock contracts panic intentionally (balance checks); documenting each is noise
 too_many_lines = "allow"
 match_same_arms = "allow"
 manual_clamp = "allow"
 fn_params_excessive_bools = "allow"
 doc_markdown = "allow"
-# Events::publish is the only event path the Soroban SDK supports for
-# dynamic per-call subjects in this crate; migrating to #[contractevent]
-# would change event shape on-chain. Recorded here so the change is a
-# deliberate ABI decision, not a lint fix.
 
 [profile.release]
 opt-level = "z"

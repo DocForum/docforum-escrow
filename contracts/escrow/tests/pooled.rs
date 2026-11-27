@@ -21,6 +21,9 @@
 // Every payout assertion checks real token balances, not just state
 // fields (hard rule 2).
 
+// Contributor fixtures use single-letter names (a, b, c, ...).
+#![allow(clippy::many_single_char_names)]
+
 use docforum_escrow::{
     Contribution, Error, EscrowContract, EscrowContractClient, EscrowStatus, PooledData,
 };

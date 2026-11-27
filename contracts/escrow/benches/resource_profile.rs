@@ -62,6 +62,8 @@ struct PayeeHook;
 
 #[contractimpl]
 impl PayeeHook {
+    // The callback ABI the escrow invokes returns a Result.
+    #[allow(clippy::unnecessary_wraps)]
     pub fn on_escrow_released(_env: Env, _escrow_id: u64, _amount: i128) -> Result<(), HookError> {
         Ok(())
     }

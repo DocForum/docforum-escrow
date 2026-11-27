@@ -18,6 +18,10 @@
 //! Every scenario is a function taking a `Token` and is run for every kind by
 //! the `conformance!` macro, so adding a kind adds it to every scenario.
 
+// Test-only token mocks: they panic on purpose, and fixtures build
+// default String32 values inline.
+#![allow(clippy::missing_panics_doc, clippy::default_trait_access)]
+
 use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus, SettleAction};
 use soroban_sdk::{
     contract, contractimpl, contracttype,

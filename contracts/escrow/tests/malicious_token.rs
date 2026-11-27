@@ -14,6 +14,9 @@
 // contract's balance, so `create_escrow` verifies the balance rises by
 // exactly `amount` and rejects the escrow otherwise.
 
+// The mock token contracts panic on purpose to model hostile tokens.
+#![allow(clippy::missing_panics_doc)]
+
 use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
     contract, contractimpl, contracttype,
