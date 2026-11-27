@@ -3,6 +3,10 @@
 One new file per PR that changes the escrow contract
 (anything under `contracts/escrow/src/`).
 
+Example: an issue adding dependent escrows (`depends_on`) would add
+`contract-changes.d/<issue-number>-dependent-escrows.md` with `bump: minor`,
+noting that refunds are never blocked by dependencies.
+
 When every contract PR bumped `CONTRACT_VERSION` itself, all of them edited
 the same line and picked the same "next" version, so each contract merge put
 every other contract PR into conflict. Now you describe the change in a

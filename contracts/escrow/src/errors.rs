@@ -133,24 +133,32 @@ pub enum Error {
     /// `unpause` on a running contract. The transition did not happen, so
     /// no event is emitted.
     NotPaused = 40,
+    /// `depends_on` referenced an escrow id that does not exist, is not
+    /// strictly lower than the new escrow's id (cycle prevention), or the
+    /// dependency's `required_status` is not a valid terminal status.
+    InvalidDependency = 54,
+    /// `release` was attempted while the escrow's dependency has not yet
+    /// reached its `required_status`. Refunds are never blocked by a
+    /// dependency.
+    DependencyNotSatisfied = 55,
     /// `release_with_attestation` was called on an escrow with no
     /// `attester` configured (Phase E5, issue #42).
-    AttesterNotConfigured = 54,
+    AttesterNotConfigured = 56,
     /// `fund_next` before the next period is due (issue #115).
-    ScheduleTooEarly = 55,
+    ScheduleTooEarly = 57,
     /// `fund_next` after every period was funded (issue #115).
-    ScheduleComplete = 56,
+    ScheduleComplete = 58,
     /// `fund_next` or a second `cancel_schedule` on a cancelled schedule
     /// (issue #115).
-    ScheduleCancelled = 57,
+    ScheduleCancelled = 59,
     /// The payer's allowance for this contract is below one period's
     /// amount — or has expired, which reads as zero (issue #115).
-    AllowanceExhausted = 58,
+    AllowanceExhausted = 60,
     /// A schedule with a zero period or zero total periods (issue #115).
-    InvalidSchedule = 59,
+    InvalidSchedule = 61,
     /// A uniqueness-enabled creation used an already-indexed pair. Use
     /// `get_unique_escrow` to recover the original escrow id.
     DuplicateConditionRef = 60,
     /// The release deadline was not strictly after the funding deadline at creation (issue #288).
-    InvalidReleaseDeadline = 61,
+    InvalidReleaseDeadline = 28800,
 }
