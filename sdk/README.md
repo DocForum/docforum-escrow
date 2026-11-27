@@ -210,3 +210,46 @@ await client.createEscrow({ payer, payee, token, amount, conditionRef, releaser 
 ```
 
 The amount helpers are additive and follow strict semver for the SDK. Existing callers that pass raw `bigint` amounts continue to work unchanged.
+
+## Transaction lifecycle
+
+`submitSigned` owns the submit-and-confirm lifecycle, so callers don't have to
+reinvent it on a congested or flaky RPC. Tune it once on the client, or per
+call:
+
+```ts
+const client = new EscrowClient({
+  contractId,
+  transaction: { sendTimeoutMs: 15_000, confirmTimeoutMs: 60_000 },
+});
+
+const result = await client.submitSigned(signedXdr, {
+  // Runs before anything is sent: persist the hash first.
+  onTransactionHash: (hash) => db.saveSubmission(orderId, hash),
+  transaction: { maxTryAgainLaterAttempts: 3 },
+});
+```
+
+| Option | Default | Applies to |
+| --- | --- | --- |
+| `simulateTimeoutMs` | 30 000 | simulation in `prepareCreateEscrow`, `prepareRelease`/`prepareRefund`, `prepareLifecycleCall` (`RequestTimeoutError`) |
+| `sendTimeoutMs` | 30 000 | each `sendTransaction` request |
+| `confirmTimeoutMs` | 120 000 | total wait for confirmation |
+| `maxTryAgainLaterAttempts` | 5 | resends after `TRY_AGAIN_LATER` |
+| `tryAgainLaterBackoffMs` | 1 000 | first backoff, doubling per retry |
+
+Retry semantics:
+
+- **The hash comes first.** `onTransactionHash` is awaited before the send; if
+  it throws, nothing is submitted.
+- **`TRY_AGAIN_LATER`** means the node did not accept the transaction, so the
+  SDK resends the *same* envelope (a fee-bump keeps the same inner
+  transaction) with exponential backoff. Past the budget it throws
+  `TryAgainLaterExhaustedError`; it is then safe to submit again later.
+- **A send that times out is never resent**: the transaction may already be in
+  the mempool. The SDK waits for the hash instead.
+- **On a confirm timeout** the SDK looks the hash up with `getTransaction`
+  rather than resubmitting. A transaction that landed after the timeout is
+  reported as success. If its status is still unknown it throws
+  `TransactionPendingError` with `hash`: check that hash later before retrying.
+- An on-chain failure throws `TransactionFailedError` with `hash`.

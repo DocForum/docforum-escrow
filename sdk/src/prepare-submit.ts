@@ -1,5 +1,6 @@
 import { Keypair } from "@stellar/stellar-sdk";
 import { type CreateEscrowParams } from "./escrow-types.js";
+import { type OnTransactionHash, type TransactionLifecycleOptions } from "./lifecycle.js";
 
 /**
  * Default lifetime of a prepared `create_escrow`, in ledgers (about ten
@@ -46,6 +47,13 @@ export interface SubmitSignedOptions {
   baseFee?: bigint;
   /** Status polls before giving up waiting for the result. Default 30. */
   pollAttempts?: number;
+  /**
+   * Called with the transaction hash before it is sent, so the caller can
+   * persist it first. See `OnTransactionHash`.
+   */
+  onTransactionHash?: OnTransactionHash;
+  /** Per-call overrides for `EscrowClientConfig.transaction` (timeouts, `TRY_AGAIN_LATER` budget). */
+  transaction?: TransactionLifecycleOptions;
 }
 
 /** Outcome of {@link EscrowClient.submitSigned}. */

@@ -102,19 +102,6 @@ export type InvalidReleaseDeadlineError = InstanceType<typeof InvalidReleaseDead
 /** Simulating the transaction failed for a reason other than a contract error. */
 export class SimulationFailure extends EscrowError {}
 
-
-/**
- * Canonical names for the lifecycle error classes. These classes are defined in this
- * module; other modules (including transaction-lifecycle.ts) must import them from here
- * rather than re-declaring them.
- */
-export type LifecycleErrorName =
-  | "SimulationFailure"
-  | "SubmissionFailure"
-  | "RequestTimeoutError"
-  | "TransactionPendingError"
-  | "TransactionFailedError";
-
 /** Submitting the signed transaction failed before the network accepted it. */
 export class SubmissionFailure extends EscrowError {}
 
@@ -143,6 +130,20 @@ export class TransactionFailedError extends EscrowError {
   constructor(hash: string, message?: string, options?: ErrorOptions) {
     super(message ?? `Transaction ${hash} failed on-chain`, options);
     this.hash = hash;
+  }
+}
+
+/**
+ * The RPC kept answering `TRY_AGAIN_LATER` past the configured retry budget.
+ * The transaction was never accepted, so it is safe to submit again later.
+ */
+export class TryAgainLaterExhaustedError extends EscrowError {
+  readonly hash: string;
+  readonly attempts: number;
+  constructor(hash: string, attempts: number) {
+    super(`The RPC node answered TRY_AGAIN_LATER ${attempts} times; transaction ${hash} was not accepted.`);
+    this.hash = hash;
+    this.attempts = attempts;
   }
 }
 

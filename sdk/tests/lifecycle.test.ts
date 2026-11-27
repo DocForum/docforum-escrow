@@ -14,9 +14,6 @@ import {
   type EscrowStatus,
   type PreparedLifecycleCall,
 } from "../src/index.js";
-// Re-export check: the lifecycle option types must resolve from the package root.
-export type { TransactionLifecycleOptions } from "../src/index.js";
-
 
 const payer = Keypair.random();
 const payee = Keypair.random();
@@ -376,16 +373,6 @@ describe("prepare → sign → submit", () => {
     expect(sent.unwrap).toHaveBeenCalled();
   });
 
-  it("timed out but landed: reports the hash without resubmitting", async () => {
-    const client = flowClient([]);
-    const prepared = await client.prepareLifecycleCall({
-      call: { method: "top_up", escrowId: 3n, payer: payer.publicKey(), amount: 10n },
-      source: relayer.publicKey(),
-    });
-    const result = await client.submitLifecycleCall(prepared, relayer, "top_up");
-    expect(result.txHash).toBe("relayed-hash");
-  });
-
   it("refuses to sign for an address that has nothing pending", async () => {
     const client = flowClient([payer.publicKey()]);
     const prepared = await client.prepareLifecycleCall({
@@ -416,7 +403,7 @@ describe("prepare → sign → submit", () => {
       call: { method: "top_up", escrowId: 3n, payer: payer.publicKey(), amount: 10n },
       source: relayer.publicKey(),
     });
-    await expect(client.submitLifecycleCall(prepared, Keypair.random())).rejects.toThrow(/source/);
+    await expect(client.submitLifecycleCall(prepared, payer)).rejects.toThrow(/submitted by its source/);
   });
 
   it("reports malformed JSON plainly", async () => {

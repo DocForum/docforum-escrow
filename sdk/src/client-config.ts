@@ -2,7 +2,7 @@ import { Keypair } from "@stellar/stellar-sdk";
 import { type InstrumentationOptions } from "./instrumentation.js";
 import { type ArchivedEntryBehavior } from "./archived-entries.js";
 import { type NetworkPreset } from "./networks.js";
-import { type TransactionLifecycleOptions } from "./lifecycle.js";
+import { type DEFAULT_LIFECYCLE_OPTIONS, type TransactionLifecycleOptions } from "./lifecycle.js";
 import { type RpcProviderConfig } from "./rpc-providers.js";
 
 /** Connection settings for an {@link EscrowClient}: which contract, and (optionally) which network. */
@@ -76,13 +76,11 @@ export interface EscrowClientConfig {
    */
   verifyContractVersion?: boolean;
   /**
-   * Transaction lifecycle tuning (Phase E6): timeouts for simulate, send and
-   * confirm, plus `TRY_AGAIN_LATER` backoff. Defaults are applied per field,
-   * so partial overrides are fine. Retry semantics are documented in
-   * `sdk/README.md` ("Transaction lifecycle"). The fake test client that
-   * consumes this config is exported from `testing/fake-client.ts`; it must be
-   * included in the API reference so TypeDoc does not warn on its
-   * constructor config type.
+   * Transaction lifecycle tuning (Phase E6, issue #62): timeouts for
+   * simulate, send and confirm, plus the `TRY_AGAIN_LATER` backoff budget.
+   * Defaults ({@link DEFAULT_LIFECYCLE_OPTIONS}) apply per field, so partial
+   * overrides are fine. Used by `submitSigned` and the `prepare*` methods;
+   * retry semantics are documented in `sdk/README.md` ("Transaction lifecycle").
    */
   transaction?: TransactionLifecycleOptions;
 }
