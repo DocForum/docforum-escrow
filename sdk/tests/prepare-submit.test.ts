@@ -19,7 +19,11 @@ import {
   PREPARED_TX_TTL_LEDGERS,
   PreparedTransactionExpiredError,
   SignedTransactionMismatchError,
+  RequestTimeoutError,
   StaleSequenceError,
+  TransactionPendingError,
+  type TransactionLifecycleOptions,
+  TryAgainLaterExhaustedError,
   UnsignedTransactionError,
 } from "../src/index.js";
 
@@ -84,6 +88,7 @@ type Fakes = {
   send?: Record<string, unknown>;
   poll?: Record<string, unknown>;
   assembled?: unknown;
+  transaction?: TransactionLifecycleOptions;
 };
 
 function makeClient(fakes: Fakes = {}) {
@@ -91,18 +96,19 @@ function makeClient(fakes: Fakes = {}) {
   const pollTransaction = vi.fn(
     async () => fakes.poll ?? { status: "SUCCESS", returnValue: nativeToScVal(42n, { type: "u64" }) },
   );
+  const getTransaction = vi.fn(async () => ({ status: "NOT_FOUND" }));
   const getAccount = vi.fn(async () => ({ sequenceNumber: () => fakes.onChainSequence ?? "100" }));
   const getLatestLedger = vi.fn(async () => ({ sequence: fakes.latestLedger ?? 500 }));
   const createEscrow = vi.fn(async () => fakes.assembled);
   const createEscrowReleaseTime = vi.fn(async () => fakes.assembled);
-  const client = Object.assign(new EscrowClient({ contractId: CONTRACT_ID, rpcUrl: "https://127.0.0.1:1" }), {
-    rpc: { sendTransaction, pollTransaction, getAccount, getLatestLedger },
+  const client = Object.assign(new EscrowClient({ contractId: CONTRACT_ID, rpcUrl: "https://127.0.0.1:1", transaction: fakes.transaction }), {
+    rpc: { sendTransaction, pollTransaction, getTransaction, getAccount, getLatestLedger },
     publicContractClient: () => ({
       create_escrow: createEscrow,
       create_escrow_release_time: createEscrowReleaseTime,
     }),
   });
-  return { client, sendTransaction, pollTransaction, getAccount, getLatestLedger, createEscrow, createEscrowReleaseTime };
+  return { client, sendTransaction, pollTransaction, getTransaction, getAccount, getLatestLedger, createEscrow, createEscrowReleaseTime };
 }
 
 const baseParams = (payer: string) => ({
@@ -115,6 +121,14 @@ const baseParams = (payer: string) => ({
 });
 
 describe("prepareCreateEscrow", () => {
+  it("fails with RequestTimeoutError when simulation exceeds transaction.simulateTimeoutMs (issue #62)", async () => {
+    const payer = Keypair.random();
+    const { client, createEscrow } = makeClient({ transaction: { simulateTimeoutMs: 10 } });
+    createEscrow.mockReturnValue(new Promise(() => {}));
+
+    await expect(client.prepareCreateEscrow(baseParams(payer.publicKey()))).rejects.toBeInstanceOf(RequestTimeoutError);
+  });
+
   it("returns an unsigned envelope bounded to a ledger window, keeping the Soroban data", async () => {
     const payer = Keypair.random();
     const envelope = makeEnvelope(payer.publicKey());
@@ -209,6 +223,55 @@ describe("submitSigned", () => {
     expect(sendTransaction).toHaveBeenCalledTimes(1);
     expect(sendTransaction.mock.calls[0]![0]).toBeInstanceOf(Transaction);
     expect(pollTransaction).toHaveBeenCalledWith("outerhash", { attempts: 30 });
+  });
+
+  it("reports the hash before sending and retries TRY_AGAIN_LATER with the same envelope (issue #62)", async () => {
+    const { client, sendTransaction, prepared, signedXdr } = await preparedAndSigned();
+    sendTransaction
+      .mockResolvedValueOnce({ status: "TRY_AGAIN_LATER", hash: "outerhash" })
+      .mockResolvedValueOnce({ status: "PENDING", hash: "outerhash" });
+    const seen: string[] = [];
+
+    const result = await client.submitSigned(signedXdr, {
+      onTransactionHash: (hash) => void seen.push(hash),
+      transaction: { tryAgainLaterBackoffMs: 1 },
+    });
+
+    expect(seen).toEqual([prepared.hash]);
+    expect(result.txHash).toBe("outerhash");
+    expect(sendTransaction).toHaveBeenCalledTimes(2);
+    expect(sendTransaction.mock.calls[0]![0]).toBe(sendTransaction.mock.calls[1]![0]);
+  });
+
+  it("stops after the TRY_AGAIN_LATER budget from the client config", async () => {
+    const { client, sendTransaction, signedXdr } = await preparedAndSigned();
+    sendTransaction.mockResolvedValue({ status: "TRY_AGAIN_LATER", hash: "outerhash" });
+    Object.assign(client, { lifecycleOptions: { maxTryAgainLaterAttempts: 1, tryAgainLaterBackoffMs: 1 } });
+
+    await expect(client.submitSigned(signedXdr)).rejects.toBeInstanceOf(TryAgainLaterExhaustedError);
+    expect(sendTransaction).toHaveBeenCalledTimes(2);
+  });
+
+  it("timed out but landed: a confirm timeout is settled by looking the hash up", async () => {
+    const { client, sendTransaction, pollTransaction, getTransaction, signedXdr } = await preparedAndSigned();
+    pollTransaction.mockReturnValue(new Promise(() => {}));
+    getTransaction.mockResolvedValue({ status: "SUCCESS", returnValue: nativeToScVal(7n, { type: "u64" }) });
+
+    const result = await client.submitSigned(signedXdr, { transaction: { confirmTimeoutMs: 10 } });
+
+    expect(result.escrowId).toBe(7n);
+    expect(getTransaction).toHaveBeenCalledWith("outerhash");
+    expect(sendTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws TransactionPendingError carrying the hash when the outcome stays unknown", async () => {
+    const { client, pollTransaction, signedXdr } = await preparedAndSigned();
+    pollTransaction.mockReturnValue(new Promise(() => {}));
+
+    const error = await client.submitSigned(signedXdr, { transaction: { confirmTimeoutMs: 10 } }).catch((e) => e);
+
+    expect(error).toBeInstanceOf(TransactionPendingError);
+    expect((error as TransactionPendingError).hash).toBe("outerhash");
   });
 
   it("returns no escrow id for a transaction that returns nothing", async () => {

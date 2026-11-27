@@ -101,10 +101,52 @@ export type InvalidReleaseDeadlineError = InstanceType<typeof InvalidReleaseDead
 
 /** Simulating the transaction failed for a reason other than a contract error. */
 export class SimulationFailure extends EscrowError {}
-/** Submitting the signed transaction failed. */
+
+/** Submitting the signed transaction failed before the network accepted it. */
 export class SubmissionFailure extends EscrowError {}
-/** The RPC request timed out. */
+
+/**
+ * An RPC request exceeded its configured timeout. Note that for submission this does not
+ * imply the transaction was rejected: check {@link TransactionPendingError} and poll by hash.
+ */
 export class RequestTimeoutError extends EscrowError {}
+
+/**
+ * The transaction was submitted (it has a hash) but its final status could not be
+ * determined before the confirmation deadline. Consumers should persist `hash` and
+ * query it later instead of resubmitting.
+ */
+export class TransactionPendingError extends EscrowError {
+  readonly hash: string;
+  constructor(hash: string, message?: string, options?: ErrorOptions) {
+    super(message ?? `Transaction ${hash} was submitted but its status is not yet known`, options);
+    this.hash = hash;
+  }
+}
+
+/** The network reported a transaction failure status on confirmation. */
+export class TransactionFailedError extends EscrowError {
+  readonly hash: string;
+  constructor(hash: string, message?: string, options?: ErrorOptions) {
+    super(message ?? `Transaction ${hash} failed on-chain`, options);
+    this.hash = hash;
+  }
+}
+
+/**
+ * The RPC kept answering `TRY_AGAIN_LATER` past the configured retry budget.
+ * The transaction was never accepted, so it is safe to submit again later.
+ */
+export class TryAgainLaterExhaustedError extends EscrowError {
+  readonly hash: string;
+  readonly attempts: number;
+  constructor(hash: string, attempts: number) {
+    super(`The RPC node answered TRY_AGAIN_LATER ${attempts} times; transaction ${hash} was not accepted.`);
+    this.hash = hash;
+    this.attempts = attempts;
+  }
+}
+
 /** Thrown when the RPC's reported network passphrase does not match the configured one. */
 export class NetworkMismatchError extends EscrowError {
   readonly expected: string | undefined;
