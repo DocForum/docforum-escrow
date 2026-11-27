@@ -1,0 +1,1 @@
+Issue #329: `MilestoneStatus` in `@docforum/escrow-sdk` now includes `"cancelled"`, and `getMilestones` maps `EscrowStatus` exhaustively so `Cancelled` tranches report `"cancelled"` instead of `"refunded"` and any future contract status is a compile-time error. Offline unit tests in `sdk/tests/milestones.test.ts` cover the mapping.

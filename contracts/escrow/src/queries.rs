@@ -31,7 +31,7 @@ impl EscrowContract {
         }
         let mut records = Vec::new(&env);
         for id in ids.iter() {
-            records.push_back(env.storage().persistent().get(&DataKey::Escrow(id)));
+            records.push_back(Self::read_escrow(&env, id));
         }
         Ok(records)
     }
@@ -60,9 +60,6 @@ impl EscrowContract {
     /// `get_status` for a settled id and the settlement event for its history.
     pub fn get_escrow(env: Env, escrow_id: u64) -> Result<EscrowData, Error> {
         Self::extend_instance_ttl(&env);
-        env.storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .ok_or(Error::NotFound)
+        Self::read_escrow(&env, escrow_id).ok_or(Error::NotFound)
     }
 }

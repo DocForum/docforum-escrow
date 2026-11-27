@@ -1280,167 +1280,174 @@
               },
               "durability": "persistent",
               "val": {
-                "map": [
+                "vec": [
                   {
-                    "key": {
-                      "symbol": "accepted_at"
-                    },
-                    "val": "void"
+                    "symbol": "V1"
                   },
                   {
-                    "key": {
-                      "symbol": "amount"
-                    },
-                    "val": {
-                      "i128": "100"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "attester"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "condition_ref"
-                    },
-                    "val": {
-                      "string": "liability-test"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "fee_bps"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "fee_recipient"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "notify_payee"
-                    },
-                    "val": {
-                      "bool": false
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payee"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payees"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "map": [
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "accepted_at"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "amount"
+                        },
+                        "val": {
+                          "i128": "100"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "attester"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "condition_ref"
+                        },
+                        "val": {
+                          "string": "liability-test"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_bps"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_recipient"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "notify_payee"
+                        },
+                        "val": {
+                          "bool": false
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "payee"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "payees"
+                        },
+                        "val": {
+                          "vec": [
                             {
-                              "key": {
-                                "symbol": "basis_points"
-                              },
-                              "val": {
-                                "u32": 10000
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "payee"
-                              },
-                              "val": {
-                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
-                              }
+                              "map": [
+                                {
+                                  "key": {
+                                    "symbol": "basis_points"
+                                  },
+                                  "val": {
+                                    "u32": 10000
+                                  }
+                                },
+                                {
+                                  "key": {
+                                    "symbol": "payee"
+                                  },
+                                  "val": {
+                                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
+                                  }
+                                }
+                              ]
                             }
                           ]
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payer"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "refund_after"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "refund_to"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "release_not_before"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "releasers"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4BV5"
+                      },
+                      {
+                        "key": {
+                          "symbol": "payer"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "requires_acceptance"
-                    },
-                    "val": {
-                      "bool": false
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "status"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "symbol": "Funded"
+                      },
+                      {
+                        "key": {
+                          "symbol": "refund_after"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "refund_to"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "threshold"
-                    },
-                    "val": {
-                      "u32": 1
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "token"
-                    },
-                    "val": {
-                      "address": "CACMVW2KK4H5FZDFF2AUCAKQTEJMZZWJUIZF23XMRVYQBSXYLHZ6BKWN"
-                    }
+                      },
+                      {
+                        "key": {
+                          "symbol": "release_not_before"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "releasers"
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4BV5"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "requires_acceptance"
+                        },
+                        "val": {
+                          "bool": false
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "status"
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "symbol": "Funded"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "threshold"
+                        },
+                        "val": {
+                          "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "token"
+                        },
+                        "val": {
+                          "address": "CACMVW2KK4H5FZDFF2AUCAKQTEJMZZWJUIZF23XMRVYQBSXYLHZ6BKWN"
+                        }
+                      }
+                    ]
                   }
                 ]
               }
@@ -1469,169 +1476,176 @@
               },
               "durability": "persistent",
               "val": {
-                "map": [
+                "vec": [
                   {
-                    "key": {
-                      "symbol": "accepted_at"
-                    },
-                    "val": "void"
+                    "symbol": "V1"
                   },
                   {
-                    "key": {
-                      "symbol": "amount"
-                    },
-                    "val": {
-                      "i128": "20"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "attester"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "condition_ref"
-                    },
-                    "val": {
-                      "string": "liability-test"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "fee_bps"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "fee_recipient"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "notify_payee"
-                    },
-                    "val": {
-                      "bool": false
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payee"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payees"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "map": [
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "accepted_at"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "amount"
+                        },
+                        "val": {
+                          "i128": "20"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "attester"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "condition_ref"
+                        },
+                        "val": {
+                          "string": "liability-test"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_bps"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_recipient"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "notify_payee"
+                        },
+                        "val": {
+                          "bool": false
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "payee"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "payees"
+                        },
+                        "val": {
+                          "vec": [
                             {
-                              "key": {
-                                "symbol": "basis_points"
-                              },
-                              "val": {
-                                "u32": 10000
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "payee"
-                              },
-                              "val": {
-                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
-                              }
+                              "map": [
+                                {
+                                  "key": {
+                                    "symbol": "basis_points"
+                                  },
+                                  "val": {
+                                    "u32": 10000
+                                  }
+                                },
+                                {
+                                  "key": {
+                                    "symbol": "payee"
+                                  },
+                                  "val": {
+                                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
+                                  }
+                                }
+                              ]
                             }
                           ]
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payer"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "refund_after"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "refund_to"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "release_not_before"
-                    },
-                    "val": {
-                      "u64": "1010"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "releasers"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4BV5"
+                      },
+                      {
+                        "key": {
+                          "symbol": "payer"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "requires_acceptance"
-                    },
-                    "val": {
-                      "bool": false
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "status"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "symbol": "Funded"
+                      },
+                      {
+                        "key": {
+                          "symbol": "refund_after"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "refund_to"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "threshold"
-                    },
-                    "val": {
-                      "u32": 1
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "token"
-                    },
-                    "val": {
-                      "address": "CACMVW2KK4H5FZDFF2AUCAKQTEJMZZWJUIZF23XMRVYQBSXYLHZ6BKWN"
-                    }
+                      },
+                      {
+                        "key": {
+                          "symbol": "release_not_before"
+                        },
+                        "val": {
+                          "u64": "1010"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "releasers"
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4BV5"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "requires_acceptance"
+                        },
+                        "val": {
+                          "bool": false
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "status"
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "symbol": "Funded"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "threshold"
+                        },
+                        "val": {
+                          "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "token"
+                        },
+                        "val": {
+                          "address": "CACMVW2KK4H5FZDFF2AUCAKQTEJMZZWJUIZF23XMRVYQBSXYLHZ6BKWN"
+                        }
+                      }
+                    ]
                   }
                 ]
               }
@@ -1660,167 +1674,174 @@
               },
               "durability": "persistent",
               "val": {
-                "map": [
+                "vec": [
                   {
-                    "key": {
-                      "symbol": "accepted_at"
-                    },
-                    "val": "void"
+                    "symbol": "V1"
                   },
                   {
-                    "key": {
-                      "symbol": "amount"
-                    },
-                    "val": {
-                      "i128": "30"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "attester"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "condition_ref"
-                    },
-                    "val": {
-                      "string": "liability-test"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "fee_bps"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "fee_recipient"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "notify_payee"
-                    },
-                    "val": {
-                      "bool": false
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payee"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payees"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "map": [
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "accepted_at"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "amount"
+                        },
+                        "val": {
+                          "i128": "30"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "attester"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "condition_ref"
+                        },
+                        "val": {
+                          "string": "liability-test"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_bps"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_recipient"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "notify_payee"
+                        },
+                        "val": {
+                          "bool": false
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "payee"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "payees"
+                        },
+                        "val": {
+                          "vec": [
                             {
-                              "key": {
-                                "symbol": "basis_points"
-                              },
-                              "val": {
-                                "u32": 10000
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "payee"
-                              },
-                              "val": {
-                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
-                              }
+                              "map": [
+                                {
+                                  "key": {
+                                    "symbol": "basis_points"
+                                  },
+                                  "val": {
+                                    "u32": 10000
+                                  }
+                                },
+                                {
+                                  "key": {
+                                    "symbol": "payee"
+                                  },
+                                  "val": {
+                                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
+                                  }
+                                }
+                              ]
                             }
                           ]
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payer"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "refund_after"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "refund_to"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "release_not_before"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "releasers"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4BV5"
+                      },
+                      {
+                        "key": {
+                          "symbol": "payer"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "requires_acceptance"
-                    },
-                    "val": {
-                      "bool": true
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "status"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "symbol": "Funded"
+                      },
+                      {
+                        "key": {
+                          "symbol": "refund_after"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "refund_to"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "threshold"
-                    },
-                    "val": {
-                      "u32": 1
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "token"
-                    },
-                    "val": {
-                      "address": "CACMVW2KK4H5FZDFF2AUCAKQTEJMZZWJUIZF23XMRVYQBSXYLHZ6BKWN"
-                    }
+                      },
+                      {
+                        "key": {
+                          "symbol": "release_not_before"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "releasers"
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4BV5"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "requires_acceptance"
+                        },
+                        "val": {
+                          "bool": true
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "status"
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "symbol": "Funded"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "threshold"
+                        },
+                        "val": {
+                          "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "token"
+                        },
+                        "val": {
+                          "address": "CACMVW2KK4H5FZDFF2AUCAKQTEJMZZWJUIZF23XMRVYQBSXYLHZ6BKWN"
+                        }
+                      }
+                    ]
                   }
                 ]
               }
@@ -1849,173 +1870,180 @@
               },
               "durability": "persistent",
               "val": {
-                "map": [
+                "vec": [
                   {
-                    "key": {
-                      "symbol": "accepted_at"
-                    },
-                    "val": "void"
+                    "symbol": "V1"
                   },
                   {
-                    "key": {
-                      "symbol": "amount"
-                    },
-                    "val": {
-                      "i128": "40"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "attester"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "condition_ref"
-                    },
-                    "val": {
-                      "string": "liability-test"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "fee_bps"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "fee_recipient"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "notify_payee"
-                    },
-                    "val": {
-                      "bool": false
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payee"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payees"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "map": [
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "accepted_at"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "amount"
+                        },
+                        "val": {
+                          "i128": "40"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "attester"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "condition_ref"
+                        },
+                        "val": {
+                          "string": "liability-test"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_bps"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_recipient"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "notify_payee"
+                        },
+                        "val": {
+                          "bool": false
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "payee"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "payees"
+                        },
+                        "val": {
+                          "vec": [
                             {
-                              "key": {
-                                "symbol": "basis_points"
-                              },
-                              "val": {
-                                "u32": 10000
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "payee"
-                              },
-                              "val": {
-                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
-                              }
+                              "map": [
+                                {
+                                  "key": {
+                                    "symbol": "basis_points"
+                                  },
+                                  "val": {
+                                    "u32": 10000
+                                  }
+                                },
+                                {
+                                  "key": {
+                                    "symbol": "payee"
+                                  },
+                                  "val": {
+                                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
+                                  }
+                                }
+                              ]
                             }
                           ]
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payer"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "refund_after"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "refund_to"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "release_not_before"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "releasers"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA6J5N"
+                      },
+                      {
+                        "key": {
+                          "symbol": "payer"
                         },
-                        {
-                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABB6KO"
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "refund_after"
                         },
-                        {
-                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABDWC6"
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "refund_to"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "requires_acceptance"
-                    },
-                    "val": {
-                      "bool": false
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "status"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "symbol": "Funded"
+                      },
+                      {
+                        "key": {
+                          "symbol": "release_not_before"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "releasers"
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA6J5N"
+                            },
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABB6KO"
+                            },
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABDWC6"
+                            }
+                          ]
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "threshold"
-                    },
-                    "val": {
-                      "u32": 2
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "token"
-                    },
-                    "val": {
-                      "address": "CACMVW2KK4H5FZDFF2AUCAKQTEJMZZWJUIZF23XMRVYQBSXYLHZ6BKWN"
-                    }
+                      },
+                      {
+                        "key": {
+                          "symbol": "requires_acceptance"
+                        },
+                        "val": {
+                          "bool": false
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "status"
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "symbol": "Funded"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "threshold"
+                        },
+                        "val": {
+                          "u32": 2
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "token"
+                        },
+                        "val": {
+                          "address": "CACMVW2KK4H5FZDFF2AUCAKQTEJMZZWJUIZF23XMRVYQBSXYLHZ6BKWN"
+                        }
+                      }
+                    ]
                   }
                 ]
               }
@@ -2044,167 +2072,174 @@
               },
               "durability": "persistent",
               "val": {
-                "map": [
+                "vec": [
                   {
-                    "key": {
-                      "symbol": "accepted_at"
-                    },
-                    "val": "void"
+                    "symbol": "V1"
                   },
                   {
-                    "key": {
-                      "symbol": "amount"
-                    },
-                    "val": {
-                      "i128": "5"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "attester"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "condition_ref"
-                    },
-                    "val": {
-                      "string": "liability-test"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "fee_bps"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "fee_recipient"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "notify_payee"
-                    },
-                    "val": {
-                      "bool": false
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payee"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payees"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "map": [
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "accepted_at"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "amount"
+                        },
+                        "val": {
+                          "i128": "5"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "attester"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "condition_ref"
+                        },
+                        "val": {
+                          "string": "liability-test"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_bps"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_recipient"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "notify_payee"
+                        },
+                        "val": {
+                          "bool": false
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "payee"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "payees"
+                        },
+                        "val": {
+                          "vec": [
                             {
-                              "key": {
-                                "symbol": "basis_points"
-                              },
-                              "val": {
-                                "u32": 10000
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "payee"
-                              },
-                              "val": {
-                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
-                              }
+                              "map": [
+                                {
+                                  "key": {
+                                    "symbol": "basis_points"
+                                  },
+                                  "val": {
+                                    "u32": 10000
+                                  }
+                                },
+                                {
+                                  "key": {
+                                    "symbol": "payee"
+                                  },
+                                  "val": {
+                                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
+                                  }
+                                }
+                              ]
                             }
                           ]
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payer"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "refund_after"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "refund_to"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "release_not_before"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "releasers"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4BV5"
+                      },
+                      {
+                        "key": {
+                          "symbol": "payer"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "requires_acceptance"
-                    },
-                    "val": {
-                      "bool": false
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "status"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "symbol": "Funded"
+                      },
+                      {
+                        "key": {
+                          "symbol": "refund_after"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "refund_to"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "threshold"
-                    },
-                    "val": {
-                      "u32": 1
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "token"
-                    },
-                    "val": {
-                      "address": "CACMVW2KK4H5FZDFF2AUCAKQTEJMZZWJUIZF23XMRVYQBSXYLHZ6BKWN"
-                    }
+                      },
+                      {
+                        "key": {
+                          "symbol": "release_not_before"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "releasers"
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4BV5"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "requires_acceptance"
+                        },
+                        "val": {
+                          "bool": false
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "status"
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "symbol": "Funded"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "threshold"
+                        },
+                        "val": {
+                          "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "token"
+                        },
+                        "val": {
+                          "address": "CACMVW2KK4H5FZDFF2AUCAKQTEJMZZWJUIZF23XMRVYQBSXYLHZ6BKWN"
+                        }
+                      }
+                    ]
                   }
                 ]
               }
@@ -2233,167 +2268,174 @@
               },
               "durability": "persistent",
               "val": {
-                "map": [
+                "vec": [
                   {
-                    "key": {
-                      "symbol": "accepted_at"
-                    },
-                    "val": "void"
+                    "symbol": "V1"
                   },
                   {
-                    "key": {
-                      "symbol": "amount"
-                    },
-                    "val": {
-                      "i128": "7"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "attester"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "condition_ref"
-                    },
-                    "val": {
-                      "string": "liability-test"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "fee_bps"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "fee_recipient"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "notify_payee"
-                    },
-                    "val": {
-                      "bool": false
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payee"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payees"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "map": [
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "accepted_at"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "amount"
+                        },
+                        "val": {
+                          "i128": "7"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "attester"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "condition_ref"
+                        },
+                        "val": {
+                          "string": "liability-test"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_bps"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "fee_recipient"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "notify_payee"
+                        },
+                        "val": {
+                          "bool": false
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "payee"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "payees"
+                        },
+                        "val": {
+                          "vec": [
                             {
-                              "key": {
-                                "symbol": "basis_points"
-                              },
-                              "val": {
-                                "u32": 10000
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "payee"
-                              },
-                              "val": {
-                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
-                              }
+                              "map": [
+                                {
+                                  "key": {
+                                    "symbol": "basis_points"
+                                  },
+                                  "val": {
+                                    "u32": 10000
+                                  }
+                                },
+                                {
+                                  "key": {
+                                    "symbol": "payee"
+                                  },
+                                  "val": {
+                                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
+                                  }
+                                }
+                              ]
                             }
                           ]
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "payer"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "refund_after"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "refund_to"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "release_not_before"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "releasers"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4BV5"
+                      },
+                      {
+                        "key": {
+                          "symbol": "payer"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "requires_acceptance"
-                    },
-                    "val": {
-                      "bool": false
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "status"
-                    },
-                    "val": {
-                      "vec": [
-                        {
-                          "symbol": "Funded"
+                      },
+                      {
+                        "key": {
+                          "symbol": "refund_after"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "refund_to"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                         }
-                      ]
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "threshold"
-                    },
-                    "val": {
-                      "u32": 1
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "token"
-                    },
-                    "val": {
-                      "address": "CD3FXVGYSLQFFTW3UH6WFF2OKZH7VERGZJZAMJHTGHBWO4F6URWEJL23"
-                    }
+                      },
+                      {
+                        "key": {
+                          "symbol": "release_not_before"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "releasers"
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4BV5"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "requires_acceptance"
+                        },
+                        "val": {
+                          "bool": false
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "status"
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "symbol": "Funded"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "threshold"
+                        },
+                        "val": {
+                          "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "token"
+                        },
+                        "val": {
+                          "address": "CD3FXVGYSLQFFTW3UH6WFF2OKZH7VERGZJZAMJHTGHBWO4F6URWEJL23"
+                        }
+                      }
+                    ]
                   }
                 ]
               }

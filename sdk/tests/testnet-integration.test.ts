@@ -4,7 +4,10 @@
 // covers release/refund (Phase E2) and the `refund_after` deadline +
 // `get_escrow` read path (Phase E4, issue #11). Adds Phase E6 factory
 // deployment + instance discovery coverage (deterministic address
-// prediction must match the on-chain deployment).
+// prediction must match the on-chain deployment). Phase E7 (issue #353):
+// every deployed 3.0 feature runs here without an opt-in env flag -- quorum,
+// cancel, a pooled round (succeed and fail), a protocol-fee release, a
+// two-op `settleMany`, the pause reads and `transferPayee`.
 //
 // Deliberately NOT wired into `npm test`/CI (see package.json -- thit
 // runs via `npm run test:integration` only): it depends on testnet
@@ -32,12 +35,18 @@ import {
   EscrowPreconditionError,
   FactoryClient,
   PreparedTransactionExpiredError,
+  ScheduleCancelledError,
+  ScheduleTooEarlyError,
   SignedTransactionMismatchError,
   StaleSequenceError,
+  UniqueEscrowMismatchError,
   UnsupportedContractVersionError,
   isSupportedContractVersion,
   knownContractId,
   predictInstanceAddress,
+  scheduleAllowanceExpirationLedger,
+  scheduleAllowanceNeeded,
+  scheduleState,
 } from "../src/index.js";
 import { Server as RpcServer } from "@stellar/stellar-sdk/rpc";
 
@@ -87,6 +96,32 @@ async function fundedKeypair(): Promise<Keypair> {
 // These tests fund new accounts and send several real transactions, which can
 // take over a minute on a slow night. This applies to this file only.
 vi.setConfig({ testTimeout: 120_000 });
+
+// Identities shared by the cases that only need one payer/payee/releaser set
+// (issue #353): every funded account is one Friendbot request, so these are
+// funded at most once per run and reused across escrows. Each escrow still has
+// its own id, so sharing an identity changes nothing about the assertions.
+interface SoakIdentities {
+  payer: Keypair;
+  payee: Keypair;
+  releaser: Keypair;
+  secondPayee: Keypair;
+  contributor: Keypair;
+  feeRecipient: Keypair;
+}
+
+let soakIdentities: Promise<SoakIdentities> | undefined;
+
+function soak(): Promise<SoakIdentities> {
+  soakIdentities ??= (async () => {
+    const [payer, payee, releaser, secondPayee, contributor, feeRecipient] = await Promise.all([
+      fundedKeypair(), fundedKeypair(), fundedKeypair(),
+      fundedKeypair(), fundedKeypair(), fundedKeypair(),
+    ]);
+    return { payer, payee, releaser, secondPayee, contributor, feeRecipient };
+  })();
+  return soakIdentities;
+}
 
 describe("EscrowClient against live testnet", () => {
   it("creates, funds, and releases an escrow end-to-end", async () => {
@@ -161,14 +196,12 @@ describe("EscrowClient against live testnet", () => {
     expect(await client.getStatus(refundEscrow.escrowId)).toBe("Refunded");
   });
 
-  // This extra quorum case is opt-in to limit Friendbot funding during
-  // ordinary integration runs; the current contract supports quorum.
-  it.skipIf(process.env.TESTNET_QUORUM_SUPPORTED !== "true")("settles a 2-of-3 quorum escrow with two approvers", async () => {
-    const [payer, payee, first, second, third] = await Promise.all([
-      fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(), fundedKeypair(),
-    ]);
+  // Quorum has been in every testnet deployment since 2.5.0, so this runs in
+  // the nightly soak unconditionally (issue #353) on reused identities.
+  it("settles a 2-of-3 quorum escrow with two approvers", async () => {
+    const { payer, payee, releaser, secondPayee, contributor } = await soak();
     const client = new EscrowClient({ contractId: CONTRACT_ID });
-    const releasers = [first.publicKey(), second.publicKey(), third.publicKey()];
+    const releasers = [releaser.publicKey(), secondPayee.publicKey(), contributor.publicKey()];
 
     const { escrowId } = await client.createQuorumEscrow({
       payer,
@@ -185,9 +218,9 @@ describe("EscrowClient against live testnet", () => {
 
     // One member cannot settle alone; two can.
     await expect(
-      client.release({ escrowId, caller: first }),
+      client.release({ escrowId, caller: releaser }),
     ).rejects.toThrow();
-    await client.releaseWithApprovals({ escrowId, approvers: [first, third] });
+    await client.releaseWithApprovals({ escrowId, approvers: [releaser, contributor] });
     expect(await client.getStatus(escrowId)).toBe("Released");
   });
 
@@ -252,10 +285,10 @@ describe("EscrowClient against live testnet", () => {
     expect(await client.getStatus(escrowId)).toBe("Funded");
   });
 
-  // `cancel` is not on the shared testnet deployment yet (see
-  // ARCHITECTURE_ESSENTIALS.md); set TESTNET_HAS_CANCEL=1 once it is.
-  it.skipIf(!process.env.TESTNET_HAS_CANCEL)("lets the payer cancel before the payee accepts", async () => {
-    const [payer, payee, releaser] = await Promise.all([fundedKeypair(), fundedKeypair(), fundedKeypair()]);
+  // `cancel` is in the current testnet deployment, so it runs unconditionally
+  // in the nightly soak (issue #353).
+  it("lets the payer cancel before the payee accepts", async () => {
+    const { payer, payee, releaser } = await soak();
     const client = new EscrowClient({ contractId: CONTRACT_ID });
     const { escrowId } = await client.createEscrow({
       payer,
@@ -680,4 +713,251 @@ describeFactory("FactoryClient against live testnet", () => {
     await client.release({ escrowId, caller: releaser });
     expect(await client.getStatus(escrowId)).toBe("Released");
   });
+});
+
+// Issue #353: the nightly soak covers the 2.5.1+ surface that runs on testnet.
+// Every case here uses the shared identities above, so the extra Friendbot cost
+// is one fixed set of accounts per run rather than per test.
+describe("Phase E7 soak: pooled, fee, batch, pause and payee coverage", () => {
+  it("runs a pooled round from contributions to release", async () => {
+    const { payer, payee, releaser, contributor } = await soak();
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const fundingDeadline = BigInt(Math.floor(Date.now() / 1000) + 3_600);
+    const { escrowId } = await client.createPooledEscrow({
+      creator: payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      fundingTarget: 1_000_000n,
+      conditionRef: "sdk-integration-test-pooled-release",
+      releaser: releaser.publicKey(),
+      fundingDeadline,
+    });
+
+    const pooled = await client.getPooled(escrowId);
+    expect(pooled.fundingTarget).toBe(1_000_000n);
+    expect(pooled.fundingDeadline).toBe(fundingDeadline);
+
+    await client.contribute({ escrowId, payer, amount: 600_000n });
+    await client.contribute({ escrowId, payer: contributor, amount: 400_000n });
+    expect((await client.getEscrow(escrowId)).amount).toBe(1_000_000n);
+    expect((await client.getContribution(escrowId, contributor.publicKey()))?.amount).toBe(400_000n);
+
+    // A successful round releases its whole total to the payee.
+    await client.release({ escrowId, caller: releaser });
+    expect(await client.getStatus(escrowId)).toBe("Released");
+  });
+
+  it("refunds a failed pooled round contributor by contributor", async () => {
+    const { payer, payee, releaser, contributor } = await soak();
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    // Short deadline so the round fails inside this test's timeout, measured
+    // against the contract's own clock below.
+    const fundingDeadline = BigInt(Math.floor(Date.now() / 1000) + 40);
+    const { escrowId } = await client.createPooledEscrow({
+      creator: payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      fundingTarget: 1_000_000n,
+      conditionRef: "sdk-integration-test-pooled-failed",
+      releaser: releaser.publicKey(),
+      fundingDeadline,
+    });
+    await client.contribute({ escrowId, payer: contributor, amount: 400_000n });
+
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if ((await client.getLedgerTime({ maxAgeMs: 0 })).closeTime >= fundingDeadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+    expect((await client.getLedgerTime({ maxAgeMs: 0 })).closeTime).toBeGreaterThanOrEqual(fundingDeadline);
+
+    await client.claimRefund({ escrowId, contributor });
+    expect(await client.getContribution(escrowId, contributor.publicKey())).toEqual({
+      amount: 400_000n,
+      refunded: true,
+    });
+    await expect(client.claimRefund({ escrowId, contributor })).rejects.toThrow();
+    // A failed round is still Funded: status describes settlement, not funding.
+    expect(await client.getStatus(escrowId)).toBe("Funded");
+  }, 120_000);
+
+  it("applies a protocol fee on release", async () => {
+    const { payer, payee, releaser, feeRecipient } = await soak();
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-protocol-fee",
+      releaser: releaser.publicKey(),
+      feeRecipient: feeRecipient.publicKey(),
+      feeBps: 250, // 2.5 %
+    });
+
+    // Read the stored fee pair before settlement; get_escrow is NotFound after.
+    const escrow = await client.getEscrow(escrowId);
+    expect(escrow.feeBps).toBe(250);
+    expect(escrow.feeRecipient).toBe(feeRecipient.publicKey());
+
+    await client.release({ escrowId, caller: releaser });
+    expect(await client.getStatus(escrowId)).toBe("Released");
+  });
+
+  it("settles two escrows in one settleMany call", async () => {
+    const { payer, payee, releaser } = await soak();
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const create = (conditionRef: string) => client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef,
+      releaser: releaser.publicKey(),
+    });
+    const [released, refunded] = [await create("sdk-integration-test-settle-many-a"), await create("sdk-integration-test-settle-many-b")];
+
+    const results = await client.settleMany([
+      { escrowId: released.escrowId, kind: "release", caller: releaser },
+      { escrowId: refunded.escrowId, kind: "refund", caller: releaser },
+    ]);
+
+    expect(results.map((result) => result.ok)).toEqual([true, true]);
+    expect(await client.getStatus(released.escrowId)).toBe("Released");
+    expect(await client.getStatus(refunded.escrowId)).toBe("Refunded");
+  });
+
+  it("reads the pause flag and the custodian that may flip it", async () => {
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    // Documented deployed custodian (ROADMAP.md, 3.0.0 redeploy). A contract
+    // without the constructor would report no admin; this one always has one.
+    expect(await client.getPauseAdmin()).toMatch(/^G[A-Z2-7]{55}$/);
+    // The deployment is not paused; if it were, every deposit case above would
+    // fail with `Paused` as well.
+    expect(await client.isPaused()).toBe(false);
+  });
+
+  it("transfers the payee and then releases to the new one", async () => {
+    const { payer, payee, releaser, secondPayee } = await soak();
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const { escrowId } = await client.createEscrow({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: "sdk-integration-test-transfer-payee",
+      releaser: releaser.publicKey(),
+    });
+
+    await client.transferPayee({ escrowId, currentPayee: payee, newPayee: secondPayee.publicKey() });
+    expect((await client.getEscrow(escrowId)).payee).toBe(secondPayee.publicKey());
+
+    await client.release({ escrowId, caller: releaser });
+    expect(await client.getStatus(escrowId)).toBe("Released");
+  });
+});
+
+// Phase E6 SDK surfaces for contract features newer than the recorded testnet
+// deployment (issues #468, #469, #470). The newest deployment in
+// deployments.json (2026-11-18, git 2bbc6b1c) predates recurring schedules
+// (#115), unique creation (#47) and the pooled release deadline (#288), so
+// these cases skip by default. Opt in by pointing TESTNET_CONTRACT_ID at a
+// deployment built from main at or after those features and setting
+// TESTNET_E6_FEATURES=1.
+const describeE6 = process.env.TESTNET_E6_FEATURES === "1" ? describe : describe.skip;
+
+describeE6("Phase E6 SDK: recurring, unique creation and pooled deadlines (opt-in)", () => {
+  it("creates a schedule, approves the allowance, funds a period and cancels (#468)", async () => {
+    const { payer, payee, releaser, contributor: keeper } = await soak();
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const latest = await client.getLedgerTime({ maxAgeMs: 0 });
+
+    const { scheduleId } = await client.createSchedule({
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 100_000n,
+      conditionRef: `sdk-integration-schedule-${Date.now()}`,
+      releaser: releaser.publicKey(),
+      refundAfterSeconds: 3_600n,
+      periodSeconds: 3_600n,
+      totalPeriods: 3,
+      firstDue: latest.closeTime, // due immediately
+    });
+    const schedule = await client.getSchedule(scheduleId);
+    expect(schedule).toMatchObject({ periodsFunded: 0, totalPeriods: 3, cancelled: false });
+    expect(scheduleState(schedule, latest.closeTime)).toBe("due");
+
+    await client.approveScheduleAllowance({
+      payer,
+      token: NATIVE_XLM_SAC,
+      amount: scheduleAllowanceNeeded(schedule),
+      expirationLedger: scheduleAllowanceExpirationLedger(schedule, latest),
+    });
+
+    // The keeper funds without the payer's signature.
+    const { escrowId } = await client.fundNext(scheduleId, { source: keeper });
+    expect(await client.getStatus(escrowId)).toBe("Funded");
+    const funded = await client.getSchedule(scheduleId);
+    expect(funded.periodsFunded).toBe(1);
+    expect(funded.nextDue).toBe(schedule.nextDue + schedule.periodSeconds);
+    expect(scheduleState(funded, (await client.getLedgerTime({ maxAgeMs: 0 })).closeTime)).toBe("waiting");
+    await expect(client.fundNext(scheduleId, { source: keeper })).rejects.toBeInstanceOf(ScheduleTooEarlyError);
+
+    await client.cancelSchedule({ scheduleId, payer });
+    expect(scheduleState(await client.getSchedule(scheduleId), funded.nextDue)).toBe("cancelled");
+    await expect(client.fundNext(scheduleId, { source: keeper })).rejects.toBeInstanceOf(ScheduleCancelledError);
+    // The period escrow already funded is unaffected by the cancel.
+    expect(await client.getStatus(escrowId)).toBe("Funded");
+  }, 120_000);
+
+  it("returns the same escrow when the same unique creation runs twice (#469)", async () => {
+    const { payer, payee, releaser } = await soak();
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const request = {
+      payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      amount: 1_000_000n,
+      conditionRef: `sdk-integration-unique-${Date.now()}`,
+      releaser: releaser.publicKey(),
+      unique: true as const,
+    };
+
+    const first = await client.createEscrow(request);
+    expect(first.existing).toBe(false);
+    expect(first.txHash).toBeTruthy();
+    const second = await client.createEscrow(request);
+    expect(second).toEqual({ escrowId: first.escrowId, txHash: undefined, existing: true, status: "Funded" });
+    expect(await client.getUniqueEscrow(payer, request.conditionRef)).toBe(first.escrowId);
+
+    await expect(client.createEscrow({ ...request, amount: 2_000_000n })).rejects.toBeInstanceOf(
+      UniqueEscrowMismatchError,
+    );
+  });
+
+  it("creates a pool with a release deadline, reads it, and closes an empty failed round (#470)", async () => {
+    const { payer, payee, releaser, contributor } = await soak();
+    const client = new EscrowClient({ contractId: CONTRACT_ID });
+    const fundingDeadline = BigInt(Math.floor(Date.now() / 1000) + 40);
+    const releaseDeadline = fundingDeadline + 3_600n;
+    const { escrowId } = await client.createPooledEscrow({
+      creator: payer,
+      payee: payee.publicKey(),
+      token: NATIVE_XLM_SAC,
+      fundingTarget: 1_000_000n,
+      conditionRef: "sdk-integration-test-pooled-release-deadline",
+      releaser: releaser.publicKey(),
+      fundingDeadline,
+      releaseDeadline,
+    });
+    expect((await client.getPooled(escrowId)).releaseDeadline).toBe(releaseDeadline);
+
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if ((await client.getLedgerTime({ maxAgeMs: 0 })).closeTime >= fundingDeadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+    // Nobody contributed: anyone may give the failed round its terminal status.
+    await client.closeFailedRound(escrowId, { source: contributor });
+    expect(await client.getStatus(escrowId)).toBe("Refunded");
+  }, 120_000);
 });

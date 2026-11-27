@@ -72,7 +72,7 @@ fn fixture(env: &Env) -> Fixture<'_> {
     }
 }
 
-impl<'a> Fixture<'a> {
+impl Fixture<'_> {
     fn cond(&self) -> String {
         String::from_str(self.env, "batch-settle")
     }
@@ -110,6 +110,8 @@ impl<'a> Fixture<'a> {
     }
 }
 
+// Returns a Result so it compares directly against settle_many's per-op results.
+#[allow(clippy::unnecessary_wraps)]
 fn ok() -> Result<(), Error> {
     Ok(())
 }
@@ -449,15 +451,80 @@ fn oversized_batch_is_rejected_before_anything_settles() {
     assert_eq!(f.status(id), EscrowStatus::Funded);
 }
 
+/// Issue #367: one opted-in payee callback that fails can revert a batch
+/// whose other releases are all valid. The callback runs after the transfer
+/// and the `Released` write, so a failure cannot become a clean per-op `Err`
+/// — the batch aborts and every op is rolled back, including releases that
+/// already paid out. A payee contract can trigger this deliberately, which
+/// makes it a cheap denial of service during a T1 race-to-settle.
 #[test]
-fn failing_payee_callback_reverts_the_whole_batch() {
-    // Funds moved and then a callback failed: that can't be a clean per-op
-    // `Err`, so the batch aborts and every earlier op is rolled back too.
+fn hostile_callback_payee_reverts_a_batch_of_valid_releases() {
     let env = Env::default();
     let f = fixture(&env);
     let hook = env.register(RejectingPayee, ());
-    let plain = f.create(10);
-    let hooked = f.client.create_escrow(
+    let payees = [
+        Address::generate(&env),
+        Address::generate(&env),
+        Address::generate(&env),
+    ];
+
+    // Three plain releases that would each settle on their own.
+    let valid = [
+        f.create_for(&f.releaser, &payees[0], 10),
+        f.create_for(&f.releaser, &payees[1], 20),
+        f.create_for(&f.releaser, &payees[2], 30),
+    ];
+    // One escrow whose payee opted in to the callback and rejects it. The
+    // payee authorized creation (notify_payee = true), so it chose this.
+    let hostile = f.client.create_escrow(
+        &f.payer,
+        &hook,
+        &f.token_id,
+        &40,
+        &f.cond(),
+        &f.releaser,
+        &None,
+        &true,
+        &None,
+        &None,
+        &None,
+    );
+    let contract_before = f.token.balance(&f.contract_id);
+
+    let result = f.client.try_settle_many(
+        &f.releaser,
+        &f.ops(&[
+            (valid[0], SettleAction::Release),
+            (valid[1], SettleAction::Release),
+            (hostile, SettleAction::Release),
+            (valid[2], SettleAction::Release),
+        ]),
+    );
+
+    // The whole invocation aborts, not one per-op error.
+    assert_eq!(result, Err(Ok(Error::CallbackFailed)));
+    // Every release is rolled back, before and after the hostile one.
+    for id in valid {
+        assert_eq!(f.status(id), EscrowStatus::Funded);
+    }
+    assert_eq!(f.status(hostile), EscrowStatus::Funded);
+    for payee in &payees {
+        assert_eq!(f.token.balance(payee), 0);
+    }
+    assert_eq!(f.token.balance(&hook), 0);
+    assert_eq!(f.token.balance(&f.contract_id), contract_before);
+}
+
+/// The runbook's mitigation (docs/runbooks/releaser-compromise.md): settle a
+/// `notify_payee` release on its own, so the hostile callback can only
+/// revert itself. The plain releases in the same invocation window land.
+#[test]
+fn isolating_the_callback_escrow_lets_the_valid_releases_settle() {
+    let env = Env::default();
+    let f = fixture(&env);
+    let hook = env.register(RejectingPayee, ());
+    let plain = f.create_for(&f.releaser, &Address::generate(&env), 10);
+    let hostile = f.client.create_escrow(
         &f.payer,
         &hook,
         &f.token_id,
@@ -471,20 +538,59 @@ fn failing_payee_callback_reverts_the_whole_batch() {
         &None,
     );
 
-    let result = f.client.try_settle_many(
+    // One transaction per notify_payee release; the plain one is unaffected.
+    assert_eq!(
+        f.client
+            .try_settle_many(&f.releaser, &f.ops(&[(plain, SettleAction::Release)]),),
+        Ok(Ok(soroban_sdk::vec![&env, ok()]))
+    );
+    assert_eq!(
+        f.client
+            .try_settle_many(&f.releaser, &f.ops(&[(hostile, SettleAction::Release)]),),
+        Err(Ok(Error::CallbackFailed))
+    );
+
+    assert_eq!(f.status(plain), EscrowStatus::Released);
+    assert_eq!(f.status(hostile), EscrowStatus::Funded);
+    assert_eq!(f.token.balance(&f.contract_id), 20);
+}
+
+/// Only release ops can hit a payee callback, so refund guidance must not
+/// isolate `notify_payee` escrows: a refund never invokes the payee.
+#[test]
+fn refund_ops_never_invoke_the_payee_callback() {
+    let env = Env::default();
+    let f = fixture(&env);
+    let hook = env.register(RejectingPayee, ());
+    let hooked = f.client.create_escrow(
+        &f.payer,
+        &hook,
+        &f.token_id,
+        &25,
+        &f.cond(),
+        &f.releaser,
+        &None,
+        &true,
+        &None,
+        &None,
+        &None,
+    );
+    let plain = f.create(5);
+    let payer_before = f.token.balance(&f.payer);
+
+    let results = f.client.settle_many(
         &f.releaser,
         &f.ops(&[
-            (plain, SettleAction::Release),
-            (hooked, SettleAction::Release),
+            (hooked, SettleAction::Refund),
+            (plain, SettleAction::Refund),
         ]),
     );
 
-    assert_eq!(result, Err(Ok(Error::CallbackFailed)));
-    assert_eq!(f.status(plain), EscrowStatus::Funded);
-    assert_eq!(f.status(hooked), EscrowStatus::Funded);
-    assert_eq!(f.token.balance(&f.payee), 0);
+    assert_eq!(results, soroban_sdk::vec![&env, ok(), ok()]);
+    assert_eq!(f.status(hooked), EscrowStatus::Refunded);
+    assert_eq!(f.status(plain), EscrowStatus::Refunded);
+    assert_eq!(f.token.balance(&f.payer), payer_before + 30);
     assert_eq!(f.token.balance(&hook), 0);
-    assert_eq!(f.token.balance(&f.contract_id), 30);
 }
 
 /// The bound is measured (docs/adr/0012): a worst-case batch —

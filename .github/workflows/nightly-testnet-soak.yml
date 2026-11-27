@@ -12,7 +12,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: nightly-testnet-soak
@@ -22,15 +21,19 @@ jobs:
   soak:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Only the failure-reporting step needs to create or update an issue.
+    permissions:
+      contents: read
+      issues: write
     defaults:
       run:
         working-directory: sdk
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -38,6 +41,12 @@ jobs:
 
       - run: npm ci
 
+      # Issue #353: the suite runs every deployed feature with no opt-in env
+      # flags -- quorum, cancel, pooled rounds (succeed and fail), a protocol-fee
+      # release, two-op settleMany, the pause reads and transferPayee. The extra
+      # cases reuse one funded identity set per run, so Friendbot use stays
+      # bounded; the classifier below is what still separates a testnet reset
+      # from an SDK failure.
       - name: Run full live testnet integration suite
         id: integration
         run: |

@@ -15,20 +15,48 @@ stdout. For example:
     stellar contract invoke --id C... --source releaser --network testnet \
       -- {action} --escrow_id {id} --caller G...
 
+An optional status command (`--status-cmd`, template with `{id}`) prints the
+escrow's current status, for example:
+
+    stellar contract invoke --id C... --network testnet \
+      -- get_status --escrow_id {id}
+
+With a status command, an escrow that is no longer `Funded` is not submitted
+again: someone else already settled it (the attacker, the timeout path, or
+another operator). Without one, a submission that fails with `NotFunded`
+(error #4) is still recorded as settled elsewhere, with the status unknown.
+
+Every escrow is submitted in its own transaction, which is what keeps an
+opted-in payee callback (`notify_payee`, a `release` only) from taking other
+escrows down with it: the callback runs after the payout, so a failing one
+reverts its whole invocation (issue #367, docs/adr/0012, threat model T11).
+Keep it that way if you change the submit path — do not combine release ops
+into one `settle_many` batch. Refund ops never invoke the callback, so only
+release needs isolating.
+
 Progress is kept in a state file of JSON lines, one per settled escrow:
 
     {"id": 12, "action": "release", "tx": "<hash>"}
+    {"id": 13, "action": "refund", "settled_elsewhere": true, "status": "Refunded"}
 
 The state file is rewritten atomically (temp file, fsync, rename) after every
-successful submission, so a crash or kill at any point leaves either the old
-or the new state, never a partial one. Re-running with the same outcome file
-skips every id already in the state file and retries the rest.
+successful submission or observed settlement, so a crash or kill at any point
+leaves either the old or the new state, never a partial one. Re-running with
+the same outcome file skips every id already in the state file and retries the
+rest.
+
+The final report separates escrows that settled as approved from those that
+settled the other way (an incident signal: e.g. refunded when release was
+approved) and from those that still failed. An escrow that settled the other
+way or whose status could not be read still counts as settled, so a run that
+only hit external settlements exits 0.
 
 Standard library only; works on Python 3.9+.
 """
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -36,6 +64,14 @@ import tempfile
 
 ACTIONS = ("release", "refund")
 U64_MAX = 2**64 - 1
+# `Error::NotFunded` is contract error 4: the escrow is not Funded any more,
+# so a settlement already landed (our retry, the attacker, or the timeout).
+NOT_FUNDED = re.compile(r"NotFunded|Error\(Contract, #4\)", re.IGNORECASE)
+SOUGHT_STATUS = {"release": "Released", "refund": "Refunded"}
+# `refund` returns the funds to the stored refund destination; `cancel` does the
+# same (`Cancelled`), so both satisfy a refund outcome. Nothing satisfies a
+# release outcome except `Released`.
+EQUIVALENT = {"refund": ("Refunded", "Cancelled")}
 
 
 def load_outcomes(path):
@@ -76,7 +112,12 @@ def load_state(path):
             try:
                 record = json.loads(line)
                 escrow_id = record["id"]
-                if not isinstance(escrow_id, int) or record["action"] not in ACTIONS or not record["tx"]:
+                if not isinstance(escrow_id, int) or record["action"] not in ACTIONS:
+                    raise ValueError
+                if record.get("settled_elsewhere"):
+                    if not isinstance(record.get("status"), str) or not record["status"]:
+                        raise ValueError
+                elif not record["tx"]:
                     raise ValueError
             except (ValueError, KeyError, TypeError):
                 raise SystemExit("{}:{}: unreadable state line; fix or move the file".format(path, lineno))
@@ -113,24 +154,58 @@ def write_state(path, state):
         os.close(dir_fd)
 
 
-def submit(template, row, timeout):
-    """Run the submit command for one escrow. Return (tx_hash, None) or (None, error)."""
-    argv = [part.replace("{id}", str(row["id"])).replace("{action}", row["action"])
+def run_template(template, values, timeout):
+    """Run a command template without a shell. Return (last stdout line, error)."""
+    argv = [part.replace("{id}", str(values["id"])).replace("{action}", values["action"])
             for part in shlex.split(template)]
     try:
         proc = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               universal_newlines=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return None, "timed out after {}s; the transaction may still land, check get_status".format(timeout)
+        return None, "timed out after {}s; the transaction may still land, check the status".format(timeout)
     except OSError as e:
-        return None, "could not run submit command: {}".format(e)
+        return None, "could not run command: {}".format(e)
     lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
     if proc.returncode != 0:
         detail = (proc.stderr.strip().splitlines() or ["no stderr"])[-1]
         return None, "exit {}: {}".format(proc.returncode, detail)
     if not lines:
-        return None, "submit command succeeded but printed no transaction hash"
+        return None, "command succeeded but printed nothing"
     return lines[-1].strip('"'), None
+
+
+def read_status(template, escrow_id, timeout):
+    """Ask the status command for one escrow. Return (status, None) or (None, error)."""
+    status, error = run_template(template, {"id": escrow_id, "action": "status"}, timeout)
+    if error:
+        return None, error
+    return normalize_status(status), None
+
+
+def normalize_status(raw):
+    """'Released' for RELEASED / \"released\" / Released; 'unknown' if empty."""
+    text = (raw or "").strip().strip('"').strip()
+    return text[:1].upper() + text[1:].lower() if text else "unknown"
+
+
+def classify(status, action):
+    """'intended', 'opposite', 'positive' (settled, status unknown), or 'open'.
+
+    `open` means the escrow is still Funded and may be submitted. `positive`
+    means it settled but the observed status does not say which way.
+    """
+    if status == "Funded":
+        return "open"
+    if status == "unknown":
+        return "positive"
+    if status == SOUGHT_STATUS[action] or status in EQUIVALENT.get(action, ()):
+        return "intended"
+    return "opposite"
+
+
+def submit(template, row, timeout):
+    """Run the submit command for one escrow. Return (tx_hash, None) or (None, error)."""
+    return run_template(template, row, timeout)
 
 
 def main(argv=None):
@@ -138,12 +213,17 @@ def main(argv=None):
     p.add_argument("outcomes", help="human-approved outcome file (JSON)")
     p.add_argument("--submit-cmd", help="command template with {id} and {action}; "
                    "omit to only list the pending work")
+    p.add_argument("--status-cmd", help="optional command template with {id} that prints "
+                   "the escrow's current status; skips escrows that already settled")
     p.add_argument("--state", help="state file (default: <outcomes>.state.jsonl)")
-    p.add_argument("--timeout", type=float, default=120, help="seconds per submission (default 120)")
+    p.add_argument("--timeout", type=float, default=120,
+                   help="seconds per status read or submission (default 120)")
     a = p.parse_args(argv)
 
     if a.submit_cmd and ("{id}" not in a.submit_cmd or "{action}" not in a.submit_cmd):
         raise SystemExit("--submit-cmd must contain both {id} and {action}")
+    if a.status_cmd and "{id}" not in a.status_cmd:
+        raise SystemExit("--status-cmd must contain {id}")
     outcomes = load_outcomes(a.outcomes)
     state_path = a.state or a.outcomes + ".state.jsonl"
     state = load_state(state_path)
@@ -152,7 +232,7 @@ def main(argv=None):
     for escrow_id, record in state.items():
         if escrow_id in wanted and record["action"] != wanted[escrow_id]:
             raise SystemExit("escrow {} was already settled as {} (tx {}) but the outcome file now says {}".format(
-                escrow_id, record["action"], record["tx"], wanted[escrow_id]))
+                escrow_id, record["action"], record.get("tx", record.get("status", "unknown")), wanted[escrow_id]))
     extra = sorted(set(state) - set(wanted))
     if extra:
         print("warning: state file has ids not in the outcome file: {}".format(extra), file=sys.stderr)
@@ -168,17 +248,71 @@ def main(argv=None):
 
     failed = []
     for row in pending:
+        escrow_id = row["id"]
+        if a.status_cmd:
+            status, error = read_status(a.status_cmd, escrow_id, a.timeout)
+            if error:
+                failed.append(escrow_id)
+                print("FAILED {} {}: could not read status ({}); not submitted".format(
+                    row["action"], escrow_id, error), file=sys.stderr)
+                continue
+            if classify(status, row["action"]) != "open":
+                state[escrow_id] = {"id": escrow_id, "action": row["action"],
+                                    "settled_elsewhere": True, "status": status}
+                write_state(state_path, state)
+                print("already settled {} {} status={} (not submitted)".format(
+                    row["action"], escrow_id, status))
+                continue
         tx, error = submit(a.submit_cmd, row, a.timeout)
         if error:
-            failed.append(row["id"])
-            print("FAILED {} {}: {}".format(row["action"], row["id"], error), file=sys.stderr)
+            if NOT_FUNDED.search(error):
+                status = "unknown"
+                if a.status_cmd:
+                    observed, status_error = read_status(a.status_cmd, escrow_id, a.timeout)
+                    status = observed if observed is not None else "unknown"
+                    if status_error:
+                        print("warning: could not read status for {}: {}".format(escrow_id, status_error),
+                              file=sys.stderr)
+                    elif classify(status, row["action"]) == "open":
+                        # NotFunded but still Funded: the submission landed in a
+                        # way the status read cannot see yet. Never retry blindly.
+                        status = "unknown"
+                state[escrow_id] = {"id": escrow_id, "action": row["action"],
+                                    "settled_elsewhere": True, "status": status}
+                write_state(state_path, state)
+                print("already settled {} {} status={} ({})".format(
+                    row["action"], escrow_id, status, error))
+                continue
+            failed.append(escrow_id)
+            print("FAILED {} {}: {}".format(row["action"], escrow_id, error), file=sys.stderr)
             continue
-        state[row["id"]] = {"id": row["id"], "action": row["action"], "tx": tx}
+        state[escrow_id] = {"id": escrow_id, "action": row["action"], "tx": tx}
         write_state(state_path, state)
-        print("settled {} {} tx={}".format(row["action"], row["id"], tx))
+        print("settled {} {} tx={}".format(row["action"], escrow_id, tx))
 
-    print("done: settled={} failed={} total={}".format(len(pending) - len(failed), len(failed), len(outcomes)),
-          file=sys.stderr)
+    intended = opposite = unknown = 0
+    incidents = []
+    for escrow_id, record in sorted(state.items()):
+        if escrow_id not in wanted:
+            continue
+        status = record.get("status")
+        kind = classify(status, record["action"]) if status else "intended"
+        if kind == "intended":
+            intended += 1
+        elif kind == "opposite":
+            opposite += 1
+            incidents.append(record)
+        else:
+            unknown += 1
+
+    print("done: settled_as_approved={} settled_otherwise={} settled_status_unknown={} failed={} total={}".format(
+        intended, opposite, unknown, len(failed), len(outcomes)), file=sys.stderr)
+    if incidents:
+        print("INCIDENT: {} escrow(s) settled the opposite way from the approved outcome:".format(
+            len(incidents)), file=sys.stderr)
+        for record in incidents:
+            print("  escrow {}: approved {} but observed {} (settled elsewhere)".format(
+                record["id"], record["action"], record["status"]), file=sys.stderr)
     if failed:
         print("re-run the same command to retry: {}".format(failed), file=sys.stderr)
         return 1

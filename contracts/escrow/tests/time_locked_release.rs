@@ -23,7 +23,7 @@ struct Fixture<'a> {
     escrow_id: u64,
 }
 
-fn setup<'a>(env: &Env, release_at: Option<u64>, refund_at: Option<u64>) -> Fixture<'_> {
+fn setup<'a>(env: &Env, release_at: Option<u64>, refund_at: Option<u64>) -> Fixture<'a> {
     env.ledger().set_timestamp(CREATED_AT);
     env.mock_all_auths();
 

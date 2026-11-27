@@ -3,13 +3,25 @@
   "threshold_percent": 20,
   "profile_method": "Soroban native budget; one successful call per fresh environment; setup excluded; every run must match",
   "last_update": {
-    "date": "2026-11-22",
-    "note": "Issue #319: re-measured after rebasing onto main (#402, #404 and #389 landed); every function moved by less than 1.5%, so no reviewed regression is being accepted."
+    "date": "2026-11-27",
+    "note": "Issue #320: added the ten previously unprofiled entry points (create_escrows, settle_many, create_pooled_escrow, contribute, claim_refund, cancel, transfer_payee, pause, unpause, solvency); existing entries unchanged."
   },
   "functions": {
     "accept": {
       "cpu_instructions": 206926,
       "memory_bytes": 98066
+    },
+    "cancel": {
+      "cpu_instructions": 485561,
+      "memory_bytes": 159733
+    },
+    "claim_refund": {
+      "cpu_instructions": 501393,
+      "memory_bytes": 170130
+    },
+    "contribute": {
+      "cpu_instructions": 666204,
+      "memory_bytes": 233697
     },
     "create_escrow": {
       "cpu_instructions": 599522,
@@ -27,6 +39,14 @@
       "cpu_instructions": 597810,
       "memory_bytes": 205401
     },
+    "create_escrows": {
+      "cpu_instructions": 8960447,
+      "memory_bytes": 2116299
+    },
+    "create_pooled_escrow": {
+      "cpu_instructions": 260838,
+      "memory_bytes": 118160
+    },
     "get_escrow": {
       "cpu_instructions": 130359,
       "memory_bytes": 68819
@@ -34,6 +54,10 @@
     "get_status": {
       "cpu_instructions": 69319,
       "memory_bytes": 32351
+    },
+    "pause": {
+      "cpu_instructions": 86391,
+      "memory_bytes": 28102
     },
     "refund": {
       "cpu_instructions": 492288,
@@ -55,9 +79,25 @@
       "cpu_instructions": 231758,
       "memory_bytes": 107271
     },
+    "settle_many": {
+      "cpu_instructions": 10445336,
+      "memory_bytes": 2335616
+    },
+    "solvency": {
+      "cpu_instructions": 168457,
+      "memory_bytes": 76963
+    },
     "top_up": {
       "cpu_instructions": 641721,
       "memory_bytes": 210934
+    },
+    "transfer_payee": {
+      "cpu_instructions": 194541,
+      "memory_bytes": 89906
+    },
+    "unpause": {
+      "cpu_instructions": 87250,
+      "memory_bytes": 27950
     }
   }
 }

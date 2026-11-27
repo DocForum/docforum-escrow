@@ -12,10 +12,13 @@
 
 use docforum_escrow::{Error, EscrowContract, EscrowContractClient, EscrowStatus};
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
+    testutils::{Address as _, Ledger as _, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, String, Vec,
+    Address, Env, IntoVal, String, Vec,
 };
+
+#[path = "common/auth.rs"]
+mod auth;
 
 const CREATED_AT: u64 = 1_000;
 const DEADLINE: u64 = 1_100;
@@ -30,7 +33,7 @@ struct Fixture<'a> {
     escrow_id: u64,
 }
 
-fn fund<'a>(env: &'a Env, requires_acceptance: bool, refund_after: Option<u64>) -> Fixture<'a> {
+fn fund(env: &Env, requires_acceptance: bool, refund_after: Option<u64>) -> Fixture<'_> {
     env.ledger().set_timestamp(CREATED_AT);
 
     let admin = Address::generate(env);
@@ -44,7 +47,7 @@ fn fund<'a>(env: &'a Env, requires_acceptance: bool, refund_after: Option<u64>) 
 
     let contract_id = env.register(
         EscrowContract,
-        (Vec::<Address>::new(&env), Address::generate(&env)),
+        (Vec::<Address>::new(env), Address::generate(env)),
     );
     let client = EscrowContractClient::new(env, &contract_id);
     let condition = String::from_str(env, "opaque-condition-ref");
@@ -243,7 +246,7 @@ fn cancel_is_not_available_without_requires_acceptance() {
     assert_unchanged_funded(&f);
     let data = f.client.get_escrow(&f.escrow_id);
     assert!(!data.requires_acceptance);
-    assert!(!data.accepted_at.is_some());
+    assert!(data.accepted_at.is_none());
 }
 
 #[test]
@@ -447,4 +450,95 @@ fn cancel_pays_the_sponsored_refund_to_not_the_funder() {
     assert_eq!(f.token.balance(&beneficiary), 100);
     assert_eq!(f.token.balance(&f.payer), 600);
     assert_eq!(f.client.get_status(&sponsored), EscrowStatus::Cancelled);
+}
+
+// --- exact authorization tree (issue #474) -------------------------------
+
+#[test]
+fn cancel_records_only_the_stored_payers_exact_tree() {
+    let env = Env::default();
+    env.mock_all_auths(); // fixture funding only
+    let f = fund(&env, true, None);
+
+    let cancel = MockAuthInvoke {
+        contract: &f.contract_id,
+        fn_name: "cancel",
+        args: (f.escrow_id, f.payer.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth {
+        address: &f.payer,
+        invoke: &cancel,
+    }]);
+
+    f.client.cancel(&f.escrow_id, &f.payer);
+
+    auth::assert_auth_tree(&env, &f.payer, &cancel);
+    assert_eq!(f.token.balance(&f.payer), 1_000);
+}
+
+#[test]
+fn cancel_rejects_a_stranger_signing_as_the_payer() {
+    let env = Env::default();
+    env.mock_all_auths(); // fixture funding only
+    let f = fund(&env, true, None);
+    let stranger = Address::generate(&env);
+
+    // The stranger authorizes a cancel that names itself as the payer. The
+    // call is authorized, but the stored payer is the only party allowed.
+    let cancel = MockAuthInvoke {
+        contract: &f.contract_id,
+        fn_name: "cancel",
+        args: (f.escrow_id, stranger.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth {
+        address: &stranger,
+        invoke: &cancel,
+    }]);
+
+    assert_eq!(
+        f.client.try_cancel(&f.escrow_id, &stranger),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_unchanged_funded(&f);
+}
+
+#[test]
+fn cancel_rejects_another_party_signing_the_payers_exact_tree() {
+    let env = Env::default();
+    env.mock_all_auths(); // fixture funding only
+    let f = fund(&env, true, None);
+
+    let cancel = MockAuthInvoke {
+        contract: &f.contract_id,
+        fn_name: "cancel",
+        args: (f.escrow_id, f.payer.clone()).into_val(&env),
+        sub_invokes: &[],
+    };
+    // The payee signs the exact tree, so only the signer check can refuse it.
+    env.mock_auths(&[MockAuth {
+        address: &f.payee,
+        invoke: &cancel,
+    }]);
+
+    assert!(matches!(
+        f.client.try_cancel(&f.escrow_id, &f.payer),
+        Err(Err(soroban_sdk::InvokeError::Abort))
+    ));
+    assert_unchanged_funded(&f);
+}
+
+#[test]
+fn cancel_fails_without_the_payers_signature() {
+    let env = Env::default();
+    env.mock_all_auths(); // fixture funding only
+    let f = fund(&env, true, None);
+
+    env.mock_auths(&[]);
+    assert!(matches!(
+        f.client.try_cancel(&f.escrow_id, &f.payer),
+        Err(Err(soroban_sdk::InvokeError::Abort))
+    ));
+    assert_unchanged_funded(&f);
 }
