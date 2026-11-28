@@ -56,11 +56,13 @@ including when the crate failed to compile and nothing was checked. The
 report is always written to the job summary and uploaded as the
 `scout-report` artifact.
 
-The job caches only the `cargo-scout-audit` binary. Scout fetches its
-detectors from the `develop` branch of `CoinFabrik/scout-audit` at run time
-and builds them inside `~/.cargo/git`. When the job also cached
-`~/.cargo/git`, it restored stale prebuilt detectors and every run ended in
-"Compilation errors" with zero findings, which passed silently. The detectors
+The job installs `cargo-scout-audit` 0.3.17 fresh on every run and caches
+nothing. Scout fetches its detectors from the `develop` branch of
+`CoinFabrik/scout-audit` at run time and builds them inside `~/.cargo/git`.
+When the job cached `~/.cargo/git`, it restored stale prebuilt detectors and
+every run ended in "Compilation errors" with zero findings, which passed
+silently. When it cached only the binary, every cache hit failed with
+"Failed to build detector library". The detectors
 are therefore not pinned by the 0.3.17 version. If an upstream detector
 change breaks or changes the analysis, the status check above turns the job
 red instead of letting it pass.
