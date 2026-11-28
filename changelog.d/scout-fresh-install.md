@@ -1,0 +1,1 @@
+CI: the Scout static-analysis job installs `cargo-scout-audit` 0.3.17 fresh on every run instead of restoring a cached binary. Every cache hit failed with "Failed to build detector library", so Scout would have gone red on main and on every PR.

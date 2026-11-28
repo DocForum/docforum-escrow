@@ -351,29 +351,15 @@ jobs:
           toolchain: 1.96.0
           targets: wasm32v1-none
 
-      # Only the pinned binary is cached. Scout 0.3.17 fetches its detectors
-      # and detector-helper from the `develop` branch of CoinFabrik/scout-audit
-      # as a cargo git checkout and builds them inside ~/.cargo/git. Caching
-      # ~/.cargo/git restored stale prebuilt detector artifacts against a
-      # newer checkout, and every run then failed to compile the crate
-      # ("Compilation errors"), which Scout reports as zero findings.
-      - name: Cache Scout binary
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cargo/bin/cargo-scout-audit
-          key: ${{ runner.os }}-scout-bin-0.3.17
-
+      # Installed fresh on every run, with no cache. Caching ~/.cargo/git
+      # restored stale prebuilt detector artifacts (every run then failed to
+      # compile the crate and reported zero findings), and caching only
+      # ~/.cargo/bin/cargo-scout-audit made Scout fail to build its detectors
+      # on every cache hit ("Failed to build detector library", e.g. on
+      # escrow #395). Only a fresh `cargo install` has produced a passing,
+      # analysed run, so the ~5 minutes are spent on purpose.
       - name: Install pinned Scout
-        # The cache restores the binary but not cargo's install metadata
-        # (~/.cargo/.crates.toml), so a plain `cargo install` on a cache hit
-        # fails with "binary `cargo-scout-audit` already exists". The cache
-        # key pins 0.3.17, so a restored binary is already the pinned version.
-        run: |
-          if [ -x ~/.cargo/bin/cargo-scout-audit ]; then
-            echo "Using cached cargo-scout-audit 0.3.17"
-          else
-            cargo install cargo-scout-audit --version 0.3.17 --locked
-          fi
+        run: cargo install cargo-scout-audit --version 0.3.17 --locked
 
       # Scout 0.3.17 builds its detectors through dylint 4.1.2, which clones
       # rust-lang/rust-clippy and checks out `master`. Clippy renamed that
