@@ -12,6 +12,7 @@ sdk/docs-api/
 .dev-env.local
 *.log
 .DS_Store
+scripts/load/out/
 action/dist/
 __pycache__/
 *.pyc

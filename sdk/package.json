@@ -39,7 +39,7 @@
     "test:integration": "vitest run --project live",
     "test:compatibility": "vitest run tests/compatibility.test.ts",
     "test:fixtures": "vitest run tests/events.test.ts",
-    "test:unit": "vitest run tests/fees.test.ts tests/signers.test.ts tests/pause.test.ts tests/protocol-fee.test.ts tests/amounts.test.ts tests/network-presets.test.ts tests/contract-version.test.ts tests/allowlist.test.ts",
+    "test:unit": "vitest run tests/fees.test.ts tests/signers.test.ts tests/pause.test.ts tests/protocol-fee.test.ts tests/amounts.test.ts tests/network-presets.test.ts tests/contract-version.test.ts tests/allowlist.test.ts tests/channel-accounts.test.ts",
     "test:milestones": "vitest run tests/milestones.test.ts",
     "test:instrumentation": "vitest run tests/instrumentation.test.ts",
     "test:offline": "vitest run --project offline",

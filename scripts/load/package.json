@@ -1,0 +1,20 @@
+{
+  "name": "docforum-escrow-load-test",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Local-network load test for the docforum-escrow contract (issue #132).",
+  "type": "module",
+  "scripts": {
+    "load": "tsx src/run.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@docforum/escrow-sdk": "file:../../sdk",
+    "@stellar/stellar-sdk": "^16.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.2"
+  }
+}
