@@ -204,7 +204,7 @@ impl EscrowContract {
             Funding::Allowance => Self::transfer_from_exact(env, &token, &payer, amount)?,
         }
 
-        let id = Self::next_id(env);
+        let id = Self::next_id(env)?;
         let data = EscrowData {
             payer,
             payee,
@@ -345,9 +345,16 @@ impl EscrowContract {
         let (payee_amount, refund_amount) = match (&settled, &schedule) {
             (EscrowStatus::Released, Some(_)) => (data.amount, 0),
             (EscrowStatus::Refunded | EscrowStatus::Cancelled, Some(schedule)) => {
-                let vested = Self::vested_amount(total, schedule, env.ledger().timestamp());
-                let unpaid_vested = vested.saturating_sub(withdrawn).min(data.amount);
-                (unpaid_vested, data.amount - unpaid_vested)
+                let vested = Self::vested_amount(total, schedule, env.ledger().timestamp())?;
+                // Clamped to `0..=amount`: `withdraw` never lets `withdrawn`
+                // exceed `vested`, and the payee can never be owed more than
+                // is still held, so the refund side is never negative.
+                let unpaid_vested = vested.saturating_sub(withdrawn).clamp(0, data.amount);
+                let refund = data
+                    .amount
+                    .checked_sub(unpaid_vested)
+                    .ok_or(Error::Overflow)?;
+                (unpaid_vested, refund)
             }
             (EscrowStatus::Released, None) => (data.amount, 0),
             (EscrowStatus::Refunded | EscrowStatus::Cancelled, None) => (0, data.amount),
@@ -377,7 +384,9 @@ impl EscrowContract {
             },
             _ => (0, None),
         };
-        let payout = payee_amount - fee;
+        // `fee` is non-zero only on release, where `payee_amount == amount`
+        // and the fee floors to at most 10 % of it.
+        let payout = payee_amount.checked_sub(fee).ok_or(Error::InvalidFee)?;
 
         // Effects before interactions: the state write lands before any
         // token call, so a re-entrant token cannot see a still-`Funded`
@@ -448,25 +457,17 @@ impl EscrowContract {
             if settled == EscrowStatus::Released && data.payees.len() > 1 {
                 // Split payout (issue #22): each share by basis points, the
                 // last payee taking the rounding remainder so the shares
-                // always sum to `payout`.
+                // always sum to `payout`. The list holds at most `MAX_PAYEES`
+                // (8) entries, enforced at creation and never grown after.
                 let mut distributed = 0i128;
-                for index in 0..data.payees.len() {
-                    let share = data.payees.get(index).ok_or(Error::InvalidPayeeList)?;
-                    let amount = if index + 1 == data.payees.len() {
+                let last = data.payees.len().saturating_sub(1);
+                for (index, share) in (0u32..).zip(data.payees.iter()) {
+                    let amount = if index == last {
                         payout
                             .checked_sub(distributed)
                             .ok_or(Error::SplitAmountOverflow)?
                     } else {
-                        let quotient = payout / BASIS_POINTS;
-                        let remainder = payout % BASIS_POINTS;
-                        quotient
-                            .checked_mul(share.basis_points as i128)
-                            .and_then(|whole| {
-                                remainder
-                                    .checked_mul(share.basis_points as i128)
-                                    .map(|fraction| whole + fraction / BASIS_POINTS)
-                            })
-                            .ok_or(Error::SplitAmountOverflow)?
+                        Self::split_share(payout, share.basis_points)?
                     };
                     distributed = distributed
                         .checked_add(amount)
@@ -685,6 +686,38 @@ impl EscrowContract {
             .ok_or(Error::InvalidFee)
     }
 
+    /// One non-final payee's share of a split payout:
+    /// `floor(payout * bps / 10 000)`, computed without the
+    /// `payout * bps` intermediate (which could exceed `i128` for very
+    /// large amounts) by splitting `payout = quotient * 10 000 + remainder`:
+    /// `quotient * bps + floor(remainder * bps / 10 000)`. The split is an
+    /// exact identity, not an approximation, so the share is identical to
+    /// the direct formula and rounds down, never paying out more than its
+    /// bps share; the final payee takes the remainder (issue #22).
+    ///
+    /// Scout's `divide-before-multiply` fires on this split; it is a false
+    /// positive because the identity is exact (docs/supply-chain.md, Scout
+    /// findings triage). `unknown_lints` keeps rustc and clippy quiet about
+    /// a lint that only exists under Scout.
+    #[allow(unknown_lints, divide_before_multiply)]
+    pub(crate) fn split_share(payout: i128, bps: u32) -> Result<i128, Error> {
+        let bps = i128::from(bps);
+        let quotient = payout
+            .checked_div(BASIS_POINTS)
+            .ok_or(Error::SplitAmountOverflow)?;
+        let remainder = payout
+            .checked_rem(BASIS_POINTS)
+            .ok_or(Error::SplitAmountOverflow)?;
+        let fraction = remainder
+            .checked_mul(bps)
+            .and_then(|scaled| scaled.checked_div(BASIS_POINTS))
+            .ok_or(Error::SplitAmountOverflow)?;
+        quotient
+            .checked_mul(bps)
+            .and_then(|whole| whole.checked_add(fraction))
+            .ok_or(Error::SplitAmountOverflow)
+    }
+
     /// Loads the full record of a funded escrow. A settled id answers
     /// `NotFunded` — what it returned before the record was reclaimed
     /// (docs/adr/0013) — and only a never-created id is `NotFound`.
@@ -754,5 +787,60 @@ impl EscrowContract {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod split_share_tests {
+    use super::*;
+
+    /// The direct formula, for inputs where `payout * bps` fits in `i128`.
+    fn direct(payout: i128, bps: u32) -> i128 {
+        payout * i128::from(bps) / BASIS_POINTS
+    }
+
+    #[test]
+    fn matches_the_direct_formula_for_normal_amounts() {
+        let rates = [1, 2, 333, 1_000, 3_333, 3_334, 5_000, 9_999, 10_000];
+        for payout in
+            (0..=25_000).chain([99_999, 1_000_001, 123_456_789_012_345, i128::from(i64::MAX)])
+        {
+            for bps in rates {
+                assert_eq!(
+                    EscrowContract::split_share(payout, bps),
+                    Ok(direct(payout, bps)),
+                    "payout {payout}, bps {bps}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn is_exact_where_the_direct_product_would_overflow() {
+        // `i128::MAX * bps` overflows, so these are checked against the exact
+        // rational value: bps / 10 000 = 1, 1/2, 1/4 and 1/10 000.
+        let max = i128::MAX;
+        assert_eq!(EscrowContract::split_share(max, 10_000), Ok(max));
+        assert_eq!(EscrowContract::split_share(max, 5_000), Ok(max / 2));
+        assert_eq!(EscrowContract::split_share(max, 2_500), Ok(max / 4));
+        assert_eq!(EscrowContract::split_share(max, 1), Ok(max / 10_000));
+        assert_eq!(
+            EscrowContract::split_share(max - 1, 5_000),
+            Ok((max - 1) / 2)
+        );
+    }
+
+    #[test]
+    fn never_exceeds_its_share_and_splits_sum_to_the_payout() {
+        // A three-way split as `settle_full` performs it: the non-final
+        // shares round down and the final payee takes the remainder, so the
+        // total paid is exactly `payout` and never more.
+        for payout in [1, 7, 10, 9_999, 10_001, i128::MAX / 3, i128::MAX] {
+            let first = EscrowContract::split_share(payout, 3_333).unwrap();
+            let second = EscrowContract::split_share(payout, 3_333).unwrap();
+            let last = payout - first - second;
+            assert!(first >= 0 && last >= first, "payout {payout}");
+            assert_eq!(first + second + last, payout);
+        }
     }
 }

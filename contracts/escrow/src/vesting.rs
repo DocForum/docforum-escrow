@@ -28,7 +28,7 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::TotalAmount(escrow_id))
             .ok_or(Error::NotStreamed)?;
-        let vested = Self::vested_amount(total, &schedule, env.ledger().timestamp());
+        let vested = Self::vested_amount(total, &schedule, env.ledger().timestamp())?;
         let claimable = if funded {
             vested.saturating_sub(withdrawn)
         } else {
@@ -67,7 +67,7 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::TotalAmount(escrow_id))
             .ok_or(Error::NotStreamed)?;
-        let claimable = Self::vested_amount(total, &schedule, env.ledger().timestamp())
+        let claimable = Self::vested_amount(total, &schedule, env.ledger().timestamp())?
             .saturating_sub(withdrawn);
         if claimable <= 0 {
             return Err(Error::NothingToWithdraw);

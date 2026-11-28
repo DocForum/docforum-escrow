@@ -268,7 +268,7 @@ await client.refundWithApprovals({ escrowId, approvers });  // { txHash } — M-
 await client.getTokenInfo(token);           // { decimals, symbol, name } — cached token metadata read from the SEP-41 contract
 client.getLedgerTime();                       // { closeTime, sequence, offsetMs } — latest ledger close time, cached ~5 s (issue #335)
 await client.ledgerClockOffset();             // ledger time − local time in ms, for useEscrowTimeline({ ledgerTimeOffsetMs })
-await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded lifecycle event page
+await client.getEvents({ fromLedger });      // { events, nextCursor } — decoded event page (typed variants)
 const stop = client.subscribe(handler, { cursor, pollIntervalMs }); // serial polling; await handler for back-pressure
 await client.createMilestoneEscrow({ payer, payee, token, amount, conditionRef, releaser, milestones }); // milestones: bigint[] tranches, validated client-side (sum == amount, all > 0); one escrow per tranche
 await client.releaseMilestone({ escrow: group, milestoneIndex, caller }); // releases that tranche's escrow, once
@@ -326,9 +326,9 @@ account auth entries (payer/releaser) a legitimate escrow call carries.
 `feeBump` charges `baseFee × (inner operations + 1)` and validates the
 cap before building the envelope, so a fee spike fails loudly instead of
 silently costing more than the sponsor agreed to.
-Event results are a discriminated union: known lifecycle events expose
-their event type and escrow id; unrecognized topics are returned as
-`type: "unknown"` with decoded topic values and payload. Persist the
+Event results are a discriminated union on `type`: lifecycle events expose their type and escrow id; every other contract event (`topUp`, `accepted`,
+`rotated`, `payeeTransferred`, `contributed`, `claimed`, `payeeRefunded`, `settled`, `refundDeadlineExtended`, `paused`, `unpaused`) has decoded fields
+(issue #327); unrecognized topics or payloads are `type: "unknown"` with decoded topic values and payload. Persist the
 last handled event's cursor to resume; an expired RPC history cursor throws
 `EventCursorExpiredError`. These helpers require the contract lifecycle
 events tracked by issue #9; the current deployment does not emit them.

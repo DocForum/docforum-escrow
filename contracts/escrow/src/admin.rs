@@ -16,6 +16,11 @@ impl EscrowContract {
     /// The custodian is deliberately weak: its only power is to refuse
     /// **new** deposits. It cannot release, refund, edit an escrow, or
     /// upgrade anything.
+    // Scout's `dynamic-storage` fires on the allowlist write below. It is
+    // accepted because the deployer writes the list once, here, and there is
+    // no setter, so no caller can grow it after deployment
+    // (docs/supply-chain.md, Scout findings triage).
+    #[allow(unknown_lints, dynamic_storage)]
     pub fn __constructor(env: Env, allowed_tokens: Vec<Address>, pause_admin: Address) {
         env.storage()
             .instance()

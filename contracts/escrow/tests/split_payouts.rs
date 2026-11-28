@@ -206,3 +206,75 @@ fn split_creation_rejects_more_than_eight_recipients() {
     );
     assert_eq!(result, Err(Ok(Error::TooManyPayees)));
 }
+
+/// Golden sweep for the split-payout arithmetic (Scout triage): for small
+/// amounts and rounding boundaries, with a 2.5 % fee and an uneven three-way split, the
+/// fee and each non-final share are exactly `floor(x * bps / 10 000)` and the
+/// final payee gets the remainder, so the four transfers always sum to the
+/// escrowed amount and the contract keeps nothing.
+#[test]
+fn split_release_amounts_match_the_direct_formula_across_a_sweep() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, token, token_id, payer) = setup(&env);
+    StellarAssetClient::new(&env, &token_id).mint(&payer, &1_000);
+    let releaser = Address::generate(&env);
+    let first = Address::generate(&env);
+    let second = Address::generate(&env);
+    let last = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    let mut payees = Vec::new(&env);
+    payees.push_back(share(&env, &first, 2_500));
+    payees.push_back(share(&env, &second, 3_333));
+    payees.push_back(share(&env, &last, 4_167));
+
+    for amount in [1i128, 2, 3, 4, 7, 9, 10, 39, 40, 41, 97, 100] {
+        let before = [
+            token.balance(&fee_recipient),
+            token.balance(&first),
+            token.balance(&second),
+            token.balance(&last),
+        ];
+        let id = client.create_split_escrow(
+            &payer,
+            &payees,
+            &token_id,
+            &amount,
+            &String::from_str(&env, "sweep"),
+            &releaser,
+            &None,
+            &false,
+            &None,
+            &Some(fee_recipient.clone()),
+            &Some(250),
+        );
+        client.release(&id, &releaser);
+
+        let fee = amount * 250 / 10_000;
+        let net = amount - fee;
+        let first_share = net * 2_500 / 10_000;
+        let second_share = net * 3_333 / 10_000;
+        let last_share = net - first_share - second_share;
+        assert_eq!(
+            token.balance(&fee_recipient) - before[0],
+            fee,
+            "amount {amount}"
+        );
+        assert_eq!(
+            token.balance(&first) - before[1],
+            first_share,
+            "amount {amount}"
+        );
+        assert_eq!(
+            token.balance(&second) - before[2],
+            second_share,
+            "amount {amount}"
+        );
+        assert_eq!(
+            token.balance(&last) - before[3],
+            last_share,
+            "amount {amount}"
+        );
+        assert_eq!(token.balance(&client.address), 0, "amount {amount}");
+    }
+}

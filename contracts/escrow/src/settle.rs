@@ -37,8 +37,17 @@ impl EscrowContract {
             (Some(_), Some(bps)) if payee_amount > 0 => Self::fee_amount(payee_amount, bps)?,
             _ => 0,
         };
-        let payer_amount = data.amount - payee_amount;
-        let payee_amount = payee_amount - fee;
+        // `0 <= payee_amount <= amount` (checked above) and the fee floors to
+        // at most 10 % of `payee_amount`, so neither subtraction can go
+        // negative; checked anyway so a broken invariant is an `Error`, not
+        // a host panic.
+        let payer_amount = data
+            .amount
+            .checked_sub(payee_amount)
+            .ok_or(Error::InvalidSettlementAmount)?;
+        let payee_amount = payee_amount
+            .checked_sub(fee)
+            .ok_or(Error::InvalidSettlementAmount)?;
         if data
             .release_not_before
             .is_some_and(|release_time| env.ledger().timestamp() < release_time)

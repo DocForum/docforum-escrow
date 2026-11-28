@@ -42,31 +42,74 @@ code. All other pedantic findings were fixed, not suppressed (missing
 
 ## Scout findings triage
 
-Scout 0.3.17 is the current Soroban analyser. Three detectors are excluded
+Scout 0.3.17 is the current Soroban analyser. Four detectors are excluded
 in CI, with the reasons below; every other detector runs. Each exclusion
 is a detector-level suppression, not a blanket "ignore the report": the
 `--cicd` flag still writes `scout-report/FAIL` for any finding from an
 enabled detector.
 
-**The job is currently report-only.** When `scout-report/FAIL` exists the job
-emits a warning, writes the full report to the job summary and uploads it as
-the `scout-report` artifact, but it does not fail. The current contract has
-an untriaged backlog (11 Critical overflow/underflow findings in
-`internal.rs`, `settle.rs`, `storage.rs` and `recurring.rs`; Medium
-divide-before-multiply, unbounded-loop, storage-revert and dynamic-storage
-findings; 3 Minor). Once each finding is fixed or given a written exclusion
-here, restore the `exit 1` in the "Run Scout" step of `ci.yml` so new
-findings block again.
+**The job is blocking.** It fails when `scout-report/FAIL` exists (any
+finding from an enabled detector), and also when the report's status for
+`docforum_escrow` is anything other than `Analyzed`. The second check is
+needed because `--cicd` removes `FAIL` whenever there are no findings,
+including when the crate failed to compile and nothing was checked. The
+report is always written to the job summary and uploaded as the
+`scout-report` artifact.
+
+The job caches only the `cargo-scout-audit` binary. Scout fetches its
+detectors from the `develop` branch of `CoinFabrik/scout-audit` at run time
+and builds them inside `~/.cargo/git`. When the job also cached
+`~/.cargo/git`, it restored stale prebuilt detectors and every run ended in
+"Compilation errors" with zero findings, which passed silently. The detectors
+are therefore not pinned by the 0.3.17 version. If an upstream detector
+change breaks or changes the analysis, the status check above turns the job
+red instead of letting it pass.
 
 | Excluded detector | Severity | Why | Exit condition |
 |---|---|---|---|
 | `soroban-version` | Enhancement | `soroban-sdk` is pinned at 27.0.6 to match the source of the live testnet deployment. Moving to 28 changes the compiled contract and the generated TypeScript bindings, so it is a separate breaking change tracked under Phase E4 follow-ups, not a CI work item. | Remove this exclusion in the SDK-upgrade PR, after regenerating bindings and redeploying to testnet. |
 | `assert-violation` | Enhancement | The contract never uses `assert!`/`panic!`; every failure is an `Error` variant in a `Result`. The only assertions are in `contracts/escrow/tests/`, where panicking on failure is the point. | Remove once Scout can be scoped to library targets only, or if production code ever needs an assertion. |
+| `dos-unexpected-revert-with-storage` | Medium | All 11 hits are `push_back`/`set` on a local, in-memory soroban `Vec`/`Map`: the releaser list built for a creation call (`attestation.rs`, `create.rs`, `pooled.rs`, `recurring.rs`), the `seen` duplicate check in `check_releaser_set`, the `get_escrows` result list (capped at `MAX_GET_ESCROWS`), and the legacy-layout upgrade map in `layout.rs`. None of them is a storage entry, so no caller can grow stored state through them. | Remove the exclusion if the detector learns to tell host-object `Vec`/`Map` values from storage, or if the contract ever stores a growable collection. |
 | `set-contract-storage` | Critical | The detector flags `env.storage()` without a prior `require_auth()` in the same function. `get_status`/`get_escrow` are intentionally unauthenticated read-only views. Every write path (`create_escrow`, `release`, `refund`) calls `require_auth()` before touching storage, and the id allocation was inlined into `create_escrow` after its auth check so no helper writes storage on its own. | Remove the exclusion if the detector gains read/write distinction, or after an independent review confirms the read-only exception is acceptable. |
 
-The release profile sets `overflow-checks = true`, so the arithmetic
-findings should abort the transaction rather than wrap, but each one still
-needs to be confirmed by hand during triage.
+Two false positives are allowed on a single function each, with
+`#[allow(unknown_lints, <lint>)]` next to a comment, instead of excluding
+the whole detector. `unknown_lints` keeps rustc and clippy quiet about a lint
+that only exists under Scout.
+
+| Allowed lint | Where | Why |
+|---|---|---|
+| `divide_before_multiply` | `EscrowContract::split_share` (`internal.rs`) and `EscrowContract::vested_amount` (`storage.rs`) | Both compute `floor(x * n / d)` as `(x / d) * n + floor((x % d) * n / d)`. This is an exact identity, not a rounding shortcut, and it avoids an `i128` overflow of `x * n` at very large amounts. Unit tests in both modules check it against the direct formula for normal inputs and against exact values at `i128::MAX`. |
+| `dynamic_storage` | `__constructor` (`admin.rs`) | The token allowlist is a `Vec<Address>` written once, by the deployer, at deployment. There is no setter, so no caller can grow it afterwards. |
+
+### Triage of the 0.3.17 backlog
+
+The full list from the last run that analyzed `main` (28 findings) and what
+happened to each one. The release profile sets `overflow-checks = true`, so
+none of the arithmetic findings could wrap. At worst they trapped the
+invocation. Each one now returns an existing `Error` variant instead, and
+none of those errors is reachable with valid state.
+
+| Finding | Severity | Verdict |
+|---|---|---|
+| `internal.rs` vesting refund `amount - unpaid_vested` | Critical | Fixed: `unpaid_vested` is clamped to `0..=amount`, then `checked_sub` → `Overflow`. |
+| `internal.rs` `payout = payee_amount - fee` | Critical | Fixed: `checked_sub` → `InvalidFee`. |
+| `internal.rs` split loop `index + 1` | Critical | Fixed: the loop iterates the payee list directly, so the index arithmetic is gone. |
+| `internal.rs` split share `whole + fraction / BASIS_POINTS` | Critical | Fixed: moved into `split_share` with `checked_*` → `SplitAmountOverflow`. Results are unchanged. |
+| `recurring.rs` `schedule_id + 1` | Critical | Fixed: `checked_add` → `Overflow`. |
+| `settle.rs` `amount - payee_amount` | Critical | Fixed: `checked_sub` → `InvalidSettlementAmount`. |
+| `settle.rs` `payee_amount - fee` | Critical | Fixed: `checked_sub` → `InvalidSettlementAmount`. |
+| `storage.rs` `next_id` `id + 1` | Critical | Fixed: `next_id` returns `Result`, and `checked_add` → `Overflow`. |
+| `storage.rs` `vested_amount` `end - start`, `now - start` and the final sum (3) | Critical | Fixed: `checked_*` → `Overflow`. `vested_amount` returns `Result`. Results are unchanged. |
+| `internal.rs` divide-before-multiply in the split share | Medium | False positive, allowed on `split_share` (see above). |
+| `internal.rs` unbounded loop over `payees` | Medium | Fixed: the loop iterates the list, which creation caps at `MAX_PAYEES` (8) and nothing grows later. |
+| `dos-unexpected-revert-with-storage` (11) | Medium | False positive: detector excluded (see the table above). |
+| `admin.rs` dynamic storage (allowlist) | Medium | Accepted, allowed on `__constructor` (see above). |
+| `storage.rs` unused-return-enum (3, `transfer_in_exact` / `transfer_from_exact`) | Minor | Fixed: the `Ok` path is now explicit (`add_liability(..)?; Ok(())`). No behaviour change. |
+
+The fixes also surfaced one new divide-before-multiply hit, on the same
+exact split in `vested_amount`, which was rewritten with checked operations.
+It is allowed the same way.
 
 ## cargo-deny policy
 

@@ -63,9 +63,10 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::NextScheduleId)
             .unwrap_or(0);
+        let next_schedule_id = schedule_id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage()
             .instance()
-            .set(&DataKey::NextScheduleId, &(schedule_id + 1));
+            .set(&DataKey::NextScheduleId, &next_schedule_id);
         let schedule = RecurringSchedule {
             payer: payer.clone(),
             payee: payee.clone(),
